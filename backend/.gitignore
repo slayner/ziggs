@@ -1,0 +1,14 @@
+# venv foi criado direto nesta pasta (misturado com o código-fonte)
+Include/
+Lib/
+pyvenv.cfg
+scripts/*.exe
+scripts/activate*
+scripts/Activate.ps1
+scripts/deactivate.bat
+scripts/__pycache__/
+
+# bancos locais (runtime/dev)
+*.db
+*.db-shm
+*.db-wal

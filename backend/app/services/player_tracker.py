@@ -1,0 +1,285 @@
+"""Background task que acompanha o kill feed global do Albion (3 regiões) e
+mantém perfis + ledger de kills atualizados."""
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+
+import httpx
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db import SessionLocal
+from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerSnapshot
+
+log = logging.getLogger(__name__)
+
+# Hosts oficiais por região — mesmos usados em bot/cogs/battleboard.py e em
+# battle_tracker.py (que importa esse dict daqui pra não duplicar).
+HOSTS = {
+    "americas": "gameinfo.albiononline.com",
+    "europe": "gameinfo-ams.albiononline.com",
+    "asia": "gameinfo-sgp.albiononline.com",
+}
+
+TIMEOUT = 20.0
+POLL_INTERVAL = 300  # segundos — o kill feed do Albion atualiza nesse ritmo
+SNAPSHOT_MAX_AGE = timedelta(hours=24)  # resolução do gráfico de crescimento de fama
+
+
+def make_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=TIMEOUT,
+        headers={"User-Agent": "ziggs-platform"},
+        verify=False,
+    )
+
+
+def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
+    """Salva/atualiza jogador e tira snapshot quando a guilda muda (ou quando
+    o último snapshot já passou de SNAPSHOT_MAX_AGE — dá resolução pro
+    gráfico de crescimento de fama sem precisar de um job dedicado, já que
+    o polling reativo toca em qualquer jogador ativo a cada POLL_INTERVAL)."""
+    albion_id = data.get("Id") or data.get("id", "")
+    if not albion_id:
+        raise ValueError("dados sem Id de jogador")
+
+    name = data.get("Name") or data.get("name", "")
+    guild_id = data.get("GuildId") or data.get("guildId") or None
+    guild_name = data.get("GuildName") or data.get("guildName") or None
+    alliance_id = data.get("AllianceId") or data.get("allianceId") or None
+    alliance_name = data.get("AllianceName") or data.get("allianceName") or None
+    alliance_tag = data.get("AllianceTag") or data.get("allianceTag") or None
+    avatar = data.get("Avatar") or data.get("avatar") or None
+
+    lifetime = data.get("LifetimeStatistics") or {}
+    pve_fame = ((lifetime.get("PvE") or {}).get("Total") or 0)
+    crafting_fame = ((lifetime.get("Crafting") or {}).get("Total") or 0)
+    gathering_fame = (((lifetime.get("Gathering") or {}).get("All") or {}).get("Total") or 0)
+    kill_fame = data.get("KillFame") or 0
+    death_fame = data.get("DeathFame") or 0
+
+    now = datetime.now(timezone.utc)
+    player = db.query(AlbionPlayer).filter_by(albion_id=albion_id).first()
+    is_new = player is None
+    guild_changed = not is_new and player.guild_id != guild_id
+
+    if is_new:
+        player = AlbionPlayer(
+            albion_id=albion_id, name=name, region=region,
+            guild_id=guild_id, guild_name=guild_name,
+            alliance_id=alliance_id, alliance_name=alliance_name, alliance_tag=alliance_tag,
+            avatar=avatar,
+            kill_fame=kill_fame, death_fame=death_fame,
+            pve_fame=pve_fame, crafting_fame=crafting_fame, gathering_fame=gathering_fame,
+            first_seen_at=now, last_seen_at=now,
+        )
+        db.add(player)
+        db.flush()
+    else:
+        player.name = name
+        player.guild_id = guild_id
+        player.guild_name = guild_name
+        player.alliance_id = alliance_id
+        player.alliance_name = alliance_name
+        player.alliance_tag = alliance_tag
+        if avatar:
+            player.avatar = avatar
+        player.kill_fame = kill_fame
+        player.death_fame = death_fame
+        player.pve_fame = pve_fame
+        player.crafting_fame = crafting_fame
+        player.gathering_fame = gathering_fame
+        player.last_seen_at = now
+        player.is_deleted = False
+
+    last_snapshot_stale = False
+    if not is_new and not guild_changed:
+        last = (
+            db.query(PlayerSnapshot)
+            .filter_by(player_id=player.id)
+            .order_by(PlayerSnapshot.snapshotted_at.desc())
+            .first()
+        )
+        last_snapshot_stale = last is None or (now - _aware(last.snapshotted_at)) > SNAPSHOT_MAX_AGE
+
+    if is_new or guild_changed or last_snapshot_stale:
+        db.add(PlayerSnapshot(
+            player_id=player.id,
+            guild_id=guild_id, guild_name=guild_name,
+            alliance_id=alliance_id, alliance_tag=alliance_tag,
+            kill_fame=kill_fame, death_fame=death_fame, pve_fame=pve_fame,
+            snapshotted_at=now,
+        ))
+
+    db.commit()
+    return player
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _record_kill_event(db: Session, ev: dict, region: str) -> None:
+    """Registra o kill no ledger (PlayerKillEvent), dedupe por
+    region+albion_event_id — chamado depois de upsert_player do killer/vítima,
+    então killer_player_id/victim_player_id já existem."""
+    event_id = str(ev.get("EventId") or "")
+    if not event_id:
+        return
+    existing = db.scalar(
+        select(PlayerKillEvent).where(
+            PlayerKillEvent.region == region, PlayerKillEvent.albion_event_id == event_id,
+        )
+    )
+    if existing is not None:
+        return
+
+    killer, victim = ev.get("Killer") or {}, ev.get("Victim") or {}
+    killer_id, victim_id = killer.get("Id"), victim.get("Id")
+    killer_row = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == killer_id)) if killer_id else None
+    victim_row = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == victim_id)) if victim_id else None
+
+    participant_count = ev.get("numberOfParticipants") or 1
+    db.add(PlayerKillEvent(
+        region=region, albion_event_id=event_id,
+        timestamp=datetime.fromisoformat(ev["TimeStamp"].replace("Z", "+00:00")),
+        fame=ev.get("TotalVictimKillFame") or 0,
+        killer_player_id=killer_row.id if killer_row else None,
+        victim_player_id=victim_row.id if victim_row else None,
+        participant_count=participant_count,
+        is_solo=participant_count == 1,
+        albion_battle_id=str(ev["BattleId"]) if ev.get("BattleId") else None,
+        kill_area=ev.get("KillArea"),
+        killer_equipment=killer.get("Equipment"),
+        victim_equipment=victim.get("Equipment"),
+        victim_inventory=victim.get("Inventory"),
+        killer_guild_id=killer.get("GuildId") or None,
+        killer_guild_name=killer.get("GuildName") or None,
+        victim_guild_id=victim.get("GuildId") or None,
+        victim_guild_name=victim.get("GuildName") or None,
+    ))
+    db.commit()
+
+
+PLAYER_SYNC_LIMIT = 50  # kills/mortes buscados por sincronização ativa, sem paginar mais que isso
+
+
+async def _upsert_event_players(db: Session, ev: dict, region: str, skip_id: str | None = None) -> None:
+    """skip_id: não re-upserta esse albion_id a partir dos dados embutidos no
+    evento — um kill/death ANTIGO traz a guilda/fama do jogador NA ÉPOCA
+    daquele evento, não o estado atual. Usado quando o evento veio da
+    sincronização ativa de UM jogador específico (ver sync_player_kills):
+    aplicar isso a ele mesmo geraria trocas de guilda falsas, fora de ordem
+    cronológica, cada vez que o perfil dele é recarregado."""
+    for role in ("Killer", "Victim"):
+        p = ev.get(role)
+        if p and p.get("Id") and p.get("Id") != skip_id:
+            try:
+                upsert_player(db, p, region)
+            except Exception as e:
+                log.debug("player_tracker: skip %s (%s): %s", p.get("Id"), region, e)
+    for participant in (ev.get("Participants") or []):
+        if participant and participant.get("Id") and participant.get("Id") != skip_id:
+            try:
+                upsert_player(db, participant, region)
+            except Exception as e:
+                log.debug("player_tracker: skip participant %s (%s): %s", participant.get("Id"), region, e)
+
+
+async def sync_player_kills(client: httpx.AsyncClient, db: Session, host: str, region: str, albion_id: str) -> int:
+    """Busca as kills/mortes recentes desse jogador direto na API (endpoint
+    por jogador, não o feed global) e registra no ledger — o feed global só
+    pega quem está nos 51 eventos mais recentes da região no momento exato
+    do poll, então a luta de um jogador específico pode nunca ter sido vista
+    passivamente. Chamado a cada carregamento/refresh do perfil.
+
+    O próprio `albion_id` NÃO é re-upsertado a partir desses eventos (ver
+    _upsert_event_players) — o estado atual dele já vem fresco da chamada a
+    /players/{id} feita por quem chama essa função."""
+    count = 0
+    for kind in ("kills", "deaths"):
+        events = None
+        for attempt in range(2):  # ponytail: 1 retry, API do Albion dá ReadTimeout transiente com frequência
+            try:
+                resp = await client.get(
+                    f"https://{host}/api/gameinfo/players/{albion_id}/{kind}",
+                    params={"limit": PLAYER_SYNC_LIMIT, "offset": 0},
+                )
+                resp.raise_for_status()
+                events = resp.json()
+                break
+            except Exception as e:
+                if attempt == 1:
+                    log.debug("player_tracker: falha ao sincronizar %s de %s (%s): %s", kind, albion_id, region, e)
+        if not isinstance(events, list):
+            continue
+        for ev in events:
+            await _upsert_event_players(db, ev, region, skip_id=albion_id)
+            try:
+                _record_kill_event(db, ev, region)
+                count += 1
+            except Exception as e:
+                db.rollback()
+                log.debug("player_tracker: skip sync event %s (%s): %s", ev.get("EventId"), region, e)
+    return count
+
+
+async def poll_once() -> int:
+    """Busca o kill feed das 3 regiões uma vez, upserta jogadores e registra
+    cada kill no ledger. Retorna contagem de jogadores upsertados."""
+    count = 0
+    db = SessionLocal()
+    try:
+        async with make_client() as c:
+            for region, host in HOSTS.items():
+                try:
+                    resp = await c.get(f"https://{host}/api/gameinfo/events", params={"limit": 51})
+                    resp.raise_for_status()
+                    events = resp.json()
+                except Exception as e:
+                    log.warning("player_tracker: falha ao buscar kill feed (%s): %s", region, e)
+                    continue
+                if not isinstance(events, list):
+                    continue
+
+                for ev in events:
+                    for role in ("Killer", "Victim"):
+                        p = ev.get(role)
+                        if p and p.get("Id"):
+                            try:
+                                upsert_player(db, p, region)
+                                count += 1
+                            except Exception as e:
+                                log.debug("player_tracker: skip %s (%s): %s", p.get("Id"), region, e)
+                    # "Participants" = quem ganhou crédito de assist nesse kill
+                    # (nome do campo na API atual — versões antigas usavam "Assists").
+                    for assist in (ev.get("Participants") or []):
+                        if assist and assist.get("Id"):
+                            try:
+                                upsert_player(db, assist, region)
+                                count += 1
+                            except Exception as e:
+                                log.debug("player_tracker: skip assist %s (%s): %s", assist.get("Id"), region, e)
+                    try:
+                        _record_kill_event(db, ev, region)
+                    except Exception as e:
+                        db.rollback()
+                        log.debug("player_tracker: skip kill event %s (%s): %s", ev.get("EventId"), region, e)
+    finally:
+        db.close()
+
+    return count
+
+
+async def run_forever() -> None:
+    """Loop de polling — iniciado no startup do FastAPI."""
+    log.info("player_tracker: iniciando (intervalo=%ds, hosts=%s)", POLL_INTERVAL, list(HOSTS))
+    while True:
+        try:
+            n = await poll_once()
+            log.debug("player_tracker: %d jogadores atualizados", n)
+        except Exception as e:
+            log.error("player_tracker: erro inesperado: %s", e)
+        await asyncio.sleep(POLL_INTERVAL)

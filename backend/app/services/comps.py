@@ -1,0 +1,267 @@
+"""
+Serviço de composições: cria/edita/lê comps e gera sugestões de build.
+
+Mantém as rotas finas. Toda escrita também grava no audit log. Quem chama dá o
+commit. Validação de tenant: role_ids precisam pertencer à MESMA guilda da comp.
+"""
+from __future__ import annotations
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from app.api.schemas.comps import (
+    BuildSuggestionOut, CompCreate, CompRead, CompSummary, CompUpdate,
+    FieldSuggestionOut, PartyIn, PartyRead, RoleRead, SlotRead,
+)
+from app.domain.suggestions import RoleBuild, suggest_build
+from app.models.audit import AuditLog
+from app.models.catalog import GameRole, Weapon
+from app.models.comps import Comp, CompParty, CompSlot, CompSlotRole
+
+
+class ServiceError(Exception):
+    """Erro de regra de negócio (vira 400 na rota)."""
+
+
+# --- helpers de leitura -----------------------------------------------------
+def _role_read(role: GameRole, weapon: Weapon | None) -> RoleRead:
+    import json as _json
+    return RoleRead(
+        id=role.id, name=role.name, weapon_id=role.weapon_id,
+        invisible_function=weapon.invisible_function if weapon else None,
+        offhand=role.offhand, helmet=role.helmet, armor=role.armor,
+        boots=role.boots, cape=role.cape, food=role.food,
+        abilities=role.abilities, play_style=role.play_style, obs=role.obs,
+        q_spell=role.q_spell, w_spell=role.w_spell, passive_spell=role.passive_spell,
+        gear_spells=_json.loads(role.gear_spells) if getattr(role, 'gear_spells', None) else None,
+        build_items=role.build_items or [],
+    )
+
+
+def _comp_read(db: Session, comp: Comp) -> CompRead:
+    # Pré-carrega as funções referenciadas + suas armas, em 1 ida ao banco.
+    role_ids = {
+        sr.game_role_id
+        for party in comp.parties for slot in party.slots for sr in slot.roles
+    }
+    roles: dict[int, GameRole] = {}
+    weapons: dict[int, Weapon] = {}
+    if role_ids:
+        for r in db.scalars(select(GameRole).where(GameRole.id.in_(role_ids))):
+            roles[r.id] = r
+        wids = {r.weapon_id for r in roles.values() if r.weapon_id}
+        if wids:
+            for w in db.scalars(select(Weapon).where(Weapon.id.in_(wids))):
+                weapons[w.id] = w
+
+    parties = [
+        PartyRead(
+            id=party.id, position=party.position, name=party.name,
+            slots=[
+                SlotRead(
+                    id=slot.id, position=slot.position, label=slot.label,
+                    notes=slot.notes, fn=getattr(slot, 'fn', None),
+                    roles=[
+                        _role_read(roles[sr.game_role_id],
+                                   weapons.get(roles[sr.game_role_id].weapon_id))
+                        for sr in slot.roles if sr.game_role_id in roles
+                    ],
+                )
+                for slot in party.slots
+            ],
+        )
+        for party in comp.parties
+    ]
+    return CompRead(
+        id=comp.id, name=comp.name, description=comp.description,
+        archived=comp.archived, parties=parties,
+    )
+
+
+def _load_full(db: Session, guild_id: int, comp_id: int) -> Comp | None:
+    return db.scalar(
+        select(Comp)
+        .where(Comp.id == comp_id, Comp.guild_id == guild_id)
+        .options(
+            selectinload(Comp.parties)
+            .selectinload(CompParty.slots)
+            .selectinload(CompSlot.roles)
+        )
+    )
+
+
+# --- escrita ----------------------------------------------------------------
+def _validate_role_ids(db: Session, guild_id: int, role_ids: set[int]) -> None:
+    if not role_ids:
+        return
+    found = set(
+        db.scalars(
+            select(GameRole.id).where(
+                GameRole.id.in_(role_ids), GameRole.guild_id == guild_id
+            )
+        )
+    )
+    missing = role_ids - found
+    if missing:
+        raise ServiceError(f"funções inexistentes nesta guilda: {sorted(missing)}")
+
+
+def _build_parties(comp: Comp, parties: list[PartyIn]) -> None:
+    """Preenche comp.parties a partir do input (positions automáticas)."""
+    for p_idx, p in enumerate(parties):
+        party = CompParty(position=p_idx, name=p.name)
+        for s_idx, s in enumerate(p.slots):
+            slot = CompSlot(position=s_idx, label=s.label, notes=s.notes, fn=s.fn)
+            for r_idx, role_id in enumerate(dict.fromkeys(s.role_ids)):  # dedupe, mantém ordem
+                slot.roles.append(CompSlotRole(game_role_id=role_id, position=r_idx))
+            party.slots.append(slot)
+        comp.parties.append(party)
+
+
+def create_comp(
+    db: Session, guild_id: int, payload: CompCreate, actor_id: int | None
+) -> CompRead:
+    all_role_ids = {
+        rid for p in payload.parties for s in p.slots for rid in s.role_ids
+    }
+    _validate_role_ids(db, guild_id, all_role_ids)
+
+    comp = Comp(
+        guild_id=guild_id, name=payload.name,
+        description=payload.description, created_by=actor_id,
+    )
+    _build_parties(comp, payload.parties)
+    db.add(comp)
+    db.flush()  # garante comp.id
+
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+        action="comp.create", entity="comp", entity_id=str(comp.id),
+        after={"name": comp.name},
+    ))
+    return _comp_read(db, comp)
+
+
+def list_comps(db: Session, guild_id: int, include_archived: bool) -> list[CompSummary]:
+    q = select(Comp).where(Comp.guild_id == guild_id).options(
+        selectinload(Comp.parties)
+    )
+    if not include_archived:
+        q = q.where(Comp.archived.is_(False))
+    out = []
+    for c in db.scalars(q.order_by(Comp.name)):
+        out.append(CompSummary(
+            id=c.id, name=c.name, description=c.description,
+            archived=c.archived, party_count=len(c.parties),
+        ))
+    return out
+
+
+def get_comp(db: Session, guild_id: int, comp_id: int) -> CompRead | None:
+    comp = _load_full(db, guild_id, comp_id)
+    return _comp_read(db, comp) if comp else None
+
+
+def update_comp(
+    db: Session, guild_id: int, comp_id: int, payload: CompUpdate,
+    actor_id: int | None,
+) -> CompRead | None:
+    comp = _load_full(db, guild_id, comp_id)
+    if comp is None:
+        return None
+
+    before = {"name": comp.name, "archived": comp.archived}
+    if payload.name is not None:
+        comp.name = payload.name
+    if payload.description is not None:
+        comp.description = payload.description
+    if payload.archived is not None:
+        comp.archived = payload.archived
+
+    if payload.parties is not None:
+        all_role_ids = {
+            rid for p in payload.parties for s in p.slots for rid in s.role_ids
+        }
+        _validate_role_ids(db, guild_id, all_role_ids)
+        comp.parties.clear()      # cascade delete-orphan limpa o antigo
+        db.flush()
+        _build_parties(comp, payload.parties)
+
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+        action="comp.update", entity="comp", entity_id=str(comp.id),
+        before=before, after={"name": comp.name, "archived": comp.archived},
+    ))
+    db.flush()
+    return _comp_read(db, comp)
+
+
+def delete_comp(
+    db: Session, guild_id: int, comp_id: int, actor_id: int | None
+) -> bool:
+    comp = db.scalar(
+        select(Comp).where(Comp.id == comp_id, Comp.guild_id == guild_id)
+    )
+    if comp is None:
+        return False
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+        action="comp.delete", entity="comp", entity_id=str(comp.id),
+        before={"name": comp.name},
+    ))
+    db.delete(comp)
+    return True
+
+
+# --- sugestão ---------------------------------------------------------------
+def _roles_to_builds(roles: list[tuple[GameRole, Weapon | None]]) -> list[RoleBuild]:
+    return [
+        RoleBuild(
+            invisible_function=w.invisible_function if w else None,
+            offhand=r.offhand, helmet=r.helmet, armor=r.armor, boots=r.boots,
+            cape=r.cape, food=r.food, abilities=r.abilities,
+            play_style=r.play_style,
+        )
+        for r, w in roles
+    ]
+
+
+def suggest(
+    db: Session, guild_id: int, comp_id: int, target_function: str, scope: str
+) -> BuildSuggestionOut:
+    """Sugere build para um slot da função `target_function`."""
+    if scope == "guild":
+        role_ids = set(db.scalars(
+            select(GameRole.id).where(GameRole.guild_id == guild_id)
+        ))
+    else:  # 'comp'
+        comp = _load_full(db, guild_id, comp_id)
+        if comp is None:
+            raise ServiceError("comp não encontrada")
+        role_ids = {
+            sr.game_role_id
+            for p in comp.parties for s in p.slots for sr in s.roles
+        }
+
+    pairs: list[tuple[GameRole, Weapon | None]] = []
+    if role_ids:
+        roles = {r.id: r for r in db.scalars(
+            select(GameRole).where(GameRole.id.in_(role_ids))
+        )}
+        wids = {r.weapon_id for r in roles.values() if r.weapon_id}
+        weapons = {}
+        if wids:
+            weapons = {w.id: w for w in db.scalars(
+                select(Weapon).where(Weapon.id.in_(wids))
+            )}
+        pairs = [(r, weapons.get(r.weapon_id)) for r in roles.values()]
+
+    result = suggest_build(target_function, _roles_to_builds(pairs))
+    return BuildSuggestionOut(
+        target_function=result.target_function,
+        sample_size=result.sample_size,
+        fields={
+            k: FieldSuggestionOut(value=v.value, votes=v.votes, total=v.total)
+            for k, v in result.fields.items()
+        },
+    )

@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+
+# Env / segredos
+.env
+.env.local
+
+# Node / frontend (quando entrar)
+node_modules/
+.next/
+dist/
+
+# Misc
+.DS_Store
+*.log
+
+# Cache local de renders de item da Albion (backend/app/api/routes/render.py)
+backend/data/render_cache/

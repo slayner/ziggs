@@ -1,0 +1,90 @@
+"""Schemas Pydantic para loot de eventos e inventário do baú."""
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+
+# ── Upload (bot → API) ────────────────────────────────────────────────────────
+
+class LootEntryIn(BaseModel):
+    looted_by_name: str
+    looted_by_user_id: int | None = None
+    item_type: str
+    item_name: str
+    quantity: int = 1
+    silver_value: int = 0  # por unidade; 0 = backend vai buscar via preços
+
+
+class LootUpload(BaseModel):
+    entries: list[LootEntryIn]
+    replace: bool = True  # substitui entradas anteriores do evento
+
+
+class ChestEntryIn(BaseModel):
+    item_type: str
+    item_name: str
+    quantity: int = 1
+    silver_value: int = 0
+    deposited_by_name: str | None = None
+    deposited_by_user_id: int | None = None
+
+
+class ChestUpload(BaseModel):
+    snapshot_at: datetime
+    entries: list[ChestEntryIn]
+    replace: bool = True
+
+
+# ── Output (API → frontend / bot) ────────────────────────────────────────────
+
+class LootEntryOut(BaseModel):
+    id: int
+    looted_by_name: str
+    looted_by_user_id: int | None
+    item_type: str
+    item_name: str
+    quantity: int
+    silver_value: int
+    in_chest: bool
+
+
+class ChestEntryOut(BaseModel):
+    id: int
+    item_type: str
+    item_name: str
+    quantity: int
+    silver_value: int
+    deposited_by_name: str | None
+    snapshot_at: datetime
+
+
+class MissingItem(BaseModel):
+    item_type: str
+    item_name: str
+    looted_qty: int
+    chest_qty: int
+    missing_qty: int
+    silver_value: int  # valor unitário
+    missing_value: int  # missing_qty * silver_value
+
+
+class ReconcileResult(BaseModel):
+    looted: list[LootEntryOut] = Field(default_factory=list)
+    chest: list[ChestEntryOut] = Field(default_factory=list)
+    missing: list[MissingItem] = Field(default_factory=list)
+    total_looted_value: int = 0
+    total_chest_value: int = 0
+    missing_value: int = 0
+    has_loot_log: bool = False
+    has_chest_log: bool = False
+
+
+# ── Preços ───────────────────────────────────────────────────────────────────
+
+class ItemPriceOut(BaseModel):
+    item_type: str
+    silver_value: int
+    source: str  # "cache" | "api" | "unknown"
+    fetched_at: datetime | None = None

@@ -1,0 +1,34 @@
+# Ambiente
+.env
+.venv
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Bancos por servidor (runtime) + scripts de teste/scratch
+data/*.db
+data/*.db-wal
+data/*.db-shm
+_tmp_*.py
+_t_*.py
+_p*_*.py
+_gschk*.py
+_gscheck*.py
+
+# IDE / ferramentas locais
+.vscode/
+.idea/
+.claude/settings.local.json
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

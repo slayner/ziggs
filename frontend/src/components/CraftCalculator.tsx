@@ -1,0 +1,1095 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  computeCraft,
+  focusCostMultiplier,
+  materialNeeds,
+  journalsFilled,
+  type CraftResult,
+} from "../lib/craft/engine";
+import {
+  returnRateNoFocus,
+  returnRateFocus,
+  HIDEOUT_QUALITY,
+  HIDEOUT_LEVEL,
+  type LocationConfig,
+  type CraftPlace,
+} from "../lib/craft/returnRate";
+import {
+  loadCatalog,
+  loadNames,
+  loadWeights,
+  loadJournalBase,
+  shortName,
+  tierLabel,
+  distinctMaterials,
+  type CatalogFamily,
+  type CatalogVariation,
+  type JournalBase,
+} from "../lib/craft/catalog";
+import type { PriceServer, PriceQuote } from "../lib/prices/types";
+import { fetchAdpPrices, fetchAdpDemand, fetchAdpPriceSeries } from "../lib/prices/adp";
+import { useServer } from "../i18n";
+import { silver, silverShort, decimal, percent } from "../lib/format";
+
+const iconUrl = (id: string, size = 64, quality?: number) =>
+  `/render/item/${encodeURIComponent(id)}?size=${size}${quality ? `&quality=${quality}` : ""}`;
+const EXCELLENT = 4;
+
+const selectAllText = (e: React.MouseEvent<HTMLElement>) => {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(e.currentTarget);
+  sel.removeAllRanges();
+  sel.addRange(range);
+};
+
+const CITIES = ["Caerleon", "Bridgewatch", "Martlock", "Thetford", "Fort Sterling", "Lymhurst", "Brecilien", "Black Market"];
+const CITY_ABBR: Record<string, string> = {
+  Lymhurst: "LH", "Fort Sterling": "FS", Thetford: "TF", Caerleon: "CN",
+  "Black Market": "BM", Brecilien: "BC", Bridgewatch: "BW", Martlock: "ML",
+};
+const cityAbbr = (city?: string) => (city ? CITY_ABBR[city] ?? city : "");
+const CITY_COLOR: Record<string, string> = {
+  "Fort Sterling": "#d8dadf",
+  Lymhurst: "#a7d8a0",
+  Thetford: "#c3b0e0",
+  Martlock: "#a7c5e6",
+  Bridgewatch: "#e6c79c",
+  Caerleon: "#e0a9a3",
+  Brecilien: "#a3d8d0",
+  "Black Market": "#b8b8bd",
+};
+const cityColor = (city?: string) => (city ? CITY_COLOR[city] : undefined);
+const CITY_BIOME: Record<string, string> = {
+  Lymhurst: "Floresta",
+  "Fort Sterling": "Montanha",
+  Bridgewatch: "Estepe",
+  Martlock: "Planalto",
+  Thetford: "Pântano",
+};
+const cityBiome = (city?: string) => (city ? CITY_BIOME[city] : undefined);
+const DEMAND_CITIES = ["Lymhurst", "Fort Sterling", "Bridgewatch", "Martlock", "Thetford"];
+const SELL_QUALITIES = [1, 2, 3, 4];
+const ALL_QUALITIES = [1, 2, 3, 4, 5];
+const TIERS = [4, 5, 6, 7, 8];
+const SETUP_FEE = 0.025;
+
+const DAY_MS = 86_400_000;
+const WEEK_MS = 7 * DAY_MS;
+const nowMs = () => Date.now();
+const timeAgo = (ms: number) => {
+  const h = Math.floor((nowMs() - ms) / 3_600_000);
+  if (h < 1) return "1m";
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+};
+const isFresh = (date?: number) => !!date && nowMs() - date <= WEEK_MS;
+const isStale = (date?: number) => (date ? nowMs() - date > DAY_MS : false);
+
+const GROUP_LABELS: Record<string, string> = {
+  METALBAR: "Metal", PLANKS: "Madeira", LEATHER: "Couro", CLOTH: "Tecido", STONEBLOCK: "Pedra",
+  Artefatos: "Artefatos", Jornais: "Jornais",
+};
+const DEFAULT_GROUP_CITY: Record<string, string> = {
+  PLANKS: "Fort Sterling", METALBAR: "Thetford", CLOTH: "Lymhurst", LEATHER: "Martlock", STONEBLOCK: "Bridgewatch",
+  POTATO: "Martlock", WHEAT: "Martlock", FOXGLOVE: "Martlock", MILK: "Martlock", BUTTER: "Martlock",
+  CABBAGE: "Thetford", AGARIC: "Thetford", MULLEIN: "Thetford",
+  PUMPKIN: "Lymhurst", CARROT: "Lymhurst", BURDOCK: "Lymhurst",
+  CORN: "Bridgewatch", BEAN: "Bridgewatch", TEASEL: "Bridgewatch",
+  TURNIP: "Fort Sterling", YARROW: "Fort Sterling", EGG: "Fort Sterling",
+  FLOUR: "Martlock", BREAD: "Martlock", COMFREY: "Caerleon",
+};
+const isArtifact = (id: string) => id.includes("ARTEFACT");
+const isJournal = (id: string) => id.includes("JOURNAL");
+function marketGroup(id: string): string {
+  if (isArtifact(id)) return "Artefatos";
+  if (isJournal(id)) return "Jornais";
+  return id.replace(/^T\d+_/, "").replace(/_LEVEL\d$/, "");
+}
+const groupLabel = (g: string) => GROUP_LABELS[g] ?? g.charAt(0) + g.slice(1).toLowerCase();
+
+const PROFESSION_BY_CATEGORY: Record<string, string> = {
+  cloth_armor: "MAGE", cloth_helmet: "MAGE", cloth_shoes: "MAGE",
+  firestaff: "MAGE", holystaff: "MAGE", arcanestaff: "MAGE", froststaff: "MAGE", cursestaff: "MAGE",
+  leather_armor: "HUNTER", leather_helmet: "HUNTER", leather_shoes: "HUNTER",
+  bow: "HUNTER", spear: "HUNTER", naturestaff: "HUNTER", dagger: "HUNTER", quarterstaff: "HUNTER",
+  plate_armor: "WARRIOR", plate_helmet: "WARRIOR", plate_shoes: "WARRIOR",
+  sword: "WARRIOR", axe: "WARRIOR", mace: "WARRIOR", hammer: "WARRIOR", crossbow: "WARRIOR", knuckles: "WARRIOR",
+  tools: "TOOLMAKER", bag: "TOOLMAKER", cape: "TOOLMAKER", gatherergear: "TOOLMAKER", offhand: "TOOLMAKER",
+};
+const professionOf = (cat: string | null) => (cat ? PROFESSION_BY_CATEGORY[cat] ?? null : null);
+function professionFromId(id: string): string | null {
+  if (id.includes("CAPE") || id.includes("BAG") || id.includes("TOOL")) return "TOOLMAKER";
+  if (id.includes("PLATE")) return "WARRIOR";
+  if (id.includes("LEATHER")) return "HUNTER";
+  if (id.includes("CLOTH")) return "MAGE";
+  return null;
+}
+const journalId = (tier: number, prof: string) => `T${tier}_JOURNAL_${prof}`;
+const t7Variation = (f: CatalogFamily) =>
+  f.variations.find((v) => v.tier === 7 && v.enchant === 0) ?? f.variations.find((v) => v.tier === 7) ?? f.variations[0];
+
+const isCityBonusKind = (f: CatalogFamily) => f.kind === "consumable" || f.category === "gathering";
+
+const displayVariation = (f: CatalogFamily) => {
+  if (!isCityBonusKind(f)) return t7Variation(f);
+  const noEnch = f.variations.filter((v) => v.enchant === 0);
+  return noEnch.reduce((b, v) => (v.tier > b.tier ? v : b), noEnch[0] ?? f.variations[0]);
+};
+const displayQuality = (f: CatalogFamily) => (isCityBonusKind(f) ? undefined : EXCELLENT);
+
+type Source = "manual" | "api";
+type OrderMode = "buy" | "sell";
+interface PriceInfo {
+  source: Source;
+  date?: number;
+  city?: string;
+}
+
+interface Settings {
+  premium: boolean;
+  stationFeePer100: number;
+  focusEfficiency: number;
+}
+
+interface Order {
+  id: string;
+  name: string;
+  variation: CatalogVariation;
+  qty: number;
+  useFocus: boolean;
+  rr: number;
+  placeLabel: string;
+  journalId: string | null;
+}
+
+function placeLabel(loc: LocationConfig): string {
+  if (loc.place === "city") return "Cidade";
+  if (loc.place === "island") return "Ilha";
+  return `HO Q${loc.hideoutQuality}/Nv${loc.hideoutLevel}`;
+}
+
+export default function CraftCalculator() {
+  const { server } = useServer();
+  const [families, setFamilies] = useState<CatalogFamily[] | null>(null);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [weights, setWeights] = useState<Record<string, number>>({});
+  const [journalBase, setJournalBase] = useState<Record<string, JournalBase>>({});
+  const [familyKey, setFamilyKey] = useState("MAIN_AXE");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+
+  const [batchQty, setBatchQty] = useState(30);
+  const useFocus = true;
+
+  const [place, setPlace] = useState<CraftPlace>("city");
+  const [placeOpen, setPlaceOpen] = useState(false);
+  const [eventBonus, setEventBonus] = useState(0);
+  const [bonusOpen, setBonusOpen] = useState(false);
+  const [hoQuality, setHoQuality] = useState(6);
+  const [hoLevel, setHoLevel] = useState(8);
+
+  const [premium, setPremium] = useState(true);
+  const [stationFeePer100, setStationFeePer100] = useState(1000);
+  const [goldPrice, setGoldPrice] = useState(0);
+  const [uiScale, setUiScale] = useState(1);
+  const [ignoredJournalTiers, setIgnoredJournalTiers] = useState<Set<number>>(new Set([4]));
+  const [focusEfficiency, setFocusEfficiency] = useState(0);
+
+  // ponytail: server now comes from global context (topbar dropdown)
+  const [sellCity, setSellCity] = useState("Black Market");
+  const [groupMarket, setGroupMarket] = useState<Record<string, string>>({});
+  const [groupOrder, setGroupOrder] = useState<Record<string, OrderMode>>({});
+  const [matPrices, setMatPrices] = useState<Record<string, number | undefined>>({});
+  const [sellPrices, setSellPrices] = useState<Record<string, number | undefined>>({});
+  const [fullJournalPrices, setFullJournalPrices] = useState<Record<string, number>>({});
+  const [matMeta, setMatMeta] = useState<Record<string, PriceInfo>>({});
+  const [sellMeta, setSellMeta] = useState<Record<string, PriceInfo>>({});
+  const [demand, setDemand] = useState<Record<string, number>>({});
+  const [loadingPrices, setLoadingPrices] = useState(false);
+  const [lastFetch, setLastFetch] = useState<number | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  const [cart, setCart] = useState<Order[]>([]);
+
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement>(null);
+  const matMetaRef = useRef(matMeta);
+  const sellMetaRef = useRef(sellMeta);
+  useEffect(() => {
+    matMetaRef.current = matMeta;
+    sellMetaRef.current = sellMeta;
+  }, [matMeta, sellMeta]);
+
+  const nameOf = (id: string) => shortName(names[id.split("@")[0]] ?? id);
+  const cityForGroup = (g: string) => groupMarket[g] ?? DEFAULT_GROUP_CITY[g] ?? "Caerleon";
+  const orderForGroup = (g: string): OrderMode => groupOrder[g] ?? "sell";
+  const cityForMat = (id: string) => cityForGroup(marketGroup(id));
+
+  useEffect(() => {
+    loadCatalog().then((fams) => {
+      setFamilies(fams);
+      if (!fams.some((f) => f.familyKey === familyKey)) setFamilyKey(fams[0]?.familyKey);
+    });
+    loadNames().then(setNames);
+    loadWeights().then(setWeights);
+    loadJournalBase().then(setJournalBase);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (pickerRef.current && !pickerRef.current.contains(t)) setPickerOpen(false);
+      if (
+        settingsRef.current &&
+        !settingsRef.current.contains(t) &&
+        settingsBtnRef.current &&
+        !settingsBtnRef.current.contains(t)
+      )
+        setShowSettings(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  const family = useMemo(() => families?.find((f) => f.familyKey === familyKey) ?? null, [families, familyKey]);
+  const variations = useMemo(
+    () => (family ? [...family.variations].sort((a, b) => a.tier - b.tier || a.enchant - b.enchant) : []),
+    [family],
+  );
+  const prof = professionOf(family?.craftCategory ?? null) ?? (family ? professionFromId(family.variations[0].uniqueName) : null);
+  const isConsumable = family?.kind === "consumable";
+
+  const artifactByTier = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const v of variations) {
+      if (v.enchant !== 0) continue;
+      const art = v.resources.find((r) => isArtifact(r.uniqueName));
+      if (art) m.set(v.tier, art.uniqueName);
+    }
+    return m;
+  }, [variations]);
+
+  const mats = family ? distinctMaterials(family.variations) : [];
+  const journalIds = prof ? [...new Set(variations.map((v) => journalId(v.tier, prof)))] : [];
+  const groups = [...new Set([...mats, ...journalIds].map(marketGroup))];
+
+  const hasBonusCity = !!family?.bonusCity;
+  const hideoutEligible = !!family && !isCityBonusKind(family);
+  const autoSpecialized = place === "city" ? hasBonusCity : place === "hideout" ? hideoutEligible : false;
+  const bonusBiome = hideoutEligible ? cityBiome(family?.bonusCity ?? undefined) : undefined;
+  const placeIcon = place === "city" ? "🏛️" : place === "island" ? "🏝️" : "🏠";
+  const placeName = place === "city" ? "Cidade" : place === "island" ? "Ilha" : "Hideout";
+  const location: LocationConfig = { place, specialized: autoSpecialized, eventBonus, hideoutQuality: hoQuality, hideoutLevel: hoLevel };
+  useEffect(() => {
+    if (place === "hideout" && family && !hideoutEligible) setPlace("city");
+  }, [place, hideoutEligible, family]);
+  const rrNoFocus = returnRateNoFocus(location);
+  const rrFocus = returnRateFocus(location);
+  const focusMult = focusCostMultiplier(focusEfficiency);
+  const settings: Settings = { premium, stationFeePer100, focusEfficiency };
+  const PREMIUM_GOLD = 3750;
+  const MONTHLY_FOCUS = 300_000;
+  const minSpf = goldPrice > 0 ? (goldPrice * PREMIUM_GOLD) / MONTHLY_FOCUS : 0;
+
+  const compute = (v: CatalogVariation): CraftResult =>
+    computeCraft({
+      quantity: batchQty,
+      materials: v.resources.map((r) => ({ uniqueName: r.uniqueName, unitPrice: matPrices[r.uniqueName] ?? 0, countPerCraft: r.count, noReturn: r.noReturn })),
+      sellPrice: sellPrices[v.uniqueName] ?? 0,
+      outputPerCraft: v.outputPerCraft ?? 1,
+      returnRateNoFocus: rrNoFocus,
+      returnRateFocus: rrFocus,
+      focusCostBase: v.focus,
+      focusEfficiency,
+      itemValue: v.itemValue,
+      stationFeePer100,
+      salesTaxRate: premium ? 0.04 : 0.08,
+      setupFeeRate: SETUP_FEE,
+    });
+
+  const filteredFamilies = useMemo(() => {
+    if (!families) return [];
+    const q = search.trim().toLowerCase();
+    const list = q ? families.filter((f) => f.name.toLowerCase().includes(q) || f.familyKey.toLowerCase().includes(q)) : families;
+    return list.slice(0, 80);
+  }, [families, search]);
+
+  function setMat(id: string, value: number | undefined) {
+    setMatPrices((p) => ({ ...p, [id]: value }));
+    setMatMeta((m) => ({ ...m, [id]: { source: "manual", date: Date.now() } }));
+  }
+  function setSell(id: string, value: number | undefined) {
+    setSellPrices((p) => ({ ...p, [id]: value }));
+    setSellMeta((m) => ({ ...m, [id]: { source: "manual", date: Date.now() } }));
+  }
+
+  const priced = (v: CatalogVariation) =>
+    sellPrices[v.uniqueName] != null && v.resources.every((r) => matPrices[r.uniqueName] != null);
+
+  function addOrder(v: CatalogVariation) {
+    if (!family) return;
+    setCart((c) => [
+      ...c,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: family.name,
+        variation: v,
+        qty: batchQty,
+        useFocus,
+        rr: useFocus ? rrFocus : rrNoFocus,
+        placeLabel: placeLabel(location),
+        journalId: prof ? journalId(v.tier, prof) : null,
+      },
+    ]);
+  }
+
+  function toggleJournalTier(t: number) {
+    setIgnoredJournalTiers((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
+  }
+
+  async function fetchMarket() {
+    if (!family) return;
+    const matIds = [...distinctMaterials(family.variations), ...journalIds];
+    const varIds = variations.map((v) => v.uniqueName);
+    const fullIds = journalIds.map((id) => `${id}_FULL`);
+    const allItems = [...new Set([...matIds, ...varIds, ...fullIds])];
+    const locs = [...new Set([sellCity, ...matIds.map(cityForMat)])];
+
+    setLoadingPrices(true);
+    setFetchError(null);
+    try {
+      const adpQuotes = await fetchAdpPrices(server, allItems, locs, SELL_QUALITIES);
+      const q = new Map<string, PriceQuote>();
+      for (const x of adpQuotes) q.set(`${x.itemId}|${x.city}|${x.quality}`, x);
+
+      const curMatMeta = matMetaRef.current;
+      const curSellMeta = sellMetaRef.current;
+
+      const matVal = (id: string) => {
+        const quote = q.get(`${id}|${cityForMat(id)}|1`);
+        if (!quote || !isFresh(quote.updatedAt)) return null;
+        const v = orderForGroup(marketGroup(id)) === "buy" ? quote.buyMax : quote.sellMin;
+        return v ? { v, date: quote.updatedAt } : null;
+      };
+      setMatPrices((prev) => {
+        const next = { ...prev };
+        for (const id of matIds) {
+          if (curMatMeta[id]?.source === "manual") continue;
+          const r = matVal(id);
+          if (r) next[id] = r.v;
+        }
+        return next;
+      });
+      setMatMeta((prev) => {
+        const next = { ...prev };
+        for (const id of matIds) {
+          if (prev[id]?.source === "manual") continue;
+          const r = matVal(id);
+          if (r) next[id] = { source: "api", date: r.date, city: cityForMat(id) };
+        }
+        return next;
+      });
+
+      const useBuyOrder = sellCity === "Black Market";
+      const avgSell: Record<string, number> = {};
+      const sellDate: Record<string, number> = {};
+      for (const id of varIds) {
+        const vals: number[] = [];
+        let latest = 0;
+        for (const ql of SELL_QUALITIES) {
+          const quote = q.get(`${id}|${sellCity}|${ql}`);
+          if (!quote || !isFresh(quote.updatedAt)) continue;
+          const v = useBuyOrder ? quote.buyMax : quote.sellMin;
+          if (v) {
+            vals.push(v);
+            latest = Math.max(latest, quote.updatedAt);
+          }
+        }
+        if (vals.length) {
+          avgSell[id] = Math.round(vals.reduce((s, n) => s + n, 0) / vals.length);
+          sellDate[id] = latest;
+        }
+      }
+      setSellPrices((prev) => {
+        const next = { ...prev };
+        for (const id of varIds) {
+          if (curSellMeta[id]?.source === "manual") continue;
+          if (avgSell[id]) next[id] = avgSell[id];
+        }
+        return next;
+      });
+      setSellMeta((prev) => {
+        const next = { ...prev };
+        for (const id of varIds) {
+          if (prev[id]?.source === "manual") continue;
+          if (avgSell[id]) next[id] = { source: "api", date: sellDate[id], city: sellCity };
+        }
+        return next;
+      });
+
+      setFullJournalPrices((prev) => {
+        const next = { ...prev };
+        for (const id of journalIds) {
+          const quote = q.get(`${id}_FULL|${sellCity}|1`);
+          if (!quote || !isFresh(quote.updatedAt)) continue;
+          const v = useBuyOrder ? quote.buyMax : quote.sellMin;
+          if (v) next[id] = v;
+        }
+        return next;
+      });
+
+      const demandData = await fetchAdpDemand(server, varIds, DEMAND_CITIES, ALL_QUALITIES);
+      setDemand((prev) => ({ ...prev, ...demandData }));
+
+      setLastFetch(nowMs());
+    } catch (e) {
+      setFetchError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setLoadingPrices(false);
+    }
+  }
+
+  useEffect(() => {
+    if (family) fetchMarket();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [family, server, sellCity, groupMarket, groupOrder]);
+
+  const rows: React.ReactNode[] = [];
+  let lastTier = -1;
+  for (const v of variations) {
+    if (v.tier !== lastTier) {
+      lastTier = v.tier;
+      const art = artifactByTier.get(v.tier);
+      if (art) {
+        rows.push(
+          <tr key={`art-${v.tier}`} className="border-t border-zinc-700 bg-purple-900/10">
+            <td colSpan={9} className="px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <ItemIcon id={art} size={30} city={cityForMat(art)} server={server} name={nameOf(art)} />
+                <span className="font-semibold text-purple-300">{nameOf(art)}</span>
+                <PriceField value={matPrices[art]} meta={matMeta[art]} onChange={(val) => setMat(art, val)} />
+              </div>
+            </td>
+          </tr>,
+        );
+      }
+    }
+    const r = compute(v);
+    const ok = priced(v);
+    const isProfit = ok && (useFocus ? r.profitFocus > 0 && r.silverPerFocus >= minSpf : r.profitNoFocus > 0);
+    const journals = journalsFilled(v.resources, v.tier, v.enchant, batchQty);
+    const visibleMats = v.resources.filter((res) => !isArtifact(res.uniqueName));
+    rows.push(
+      <tr key={v.uniqueName} onDoubleClick={() => addOrder(v)} className="border-b border-zinc-900 hover:bg-zinc-800/40">
+        <td className="whitespace-nowrap px-3 py-2">
+          <div className="flex items-center gap-2">
+            <ItemIcon id={v.uniqueName} size={36} city={sellCity} server={server} name={`${nameOf(v.uniqueName)} ${tierLabel(v)}`} />
+            <span className={`font-medium ${isProfit ? "text-emerald-400" : "text-zinc-200"}`}>{tierLabel(v)}</span>
+            {v.outputPerCraft && v.outputPerCraft > 1 && <span className="rounded bg-zinc-800 px-1 text-[10px] text-zinc-400" title="Itens por craft">×{v.outputPerCraft}</span>}
+          </div>
+        </td>
+        <td className="px-2 py-2">
+          <div className="flex flex-wrap gap-x-1.5 gap-y-1.5">
+            {visibleMats.map((res) => (
+              <div key={res.uniqueName} className="flex items-center gap-1">
+                <span className="relative shrink-0">
+                  <ItemIcon id={res.uniqueName} size={28} city={cityForMat(res.uniqueName)} server={server} name={nameOf(res.uniqueName)} />
+                  <span className="absolute bottom-0.5 right-0 rounded bg-zinc-900/85 px-0.5 text-[9px] leading-tight tabular-nums text-zinc-300" title="Quantidade por craft">{res.count}</span>
+                </span>
+                <PriceField value={matPrices[res.uniqueName]} meta={matMeta[res.uniqueName]} onChange={(val) => setMat(res.uniqueName, val)} w="w-20" />
+              </div>
+            ))}
+          </div>
+        </td>
+        <Td right muted>{silver(v.focus * focusMult)}</Td>
+        <td className="px-2 py-2">
+          <div className="flex justify-end">
+            <PriceField value={sellPrices[v.uniqueName]} meta={sellMeta[v.uniqueName]} onChange={(val) => setSell(v.uniqueName, val)} w="w-24" />
+          </div>
+        </td>
+        <Td right value={ok ? r.profitNoFocus : undefined} sub={ok ? percent(r.marginNoFocus) : undefined}>{ok ? silverShort(r.profitNoFocus) : "—"}</Td>
+        <Td right value={ok ? r.profitFocus : undefined} sub={ok ? percent(r.marginFocus) : undefined}>{ok ? silverShort(r.profitFocus) : "—"}</Td>
+        <Td right value={ok ? r.silverPerFocus : undefined}>{ok ? decimal(r.silverPerFocus) : "—"}</Td>
+        <Td right muted>{isConsumable ? "—" : decimal(journals)}</Td>
+        <td className="px-3 py-2 text-right">
+          {demand[v.uniqueName] != null ? <span className={demand[v.uniqueName] < 5 ? "text-red-400" : "text-zinc-300"}>{silver(demand[v.uniqueName])}</span> : <span className="text-zinc-600">—</span>}
+        </td>
+      </tr>,
+    );
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-[1600px] px-4 py-5" style={{ zoom: uiScale }}>
+      {/* Navbar */}
+      <nav className="mb-4 flex items-center gap-4 border-b border-zinc-800 pb-3">
+        <span className="text-lg font-bold text-amber-400">Calculadora de Craft</span>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="mr-1 hidden text-xs text-zinc-500 sm:inline">
+            {fetchError ? <span className="text-red-400">Erro ao buscar preços</span> : loadingPrices ? "Atualizando…" : lastFetch ? `Preços ${timeAgo(lastFetch)} atrás · ADP` : "—"}
+          </span>
+          <IconButton onClick={fetchMarket} disabled={loadingPrices || !family} title="Atualizar preços" spinning={loadingPrices}>⟳</IconButton>
+          <button
+            ref={settingsBtnRef}
+            onClick={() => setShowSettings((s) => !s)}
+            title="Configurações"
+            className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-semibold ${showSettings ? "border-amber-500 text-amber-300" : "border-zinc-700 text-zinc-300 hover:border-zinc-600"}`}
+          >
+            <span className="text-base">⚙</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* Control bar */}
+      <div className="mb-4 flex flex-wrap items-start gap-3">
+        {/* Item dropdown */}
+        <div className="relative min-w-64 flex-1" ref={pickerRef}>
+          <button onClick={() => setPickerOpen((o) => !o)} className="flex h-[36px] w-full items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-left hover:border-zinc-600">
+            {family && (
+              <img src={iconUrl(displayVariation(family).uniqueName, 96, displayQuality(family))} alt="" width={28} height={28} />
+            )}
+            <span className="flex-1 truncate text-sm font-semibold text-zinc-100">{family?.name ?? "Carregando…"}</span>
+            {family?.bonusCity && <span className="hidden rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium sm:inline" style={{ color: cityColor(family.bonusCity) }} title={bonusBiome ? `Bioma de bônus de craft (+15%) · ${family.bonusCity}` : "Cidade de bônus de craft (+15%)"}>{bonusBiome ?? family.bonusCity}</span>}
+            <span className="text-zinc-500">▾</span>
+          </button>
+          {pickerOpen && (
+            <div className="absolute z-40 mt-1 w-96 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl">
+              <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar item…" className="mb-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-sm outline-none focus:border-amber-500" />
+              <div className="max-h-96 space-y-0.5 overflow-y-auto">
+                {filteredFamilies.map((f) => (
+                  <button key={f.familyKey} onClick={() => { setFamilyKey(f.familyKey); setPickerOpen(false); setSearch(""); }} className={`flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm ${f.familyKey === familyKey ? "bg-amber-500/15 text-amber-300" : "text-zinc-300 hover:bg-zinc-800"}`}>
+                    <img src={iconUrl(displayVariation(f).uniqueName, 64, displayQuality(f))} alt="" width={30} height={30} />
+                    <span className="truncate">{f.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Production controls */}
+        <div className="flex flex-wrap items-center gap-2">
+          <InlineNum label="Qtd" value={batchQty} onChange={setBatchQty} w="w-28" />
+          <ToggleBtn active={premium} on="Premium" off="Premium" onClick={() => setPremium((p) => !p)} />
+          <InlineNum label="Fee/100" value={stationFeePer100} onChange={setStationFeePer100} w="w-32" />
+          {/* Daily/event bonus */}
+          <div className="flex h-9 w-[130px] shrink-0 gap-1">
+            {bonusOpen ? (
+              <>
+                <BonusBtn label="Sem" active={eventBonus === 0} onClick={() => { setEventBonus(0); setBonusOpen(false); }} />
+                <BonusBtn label="+10%" active={eventBonus === 0.1} onClick={() => { setEventBonus(0.1); setBonusOpen(false); }} />
+                <BonusBtn label="+20%" active={eventBonus === 0.2} onClick={() => { setEventBonus(0.2); setBonusOpen(false); }} />
+              </>
+            ) : (
+              <button onClick={() => setBonusOpen(true)} title="Bônus de evento/diário" className={`flex h-9 w-full items-center justify-center rounded-md border px-2 text-sm ${eventBonus !== 0 ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600"}`}>
+                {eventBonus === 0 ? "Bônus" : `Bônus +${Math.round(eventBonus * 100)}%`}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Craft location */}
+        <div className="flex h-9 w-[184px] shrink-0 gap-1">
+          {placeOpen ? (
+            <>
+              <PlaceBtn icon="🏛️" label="Cidade" active={place === "city"} onClick={() => { setPlace("city"); setPlaceOpen(false); }} />
+              <PlaceBtn icon="🏝️" label="Ilha" active={place === "island"} onClick={() => { setPlace("island"); setPlaceOpen(false); }} />
+              {hideoutEligible && <PlaceBtn icon="🏠" label="Hideout" active={place === "hideout"} onClick={() => { setPlace("hideout"); setPlaceOpen(false); }} />}
+            </>
+          ) : place === "hideout" && hideoutEligible ? (
+            <>
+              <button onClick={() => setPlaceOpen(true)} title="Hideout — trocar local de craft" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-amber-500 bg-amber-500/15 text-base text-amber-300">🏠</button>
+              <select value={hoQuality} onChange={(e) => setHoQuality(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1 px-1`} title="Qualidade da zona do HO">{HIDEOUT_QUALITY.map((_, i) => <option key={i} value={i + 1}>{`Q${i + 1}`}</option>)}</select>
+              <select value={hoLevel} onChange={(e) => setHoLevel(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1 px-1`} title="Nível de poder do HO">{HIDEOUT_LEVEL.map((_, i) => <option key={i} value={i + 1}>{`Nv${i + 1}`}</option>)}</select>
+            </>
+          ) : (
+            <PlaceBtn icon={placeIcon} label={placeName} active expanded onClick={() => setPlaceOpen(true)} />
+          )}
+        </div>
+      </div>
+
+      {/* Settings */}
+      {showSettings && (
+        <div ref={settingsRef} className="mb-4 grid gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-3">
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Mercado</h3>
+            <Field label="Vender em">
+              <select value={sellCity} onChange={(e) => setSellCity(e.target.value)} className={selectCls}>
+                {CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </Field>
+            <Field label={
+              <span className="inline-flex items-center gap-1">
+                Preço do ouro (prata/ouro)
+                <span className="cursor-help text-zinc-600" title="Usado para o SPF mínimo: uma premium custa 3750 de ouro e rende ~300k de focus/mês.">ⓘ</span>
+              </span>
+            }>
+              <input type="number" value={goldPrice || ""} placeholder="—" onChange={(e) => setGoldPrice(e.target.value === "" ? 0 : +e.target.value)} className={`${selectCls} w-full placeholder:text-zinc-600`} />
+            </Field>
+            {minSpf > 0 && <p className="text-xs text-zinc-500">SPF mínimo: <b className="text-zinc-300">{decimal(minSpf)}</b> prata/focus</p>}
+          </div>
+
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Mercado por material</h3>
+            {groups.map((g) => (
+              <div key={g} className="flex items-end gap-2">
+                <Field label={groupLabel(g)}>
+                  <select value={cityForGroup(g)} onChange={(e) => setGroupMarket((m) => ({ ...m, [g]: e.target.value }))} className={`${selectCls} w-32`}>
+                    {CITIES.filter((c) => c !== "Black Market").map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
+                <select value={orderForGroup(g)} onChange={(e) => setGroupOrder((m) => ({ ...m, [g]: e.target.value as OrderMode }))} className={selectCls} title="Tipo de ordem">
+                  <option value="sell">Sell order</option>
+                  <option value="buy">Buy order</option>
+                </select>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Craft</h3>
+            <Field label={
+              <span className="inline-flex items-center gap-1">
+                Focus Efficiency (0–40000)
+                <span className="cursor-help text-zinc-600" title="Pontos de eficiência do Destiny Board. Reduz o custo de focus: 0 = sem redução, 40000 = custo x1/16.">ⓘ</span>
+              </span>
+            }>
+              <input type="number" min={0} max={40000} value={focusEfficiency || ""} placeholder="0" onChange={(e) => setFocusEfficiency(e.target.value === "" ? 0 : Math.min(40000, Math.max(0, +e.target.value)))} className={`${selectCls} w-full`} />
+            </Field>
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Ignorar jornais (tier)</h3>
+              <p className="text-xs text-zinc-500">Tiers marcados não entram no carrinho.</p>
+              <div className="flex flex-wrap gap-1.5">
+                {TIERS.map((t) => (
+                  <button key={t} onClick={() => toggleJournalTier(t)} className={`rounded-md border px-2 py-1 text-xs ${ignoredJournalTiers.has(t) ? "border-red-500/60 bg-red-900/20 text-red-300" : "border-zinc-700 text-zinc-300"}`}>T{t}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Interface</h3>
+            <Field label="Tamanho (ícones + texto)">
+              <select value={uiScale} onChange={(e) => setUiScale(+e.target.value)} className={selectCls}>
+                <option value={0.9}>Compacto</option>
+                <option value={1}>Padrão</option>
+                <option value={1.15}>Grande</option>
+                <option value={1.3}>Maior</option>
+                <option value={1.5}>Máximo</option>
+              </select>
+            </Field>
+          </div>
+        </div>
+      )}
+
+      {/* Main grid */}
+      <div className="grid items-start gap-5 min-[1500px]:grid-cols-[1fr_320px]">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-zinc-800 text-left text-[11px] uppercase tracking-wide text-zinc-500">
+                <Th>Item</Th>
+                <Th>Materiais (preço unit.)</Th>
+                <Th right>Focus cost</Th>
+                <Th right>Venda (méd)</Th>
+                <Th right><span title="Lucro sem focus">Lucro −F</span></Th>
+                <Th right><span title="Lucro com focus">Lucro +F</span></Th>
+                <Th right>SPF</Th>
+                <Th right>Jornais</Th>
+                <Th right>
+                  <span className="inline-flex items-center gap-1">
+                    Demanda
+                    <span className="cursor-help text-zinc-600" title="Soma de vendas diárias nas 5 cidades reais, todas as qualidades.">ⓘ</span>
+                  </span>
+                </Th>
+              </tr>
+            </thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </div>
+
+        <Cart cart={cart} matPrices={matPrices} sellPrices={sellPrices} weights={weights} journalBase={journalBase} fullJournalPrices={fullJournalPrices} settings={settings} ignoredTiers={ignoredJournalTiers} rrNoFocus={rrNoFocus} rrFocus={rrFocus} nameOf={nameOf} onRemove={(id) => setCart((c) => c.filter((o) => o.id !== id))} onClear={() => setCart([])} />
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Cart ---------------- */
+
+function Cart({
+  cart, matPrices, sellPrices, weights, journalBase, fullJournalPrices, settings, ignoredTiers, rrNoFocus, rrFocus, nameOf, onRemove, onClear,
+}: {
+  cart: Order[];
+  matPrices: Record<string, number | undefined>;
+  sellPrices: Record<string, number | undefined>;
+  weights: Record<string, number>;
+  journalBase: Record<string, JournalBase>;
+  fullJournalPrices: Record<string, number>;
+  settings: Settings;
+  ignoredTiers: Set<number>;
+  rrNoFocus: number;
+  rrFocus: number;
+  nameOf: (id: string) => string;
+  onRemove: (id: string) => void;
+  onClear: () => void;
+}) {
+  const journalUnit = (id: string) => matPrices[id] ?? journalBase[id]?.base ?? 0;
+  const orderProfit = (o: Order) =>
+    computeCraft({
+      quantity: o.qty,
+      materials: o.variation.resources.map((r) => ({ uniqueName: r.uniqueName, unitPrice: matPrices[r.uniqueName] ?? 0, countPerCraft: r.count, noReturn: r.noReturn })),
+      sellPrice: sellPrices[o.variation.uniqueName] ?? 0,
+      outputPerCraft: o.variation.outputPerCraft ?? 1,
+      returnRateNoFocus: o.rr,
+      returnRateFocus: o.rr,
+      focusCostBase: o.variation.focus,
+      focusEfficiency: settings.focusEfficiency,
+      itemValue: o.variation.itemValue,
+      stationFeePer100: settings.stationFeePer100,
+      salesTaxRate: settings.premium ? 0.04 : 0.08,
+      setupFeeRate: SETUP_FEE,
+    }).profitNoFocus;
+
+  const combined = new Map<string, { buyCount: number; subtotal: number }>();
+  const journalCount = new Map<string, number>();
+  let grandTotal = 0;
+  let plannedProfit = 0;
+  let totalLoad = 0;
+
+  for (const o of cart) {
+    plannedProfit += orderProfit(o);
+    for (const n of materialNeeds(o.variation.resources, o.qty, o.rr)) {
+      const unit = matPrices[n.uniqueName] ?? 0;
+      const sub = n.buyCount * unit;
+      grandTotal += sub;
+      totalLoad += n.buyCount * (weights[n.uniqueName] ?? 0);
+      const cur = combined.get(n.uniqueName) ?? { buyCount: 0, subtotal: 0 };
+      combined.set(n.uniqueName, { buyCount: cur.buyCount + n.buyCount, subtotal: cur.subtotal + sub });
+    }
+    if (o.journalId && !ignoredTiers.has(o.variation.tier)) {
+      const j = journalsFilled(o.variation.resources, o.variation.tier, o.variation.enchant, o.qty);
+      journalCount.set(o.journalId, (journalCount.get(o.journalId) ?? 0) + j);
+    }
+  }
+  let journalProfit = 0;
+  let journalTotal = 0;
+  let journalPriced = true;
+  for (const [id, raw] of journalCount) {
+    const count = Math.ceil(raw);
+    grandTotal += count * journalUnit(id);
+    totalLoad += count * (weights[id] ?? 0);
+    journalTotal += count;
+    const full = fullJournalPrices[id];
+    if (full == null) journalPriced = false;
+    else journalProfit += count * (full - journalUnit(id));
+  }
+
+  return (
+    <aside className="space-y-3 xl:sticky xl:top-4 xl:self-start">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-zinc-200">🛒 Carrinho de craft</h2>
+        <div className="flex items-center gap-2 text-xs text-zinc-400">
+          <span>ret. s/f <b className="text-zinc-100">{percent(rrNoFocus)}</b></span>
+          <span>c/f <b className="text-zinc-100">{percent(rrFocus)}</b></span>
+        </div>
+      </div>
+
+      {cart.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/30 p-6 text-center text-sm text-zinc-500">
+          Dê <b className="text-zinc-300">duplo-clique</b> em uma linha da tabela para adicionar o pedido ao carrinho.
+        </div>
+      ) : (
+        <>
+          <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3">
+            <div className="mb-2 grid grid-cols-2 gap-2">
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-zinc-500">Total a comprar</div>
+                <div className="text-base font-bold text-amber-300">{silver(grandTotal)}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] uppercase tracking-wide text-zinc-500">Lucro planejado</div>
+                <div className={`text-base font-bold ${plannedProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}>{silver(plannedProfit)}</div>
+              </div>
+            </div>
+            <div className="mb-2 flex items-center justify-between border-t border-zinc-800 pt-2 text-xs">
+              <span className="text-zinc-500">Peso</span>
+              <span onDoubleClick={selectAllText} className="font-semibold text-zinc-300">{decimal(totalLoad)} kg</span>
+            </div>
+            {journalTotal > 0 && (
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="inline-flex items-center gap-1 text-zinc-500">
+                  Lucro jornais
+                  <span className="cursor-help text-zinc-600" title="Lucro de vender os jornais cheios (preço cheio − preço/base do vazio).">ⓘ</span>
+                </span>
+                {journalPriced ? (
+                  <span onDoubleClick={selectAllText} className={`font-semibold ${journalProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}>{silver(journalProfit)} ({journalTotal})</span>
+                ) : (
+                  <span className="text-zinc-600">— ({journalTotal})</span>
+                )}
+              </div>
+            )}
+            <button onClick={onClear} className="mb-2 text-xs text-zinc-500 hover:text-red-400">limpar tudo</button>
+            <table className="w-full table-fixed text-xs">
+              <tbody>
+                {[
+                  ...[...combined.entries()].map(([id, v]) => ({ id, count: v.buyCount, subtotal: v.subtotal })),
+                  ...[...journalCount.entries()].map(([id, raw]) => {
+                    const count = Math.ceil(raw);
+                    return { id, count, subtotal: count * journalUnit(id) };
+                  }),
+                ].map((it) => <CartItemRow key={it.id} id={it.id} count={it.count} subtotal={it.subtotal} name={nameOf(it.id)} />)}
+              </tbody>
+            </table>
+          </div>
+
+          {cart.map((o) => {
+            const journals = journalsFilled(o.variation.resources, o.variation.tier, o.variation.enchant, o.qty);
+            const needs = materialNeeds(o.variation.resources, o.qty, o.rr);
+            const total = needs.reduce((s, n) => s + n.buyCount * (matPrices[n.uniqueName] ?? 0), 0);
+            return (
+              <div key={o.id} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
+                <div className="flex items-start gap-2">
+                  <img src={iconUrl(o.variation.uniqueName)} alt="" width={38} height={38} />
+                  <div className="flex-1">
+                    <div onDoubleClick={selectAllText} className="text-sm font-medium text-zinc-100">{o.qty}× {o.name} {tierLabel(o.variation)}</div>
+                    <div className="flex flex-wrap gap-1.5 text-[11px] text-zinc-400">
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5">{o.placeLabel}</span>
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5">{o.useFocus ? "com focus" : "sem focus"}</span>
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5">{decimal(journals)} jornais</span>
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5">{silver(total)}</span>
+                    </div>
+                  </div>
+                  <button onClick={() => onRemove(o.id)} className="text-zinc-500 hover:text-red-400" title="Excluir pedido">✕</button>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </aside>
+  );
+}
+
+function CartItemRow({ id, count, subtotal, name }: { id: string; count: number; subtotal: number; name: string }) {
+  return (
+    <tr>
+      <td className="w-full max-w-0 py-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <img src={iconUrl(id)} alt="" width={24} height={24} className="shrink-0" />
+          <span onDoubleClick={selectAllText} className="truncate text-zinc-300">{name}</span>
+        </div>
+      </td>
+      <td onDoubleClick={selectAllText} className="w-16 whitespace-nowrap py-1 pl-2 text-right text-zinc-300">{silver(count)}</td>
+      <td onDoubleClick={selectAllText} className="w-16 whitespace-nowrap py-1 pl-2 text-right text-zinc-500">{subtotal ? silverShort(subtotal) : "—"}</td>
+    </tr>
+  );
+}
+
+/* ---------------- Item icon with hover price history ---------------- */
+
+function ItemIcon({ id, size, city, server, name }: { id: string; size: number; city: string; server: PriceServer; name: string }) {
+  const [show, setShow] = useState(false);
+  const [data, setData] = useState<{ series: { t: string; price: number }[]; avg: number } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const enter = () => {
+    timer.current = setTimeout(async () => {
+      setShow(true);
+      if (!data) {
+        try {
+          const result = await fetchAdpPriceSeries(server, id, city, [1, 2, 3, 4]);
+          setData(result);
+        } catch {
+          setData({ series: [], avg: 0 });
+        }
+      }
+    }, 2000);
+  };
+  const leave = () => {
+    if (timer.current) clearTimeout(timer.current);
+    setShow(false);
+  };
+
+  return (
+    <span className="relative inline-flex" onMouseEnter={enter} onMouseLeave={leave}>
+      <img src={iconUrl(id, size * 2)} alt="" width={size} height={size} />
+      {show && (
+        <div className="absolute left-0 top-full z-30 mt-1 w-96 rounded-lg border border-zinc-700 bg-zinc-900 p-3 shadow-xl">
+          <div className="mb-1 flex items-center justify-between gap-2 text-sm">
+            <span className="truncate font-semibold text-zinc-200">{name}</span>
+            <span className="shrink-0 text-zinc-500">4 sem · {cityAbbr(city)}</span>
+          </div>
+          {!data ? (
+            <div className="py-6 text-center text-xs text-zinc-500">Carregando histórico…</div>
+          ) : data.series.length === 0 ? (
+            <div className="py-6 text-center text-xs text-zinc-500">Sem histórico em {city}</div>
+          ) : (
+            <PriceHistory series={data.series} avg={data.avg} />
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
+function PriceHistory({ series, avg }: { series: { t: string; price: number }[]; avg: number }) {
+  const W = 320, H = 132;
+  const padL = 6, padR = 70, padTop = 8, padBottom = 24;
+  const plotW = W - padL - padR;
+  const plotH = H - padTop - padBottom;
+  const prices = series.map((p) => p.price);
+  const max = Math.max(...prices);
+  const min = Math.min(...prices);
+  const range = Math.max(1, max - min);
+  const n = series.length;
+  const x = (i: number) => padL + (n > 1 ? (i / (n - 1)) * plotW : plotW / 2);
+  const y = (v: number) => padTop + (1 - (v - min) / range) * plotH;
+  const baseY = padTop + plotH;
+  const line = series.map((p, i) => `${x(i).toFixed(1)},${y(p.price).toFixed(1)}`).join(" ");
+  const refs = [
+    { v: max, c: "#34d399", label: "máx", strong: false },
+    { v: avg, c: "#fbbf24", label: "méd", strong: true },
+    { v: min, c: "#f87171", label: "mín", strong: false },
+  ];
+  const weeks = [1, 2, 3, 4];
+  const weekX = (w: number) => padL + (1 - w / 4) * plotW;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" preserveAspectRatio="xMidYMid meet">
+      {series.map((_, i) => (
+        <line key={`d${i}`} x1={x(i)} x2={x(i)} y1={padTop} y2={baseY} stroke="#3f3f46" strokeWidth="0.3" opacity="0.4" />
+      ))}
+      {weeks.map((w) => (
+        <g key={`w${w}`}>
+          <line x1={weekX(w)} x2={weekX(w)} y1={padTop} y2={baseY} stroke="#52525b" strokeWidth="0.6" strokeDasharray="2 2" opacity="0.7" />
+          <text x={weekX(w)} y={baseY + 16} textAnchor="middle" fontSize="11" fill="#71717a">{`${w}w`}</text>
+        </g>
+      ))}
+      {refs.map((r, i) => (
+        <g key={i}>
+          <line x1={padL} x2={padL + plotW} y1={y(r.v)} y2={y(r.v)} stroke={r.c} strokeWidth={r.strong ? 0.9 : 0.6} strokeDasharray="3 3" opacity="0.6" />
+          <text x={padL + plotW + 4} y={y(r.v) + 3} fontSize={r.strong ? 13 : 11} fontWeight={r.strong ? 700 : 400} fill={r.c}>{silverShort(r.v)}</text>
+        </g>
+      ))}
+      <polyline points={line} fill="none" stroke="#38bdf8" strokeWidth="1.4" />
+      {series.map((p, i) => (
+        <circle key={i} cx={x(i)} cy={y(p.price)} r="1.6" fill="#7dd3fc">
+          <title>{`${p.t.slice(5, 10)}: ${silver(p.price)}`}</title>
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
+/* ---------------- UI primitives ---------------- */
+
+function IconButton({ children, onClick, title, disabled, spinning }: { children: React.ReactNode; onClick: () => void; title: string; active?: boolean; disabled?: boolean; spinning?: boolean }) {
+  return (
+    <button onClick={onClick} disabled={disabled} title={title} className={`relative flex h-9 items-center rounded-lg border px-3 text-base disabled:opacity-50 border-zinc-700 text-zinc-300 hover:border-zinc-600`}>
+      <span className={spinning ? "inline-block animate-spin" : ""}>{children}</span>
+    </button>
+  );
+}
+
+const selectCls = "rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-amber-500";
+
+function InlineNum({ label, value, onChange, w = "w-24" }: { label: string; value: number; onChange: (v: number) => void; w?: string }) {
+  return (
+    <div className={`flex h-[36px] items-center rounded-md border border-zinc-700 bg-zinc-900 ${w}`}>
+      <span className="pl-2 text-[11px] text-zinc-500">{label}</span>
+      <input type="number" value={value} onChange={(e) => onChange(+e.target.value)} className="min-w-0 flex-1 bg-transparent px-2 text-right text-sm text-zinc-100 outline-none" />
+    </div>
+  );
+}
+
+function ToggleBtn({ active, on, off, onClick }: { active: boolean; on: string; off: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className={`h-[36px] rounded-md border px-3 text-sm font-medium ${active ? "border-amber-500 bg-amber-500 text-zinc-950" : "border-zinc-700 bg-zinc-900 text-zinc-400"}`}>
+      {active ? on : off}
+    </button>
+  );
+}
+
+function PlaceBtn({ icon, label, active, onClick, expanded }: { icon: string; label: string; active: boolean; onClick: () => void; expanded?: boolean }) {
+  return (
+    <button onClick={onClick} title={label} className={`flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border px-2 text-sm ${active ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600"}`}>
+      <span className="text-base">{icon}</span>
+      {expanded && <span>{label}</span>}
+    </button>
+  );
+}
+
+function BonusBtn({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className={`flex h-9 flex-1 items-center justify-center rounded-md border px-1 text-xs ${active ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600"}`}>
+      {label}
+    </button>
+  );
+}
+
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs text-zinc-400">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Th({ children, right }: { children?: React.ReactNode; right?: boolean }) {
+  return <th className={`sticky top-0 z-20 bg-zinc-900 px-3 py-2 font-medium ${right ? "text-right" : ""}`}>{children}</th>;
+}
+
+function Td({ children, right, muted, value, sub }: { children: React.ReactNode; right?: boolean; muted?: boolean; value?: number; sub?: React.ReactNode }) {
+  const color = value === undefined ? "" : value > 0 ? "text-emerald-400" : value < 0 ? "text-red-400" : "";
+  return (
+    <td className={`whitespace-nowrap px-2 py-2 ${right ? "text-right" : ""} ${muted ? "text-zinc-500" : ""} ${color}`}>
+      {sub != null ? (
+        <div className={`flex flex-col leading-tight ${right ? "items-end" : ""}`}>
+          <span>{children}</span>
+          <span className="text-[10px] opacity-70">{sub}</span>
+        </div>
+      ) : (
+        children
+      )}
+    </td>
+  );
+}
+
+function MetaInline({ meta }: { meta?: PriceInfo }) {
+  if (!meta) return null;
+  if (meta.source === "manual")
+    return <span className="flex w-7 shrink-0 items-center justify-center text-[10px] text-amber-400" title="Editado manualmente">✎</span>;
+  const stale = isStale(meta.date);
+  return (
+    <span className={`flex w-7 shrink-0 flex-col items-center justify-center leading-none ${stale ? "text-orange-400" : "text-sky-400"}`} title={`Preço da API${meta.city ? ` em ${meta.city}` : ""}`}>
+      <span className="text-[9px]" style={{ color: cityColor(meta.city) }}>{meta.date ? timeAgo(meta.date) : "—"}</span>
+      <span className="text-[9px] font-semibold" style={{ color: cityColor(meta.city) }}>{cityAbbr(meta.city)}</span>
+    </span>
+  );
+}
+
+function PriceField({ value, meta, onChange, w = "w-28" }: { value?: number; meta?: PriceInfo; onChange: (v: number | undefined) => void; w?: string }) {
+  return (
+    <div className={`flex items-center rounded-md border border-zinc-700 bg-zinc-950 focus-within:border-amber-500 ${w}`}>
+      <MetaInline meta={meta} />
+      <input
+        type="number"
+        value={value ?? ""}
+        placeholder="—"
+        onChange={(e) => onChange(e.target.value === "" ? undefined : +e.target.value)}
+        className="min-w-0 flex-1 bg-transparent px-1.5 py-1 text-right text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+      />
+    </div>
+  );
+}

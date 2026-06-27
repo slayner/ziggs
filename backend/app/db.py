@@ -1,0 +1,42 @@
+"""Engine + sessão SQLAlchemy (síncrono por enquanto; simples e suficiente)."""
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+from sqlalchemy import event, create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.config import get_settings
+
+_settings = get_settings()
+
+# SQLite (dev local) precisa de check_same_thread=False porque o FastAPI roda
+# endpoints síncronos em várias threads. timeout=30: espera até 30s pelo lock
+# em vez de falhar imediatamente quando há writes concorrentes dos background
+# tasks (battle_tracker, profile_warmer, player_tracker).
+_is_sqlite = _settings.database_url.startswith("sqlite")
+_connect_args = {"check_same_thread": False, "timeout": 30} if _is_sqlite else {}
+engine = create_engine(
+    _settings.database_url, pool_pre_ping=True, future=True,
+    connect_args=_connect_args,
+)
+
+if _is_sqlite:
+    # WAL mode: leitores não bloqueiam escritores e vice-versa — elimina a
+    # maior parte do "database is locked" com múltiplos background tasks.
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_wal(dbapi_conn, _rec):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.close()
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+def get_session() -> Iterator[Session]:
+    """Dependency do FastAPI: abre uma sessão por request."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
