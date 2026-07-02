@@ -27,6 +27,7 @@ def upload_loot(
     payload: LootUpload,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     result = svc.upload_loot(db, guild.id, event_id, payload)
     db.commit()
@@ -42,6 +43,7 @@ def get_loot(
     event_id: int,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("events.view")),
 ):
     return svc.reconcile(db, guild.id, event_id)
 
@@ -59,6 +61,7 @@ def upload_chest(
     payload: ChestUpload,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     result = svc.upload_chest(db, guild.id, event_id, payload)
     db.commit()
@@ -76,6 +79,7 @@ def item_price(
     item_type: str,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("events.view")),
 ):
     try:
         return svc.get_price(db, item_type)

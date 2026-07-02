@@ -14,6 +14,7 @@ Funções legacy (sync_prices / get_price) mantidas para compatibilidade.
 from __future__ import annotations
 
 import asyncio
+import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -326,7 +327,14 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
         rows = []
         for item_id in missing:
             vals = by_item.get(item_id, [])
-            price = round(sum(vals) / len(vals)) if vals else 0
+            # Mediana, não média — item ilíquido pode ter só 1-2 listagens
+            # reais entre as ~28 combinações (cidade × qualidade) e o resto
+            # zero/ausente; uma única listagem "troll" (vendedor sem
+            # concorrência pedindo um preço absurdo) já bastava pra puxar a
+            # MÉDIA pra um valor completamente fora da realidade — e como
+            # esse cache é permanente (nunca reconsultado), ficava errado
+            # pra sempre. Mediana ignora esse tipo de outlier isolado.
+            price = round(statistics.median(vals)) if vals else 0
             cached[item_id] = price
             rows.append({"item_id": item_id, "city": _BATTLE_SENTINEL, "quality": 1,
                          "sell_price_min": price, "price_date": now, "recorded_at": now})

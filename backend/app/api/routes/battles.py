@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.models.battles import Battle, BattleGuild, BattleKillEvent, BattleParticipant, BattleSide
 from app.models.catalog import Weapon
-from app.models.players import PlayerKillEvent
+from app.models.players import PlayerCountSnapshot, PlayerKillEvent
 from app.services import battle_groups, battle_sides, battle_tracker, prices
+from app.services.player_activity import active_player_count
 
 router = APIRouter(prefix="/battles", tags=["battles"])
 
@@ -159,37 +160,20 @@ def _factions_summary(db: Session, battle_id: int) -> list[dict]:
     return rows
 
 
-def _active_player_count(db: Session, region: str | None, start: datetime, end: datetime) -> int:
-    """Distintos com kill OU morte no ledger na janela — não dá pra fazer
-    direto em SQL com clareza (união de 2 colunas), então junta em Python;
-    volume de uma janela de 7 dias é pequeno o bastante pra não pesar."""
-    q = select(PlayerKillEvent.killer_player_id, PlayerKillEvent.victim_player_id).where(
-        PlayerKillEvent.timestamp >= start, PlayerKillEvent.timestamp < end,
-    )
-    if region:
-        q = q.where(PlayerKillEvent.region == region)
-    ids: set[int] = set()
-    for killer_id, victim_id in db.execute(q).all():
-        if killer_id is not None:
-            ids.add(killer_id)
-        if victim_id is not None:
-            ids.add(victim_id)
-    return len(ids)
-
-
 @router.get("/active-players")
 def active_players(db: Session = Depends(deps.db_session)):
     """Jogadores distintos (kill ou morte) nos últimos 7 dias, por região +
-    global, comparado com os 7 dias anteriores. Sem tabela de snapshot: o
-    ledger (PlayerKillEvent) nunca é apagado, a janela anterior sempre pode
-    ser recalculada — "histórico" vem de graça."""
+    global, comparado com os 7 dias anteriores. A janela anterior é
+    recalculada do ledger (PlayerKillEvent), mas o HISTÓRICO ponto-a-ponto
+    pro gráfico vem de PlayerCountSnapshot (ver active_players_history
+    abaixo) — o ledger não guarda "quantos estavam ativos às 14h de terça"."""
     now = datetime.now(timezone.utc)
     week_start = now - timedelta(days=7)
     prev_start = now - timedelta(days=14)
 
     def stat(region: str | None) -> dict:
-        current = _active_player_count(db, region, week_start, now)
-        previous = _active_player_count(db, region, prev_start, week_start)
+        current = active_player_count(db, region, week_start, now)
+        previous = active_player_count(db, region, prev_start, week_start)
         delta_pct = round((current - previous) / previous * 100) if previous else None
         return {"current": current, "previous": previous, "delta_pct": delta_pct}
 
@@ -201,66 +185,162 @@ def active_players(db: Session = Depends(deps.db_session)):
     }
 
 
+_ACTIVE_HISTORY_RANGE_DAYS = {"1m": 31, "6m": 183, "1y": 366}
+_ACTIVE_HISTORY_REGIONS = ("global", "americas", "europe", "asia")
+
+
+@router.get("/active-players/history")
+def active_players_history(range: str = "6m", db: Session = Depends(deps.db_session)):
+    """Série histórica pro gráfico do dashboard — pontos coletados a cada
+    15min por services/player_count_snapshot.py. `collected_since` ignora o
+    filtro de range: é a data do PRIMEIRO snapshot já gravado, pra avisar o
+    usuário desde quando a coleta existe mesmo que ele esteja olhando "1 mês"."""
+    since_row = db.execute(select(func.min(PlayerCountSnapshot.recorded_at))).scalar_one_or_none()
+
+    q = select(PlayerCountSnapshot.region, PlayerCountSnapshot.count, PlayerCountSnapshot.recorded_at)
+    days = _ACTIVE_HISTORY_RANGE_DAYS.get(range)
+    if days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        q = q.where(PlayerCountSnapshot.recorded_at >= cutoff)
+    q = q.order_by(PlayerCountSnapshot.recorded_at)
+
+    series: dict[str, list[dict]] = {r: [] for r in _ACTIVE_HISTORY_REGIONS}
+    for region, count, recorded_at in db.execute(q).all():
+        if region in series:
+            series[region].append({"t": int(_aware(recorded_at).timestamp() * 1000), "count": count})
+
+    return {
+        "collected_since": _aware(since_row).isoformat() if since_row else None,
+        "series": series,
+    }
+
+
+def _week_start_utc() -> datetime:
+    """Domingo 00:00 UTC mais recente — o ranking semanal de fama reseta
+    nesse instante, não é uma janela rolante de 7 dias."""
+    now = datetime.now(timezone.utc)
+    days_since_sunday = (now.weekday() + 1) % 7  # weekday(): Mon=0..Sun=6
+    return (now - timedelta(days=days_since_sunday)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+# Sistema de pontos "invisível" por arma — kills puras favoreciam só dps e
+# nunca destacavam tank/suporte/healer/pierce, que carregam a luta sem
+# necessariamente fechar abates pessoais. Kills sempre valem 1 ponto pra
+# qualquer função; cada função soma um bônus específico. Compartilhado entre
+# o destaque de armas do perfil de jogador (routes/players.py _weapon_points)
+# e o ranking de "maior pontuador com uma arma" do Highscores.
+HEALING_PER_POINT = 500_000        # healer: 1 ponto a cada 500k de cura NA MESMA luta
+ASSISTS_PER_POINT = 3              # pierce: 1 ponto a cada 3 assists
+SUPPORT_ELIGIBLE_FIGHT_POINTS = 2  # suporte: por luta elegível (ranking semanal) com 0 mortes
+TANK_ELIGIBLE_FIGHT_POINTS = 3     # tank: idem, mas só se a guilda não perdeu mais que o time adversário
+
+
+def lethal_with_healing_filter() -> list:
+    """Luta letal (ver Battle.is_lethal em battle_tracker._write_deep_data)
+    com cura registrada — de qualquer lado, não precisa ser da própria
+    guilda. Reaproveitado pelo ranking semanal de guildas (battle_highlights)
+    e pelo sistema de pontos por arma do perfil de jogador (routes/players.py)."""
+    return [
+        Battle.is_lethal.is_(True),
+        Battle.id.in_(select(BattleParticipant.battle_id).where(BattleParticipant.healing_done > 0)),
+    ]
+
+
+def latest_guild_names(db: Session, guild_ids: list[str]) -> dict[str, tuple[str, str | None]]:
+    """Nome/aliança mais recentes de cada guilda (podem variar entre batalhas)
+    — busca separada da agregação principal porque incluir essas colunas no
+    GROUP BY quebra no Postgres sem agregação. Reaproveitado pelo ranking
+    semanal de fama e pelos rankings do Highscores."""
+    if not guild_ids:
+        return {}
+    out: dict[str, tuple[str, str | None]] = {}
+    for gid, gname, aname in db.execute(
+        select(BattleGuild.albion_guild_id, BattleGuild.guild_name, BattleGuild.alliance_name)
+        .join(Battle, Battle.id == BattleGuild.battle_id)
+        .where(BattleGuild.albion_guild_id.in_(guild_ids))
+        .order_by(Battle.id.desc())
+    ):
+        out.setdefault(gid, (gname, aname))
+    return out
+
+
+def eligible_guild_battles_subquery():
+    """(battle_id, guild_id, player_count) onde a guilda teve mais de 15
+    jogadores distintos NESSA luta — independe de lado, conta os dois lados
+    se a guilda aparecer em ambos (caso raro, mas não custa nada tratar
+    certo). Reaproveitado pelo ranking semanal de guildas e pelo sistema de
+    pontos por arma do perfil de jogador (routes/players.py)."""
+    return (
+        select(
+            BattleParticipant.battle_id,
+            BattleParticipant.guild_id,
+            func.count(func.distinct(BattleParticipant.albion_player_id)).label("player_count"),
+        )
+        .where(BattleParticipant.guild_id.isnot(None))
+        .group_by(BattleParticipant.battle_id, BattleParticipant.guild_id)
+        .having(func.count(func.distinct(BattleParticipant.albion_player_id)) > 15)
+        .subquery()
+    )
+
+
 @router.get("/highlights")
 def battle_highlights(regions: str | None = None, db: Session = Depends(deps.db_session)):
-    """Top 7 jogadores que mais apareceram em batalhas "de verdade" nos
-    últimos 7 dias — só conta luta com mais de 5 jogadores, que teve cura
-    (filtra ganks pequenos/solo) E que é letal (filtra duelo/arena disfarçado
-    de luta grande, ver Battle.is_lethal em battle_tracker._write_deep_data)."""
-    week_start = datetime.now(timezone.utc) - timedelta(days=7)
+    """Ranking semanal (reseta domingo 00:00 UTC) de fama PvP por guilda. Só
+    conta fama de batalha elegível: a guilda teve mais de 15 jogadores NESSA
+    luta (limiar é por guilda, não pela batalha toda), a luta é letal (ver
+    Battle.is_lethal em battle_tracker._write_deep_data), e houve cura
+    registrada — de qualquer lado, não precisa ser da própria guilda."""
+    week_start = _week_start_utc()
 
-    q = select(Battle.id).where(
+    battle_filters = [
         Battle.processing_tier == "deep",
-        Battle.players_total > 5,
         Battle.start_time >= week_start,
-        Battle.is_lethal.is_(True),
-    )
+        *lethal_with_healing_filter(),
+    ]
     if regions:
-        q = q.where(Battle.region.in_([r.strip() for r in regions.split(",") if r.strip()]))
-    q = q.where(Battle.id.in_(select(BattleParticipant.battle_id).where(BattleParticipant.healing_done > 0)))
+        battle_filters.append(Battle.region.in_([r.strip() for r in regions.split(",") if r.strip()]))
 
-    qualifying_ids = db.scalars(q).all()
-    if not qualifying_ids:
-        return {"players": []}
+    eligible_guild_battles = eligible_guild_battles_subquery()
 
-    counts = db.execute(
-        select(BattleParticipant.albion_player_id, func.count(BattleParticipant.id).label("appearances"))
-        .where(BattleParticipant.battle_id.in_(qualifying_ids))
-        .group_by(BattleParticipant.albion_player_id)
-        .order_by(func.count(BattleParticipant.id).desc())
-        .limit(7)
+    fame_rows = db.execute(
+        select(
+            BattleGuild.albion_guild_id,
+            func.sum(BattleGuild.kill_fame).label("fame"),
+            func.avg(eligible_guild_battles.c.player_count).label("avg_players"),
+        )
+        .join(Battle, Battle.id == BattleGuild.battle_id)
+        .join(
+            eligible_guild_battles,
+            (eligible_guild_battles.c.battle_id == BattleGuild.battle_id)
+            & (eligible_guild_battles.c.guild_id == BattleGuild.albion_guild_id),
+        )
+        .where(*battle_filters)
+        .group_by(BattleGuild.albion_guild_id)
+        .order_by(func.sum(BattleGuild.kill_fame).desc())
+        .limit(10)
     ).all()
-    if not counts:
-        return {"players": []}
+    if not fame_rows:
+        return {"week_start": week_start.isoformat(), "guilds": []}
 
-    player_ids = [r.albion_player_id for r in counts]
-    appearances = {r.albion_player_id: r.appearances for r in counts}
+    guild_ids = [r.albion_guild_id for r in fame_rows]
+    fame_by_id = {r.albion_guild_id: int(r.fame or 0) for r in fame_rows}
+    avg_players_by_id = {r.albion_guild_id: round(r.avg_players or 0) for r in fame_rows}
 
-    # Nome/guilda/região podem variar entre as batalhas da janela (multi-
-    # servidor) — busca o registro mais recente de cada jogador pra exibição
-    # numa query separada (em vez de incluir essas colunas no GROUP BY acima,
-    # que o Postgres rejeita sem agregação — diferente do SQLite, que aceita
-    # de boa).
-    latest_by_player: dict[str, tuple[BattleParticipant, str]] = {}
-    for bp, region in db.execute(
-        select(BattleParticipant, Battle.region)
-        .join(Battle, Battle.id == BattleParticipant.battle_id)
-        .where(BattleParticipant.albion_player_id.in_(player_ids), BattleParticipant.battle_id.in_(qualifying_ids))
-        .order_by(BattleParticipant.battle_id.desc())
-    ):
-        latest_by_player.setdefault(bp.albion_player_id, (bp, region))
+    latest_by_id = latest_guild_names(db, guild_ids)
 
-    return {"players": [
-        {
-            "albion_player_id": pid,
-            "name": latest_by_player[pid][0].name,
-            "guild_name": latest_by_player[pid][0].guild_name,
-            "alliance_name": latest_by_player[pid][0].alliance_name,
-            "region": latest_by_player[pid][1],
-            "appearances": appearances[pid],
-        }
-        for pid in player_ids
-    ]}
+    return {
+        "week_start": week_start.isoformat(),
+        "guilds": [
+            {
+                "albion_guild_id": gid,
+                "name": latest_by_id.get(gid, (gid, None))[0],
+                "alliance_name": latest_by_id.get(gid, (gid, None))[1],
+                "fame": fame_by_id[gid],
+                "avg_players": avg_players_by_id[gid],
+            }
+            for gid in guild_ids
+        ],
+    }
 
 
 @router.get("")
@@ -323,10 +403,14 @@ def list_battles(
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
     battles = db.scalars(q.order_by(Battle.start_time.desc()).limit(limit).offset(offset)).all()
 
+    # Toda batalha que aparece no feed ganha um link público (se ainda não tiver)
+    # — em lote, um commit só pra página inteira, não um por batalha (ver
+    # get_or_create_groups_bulk).
+    groups = battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
+
     out = []
     for b in battles:
-        # Toda batalha que aparece no feed ganha um link público (se ainda não tiver).
-        group = battle_groups.get_or_create_group(db, [b.id])
+        group = groups[b.id]
         out.append({
             "public_id": group.public_id,
             "region": b.region,
@@ -395,8 +479,8 @@ def _combined_detail(db: Session, battle_ids: list[int], public_id: str) -> dict
             merged[v]["death_fame"] += ev.fame
         if not k or not v:
             continue
-        kf = battle_sides.faction_key(merged[k]["guild_id"], merged[k]["alliance_id"])
-        vf = battle_sides.faction_key(merged[v]["guild_id"], merged[v]["alliance_id"])
+        kf = battle_sides.faction_key(merged[k]["guild_id"], merged[k]["alliance_id"], k)
+        vf = battle_sides.faction_key(merged[v]["guild_id"], merged[v]["alliance_id"], v)
         kills_between[(kf, vf)] = kills_between.get((kf, vf), 0) + 1
 
     factions, player_faction = battle_sides.build_factions(merged)
@@ -561,17 +645,30 @@ async def resolve_battles(albion_ids: list[str] = Body(..., embed=True), db: Ses
         raise HTTPException(400, "Nenhum ID informado")
 
     resolved: list[Battle] = []
+    unresolved: list[str] = []
     async with battle_tracker.make_client() as client:
         for albion_id in ids:
             battle = await battle_tracker.resolve_by_albion_id(client, db, albion_id)
             if battle is not None:
                 resolved.append(battle)
+            else:
+                unresolved.append(albion_id)
 
     if not resolved:
-        raise HTTPException(404, "Nenhuma dessas batalhas foi encontrada (nem na nossa base, nem na API do Albion)")
+        raise HTTPException(
+            404,
+            "Batalha não encontrada — o ID pode estar errado, ou ela é antiga demais e não está mais disponível na API do Albion."
+            if len(ids) == 1 else
+            "Nenhuma das batalhas informadas foi encontrada — os IDs podem estar errados, ou são antigas demais para a API do Albion.",
+        )
 
     group = battle_groups.get_or_create_group(db, [b.id for b in resolved])
-    return _combined_detail(db, [b.id for b in resolved], group.public_id)
+    detail = _combined_detail(db, [b.id for b in resolved], group.public_id)
+    # IDs que o usuário colou junto mas não resolveram (não existem mais na API
+    # do Albion, geralmente por serem antigos demais) — o frontend ignora e
+    # mostra esses como aviso ao lado da batalha combinada que SIM carregou.
+    detail["unresolved_ids"] = unresolved
+    return detail
 
 
 @router.post("/merge")

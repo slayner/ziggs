@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
-import { useServer, type GameServer } from "../i18n";
+import { useLang, useT, REGION_LABELS, type GameServer } from "../i18n";
+import { timeAgo as timeAgoFmt } from "../lib/format";
+import GlobalSearch from "./GlobalSearch";
 
 // GameServer ("west"/"east"/"europe", usado pro preço de mercado) -> Battle.region
 // do backend ("americas"/"asia"/"europe", usado pro feed de batalhas).
@@ -28,8 +30,6 @@ interface Battle {
   is_zvz: boolean;
   factions: Faction[];
 }
-
-const REGION_LABELS: Record<string, string> = { americas: "Americas", europe: "Europe", asia: "Asia" };
 
 const FILTER_INPUT_CLASS = "w-10 bg-transparent text-xs text-zinc-100 outline-none [color-scheme:dark] text-center tabular-nums";
 
@@ -93,15 +93,6 @@ function fameShort(n: number): string {
   return n > 0 ? String(n) : "—";
 }
 
-function timeAgo(ts: string): string {
-  const diff = Date.now() - new Date(ts).getTime();
-  const m = Math.floor(diff / 60_000);
-  if (m < 60) return `${m}m atrás`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h atrás`;
-  return `${Math.floor(h / 24)}d atrás`;
-}
-
 /** dd/mm hh:mm UTC, ou dd/mm/yy hh:mm se for de um ano anterior ao atual (UTC). */
 function dateTimeUTC(ts: string): string {
   const d = new Date(ts);
@@ -136,7 +127,8 @@ interface Filters {
 const STAGGER_MS = 350;
 
 export default function BattleTracker() {
-  const { servers } = useServer();
+  const t = useT();
+  const { lang, servers } = useLang();
   const [battles, setBattles] = useState<Battle[] | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -356,64 +348,56 @@ export default function BattleTracker() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6">
-
-      {/* Busca + filtros + Multi */}
-      <div className="mb-4 flex flex-wrap items-center gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 px-3 py-2.5">
-        <input
-          value={search}
-          onChange={e => onSearch(e.target.value)}
-          placeholder="Filtrar por guilda, aliança, jogador ou zona…"
-          className="min-w-[180px] flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
-        />
-        <button
-          onClick={onMultiClick}
-          disabled={merging}
-          className={`shrink-0 rounded border px-3 py-1 text-xs font-medium disabled:opacity-40 ${
-            multiMode
-              ? "border-amber-500 bg-amber-500/10 text-amber-300"
-              : "border-zinc-700 bg-zinc-800/60 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
-          }`}
-        >
-          {merging ? "Combinando…" : multiMode ? `Multi (${selected.size})` : "Multi"}
-        </button>
-        <span className="h-5 w-px shrink-0 bg-zinc-800" />
-        <FilterField label="Período">
-          <CompactDateInput value={dateFrom} onChange={onDateFrom} />
-          <span className="shrink-0 text-zinc-600">–</span>
-          <CompactDateInput value={dateTo} onChange={onDateTo} />
-        </FilterField>
-        <FilterField label="Jogadores">
-          <input
-            type="text"
-            inputMode="numeric"
-            value={minPlayers}
-            onChange={e => onMinPlayers(e.target.value)}
-            className={FILTER_INPUT_CLASS}
-          />
-        </FilterField>
-        <FilterField label="Kills">
-          <input
-            type="text"
-            inputMode="numeric"
-            value={minKills}
-            onChange={e => onMinKills(e.target.value)}
-            className={FILTER_INPUT_CLASS}
-          />
-        </FilterField>
-      </div>
+      <GlobalSearch
+        onQueryChange={onSearch}
+        extraFilters={
+          <>
+            <button
+              onClick={onMultiClick}
+              disabled={merging}
+              className={`shrink-0 rounded border px-3 py-1 text-xs font-medium disabled:opacity-40 ${
+                multiMode
+                  ? "border-amber-500 bg-amber-500/10 text-amber-300"
+                  : "border-zinc-700 bg-zinc-800/60 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
+              }`}
+            >
+              {merging ? t("multiCombining") : multiMode ? `${t("multiLabel")} (${selected.size})` : t("multiLabel")}
+            </button>
+            <FilterField label={t("periodLabel")}>
+              <CompactDateInput value={dateFrom} onChange={onDateFrom} />
+              <span className="shrink-0 text-zinc-600">–</span>
+              <CompactDateInput value={dateTo} onChange={onDateTo} />
+            </FilterField>
+            <FilterField label={t("playersFilterLabel")}>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={minPlayers}
+                onChange={e => onMinPlayers(e.target.value)}
+                className={FILTER_INPUT_CLASS}
+              />
+            </FilterField>
+            <FilterField label={t("killsFilterLabel")}>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={minKills}
+                onChange={e => onMinKills(e.target.value)}
+                className={FILTER_INPUT_CLASS}
+              />
+            </FilterField>
+          </>
+        }
+      />
 
       {error && (
         <p className="mb-4 rounded-lg border border-red-800 bg-red-900/20 px-4 py-3 text-sm text-red-400">{error}</p>
       )}
 
-      {loading && (
-        <div className="py-16 text-center text-zinc-500">Carregando batalhas…</div>
-      )}
-
       {!loading && battles?.length === 0 && (
         <div className="py-16 text-center">
-          <p className="text-zinc-400">Nenhuma batalha encontrada.</p>
-          <p className="mt-1 text-sm text-zinc-600">Tente ajustar os filtros — o feed é sincronizado automaticamente.</p>
+          <p className="text-zinc-400">{t("noBattlesFound")}</p>
+          <p className="mt-1 text-sm text-zinc-600">{t("noBattlesFoundFilters")}</p>
         </div>
       )}
 
@@ -454,7 +438,7 @@ export default function BattleTracker() {
 
               <span className="w-24 shrink-0 flex flex-col leading-tight">
                 <span className="text-[10px] uppercase tracking-wide text-zinc-600">
-                  {REGION_LABELS[b.region] ?? b.region}
+                  {REGION_LABELS[lang][b.region] ?? b.region}
                 </span>
                 <span className="text-xs text-zinc-500 tabular-nums">{dateTimeUTC(b.start_time)}</span>
               </span>
@@ -475,7 +459,7 @@ export default function BattleTracker() {
                   </span>
                 ) : (
                   <div className="text-sm text-zinc-200 truncate" title={b.cluster ?? ""}>
-                    {b.cluster ?? "Zona desconhecida"}
+                    {b.cluster ?? t("unknownZone")}
                   </div>
                 )}
               </span>
@@ -486,33 +470,42 @@ export default function BattleTracker() {
               <span className="w-12 shrink-0 text-right text-xs font-semibold text-amber-400/80 tabular-nums">
                 {fameShort(b.total_fame)}
               </span>
-              <span className="w-16 shrink-0 text-right text-xs text-zinc-500 tabular-nums">{b.kill_count} kills</span>
-              <span className="w-16 shrink-0 text-right text-xs text-zinc-600 tabular-nums">{timeAgo(b.start_time)}</span>
+              <span className="w-16 shrink-0 text-right text-xs text-zinc-500 tabular-nums">{b.kill_count} {t("killsSuffix")}</span>
+              <span className="w-16 shrink-0 text-right text-xs text-zinc-600 tabular-nums">
+                {timeAgoFmt(b.start_time, { min: t("agoMinutes"), hour: t("agoHours"), day: t("agoDays") })}
+              </span>
             </a>
           );
         })}
       </div>
 
       {/* mesma paginação (page size + páginas numeradas) da lista de jogadores
-          da página de batalha (pedido explícito). */}
-      {!loading && battles && (
+          da página de batalha (pedido explícito). Fica montada e visível
+          durante o loading (só desabilitada) — sumir e reaparecer é o mesmo
+          "pulo" de layout que a gente acabou de tirar do quadrante de cima. */}
+      {battles && (
         <div className="mt-4 flex items-center justify-end gap-3 text-xs">
+          <i
+            className={`ti ti-loader-2 animate-spin text-zinc-500 ${loading ? "opacity-100" : "opacity-0"}`}
+            aria-hidden="true"
+          />
           <div className="flex items-center gap-1">
-            <button disabled={page <= 0} onClick={() => onPage(0)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">«</button>
-            <button disabled={page <= 0} onClick={() => onPage(page - 1)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">‹</button>
+            <button disabled={loading || page <= 0} onClick={() => onPage(0)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">«</button>
+            <button disabled={loading || page <= 0} onClick={() => onPage(page - 1)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">‹</button>
             {pageNums.map(n => (
               <button
                 key={n}
+                disabled={loading}
                 onClick={() => onPage(n - 1)}
-                className={`px-2 py-1 rounded ${n === page + 1 ? "bg-amber-500/10 text-amber-300 border border-amber-500" : "text-zinc-400 hover:text-zinc-200"}`}
+                className={`px-2 py-1 rounded disabled:opacity-30 ${n === page + 1 ? "bg-amber-500/10 text-amber-300 border border-amber-500" : "text-zinc-400 hover:text-zinc-200"}`}
               >
                 {n}
               </button>
             ))}
-            <button disabled={page + 1 >= totalPages} onClick={() => onPage(page + 1)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">›</button>
-            <button disabled={page + 1 >= totalPages} onClick={() => onPage(totalPages - 1)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">»</button>
+            <button disabled={loading || page + 1 >= totalPages} onClick={() => onPage(page + 1)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">›</button>
+            <button disabled={loading || page + 1 >= totalPages} onClick={() => onPage(totalPages - 1)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">»</button>
           </div>
-          <span className="text-zinc-500">{total} batalhas</span>
+          <span className="text-zinc-500">{total} {t("battlesCountSuffix")}</span>
         </div>
       )}
     </div>

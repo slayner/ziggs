@@ -11,13 +11,22 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+from localization import ZiggsTranslator
+
 load_dotenv()
 
 TOKEN      = os.getenv("DISCORD_TOKEN", "")
 SITE_URL   = os.getenv("BOT_SITE_URL", "").rstrip("/")
 API_SECRET = os.getenv("BOT_API_SECRET", "")
 
+# members e message_content são privilegiados: precisam estar ligados em
+# "Server Members Intent" e "Message Content Intent" no Discord Developer
+# Portal (Bot → Privileged Gateway Intents), senão on_member_remove/
+# on_member_update (registro) e os comandos de prefixo (!addmoney etc.) não
+# funcionam — sem message_content, ctx.message.content chega vazio.
 intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 
@@ -59,6 +68,7 @@ async def on_ready() -> None:
     if not heartbeat_loop.is_running():
         heartbeat_loop.start()
     try:
+        await bot.tree.set_translator(ZiggsTranslator())
         synced = await bot.tree.sync()
         print(f"✓ {len(synced)} comando(s) sincronizado(s)")
     except Exception as e:
@@ -80,6 +90,8 @@ async def on_guild_remove(guild: discord.Guild) -> None:
 async def main() -> None:
     async with bot:
         await bot.load_extension("cogs.general")
+        await bot.load_extension("cogs.registration")
+        await bot.load_extension("cogs.economy")
         await bot.start(TOKEN)
 
 

@@ -54,6 +54,7 @@ def _get_weapon(db: Session, weapon_id: int | None) -> Weapon | None:
 def list_weapons(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.view")),
 ):
     rows = db.scalars(select(Weapon).order_by(Weapon.name))
     return [
@@ -71,6 +72,7 @@ def list_weapons(
 def list_roles(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.view")),
 ):
     rows = db.execute(
         select(GameRole.id, GameRole.name, Weapon.invisible_function)
@@ -89,6 +91,7 @@ def get_role(
     role_id: int,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.view")),
 ):
     role = db.get(GameRole, role_id)
     if role is None or role.guild_id != guild.id:
@@ -101,6 +104,7 @@ def get_weapon_spells(
     base_id: str,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.view")),
 ):
     """Retorna os feitiços Q/W/passivo disponíveis para um tipo base de arma."""
     rows = db.scalars(
@@ -124,6 +128,7 @@ def create_role(
     payload: GameRoleCreate,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.manage")),
 ):
     role = GameRole(
         guild_id=guild.id,
@@ -153,6 +158,7 @@ def update_role(
     payload: GameRoleUpdate,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.manage")),
 ):
     role = db.get(GameRole, role_id)
     if role is None or role.guild_id != guild.id:
@@ -179,6 +185,7 @@ def delete_role(
     role_id: int,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.manage")),
 ):
     role = db.get(GameRole, role_id)
     if role is None or role.guild_id != guild.id:
@@ -195,6 +202,7 @@ async def get_prices(
     quality: int = 1,  # kept for compat but ignored
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.view")),
 ) -> dict:
     """Retorna a média histórica 5 cidades × qualidades 1-4 para uma lista de itens."""
     item_ids = [i.strip() for i in items.split(",") if i.strip()]
@@ -222,6 +230,7 @@ def suggest(
     payload: SuggestRequest,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.view")),
 ):
     """
     Sugere build para uma função invisível olhando TODAS as funções da guilda

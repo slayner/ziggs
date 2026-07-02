@@ -230,12 +230,6 @@ Prefixos de classes:
 
 Variáveis CSS importantes: `--border`, `--surface`, `--surface-2`, `--hint`, `--muted`, `--text`, `--gold`, `--gold-soft`, `--info`, `--info-soft`, `--green`.
 
-## Bugs pré-existentes (NÃO introduzidos por nós, ignorar no tsc)
-
-1. `focusedItemId` declarado mas nunca lido em CompBuilder (~linha 754)
-2. `spells` desestruturado mas não usado em RoleViewBlock (~linha 1360)
-3. `mock.ts` tem objetos sem a prop `fn` exigida por `ApiSlot`
-
 ## Padrões não-óbvios
 
 **Modo offline/demo:** se `api.listComps()` falha, carrega `MOCK_API_COMP` e seta `offline: true`. Badge "demonstração" aparece no header.

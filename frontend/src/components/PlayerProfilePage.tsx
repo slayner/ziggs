@@ -2,10 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
 import { silver, dateUTC, monthYearUTC } from "../lib/format";
 import { itemRenderUrl, NO_WEAPON_ICON_ID } from "../data/albion-items";
+import { useLang, useT, REGION_LABELS } from "../i18n";
 
 const API = import.meta.env.DEV ? "http://localhost:8000" : "";
-
-const REGION_LABELS: Record<string, string> = { americas: "Americas", europe: "Europe", asia: "Asia" };
 // Inverso de PLAYER_PREFIXES (router.ts) — pra montar o link de perfil do
 // oponente a partir da região (mesma região do jogador do perfil: kills só
 // acontecem dentro do mesmo servidor Albion).
@@ -83,7 +82,7 @@ type BuildBase = {
   weapon_base: string | null; offhand_base: string | null; helmet_base: string | null;
   armor_base: string | null; boots_base: string | null; kills: number;
 };
-type TopWeapon = { weapon_base: string; kills: number; builds: BuildBase[] };
+type TopWeapon = { weapon_base: string; points: number; builds: BuildBase[] };
 
 interface PlayerProfile {
   Id: string;
@@ -207,12 +206,13 @@ function t7Render(base: string | null): string | null {
 }
 
 function BuildRow({ b }: { b: BuildBase }) {
+  const t = useT();
   const slots: { base: string | null; label: string }[] = [
-    { base: b.weapon_base, label: "Arma" },
-    { base: b.offhand_base, label: "Offhand" },
-    { base: b.helmet_base, label: "Elmo" },
-    { base: b.armor_base, label: "Peitoral" },
-    { base: b.boots_base, label: "Botas" },
+    { base: b.weapon_base, label: t("equipSlotWeapon") },
+    { base: b.offhand_base, label: t("equipSlotOffhand") },
+    { base: b.helmet_base, label: t("equipSlotHelmet") },
+    { base: b.armor_base, label: t("equipSlotArmor") },
+    { base: b.boots_base, label: t("equipSlotBoots") },
   ];
   return (
     <div className="flex items-center gap-2 py-1.5">
@@ -225,7 +225,7 @@ function BuildRow({ b }: { b: BuildBase }) {
           ) : null;
         })}
       </div>
-      <span className="ml-auto shrink-0 text-xs font-semibold text-amber-400/80 tabular-nums">{b.kills} kills</span>
+      <span className="ml-auto shrink-0 text-xs font-semibold text-amber-400/80 tabular-nums">{b.kills} {t("killsSuffix")}</span>
     </div>
   );
 }
@@ -233,6 +233,7 @@ function BuildRow({ b }: { b: BuildBase }) {
 // Mesmo padrão de hover/pin do horizonte de eventos (BattlePage.tsx,
 // KillTimelineChart): passa o mouse mostra, clica fixa aberto até clicar fora.
 function TopWeaponsWidget({ weapons }: { weapons: TopWeapon[] }) {
+  const t = useT();
   const [open, setOpen] = useState<{ x: number; y: number; weapon: TopWeapon; pinned: boolean } | null>(null);
   const popupRef = useRef<HTMLDivElement | null>(null);
 
@@ -263,7 +264,7 @@ function TopWeaponsWidget({ weapons }: { weapons: TopWeapon[] }) {
             onMouseLeave={() => setOpen(o => (o?.pinned ? o : null))}
             onClick={ev => setOpen({ x: ev.clientX, y: ev.clientY, weapon: w, pinned: true })}
           />
-          <span className="text-[10px] text-zinc-500 tabular-nums">{w.kills} kills</span>
+          <span className="text-[10px] text-zinc-500 tabular-nums">{w.points}</span>
         </div>
       ))}
       {open && (
@@ -272,7 +273,7 @@ function TopWeaponsWidget({ weapons }: { weapons: TopWeapon[] }) {
           className="fixed z-50 w-64 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 shadow-lg"
           style={{ left: open.x - 12, top: open.y + 12, transform: "translateX(-100%)" }}
         >
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Top builds</div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">{t("topBuilds")}</div>
           <div className="divide-y divide-zinc-800/60">
             {open.weapon.builds.map((b, i) => <BuildRow key={i} b={b} />)}
           </div>
@@ -331,6 +332,7 @@ function timeOverDate(ts: string): [string, string] {
 function NameGuildBlock({ name, guild, alliance, onClick }: {
   name: string; guild: string | null; alliance?: string | null; onClick?: (e: React.MouseEvent) => void;
 }) {
+  const t = useT();
   return (
     <div className="min-w-0 flex-1 text-center">
       {onClick ? (
@@ -342,7 +344,7 @@ function NameGuildBlock({ name, guild, alliance, onClick }: {
       )}
       <span className="block truncate text-[10px] text-zinc-600">
         {alliance && <span className="mr-1">[{alliance}]</span>}
-        {guild ?? "Sem guilda"}
+        {guild ?? t("noGuild")}
       </span>
     </div>
   );
@@ -354,6 +356,7 @@ function ActivityRow({ ev, profileName, profileGuild, region, isNew, onGlowEnd }
   ev: Activity; profileName: string; profileGuild: string | null; region: string;
   isNew?: boolean; onGlowEnd?: () => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const isKill = ev.kind === "kill";
   const color = isKill ? "text-blue-400" : "text-red-400";
@@ -373,7 +376,7 @@ function ActivityRow({ ev, profileName, profileGuild, region, isNew, onGlowEnd }
     <div className={`bg-zinc-900/60 border-l-2${isNew ? " dash-glow" : ""}`} style={{ borderLeftColor: borderColor }} onAnimationEnd={onGlowEnd}>
       {/* div (não button) porque o nome do oponente já é um botão clicável aninhado */}
       <div role="button" tabIndex={0} onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-3 px-3 py-2.5 text-left cursor-pointer">
-        <img src={itemRenderUrl(ownWeaponId, ownWeapon?.Quality ?? 0)} alt="" title={ownWeapon ? ownWeapon.Type : "Sem arma equipada"} width={28} height={28} className="shrink-0" />
+        <img src={itemRenderUrl(ownWeaponId, ownWeapon?.Quality ?? 0)} alt="" title={ownWeapon ? ownWeapon.Type : t("noWeaponEquipped")} width={28} height={28} className="shrink-0" />
 
         <NameGuildBlock name={profileName} guild={profileGuild} />
 
@@ -389,7 +392,7 @@ function ActivityRow({ ev, profileName, profileGuild, region, isNew, onGlowEnd }
           onClick={goToOther}
         />
 
-        <img src={itemRenderUrl(otherWeaponId, otherWeapon?.Quality ?? 0)} alt="" title={otherWeapon ? otherWeapon.Type : "Sem arma equipada"} width={28} height={28} className="shrink-0" />
+        <img src={itemRenderUrl(otherWeaponId, otherWeapon?.Quality ?? 0)} alt="" title={otherWeapon ? otherWeapon.Type : t("noWeaponEquipped")} width={28} height={28} className="shrink-0" />
       </div>
       {open && (
         <div className="flex items-center justify-between gap-4 border-t border-zinc-800 px-3 py-3">
@@ -400,11 +403,11 @@ function ActivityRow({ ev, profileName, profileGuild, region, isNew, onGlowEnd }
               <button onClick={() => navigate(`/${ev.battle_public_id}`)} className="hover:opacity-80 transition-opacity">
                 {(ev.battle_factions ?? []).length > 0
                   ? <FactionHeatmap factions={ev.battle_factions} />
-                  : <span className="text-[11px] text-zinc-500">Ver luta</span>}
+                  : <span className="text-[11px] text-zinc-500">{t("viewBattleLink")}</span>}
               </button>
             ) : ev.is_solo ? (
               <a href={albionKillboardUrl(ev.event_id)} target="_blank" rel="noopener noreferrer" className="text-[11px] text-zinc-500 hover:text-amber-400">
-                Ver no Albion
+                {t("viewOnAlbion")}
               </a>
             ) : null}
             <div className="text-[10px] capitalize text-zinc-600">{ev.role ?? "—"}</div>
@@ -460,6 +463,8 @@ function FactionHeatmap({ factions }: { factions: BattleFaction[] }) {
 }
 
 function BattleRow({ b, isNew, onGlowEnd }: { b: ZiggsBattle; isNew?: boolean; onGlowEnd?: () => void }) {
+  const t = useT();
+  const { lang } = useLang();
   return (
     <a
       href={`/${b.public_id}`}
@@ -472,7 +477,7 @@ function BattleRow({ b, isNew, onGlowEnd }: { b: ZiggsBattle; isNew?: boolean; o
       onAnimationEnd={onGlowEnd}
     >
       <span className="w-24 shrink-0 flex flex-col leading-tight">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-600">{REGION_LABELS[b.region] ?? b.region}</span>
+        <span className="text-[10px] uppercase tracking-wide text-zinc-600">{REGION_LABELS[lang][b.region] ?? b.region}</span>
         <span className="text-xs text-zinc-500 tabular-nums">{dateUTC(b.start_time)}</span>
       </span>
 
@@ -481,7 +486,7 @@ function BattleRow({ b, isNew, onGlowEnd }: { b: ZiggsBattle; isNew?: boolean; o
           <FactionHeatmap factions={b.factions} />
         ) : (
           <div className="truncate text-sm text-zinc-200" title={b.cluster ?? ""}>
-            {b.cluster ?? "Zona desconhecida"}
+            {b.cluster ?? t("unknownZone")}
           </div>
         )}
       </span>
@@ -489,7 +494,7 @@ function BattleRow({ b, isNew, onGlowEnd }: { b: ZiggsBattle; isNew?: boolean; o
       <span className="w-12 shrink-0 text-right text-xs font-semibold text-amber-400/80 tabular-nums">
         {battleFameShort(b.total_fame)}
       </span>
-      <span className="w-16 shrink-0 text-right text-xs text-zinc-500 tabular-nums">{b.kill_count} kills</span>
+      <span className="w-16 shrink-0 text-right text-xs text-zinc-500 tabular-nums">{b.kill_count} {t("killsSuffix")}</span>
       <span className="w-16 shrink-0 text-right text-xs text-zinc-600 tabular-nums">{timeAgo(b.start_time)}</span>
     </a>
   );
@@ -499,6 +504,7 @@ function BattleRow({ b, isNew, onGlowEnd }: { b: ZiggsBattle; isNew?: boolean; o
 // da guilda centralizado, data de saída ("atual" se ainda está lá) à
 // direita — status (kills/mortes/prata) em extenso abaixo do nome.
 function GuildHistoryRow({ h }: { h: ZiggsData["guild_history"][number] }) {
+  const t = useT();
   const [startTime, startDate] = timeOverDate(h.start);
   const end = h.end ? timeOverDate(h.end) : null;
   return (
@@ -510,14 +516,14 @@ function GuildHistoryRow({ h }: { h: ZiggsData["guild_history"][number] }) {
 
       <div className="flex-1 min-w-0 text-center">
         {h.guild_is_deleted
-          ? <span className="truncate text-sm text-zinc-600 line-through" title="Guilda excluída do jogo">{h.guild_name ?? "Sem guilda"}</span>
+          ? <span className="truncate text-sm text-zinc-600 line-through" title={t("guildDeletedTitle")}>{h.guild_name ?? t("noGuild")}</span>
           : h.guild_id
-            ? <button onClick={() => navigate(`/guild/${h.guild_id}`)} className="truncate text-sm font-medium text-zinc-200 hover:text-amber-400 transition-colors">{h.guild_name ?? "Sem guilda"}</button>
-            : <span className="truncate text-sm font-medium text-zinc-200">{h.guild_name ?? "Sem guilda"}</span>
+            ? <button onClick={() => navigate(`/guild/${h.guild_id}`)} className="truncate text-sm font-medium text-zinc-200 hover:text-amber-400 transition-colors">{h.guild_name ?? t("noGuild")}</button>
+            : <span className="truncate text-sm font-medium text-zinc-200">{h.guild_name ?? t("noGuild")}</span>
         }
         {h.alliance_tag && (
           h.alliance_is_deleted
-            ? <div className="text-xs text-zinc-600 line-through" title="Aliança excluída do jogo">[{h.alliance_tag}]</div>
+            ? <div className="text-xs text-zinc-600 line-through" title={t("allianceDeletedTitle")}>[{h.alliance_tag}]</div>
             : h.alliance_id
               ? <div><button onClick={() => navigate(`/alliance/${h.alliance_id}`)} className="text-xs text-amber-400 hover:opacity-75 transition-opacity">[{h.alliance_tag}]</button></div>
               : <div className="text-xs text-amber-400">[{h.alliance_tag}]</div>
@@ -531,7 +537,7 @@ function GuildHistoryRow({ h }: { h: ZiggsData["guild_history"][number] }) {
             <span className="text-[10px] text-zinc-600 tabular-nums">{end[1]}</span>
           </>
         ) : (
-          <span className="text-[11px] font-medium text-emerald-400">atual</span>
+          <span className="text-[11px] font-medium text-emerald-400">{t("currentLabel")}</span>
         )}
       </span>
     </div>
@@ -545,6 +551,7 @@ function SkeletonBox({ className }: { className?: string }) {
 // Estrutura da página já montada enquanto a única chamada à API ainda não
 // voltou — sensação de progresso em vez de só um "carregando" parado.
 function ProfileSkeleton() {
+  const t = useT();
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
@@ -562,8 +569,8 @@ function ProfileSkeleton() {
       </div>
 
       <div className="flex gap-1 border-b border-zinc-800 pb-0">
-        {["Atividade", "Batalhas", "Histórico de Guildas"].map(t => (
-          <span key={t} className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-zinc-700">{t}</span>
+        {[t("tabActivity"), t("battles"), t("tabGuildHistory")].map(label => (
+          <span key={label} className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-zinc-700">{label}</span>
         ))}
       </div>
 
@@ -612,6 +619,8 @@ const PROFILE_REFRESH_MS = 60_000;
 const STAGGER_MS = 350;
 
 export default function PlayerProfilePage({ region, name, onBack }: { region: string; name: string; onBack: () => void }) {
+  const t = useT();
+  const { lang } = useLang();
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -763,7 +772,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6">
-      <button onClick={onBack} className="mb-4 text-sm text-zinc-400 hover:text-zinc-200">← Voltar</button>
+      <button onClick={onBack} className="mb-4 text-sm text-zinc-400 hover:text-zinc-200">← {t("back")}</button>
 
       {loading && <ProfileSkeleton />}
       {error && !loading && (
@@ -780,10 +789,10 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
                 <div className="flex flex-wrap items-baseline gap-2">
                   <h2 className="text-xl font-bold text-zinc-100">{profile.Name}</h2>
                   {profile._is_deleted && (
-                    <span className="rounded border border-red-900/60 bg-red-950/40 px-2 py-0.5 text-[10px] text-red-400 uppercase tracking-wide">excluído</span>
+                    <span className="rounded border border-red-900/60 bg-red-950/40 px-2 py-0.5 text-[10px] text-red-400 uppercase tracking-wide">{t("deletedBadge")}</span>
                   )}
                   <span className="self-center rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500">
-                    {REGION_LABELS[z.region] ?? z.region}
+                    {REGION_LABELS[lang][z.region] ?? z.region}
                   </span>
                 </div>
                 <div className="mt-0.5 flex items-baseline gap-1.5 text-sm text-zinc-400">
@@ -798,19 +807,19 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
                       ? <button onClick={() => navigate(`/guild/${profile.GuildId}`)} className="font-medium text-zinc-300 hover:text-amber-400 transition-colors">{profile.GuildName}</button>
                       : <span className="font-medium text-zinc-300">{profile.GuildName}</span>
                   ) : (
-                    <span className="text-zinc-600">Sem guilda</span>
+                    <span className="text-zinc-600">{t("noGuild")}</span>
                   )}
                 </div>
                 <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-600">
                   <button
                     onClick={() => load(true)}
                     disabled={refreshing}
-                    title="Forçar atualização"
+                    title={t("forceRefreshTitle")}
                     className="text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors"
                   >
                     <span className={refreshing ? "inline-block animate-spin" : "inline-block"}>⟳</span>
                   </button>
-                  Atualizado {timeAgo(z.last_seen_at)} atrás · no Ziggs desde {dateUTC(z.first_seen_at)}
+                  {t("updatedAgoPrefix")} {timeAgo(z.last_seen_at)} {t("agoSinceSuffix")} {dateUTC(z.first_seen_at)}
                 </div>
               </div>
               <TopWeaponsWidget weapons={z.top_weapons} />
@@ -831,7 +840,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
                   onAnimationEnd={() => setGlowingStats(p => { const n = new Set(p); n.delete("kd"); return n; })}
                 >{ratio}</span>
               </div>
-              <FameRow label="Prata dropada" value={z.silver_dropped}
+              <FameRow label={t("silverDroppedLabel")} value={z.silver_dropped}
                 isGlowing={glowingStats.has("silver")}
                 onGlowEnd={() => setGlowingStats(p => { const n = new Set(p); n.delete("silver"); return n; })} />
               {!!stats?.PvE?.Total && <FameRow label="PvE Fame" value={stats.PvE.Total} />}
@@ -842,11 +851,11 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
               <div className="relative mt-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
                 <i
                   className="ti ti-info-circle absolute right-2 top-2 text-zinc-600"
-                  title="Estimativa: fama total de coleta dividida por 200 — não é a fama em si, é uma contagem aproximada de quantos recursos o jogador já coletou."
+                  title={t("gatheringEstimateTooltip")}
                 />
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(90px,1fr))] gap-2">
-                  {([["Madeira", gathering.Wood], ["Couro", gathering.Hide], ["Minério", gathering.Ore],
-                    ["Pedra", gathering.Rock], ["Fibra", gathering.Fiber]] as const).map(([label, g]) =>
+                  {([[t("resourceWood"), gathering.Wood], [t("resourceHide"), gathering.Hide], [t("resourceOre"), gathering.Ore],
+                    [t("resourceRock"), gathering.Rock], [t("resourceFiber"), gathering.Fiber]] as const).map(([label, g]) =>
                     g?.Total ? <ResourceCountRow key={label} label={label} fame={g.Total} /> : null
                   )}
                 </div>
@@ -856,16 +865,16 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
 
           {/* Abas */}
           <div className="flex gap-1 border-b border-zinc-800 pb-0">
-            {(["activity", "battles", "history"] as const).map(t => (
+            {(["activity", "battles", "history"] as const).map(tab => (
               <button
-                key={t}
-                onClick={() => setActiveTab(t)}
+                key={tab}
+                onClick={() => setActiveTab(tab)}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === t ? "border-amber-500 text-amber-300" : "border-transparent text-zinc-500 hover:text-zinc-300"
+                  activeTab === tab ? "border-amber-500 text-amber-300" : "border-transparent text-zinc-500 hover:text-zinc-300"
                 }`}
               >
-                {t === "activity" ? `Atividade (${activity.length})` :
-                  t === "battles" ? `Batalhas (${z.battle_history.length})` : "Histórico de Guildas"}
+                {tab === "activity" ? `${t("tabActivity")} (${activity.length})` :
+                  tab === "battles" ? `${t("battles")} (${z.battle_history.length})` : t("tabGuildHistory")}
               </button>
             ))}
           </div>
@@ -873,7 +882,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
           <div className="space-y-2">
             {activeTab === "activity" && (
               activity.length === 0
-                ? <p className="py-8 text-center text-sm text-zinc-600">Nenhuma kill ou morte registrada ainda pelo ledger do Ziggs.</p>
+                ? <p className="py-8 text-center text-sm text-zinc-600">{t("noActivityYet")}</p>
                 : <>
                   {activityItems.map((ev, i) => (
                     <ActivityRow
@@ -888,7 +897,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
             )}
             {activeTab === "battles" && (
               z.battle_history.length === 0
-                ? <p className="py-8 text-center text-sm text-zinc-600">Nenhuma batalha (5+ jogadores) registrada ainda.</p>
+                ? <p className="py-8 text-center text-sm text-zinc-600">{t("noProfileBattlesYet")}</p>
                 : <>
                   {battlesItems.map(b => (
                     <BattleRow
@@ -902,7 +911,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
             )}
             {activeTab === "history" && (
               z.guild_history.length === 0
-                ? <p className="py-8 text-center text-sm text-zinc-600">Nenhuma mudança de guilda registrada ainda.</p>
+                ? <p className="py-8 text-center text-sm text-zinc-600">{t("noGuildHistoryYet")}</p>
                 : <>
                   {historyItems.map((h, i) => <GuildHistoryRow key={i} h={h} />)}
                   <Pagination page={historyPageClamped} totalPages={historyTotalPages} onPage={setHistoryPage} />

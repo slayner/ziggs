@@ -31,10 +31,22 @@ class SideAnalysis:
     score: dict[str, int] = field(default_factory=dict)         # label -> kills reais contra o outro lado
 
 
-def faction_key(guild_id: str | None, alliance_id: str | None) -> str:
+def faction_key(guild_id: str | None, alliance_id: str | None, player_id: str | None) -> str:
+    """Facção de um participante: aliança > guilda > o PRÓPRIO JOGADOR como
+    facção de 1 pessoa só, se não tiver nem guilda nem aliança.
+
+    Sem o fallback por jogador, todo guildless caía no MESMO bucket
+    "g:sem_guilda" — numa luta com guildless dos dois lados, isso misturava
+    inimigos na mesma facção e quebrava a detecção de lado (is_zvz, contagem
+    de jogador por lado, score, tudo saía errado). Cada guildless agora é
+    sua própria facção de 1 jogador; detect_sides já lida bem com muitas
+    facções pequenas (é como já trata várias guildas pequenas), então cada
+    um cai no lado certo pelo grafo de hostilidade real."""
     if alliance_id:
         return f"a:{alliance_id}"
-    return f"g:{guild_id or 'sem_guilda'}"
+    if guild_id:
+        return f"g:{guild_id}"
+    return f"p:{player_id}" if player_id else "g:sem_guilda"
 
 
 def build_factions(participants: dict[str, dict]) -> tuple[dict[str, Faction], dict[str, str]]:
@@ -44,7 +56,7 @@ def build_factions(participants: dict[str, dict]) -> tuple[dict[str, Faction], d
     factions: dict[str, Faction] = {}
     player_faction: dict[str, str] = {}
     for pid, row in participants.items():
-        fk = faction_key(row.get("guild_id"), row.get("alliance_id"))
+        fk = faction_key(row.get("guild_id"), row.get("alliance_id"), pid)
         player_faction[pid] = fk
         f = factions.setdefault(fk, Faction(key=fk))
         f.player_count += 1
@@ -173,7 +185,32 @@ def _demo() -> None:
     result3 = analyze(factions3, {})
     assert result3.side_of["a:X"] == "rats" and result3.side_of["a:Y"] == "rats"
 
-    print("battle_sides: 3 cenários OK")
+    # 4) guildless dos DOIS lados de uma mesma luta — faction_key tem que dar
+    # uma facção por JOGADOR (não um "g:sem_guilda" compartilhado), senão
+    # build_factions mistura os dois bandos guildless numa facção só e
+    # detect_sides joga os dois pro MESMO lado, mesmo lutando um contra o outro.
+    participants4 = {
+        "p1": {"guild_id": "G1", "alliance_id": None, "kills": 8, "deaths": 2},
+        "p2": {"guild_id": None, "alliance_id": None, "kills": 4, "deaths": 1},  # guildless, lado G1
+        "p3": {"guild_id": "G2", "alliance_id": None, "kills": 2, "deaths": 8},
+        "p4": {"guild_id": None, "alliance_id": None, "kills": 1, "deaths": 4},  # guildless, lado G2
+    }
+    factions4, player_faction4 = build_factions(participants4)
+    assert player_faction4["p2"] != player_faction4["p4"], "guildless de lados opostos não podem cair na mesma facção"
+    kills_between4 = {
+        (player_faction4["p1"], player_faction4["p3"]): 6,
+        (player_faction4["p3"], player_faction4["p1"]): 1,
+        (player_faction4["p2"], player_faction4["p3"]): 4,  # p2 (guildless) ataca G2
+        (player_faction4["p3"], player_faction4["p2"]): 1,
+        (player_faction4["p4"], player_faction4["p1"]): 1,  # p4 (guildless) ataca G1
+        (player_faction4["p1"], player_faction4["p4"]): 4,
+    }
+    result4 = analyze(factions4, kills_between4)
+    assert result4.side_of[player_faction4["p1"]] == result4.side_of[player_faction4["p2"]], "p1 e p2 deveriam ficar do mesmo lado"
+    assert result4.side_of[player_faction4["p3"]] == result4.side_of[player_faction4["p4"]], "p3 e p4 deveriam ficar do mesmo lado"
+    assert result4.side_of[player_faction4["p1"]] != result4.side_of[player_faction4["p3"]], "os 2 bandos deveriam ficar em lados opostos"
+
+    print("battle_sides: 4 cenários OK")
 
 
 if __name__ == "__main__":

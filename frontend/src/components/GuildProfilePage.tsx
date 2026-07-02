@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { navigate } from "../router";
 import { dateUTC } from "../lib/format";
 import { RoleIcon } from "./RoleIcons";
+import { useLang, useT, REGION_LABELS } from "../i18n";
 
 const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 
 const REGION_PREFIX: Record<string, string> = { americas: "am", asia: "as", europe: "eu" };
-const REGION_LABELS: Record<string, string> = { americas: "Americas", europe: "Europe", asia: "Asia" };
 const PAGE_SIZE = 20;
 
 /* ── Types ──────────────────────────────────────────────────────── */
@@ -87,11 +87,6 @@ function fameShort(n: number): string {
   return String(n);
 }
 
-function timeUTC(ts: string): string {
-  const d = new Date(ts);
-  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
-}
-
 function shortDateUTC(ts: string): string {
   const d = new Date(ts);
   const dd = String(d.getUTCDate()).padStart(2, "0");
@@ -163,17 +158,9 @@ function Pagination({ page, total, onChange }: { page: number; total: number; on
   );
 }
 
-function ResultBadge({ result }: { result: "win" | "loss" | "draw" | null }) {
-  if (!result) return null;
-  const cfg = {
-    win:  { label: "V", cls: "text-green-400 border-green-900/60 bg-green-950/40" },
-    loss: { label: "D", cls: "text-red-400 border-red-900/60 bg-red-950/40" },
-    draw: { label: "E", cls: "text-zinc-400 border-zinc-700 bg-zinc-800/40" },
-  }[result];
-  return <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold ${cfg.cls}`}>{cfg.label}</span>;
-}
-
 function GuildBattleRow({ b }: { b: ProfileBattle }) {
+  const t = useT();
+  const { lang } = useLang();
   return (
     <a
       href={`/${b.public_id}`}
@@ -185,23 +172,17 @@ function GuildBattleRow({ b }: { b: ProfileBattle }) {
       className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 transition-colors hover:border-zinc-600 hover:bg-zinc-800/40"
     >
       <span className="w-20 shrink-0 flex flex-col leading-tight">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-600">{REGION_LABELS[b.region] ?? b.region}</span>
+        <span className="text-[10px] uppercase tracking-wide text-zinc-600">{REGION_LABELS[lang][b.region] ?? b.region}</span>
         <span className="text-xs text-zinc-500 tabular-nums">{dateUTC(b.start_time)}</span>
       </span>
 
       <span className="flex-1 min-w-0 text-center">
         {b.factions.length > 0
           ? <FactionHeatmap factions={b.factions} />
-          : <span className="truncate text-sm text-zinc-300">{b.cluster ?? "Zona desconhecida"}</span>}
+          : <span className="truncate text-sm text-zinc-300">{b.cluster ?? t("unknownZone")}</span>}
       </span>
 
       <span className="flex items-center gap-2 shrink-0">
-        <ResultBadge result={b.result} />
-        <span className="text-xs tabular-nums">
-          <span className="text-blue-400">{b.kills}k</span>
-          <span className="text-zinc-600"> / </span>
-          <span className="text-red-400">{b.deaths}m</span>
-        </span>
         <span className="w-14 text-right text-xs font-semibold text-amber-400/80 tabular-nums">{fameShort(b.kill_fame)}</span>
         <span className="w-10 text-right text-xs text-zinc-600 tabular-nums">{timeAgo(b.start_time)}</span>
       </span>
@@ -228,8 +209,9 @@ function eventsToStints(events: AllianceEvent[]): AllianceStint[] {
 }
 
 function AllianceHistoryTab({ events }: { events: AllianceEvent[] }) {
+  const t = useT();
   if (!events.length)
-    return <p className="py-8 text-center text-zinc-600">Nenhuma mudança de aliança registrada.</p>;
+    return <p className="py-8 text-center text-zinc-600">{t("noAllianceHistoryYet")}</p>;
   const stints = eventsToStints(events);
   return (
     <div className="flex flex-col gap-2">
@@ -245,7 +227,7 @@ function AllianceHistoryTab({ events }: { events: AllianceEvent[] }) {
           <span className="w-20 shrink-0 text-center text-xs tabular-nums">
             {s.left
               ? <span className="text-zinc-500">{dateUTC(s.left)}</span>
-              : <span className="font-medium text-emerald-400">atual</span>
+              : <span className="font-medium text-emerald-400">{t("currentLabel")}</span>
             }
           </span>
         </div>
@@ -257,9 +239,10 @@ function AllianceHistoryTab({ events }: { events: AllianceEvent[] }) {
 /* ── Roster log (alliance profile) ──────────────────────────────── */
 
 function RosterGuildPill({ g, highlight }: { g: RosterGuild; highlight: "added" | "removed" | null }) {
+  const t = useT();
   if (g.is_deleted && highlight !== "removed") {
     return (
-      <span className="rounded border border-zinc-700/40 bg-zinc-800/30 px-2 py-0.5 text-xs text-zinc-600 line-through" title="Guilda excluída do jogo">
+      <span className="rounded border border-zinc-700/40 bg-zinc-800/30 px-2 py-0.5 text-xs text-zinc-600 line-through" title={t("guildDeletedTitle")}>
         {g.name}
       </span>
     );
@@ -277,8 +260,9 @@ function RosterGuildPill({ g, highlight }: { g: RosterGuild; highlight: "added" 
 }
 
 function RosterLogTab({ events }: { events: RosterEvent[] }) {
+  const t = useT();
   if (!events.length)
-    return <p className="py-8 text-center text-zinc-600">Nenhuma mudança de composição registrada.</p>;
+    return <p className="py-8 text-center text-zinc-600">{t("noRosterLogYet")}</p>;
 
   return (
     <div className="flex flex-col gap-3">
@@ -307,7 +291,7 @@ function RosterLogTab({ events }: { events: RosterEvent[] }) {
             </div>
             <div className="shrink-0 flex flex-col items-center leading-tight w-10">
               <span className="text-sm font-bold tabular-nums text-zinc-200">{total}</span>
-              <span className="text-[10px] uppercase tracking-wide text-zinc-600">guildas</span>
+              <span className="text-[10px] uppercase tracking-wide text-zinc-600">{t("guildWordPlural")}</span>
             </div>
           </div>
         );
@@ -321,6 +305,7 @@ const ROLE_ORDER = ["tank", "healer", "support", "dps", "pierce", "battlemount"]
 type SortKey = "battles" | "kills" | "deaths" | "last_seen" | `role:${string}`;
 
 function EntityTable({ items, mode }: { items: (GuildMember | AllianceGuild)[]; mode: "guild" | "alliance" }) {
+  const t = useT();
   const [sortKey, setSortKey] = useState<SortKey>("battles");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(0);
@@ -362,7 +347,7 @@ function EntityTable({ items, mode }: { items: (GuildMember | AllianceGuild)[]; 
 
   const Th = ({ col, label }: { col: SortKey; label: string }) => (
     <button onClick={() => toggle(col)}
-      className={`text-right text-[10px] uppercase tracking-wide transition-colors ${sortKey === col ? "text-amber-400" : "text-zinc-600 hover:text-zinc-400"}`}>
+      className={`whitespace-nowrap text-right text-[10px] uppercase tracking-wide transition-colors ${sortKey === col ? "text-amber-400" : "text-zinc-600 hover:text-zinc-400"}`}>
       {label}{sortKey === col ? (sortDir === "desc" ? " ↓" : " ↑") : ""}
     </button>
   );
@@ -377,11 +362,11 @@ function EntityTable({ items, mode }: { items: (GuildMember | AllianceGuild)[]; 
     <div>
       <div className={`mb-1 grid ${cols} gap-x-2 gap-y-0 px-3 items-center`}>
         <span className="text-left text-[10px] uppercase tracking-wide text-zinc-600">
-          {isGuild ? "Jogador" : "Guilda"}
+          {isGuild ? t("colPlayer") : t("gpGuildWord")}
         </span>
-        <Th col="battles" label="Lutas" />
-        <Th col="kills" label="Kills" />
-        <Th col="deaths" label="Mortes" />
+        <Th col="battles" label={t("battlesCountSuffix")} />
+        <Th col="kills" label={t("killsSuffix")} />
+        <Th col="deaths" label={t("deathsWord")} />
         {isGuild && <span />}
         {isGuild && ROLE_ORDER.map(r => (
           <button key={r} title={r} onClick={() => toggle(`role:${r}`)}
@@ -389,7 +374,7 @@ function EntityTable({ items, mode }: { items: (GuildMember | AllianceGuild)[]; 
             <RoleIcon role={r} size={16} />
           </button>
         ))}
-        <Th col="last_seen" label="Último" />
+        <Th col="last_seen" label={t("colLastSeen")} />
       </div>
 
       <div className="flex flex-col gap-px">
@@ -404,7 +389,7 @@ function EntityTable({ items, mode }: { items: (GuildMember | AllianceGuild)[]; 
                   : `/guild/${m.albion_id}`
               )}>
               {(m as GuildMember).is_deleted
-                ? <span className="text-left text-sm text-zinc-600 truncate line-through" title="Jogador excluído do jogo">{m.name}</span>
+                ? <span className="text-left text-sm text-zinc-600 truncate line-through" title={t("playerDeletedTitle")}>{m.name}</span>
                 : <span className="text-left text-sm text-zinc-100 truncate hover:text-amber-400">{m.name}</span>
               }
               <span className="tabular-nums font-medium" style={{ color: presenceColor(m.battles) }}>{m.battles}</span>
@@ -434,6 +419,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
   albionId: string;
   onBack: () => void;
 }) {
+  const t = useT();
   const [data, setData] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -510,7 +496,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     return (
       <div className="mx-auto max-w-5xl px-4 py-10">
         <button onClick={onBack} className="mb-6 flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-300">
-          <i className="ti ti-arrow-left" /> Voltar
+          <i className="ti ti-arrow-left" /> {t("back")}
         </button>
         <div className="animate-pulse space-y-4">
           <div className="h-8 w-64 rounded bg-zinc-800" />
@@ -530,10 +516,10 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     return (
       <div className="mx-auto max-w-5xl px-4 py-10">
         <button onClick={onBack} className="mb-6 flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-300">
-          <i className="ti ti-arrow-left" /> Voltar
+          <i className="ti ti-arrow-left" /> {t("back")}
         </button>
         <div className="rounded-lg border border-red-900/50 bg-red-950/20 px-4 py-6 text-center">
-          <p className="text-red-400">{error === "404" ? `${mode === "guild" ? "Guilda" : "Aliança"} não encontrada.` : `Erro ao carregar perfil (${error}).`}</p>
+          <p className="text-red-400">{error === "404" ? (mode === "guild" ? t("gpGuildNotFound") : t("gpAllianceNotFound")) : `${t("gpLoadError")} (${error}).`}</p>
         </div>
       </div>
     );
@@ -545,17 +531,17 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
   const rosterLog = mode === "alliance" ? (data as AllianceProfile).roster_log ?? [] : [];
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: "members", label: mode === "guild" ? `Membros (${members.length})` : `Guildas (${members.length})` },
-    { id: "battles", label: `Batalhas (${battles_count})` },
-    ...(mode === "guild" ? [{ id: "alliances" as Tab, label: `Histórico de alianças (${allianceHistory.length})` }] : []),
-    ...(mode === "alliance" ? [{ id: "roster" as Tab, label: `Histórico (${rosterLog.length})` }] : []),
+    { id: "members", label: mode === "guild" ? `${t("membersTabLabel")} (${members.length})` : `${t("guildsLabel")} (${members.length})` },
+    { id: "battles", label: `${t("battles")} (${battles_count})` },
+    ...(mode === "guild" ? [{ id: "alliances" as Tab, label: `${t("allianceHistoryTabLabel")} (${eventsToStints(allianceHistory).length})` }] : []),
+    ...(mode === "alliance" ? [{ id: "roster" as Tab, label: `${t("rosterHistoryTabLabel")} (${rosterLog.length})` }] : []),
   ];
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6">
       {/* back */}
       <button onClick={onBack} className="mb-5 flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-300">
-        <i className="ti ti-arrow-left" /> Voltar
+        <i className="ti ti-arrow-left" /> {t("back")}
       </button>
 
       {/* header */}
@@ -565,11 +551,11 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-xl font-bold text-zinc-100">{data.name}</h1>
               <span className="rounded border border-zinc-700 bg-zinc-800/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500">
-                {mode === "guild" ? "Guilda" : "Aliança"}
+                {mode === "guild" ? t("gpGuildWord") : t("gpAllianceWord")}
               </span>
               {entityDeleted && (
                 <span className="rounded border border-red-900/60 bg-red-950/40 px-2 py-0.5 text-[10px] text-red-400 uppercase tracking-wide">
-                  excluído
+                  {t("deletedBadge")}
                 </span>
               )}
             </div>
@@ -577,7 +563,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
               const gp = data as GuildProfile;
               return (
                 <p className="mt-0.5 text-sm text-zinc-500">
-                  Aliança:{" "}
+                  {t("gpAllianceLabel")}{" "}
                   {gp.alliance_id
                     ? <button onClick={() => navigate(`/alliance/${gp.alliance_id}`)} className="font-medium text-zinc-300 hover:text-amber-400 transition-colors">[{gp.alliance_name}]</button>
                     : <span className="font-medium text-zinc-300">[{gp.alliance_name}]</span>
@@ -586,7 +572,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
               );
             })()}
             <p className="mt-1 text-sm text-zinc-500">
-              {data.kills_total.toLocaleString("pt-BR")} kills · {data.deaths_total.toLocaleString("pt-BR")} mortes
+              {data.kills_total.toLocaleString("pt-BR")} {t("killsSuffix")} · {data.deaths_total.toLocaleString("pt-BR")} {t("deathsWord")}
             </p>
           </div>
 
@@ -595,7 +581,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
             {(["7d", "30d", "all"] as Win[]).map(w => (
               <button key={w} onClick={() => setWin(w)}
                 className={`rounded-md px-3 py-1 font-medium transition-colors ${win === w ? "bg-amber-500/20 text-amber-300" : "text-zinc-500 hover:text-zinc-300"}`}>
-                {w === "all" ? "Tudo" : w}
+                {w === "all" ? t("rangeAll") : w}
               </button>
             ))}
           </div>
@@ -605,8 +591,8 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
         <div className="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2">
           {[
             { label: "Kill Fame", value: fameShort(kill_fame[win]) },
-            { label: "Prata Dropada", value: fameShort(silver_dropped[win]) },
-            { label: "Batalhas", value: String(battles[win]) },
+            { label: t("silverDroppedLabel"), value: fameShort(silver_dropped[win]) },
+            { label: t("battles"), value: String(battles[win]) },
           ].map(s => (
             <div key={s.label} className="flex flex-col items-center justify-center gap-0.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5">
               <span className="text-[10px] uppercase tracking-wide text-zinc-500">{s.label}</span>
@@ -625,12 +611,12 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
           </button>
         ))}
         <div className="ml-auto mb-1 flex items-center gap-2.5 rounded-lg border border-zinc-800 bg-zinc-900/40 px-2.5 py-1.5">
-          <span className="text-[10px] uppercase tracking-wide text-zinc-600">Jogadores ≥</span>
+          <span className="text-[10px] uppercase tracking-wide text-zinc-600">{t("minPlayersLabel")}</span>
           <input type="text" inputMode="numeric" value={minPlayers}
             onChange={e => { setMinPlayers(e.target.value); setBattlesCurPage(0); }}
             className="w-8 bg-transparent text-xs text-zinc-100 outline-none text-center tabular-nums" />
           <span className="h-3.5 w-px shrink-0 bg-zinc-800" />
-          <span className="text-[10px] uppercase tracking-wide text-zinc-600">Kills ≥</span>
+          <span className="text-[10px] uppercase tracking-wide text-zinc-600">{t("minKillsLabel")}</span>
           <input type="text" inputMode="numeric" value={minKills}
             onChange={e => { setMinKills(e.target.value); setBattlesCurPage(0); }}
             className="w-8 bg-transparent text-xs text-zinc-100 outline-none text-center tabular-nums" />
@@ -640,17 +626,17 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
       {/* tab content */}
       {tab === "members" && (
         membersLoading
-          ? <div className="py-8 text-center text-sm text-zinc-500">Carregando…</div>
+          ? <div className="py-8 text-center text-sm text-zinc-500">{t("loading")}</div>
           : <EntityTable items={filteredMembers} mode={mode} />
       )}
 
       {tab === "battles" && (
         <div className="flex flex-col gap-2">
           {battlesLoading && !battlesPage && (
-            <div className="py-8 text-center text-sm text-zinc-500">Carregando…</div>
+            <div className="py-8 text-center text-sm text-zinc-500">{t("loading")}</div>
           )}
           {!battlesLoading && battlesPage?.battles.length === 0 && (
-            <p className="py-8 text-center text-zinc-600">Nenhuma batalha registrada ainda.</p>
+            <p className="py-8 text-center text-zinc-600">{t("noGuildProfileBattlesYet")}</p>
           )}
           {battlesPage?.battles.map(b => <GuildBattleRow key={b.public_id} b={b} />)}
           {battlesPage && battlesPage.pages > 1 && (

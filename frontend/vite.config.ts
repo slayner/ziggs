@@ -13,6 +13,7 @@ export default defineConfig({
       "/meta": { target: "http://127.0.0.1:8000", changeOrigin: true },
       "/players": { target: "http://127.0.0.1:8000", changeOrigin: true },
       "/render": { target: "http://127.0.0.1:8000", changeOrigin: true },
+      "/claims": { target: "http://127.0.0.1:8000", changeOrigin: true },
     },
   },
 });

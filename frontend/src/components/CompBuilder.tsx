@@ -6,8 +6,8 @@ import {
 } from "../api";
 import { ItemPicker } from "./ItemPicker";
 import { RENDER_URL, ITEM_BY_ID, itemRenderUrl, type ItemSlot } from "../data/albion-items";
-import { MOCK_API_COMP } from "../mock";
-import { useServer } from "../i18n";
+import { mockApiComp } from "../mock";
+import { useLang, useServer, useT } from "../i18n";
 
 // ── Types ────────────────────────────────────────────────────
 type FnTypeDef  = { key: string; label: string; color: string; emoji?: string };
@@ -62,16 +62,19 @@ function fnLabel(ft: FnTypeDef): string {
   return ft.emoji ? `${ft.emoji} ${ft.label}` : ft.label;
 }
 
-const EQUIP_SLOTS = [
-  { key: "weapon",  label: "Arma" },
-  { key: "offhand", label: "Off-hand" },
-  { key: "helmet",  label: "Capacete" },
-  { key: "armor",   label: "Armadura" },
-  { key: "boots",   label: "Botas" },
-  { key: "cape",    label: "Capa" },
-  { key: "food",    label: "Comida" },
-  { key: "potion",  label: "Poção" },
-] as { key: ItemSlot; label: string }[];
+function useEquipSlots(): { key: ItemSlot; label: string }[] {
+  const t = useT();
+  return [
+    { key: "weapon",  label: t("cbSlotWeapon") },
+    { key: "offhand", label: "Off-hand" },
+    { key: "helmet",  label: t("cbSlotHelmet") },
+    { key: "armor",   label: t("cbSlotArmor") },
+    { key: "boots",   label: t("cbSlotBoots") },
+    { key: "cape",    label: t("cbSlotCape") },
+    { key: "food",    label: t("cbSlotFood") },
+    { key: "potion",  label: t("cbSlotPotion") },
+  ] as { key: ItemSlot; label: string }[];
+}
 
 const ALT_CAPABLE = new Set(["offhand", "helmet", "armor", "boots", "cape"]);
 
@@ -506,6 +509,8 @@ function RoleViewBlock({ r, spells, onTotal, label }: {
   onTotal?: (v: number) => void;
   label?: string;
 }) {
+  const t = useT();
+  const EQUIP_SLOTS = useEquipSlots();
   const [focusedId, setFocusedId] = useState<string | undefined>(undefined);
   const [localTotal, setLocalTotal] = useState(0);
   const [swapMap, setSwapMap] = useState<Record<string, number>>({});
@@ -561,19 +566,19 @@ function RoleViewBlock({ r, spells, onTotal, label }: {
           )}
           {r.play_style && (
             <div className="sd-section">
-              <h4>Modo de jogo</h4>
+              <h4>{t("playStyleTitle")}</h4>
               <p>{r.play_style}</p>
             </div>
           )}
           {r.obs && (
             <div className="sd-section">
-              <h4>Observações</h4>
+              <h4>{t("obsTitle")}</h4>
               <p>{r.obs}</p>
             </div>
           )}
           {totalAlts > 0 && totalAlts < 5 && (
             <p style={{ fontSize: 10, fontWeight: 700, color: "var(--hint)", textTransform: "uppercase", letterSpacing: ".08em", margin: 0 }}>
-              Equipamentos Alternativos
+              {t("altEquipTitle")}
             </p>
           )}
         </div>
@@ -642,6 +647,7 @@ export function EquipGrid({
   // efeito quando omitido.
   gearQuality?: Record<string, number>;
 }) {
+  const t = useT();
   const weaponSpellIds = [
     selectedQ ? weaponSpells?.find(s => s.slot === "Q" && s.spell_id === selectedQ)?.uisprite ?? selectedQ : null,
     selectedW ? weaponSpells?.find(s => s.slot === "W" && s.spell_id === selectedW)?.uisprite ?? selectedW : null,
@@ -658,7 +664,7 @@ export function EquipGrid({
               // no slot de offhand — sem as skills (essas já aparecem no slot da arma).
               const weaponItem = equip.weapon;
               return (
-                <div key={ci} className="rc-equip-cell rc-equip-2h" title="Arma de duas mãos">
+                <div key={ci} className="rc-equip-cell rc-equip-2h" title={t("twoHandedWeaponTitle")}>
                   {weaponItem?.id && <img src={itemUrl(weaponItem.id, gearQuality?.weapon ?? 0)} alt={weaponItem.name} onError={imgRetry()} />}
                 </div>
               );
@@ -694,9 +700,10 @@ export function EquipGrid({
 
 // ── AltEquipSection ──────────────────────────────────────────
 const ALT_SLOTS_VIEW = ["offhand", "helmet", "armor", "boots", "cape"] as const;
-const ALT_SLOT_LABELS: Record<string, string> = {
-  offhand: "Escudo", helmet: "Capacete", armor: "Armadura", boots: "Botas", cape: "Capa",
-};
+function useAltSlotLabels(): Record<string, string> {
+  const t = useT();
+  return { offhand: t("cbSlotShieldAlt"), helmet: t("cbSlotHelmet"), armor: t("cbSlotArmor"), boots: t("cbSlotBoots"), cape: t("cbSlotCape") };
+}
 
 function AltEquipSection({ equip, gearSpells, swapMap, onSwap, titleInSidebar }: {
   equip: DraftEquip;
@@ -705,6 +712,8 @@ function AltEquipSection({ equip, gearSpells, swapMap, onSwap, titleInSidebar }:
   onSwap: (slot: string, altIdx: number) => void;
   titleInSidebar?: boolean;
 }) {
+  const t = useT();
+  const ALT_SLOT_LABELS = useAltSlotLabels();
   const eq = equip as Record<string, unknown>;
   const groups = ALT_SLOTS_VIEW.map(slot => {
     const alts = safeAltArr(eq[`${slot}_alt`]);
@@ -755,7 +764,7 @@ function AltEquipSection({ equip, gearSpells, swapMap, onSwap, titleInSidebar }:
     <div onClick={e => e.stopPropagation()} style={titleInSidebar ? undefined : { width: "fit-content" }}>
       {!titleInSidebar && (
         <div style={{ textAlign: "center", width: "100%", fontSize: 10, fontWeight: 700, color: "var(--hint)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>
-          Equipamentos Alternativos
+          {t("altEquipTitle")}
         </div>
       )}
       {items}
@@ -765,6 +774,7 @@ function AltEquipSection({ equip, gearSpells, swapMap, onSwap, titleInSidebar }:
 
 // ── ColorPicker ─────────────────────────────────────────────
 function ColorPicker({ value, onChange }: { value: string; onChange: (c: string) => void }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [hex, setHex] = useState(value.replace("#", ""));
   const ref = useRef<HTMLDivElement>(null);
@@ -807,7 +817,7 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (c: string)
               <input type="color" value={value} style={{ opacity: 0, width: "100%", height: "100%", cursor: "pointer" }}
                 onChange={e => { onChange(e.target.value); setHex(e.target.value.replace("#", "")); }} />
             </label>
-            <button className="cs-xbtn" title="Cor aleatória"
+            <button className="cs-xbtn" title={t("randomColorTitle")}
               onClick={e => { e.stopPropagation(); randomize(); }}>
               <i className="ti ti-dice" aria-hidden />
             </button>
@@ -820,12 +830,14 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (c: string)
 
 // ════════════════════════════════════════════════════════════
 export default function CompBuilder({ perms }: { perms: Permissions }) {
+  const t = useT();
+  const { lang } = useLang();
+  const EQUIP_SLOTS = useEquipSlots();
   const [draft,            setDraft]            = useState<Draft | null>(null);
   const [editing,          setEditing]          = useState(false);
   const [offline,          setOffline]          = useState(false);
   const [openCard,         setOpenCard]         = useState<[number, number] | null>(null);
   const [histTotal,        setHistTotal]        = useState(0);
-  const [focusedItemId,    setFocusedItemId]    = useState("");
   const [dirty,            setDirty]            = useState(false);
   const [saving,           setSaving]           = useState(false);
   const [saveOk,           setSaveOk]           = useState(false);
@@ -860,7 +872,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
   useEffect(() => {
     api.listComps()
       .then(list => setCompList(list))
-      .catch(() => { setCompList([{ id: 1, name: "Demonstração" }]); setOffline(true); });
+      .catch(() => { setCompList([{ id: 1, name: t("demoCompName") }]); setOffline(true); });
     api.listWeapons().then(setWeapons).catch(() => {});
   }, []);
 
@@ -872,11 +884,11 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
       setHistory([]); setOpenCard(null); setError(null);
     } catch {
       if (offline) {
-        setDraft(compToDraft(MOCK_API_COMP));
+        setDraft(compToDraft(mockApiComp(lang)));
         setActiveCompId(id);
         setHistory([]); setOpenCard(null);
       } else {
-        setError("Erro ao carregar composição");
+        setError(t("loadCompError"));
       }
     }
   }
@@ -889,7 +901,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
       await loadComp(c.id);
       setCreatingComp(false); setNewCompName(""); setEditing(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao criar composição");
+      setError(e instanceof Error ? e.message : t("createCompError"));
     }
   }
 
@@ -899,7 +911,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
       setCompList(prev => prev?.filter(c => c.id !== id) ?? prev);
       setDeletingCompId(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro ao excluir composição");
+      setError(e instanceof Error ? e.message : t("deleteCompError"));
     }
   }
 
@@ -1010,7 +1022,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
     if (openCard?.[0] === pi && openCard?.[1] === si) {
       setOpenCard(null); setHistTotal(0); setFlexMenu(null); return;
     }
-    setOpenCard([pi, si]); setHistTotal(0); setFocusedItemId(""); setFlexMenu(null); setEditRi(0);
+    setOpenCard([pi, si]); setHistTotal(0); setFlexMenu(null); setEditRi(0);
     if (!draft) return;
     const roles = draft.parties[pi]?.slots[si]?.roles ?? [];
     for (let ri = 0; ri < roles.length; ri++) {
@@ -1217,12 +1229,12 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
       <div className="container">
         <div className="card">
           <div className="comp-header">
-            <span style={{ fontWeight: 600, fontSize: 16 }}>Composições</span>
-            {offline && <span className="badge">demonstração</span>}
+            <span style={{ fontWeight: 600, fontSize: 16 }}>{t("compsTitle")}</span>
+            {offline && <span className="badge">{t("demoBadge")}</span>}
             {perms["comps.create"] && (
               <button className="btn" style={{ marginLeft: "auto" }}
                 onClick={() => { setCreatingComp(p => !p); setError(null); }}>
-                <i className="ti ti-plus" aria-hidden /> Nova composição
+                <i className="ti ti-plus" aria-hidden /> {t("newCompBtn")}
               </button>
             )}
           </div>
@@ -1230,7 +1242,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
           {creatingComp && (
             <div style={{ padding: "8px 14px", borderTop: "1px solid var(--border)", display: "flex", gap: 8 }}>
               <input className="input" style={{ flex: 1, fontSize: 13, padding: "6px 10px" }}
-                placeholder="Nome da composição…"
+                placeholder={t("compNamePlaceholder")}
                 value={newCompName}
                 autoFocus
                 onChange={e => setNewCompName(e.target.value)}
@@ -1238,17 +1250,17 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                   if (e.key === "Enter") createCompFn();
                   if (e.key === "Escape") { setCreatingComp(false); setNewCompName(""); }
                 }} />
-              <button className="btn primary" onClick={createCompFn} disabled={!newCompName.trim()}>Criar</button>
-              <button className="btn" onClick={() => { setCreatingComp(false); setNewCompName(""); }}>Cancelar</button>
+              <button className="btn primary" onClick={createCompFn} disabled={!newCompName.trim()}>{t("createBtn")}</button>
+              <button className="btn" onClick={() => { setCreatingComp(false); setNewCompName(""); }}>{t("cancel")}</button>
             </div>
           )}
 
           {error && <p style={{ color: "#e07a7a", padding: "8px 16px", margin: 0, fontSize: 12 }}>{error}</p>}
 
-          {!compList && <p className="muted" style={{ padding: "16px 14px" }}>Carregando…</p>}
+          {!compList && <p className="muted" style={{ padding: "16px 14px" }}>{t("loading")}</p>}
           {compList?.length === 0 && !creatingComp && (
             <p className="muted" style={{ padding: "16px 14px" }}>
-              Nenhuma composição.{perms["comps.create"] ? " Crie a primeira!" : ""}
+              {t("noCompsYet")}{perms["comps.create"] ? ` ${t("createFirstOneSuffix")}` : ""}
             </p>
           )}
           {compList?.map(c => (
@@ -1264,16 +1276,16 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                   <div style={{ display: "flex", gap: 6, padding: "0 10px", flexShrink: 0 }}>
                     <button className="btn" style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a", borderColor: "#e07a7a" }}
                       onClick={() => deleteCompFn(c.id)}>
-                      Confirmar
+                      {t("confirmBtn")}
                     </button>
                     <button className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
                       onClick={() => setDeletingCompId(null)}>
-                      Cancelar
+                      {t("cancel")}
                     </button>
                   </div>
                 ) : (
                   <button className="btn" style={{ fontSize: 12, padding: "3px 8px", marginRight: 10, flexShrink: 0, opacity: 0.5 }}
-                    title="Excluir composição"
+                    title={t("deleteCompTitle")}
                     onClick={e => { e.stopPropagation(); setDeletingCompId(c.id); }}>
                     <i className="ti ti-trash" />
                   </button>
@@ -1286,7 +1298,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
     );
   }
 
-  if (!draft) return <div className="container"><p className="muted">Carregando…</p></div>;
+  if (!draft) return <div className="container"><p className="muted">{t("loading")}</p></div>;
 
   // ── Render (builder) ──────────────────────────────────────
   return (
@@ -1297,7 +1309,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
         <div className="comp-header">
           <button className="btn" style={{ padding: "5px 10px" }}
             onClick={() => { setActiveCompId(null); setDraft(null); setError(null); setEditing(false); }}
-            title="Voltar para a lista">
+            title={t("backToListTitle")}>
             <i className="ti ti-arrow-left" aria-hidden />
           </button>
           {editing ? (
@@ -1307,27 +1319,27 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
           ) : (
             <span style={{ fontWeight: 600, fontSize: 16 }}>{draft.name}</span>
           )}
-          {offline && <span className="badge">demonstração</span>}
+          {offline && <span className="badge">{t("demoBadge")}</span>}
           {error && <span style={{ color: "#e07a7a", fontSize: 12 }}>{error}</span>}
 
           <div className="comp-view-toggle">
             <button className={!editing ? "active" : ""} onClick={() => setEditing(false)}>
-              <i className="ti ti-eye" aria-hidden /> Ver
+              <i className="ti ti-eye" aria-hidden /> {t("viewBtn")}
             </button>
             {perms["comps.manage"] && (
               <button className={editing ? "active" : ""} onClick={() => setEditing(true)}>
-                <i className="ti ti-pencil" aria-hidden /> Editar
+                <i className="ti ti-pencil" aria-hidden /> {t("editBtn")}
               </button>
             )}
           </div>
 
           <button className="btn" style={{ marginLeft: "auto" }}
-            onClick={() => setShowFnPanel(p => !p)} title="Configurar tipos de função">
+            onClick={() => setShowFnPanel(p => !p)} title={t("configFnTypesTitle")}>
             <i className="ti ti-palette" aria-hidden />
           </button>
 
           <button className="btn" onClick={undo} disabled={!history.length}
-            title="Desfazer última modificação">
+            title={t("undoLastTitle")}>
             <i className="ti ti-arrow-back-up" aria-hidden />
           </button>
 
@@ -1335,9 +1347,9 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
             <button className={"btn" + (dirty ? " primary" : "")}
               onClick={save} disabled={!dirty || saving}>
               {saveOk
-                ? <><i className="ti ti-check" aria-hidden /> Salvo</>
-                : saving ? "Salvando…"
-                : <><i className="ti ti-device-floppy" aria-hidden /> Salvar</>}
+                ? <><i className="ti ti-check" aria-hidden /> {t("saved")}</>
+                : saving ? t("saving")
+                : <><i className="ti ti-device-floppy" aria-hidden /> {t("save")}</>}
             </button>
           )}
         </div>
@@ -1354,27 +1366,27 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                   onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, emoji: e.target.value || undefined } : t))} />
                 <input className="fn-type-name-input" value={ft.label} style={{ color: ft.color }}
                   onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, label: e.target.value } : t))} />
-                <button className="cs-xbtn" title="Mover acima" disabled={fti === 0}
+                <button className="cs-xbtn" title={t("moveUpTitle")} disabled={fti === 0}
                   onClick={() => { if (fti > 0) { const n = [...fnTypes]; [n[fti-1], n[fti]] = [n[fti], n[fti-1]]; saveFnTypes(n); } }}>
                   <i className="ti ti-chevron-up" aria-hidden />
                 </button>
-                <button className="cs-xbtn" title="Mover abaixo" disabled={fti === fnTypes.length - 1}
+                <button className="cs-xbtn" title={t("moveDownTitle")} disabled={fti === fnTypes.length - 1}
                   onClick={() => { if (fti < fnTypes.length - 1) { const n = [...fnTypes]; [n[fti], n[fti+1]] = [n[fti+1], n[fti]]; saveFnTypes(n); } }}>
                   <i className="ti ti-chevron-down" aria-hidden />
                 </button>
-                <button className="cs-xbtn" title="Excluir tipo" onClick={() => deleteFnType(ft.key)}>
+                <button className="cs-xbtn" title={t("deleteTypeTitle")} onClick={() => deleteFnType(ft.key)}>
                   <i className="ti ti-x" aria-hidden />
                 </button>
               </div>
             ))}
             <div className="fn-color-row" style={{ gap: 8 }}>
               <button className="btn" style={{ fontSize: 11, padding: "3px 9px" }}
-                onClick={() => saveFnTypes([...fnTypes, { key: `custom_${Date.now()}`, label: "Novo", color: "#888888" }])}>
-                <i className="ti ti-plus" aria-hidden /> Adicionar
+                onClick={() => saveFnTypes([...fnTypes, { key: `custom_${Date.now()}`, label: t("newFnTypeLabel"), color: "#888888" }])}>
+                <i className="ti ti-plus" aria-hidden /> {t("addBtn")}
               </button>
               <button className="btn" style={{ fontSize: 11, padding: "3px 9px" }}
                 onClick={() => saveFnTypes([...DEFAULT_FN_TYPES])}>
-                Restaurar padrões
+                {t("restoreDefaultsBtn")}
               </button>
             </div>
           </div>
@@ -1391,7 +1403,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                 <div className="party-card-head">
                   <button className="party-collapse-btn"
                     onClick={() => togglePartyCollapse(pi)}
-                    title={isCollapsed ? "Expandir" : "Colapsar"}>
+                    title={isCollapsed ? t("expandBtn") : t("collapseBtn")}>
                     <i className={`ti ti-chevron-${isCollapsed ? "right" : "down"}`} aria-hidden />
                   </button>
                   {editing ? (
@@ -1409,7 +1421,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                     {party.slots.length}/{MAX_SLOTS}
                   </span>
                   {editing && draft.parties.length > 1 && (
-                    <button className="cs-xbtn" onClick={() => removeParty(pi)} title="Remover party">
+                    <button className="cs-xbtn" onClick={() => removeParty(pi)} title={t("removePartyTitle")}>
                       <i className="ti ti-x" aria-hidden />
                     </button>
                   )}
@@ -1429,9 +1441,6 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                       const role    = slot.roles[0];
                       const isOpen  = openCard?.[0] === pi && openCard?.[1] === si;
                       const chipColor = slot.fn ? (getFnDef(slot.fn, fnTypes)?.color ?? "#888") : undefined;
-                      const weapBase  = role?.equip_loaded && role.equip.weapon?.id
-                        ? wBase(role.equip.weapon.id) : null;
-                      const spells = weapBase ? spellCache[weapBase] : undefined;
                       const formRole = slot.roles[editRi] ?? role;
                       const formWeapBase = formRole?.equip_loaded && formRole.equip.weapon?.id
                         ? wBase(formRole.equip.weapon.id) : null;
@@ -1456,13 +1465,13 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                 {editing && isOpen ? (
                                   <input className="input"
                                     style={{ flex: 1, minWidth: 0, padding: "2px 6px", fontSize: 13, height: 26 }}
-                                    placeholder="Sem nome"
+                                    placeholder={t("noNamePlaceholder")}
                                     value={formRole.name}
                                     onClick={e => e.stopPropagation()}
                                     onFocus={captureHistory} onBlur={releaseFocus}
                                     onChange={e => updRoleQuiet(pi, si, editRi, r => ({ ...r, name: e.target.value }))} />
                                 ) : (
-                                  <span className="rc-name">{role.name || "Sem nome"}</span>
+                                  <span className="rc-name">{role.name || t("noNamePlaceholder")}</span>
                                 )}
                                 {/* Build total price */}
                                 {isOpen && histTotal > 0 && (
@@ -1488,7 +1497,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                 )}
                               </>
                             ) : (
-                              <span className="chip-empty" style={{ fontSize: 12 }}>Sem papel</span>
+                              <span className="chip-empty" style={{ fontSize: 12 }}>{t("noRoleAssigned")}</span>
                             )}
                             {editing && isOpen && (
                               <>
@@ -1511,7 +1520,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                 </select>
                                 <button className="cs-xbtn"
                                   onClick={e => { e.stopPropagation(); removeSlot(pi, si); }}
-                                  title="Remover do comp">
+                                  title={t("removeFromCompTitle")}>
                                   <i className="ti ti-x" aria-hidden />
                                 </button>
                               </>
@@ -1523,7 +1532,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                             <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "0 10px 6px", alignItems: "flex-start" }} onClick={e => e.stopPropagation()}>
                               {slot.roles.slice(1).map((fr, fri) => fr.equip_loaded ? (
                                 <div key={fri} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                                  <span style={{ fontSize: 8, color: "var(--muted)", flexShrink: 0 }}>OU</span>
+                                  <span style={{ fontSize: 8, color: "var(--muted)", flexShrink: 0 }}>{t("orWord")}</span>
                                   <EquipStrip equip={fr.equip} weaponIs2H={is2H(fr.equip.weapon?.id)} />
                                 </div>
                               ) : null)}
@@ -1536,7 +1545,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                               {/* Fn type picker — shown when slot has no type yet */}
                               {editing && slot.fn === null ? (
                                 <div className="fn-type-picker">
-                                  <p className="fn-picker-hint">Selecione o tipo de função desta bracket:</p>
+                                  <p className="fn-picker-hint">{t("selectFnTypeHint")}</p>
                                   {fnTypes.map((ft, fti) => (
                                     <div key={ft.key} className="fn-picker-row">
                                       <button className="fn-type-assign-btn"
@@ -1554,22 +1563,22 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                         onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, emoji: e.target.value || undefined } : t))} />
                                       <input className="fn-type-name-input" value={ft.label} style={{ color: ft.color, flex: 1 }}
                                         onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, label: e.target.value } : t))} />
-                                      <button className="cs-xbtn" title="Mover acima" disabled={fti === 0}
+                                      <button className="cs-xbtn" title={t("moveUpTitle")} disabled={fti === 0}
                                         onClick={() => { if (fti > 0) { const n = [...fnTypes]; [n[fti-1], n[fti]] = [n[fti], n[fti-1]]; saveFnTypes(n); } }}>
                                         <i className="ti ti-chevron-up" aria-hidden />
                                       </button>
-                                      <button className="cs-xbtn" title="Mover abaixo" disabled={fti === fnTypes.length - 1}
+                                      <button className="cs-xbtn" title={t("moveDownTitle")} disabled={fti === fnTypes.length - 1}
                                         onClick={() => { if (fti < fnTypes.length - 1) { const n = [...fnTypes]; [n[fti], n[fti+1]] = [n[fti+1], n[fti]]; saveFnTypes(n); } }}>
                                         <i className="ti ti-chevron-down" aria-hidden />
                                       </button>
-                                      <button className="cs-xbtn" title="Excluir tipo" onClick={() => deleteFnType(ft.key)}>
+                                      <button className="cs-xbtn" title={t("deleteTypeTitle")} onClick={() => deleteFnType(ft.key)}>
                                         <i className="ti ti-trash" aria-hidden />
                                       </button>
                                     </div>
                                   ))}
                                   <button className="btn" style={{ marginTop: 8, fontSize: 11, padding: "3px 9px" }}
-                                    onClick={() => saveFnTypes([...fnTypes, { key: `custom_${Date.now()}`, label: "Novo", color: "#888888" }])}>
-                                    <i className="ti ti-plus" aria-hidden /> Novo tipo
+                                    onClick={() => saveFnTypes([...fnTypes, { key: `custom_${Date.now()}`, label: t("newFnTypeLabel"), color: "#888888" }])}>
+                                    <i className="ti ti-plus" aria-hidden /> {t("newTypeBtn")}
                                   </button>
                                 </div>
                               ) : editing ? (
@@ -1583,8 +1592,8 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                         <button key={ri}
                                           className={`flex-role-tab${editRi === ri ? " act" : ""}`}
                                           onClick={() => setEditRi(ri)}>
-                                          {ri === 0 ? "Principal" : (r.name
-                                            ? (r.flex_of ? `${r.name} (flex de ${r.flex_of})` : r.name)
+                                          {ri === 0 ? t("mainTabLabel") : (r.name
+                                            ? (r.flex_of ? `${r.name} (${t("flexOfPrefix")} ${r.flex_of})` : r.name)
                                             : `Flex ${ri}`)}
                                         </button>
                                       ))}
@@ -1593,18 +1602,18 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
 
                                   {/* Weapon */}
                                   <div className="equip-field">
-                                    <label className="equip-field-label">Arma</label>
+                                    <label className="equip-field-label">{t("cbSlotWeapon")}</label>
                                     <ItemPicker slot="weapon"
                                       valueId={formRole?.equip.weapon?.id ?? ""}
                                       valueName={formRole?.equip.weapon?.name ?? ""}
-                                      placeholder="Selecionar arma…"
+                                      placeholder={t("selectWeaponPlaceholder")}
                                       onChange={(id, name) => onWeaponChange(pi, si, editRi, id, name)} />
                                   </div>
 
                                   {/* Q / W / Passive spell picker */}
                                   {formSpells && formSpells.length > 0 && (
                                     <div className="equip-field">
-                                      <label className="equip-field-label">Habilidades Q / W / Passiva</label>
+                                      <label className="equip-field-label">{t("abilitiesQwpLabel")}</label>
                                       <div className="rc-spells">
                                         <SpellPicker spells={formSpells} slot="Q"
                                           selected={formRole?.q_spell ?? null}
@@ -1621,7 +1630,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
 
                                   {/* Other equipment */}
                                   <div className="equip-field">
-                                    <label className="equip-field-label">Equipamento</label>
+                                    <label className="equip-field-label">{t("equipmentLabel")}</label>
                                     <div className="equip-grid-narrow">
                                       {EQUIP_SLOTS.filter(s => s.key !== "weapon").filter(s => !(s.key === "offhand" && is2H(formRole?.equip.weapon?.id))).map(({ key, label }) => {
                                         const gearBase = formRole?.equip[key]?.id ? wBase(formRole.equip[key]!.id) : null;
@@ -1656,7 +1665,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                                       <ItemPicker slot={key}
                                                         valueId={alt?.id ?? ""}
                                                         valueName={alt?.name ?? ""}
-                                                        placeholder="Alternativo…"
+                                                        placeholder={t("alternativePlaceholder")}
                                                         excludeIds={usedIds.filter(id => id !== alt?.id)}
                                                         onChange={(id, name) => {
                                                           updRole(pi, si, editRi, r => {
@@ -1689,7 +1698,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                             })()}
                                             {(key === "potion" || key === "food") && (
                                               <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
-                                                <label className="equip-field-label">Qtd.</label>
+                                                <label className="equip-field-label">{t("qtyShortLabel")}</label>
                                                 <input type="number" className="input"
                                                   style={{ width: 60, fontSize: 13, padding: "2px 6px" }}
                                                   min={1} max={999}
@@ -1744,10 +1753,10 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
 
                                   {/* Playstyle */}
                                   <div className="equip-field">
-                                    <label className="equip-field-label">Modo de jogo</label>
+                                    <label className="equip-field-label">{t("playStyleTitle")}</label>
                                     <textarea className="input" rows={2}
                                       style={{ fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
-                                      placeholder="ex.: Fica atrás do grupo, cura o alvo principal…"
+                                      placeholder={t("playStylePlaceholder")}
                                       value={formRole?.play_style ?? ""}
                                       onFocus={captureHistory} onBlur={releaseFocus}
                                       onChange={e => updRoleQuiet(pi, si, editRi, r => ({
@@ -1757,10 +1766,10 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
 
                                   {/* Observations */}
                                   <div className="equip-field">
-                                    <label className="equip-field-label">Observações</label>
+                                    <label className="equip-field-label">{t("obsTitle")}</label>
                                     <textarea className="input" rows={2}
                                       style={{ fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
-                                      placeholder="ex.: Prioridade de alvo, posicionamento…"
+                                      placeholder={t("obsPlaceholder")}
                                       value={formRole?.obs ?? ""}
                                       onFocus={captureHistory} onBlur={releaseFocus}
                                       onChange={e => updRoleQuiet(pi, si, editRi, r => ({
@@ -1782,19 +1791,19 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                           <button className="btn"
                                             style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a" }}
                                             onClick={() => deleteFromCatalog(role.catalog_id!, pi, si)}>
-                                            Confirmar exclusão
+                                            {t("confirmDeleteBtn")}
                                           </button>
                                           <button className="btn"
                                             style={{ fontSize: 11, padding: "3px 8px" }}
                                             onClick={() => setDelConfirm(null)}>
-                                            Cancelar
+                                            {t("cancel")}
                                           </button>
                                         </>
                                       ) : (
                                         <button className="btn"
                                           style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a" }}
                                           onClick={() => setDelConfirm(role.catalog_id)}>
-                                          <i className="ti ti-trash" aria-hidden /> Excluir do catálogo
+                                          <i className="ti ti-trash" aria-hidden /> {t("deleteFromCatalogBtn")}
                                         </button>
                                       )
                                     )}
@@ -1805,7 +1814,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                           updSlot(pi, si, s => ({ ...s, roles: s.roles.filter((_, i) => i !== editRi) }));
                                           setEditRi(0);
                                         }}>
-                                        <i className="ti ti-x" aria-hidden /> Remover flex
+                                        <i className="ti ti-x" aria-hidden /> {t("removeFlexBtn")}
                                       </button>
                                     )}
                                   </div>
@@ -1822,7 +1831,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                             setEditRi(newRi);
                                             setFlexMenu(null);
                                           }}>
-                                          <i className="ti ti-plus" aria-hidden /> Nova build
+                                          <i className="ti ti-plus" aria-hidden /> {t("newBuildBtn")}
                                         </button>
                                         {pickable.map((r, idx) => (
                                           <button key={idx} className="flex-picker-item"
@@ -1842,8 +1851,8 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                                   onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
                                               : <span style={{ width: 20, flexShrink: 0 }} />}
                                             <span className="flex-picker-name">
-                                              {r.name || "Sem nome"}
-                                              {r.flex_of && <span style={{ color: "var(--muted)", fontSize: 10 }}> (flex de {r.flex_of})</span>}
+                                              {r.name || t("noNamePlaceholder")}
+                                              {r.flex_of && <span style={{ color: "var(--muted)", fontSize: 10 }}> ({t("flexOfPrefix")} {r.flex_of})</span>}
                                             </span>
                                             {r.fn && (() => { const ft = getFnDef(r.fn, fnTypes); return ft ? (
                                               <span className="rc-fn-badge" style={{
@@ -1854,7 +1863,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                           </button>
                                         ))}
                                         {!pickable.length && (
-                                          <span className="flex-picker-empty">Nenhuma outra build na comp</span>
+                                          <span className="flex-picker-empty">{t("noOtherBuildInComp")}</span>
                                         )}
                                       </div>
                                     );
@@ -1866,7 +1875,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                       display: "flex", flexDirection: "column", gap: 4,
                                       paddingTop: 6, borderTop: "1px solid var(--border)",
                                     }}>
-                                      <span className="equip-field-label">Alternativas (flex)</span>
+                                      <span className="equip-field-label">{t("flexAlternativesLabel")}</span>
                                       {slot.roles.slice(1).map((fr, fri) => (
                                         <div key={fri}
                                           style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
@@ -1899,7 +1908,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                 /* ── View detail ──────────────────────── */
                                 <>
                                   {!role?.equip_loaded && (
-                                    <p className="hint" style={{ fontSize: 12 }}>Carregando…</p>
+                                    <p className="hint" style={{ fontSize: 12 }}>{t("loading")}</p>
                                   )}
 
                                   {slot.roles.map((r, ri) => {
@@ -1910,19 +1919,19 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                     return (
                                       <Fragment key={ri}>
                                         {ri > 0 && (
-                                          <div className="rc-ou-divider"><span>OU</span></div>
+                                          <div className="rc-ou-divider"><span>{t("orWord")}</span></div>
                                         )}
                                         <div>
                                           <RoleViewBlock r={r as DraftRole & { equip_loaded: true }} spells={rSpells} onTotal={ri === 0 ? setHistTotal : undefined} label={ri > 0 ? r.name : undefined} />
                                         </div>
                                         {ri === 0 && !hasEquip && !r.play_style && !r.obs && (
                                           <p className="hint" style={{ fontSize: 12 }}>
-                                            Nenhum detalhe definido.{" "}
+                                            {t("noDetailDefined")}{" "}
                                             {perms["comps.manage"] && (
                                               <button
                                                 style={{ background: "none", border: "none", color: "var(--info)", cursor: "pointer", fontSize: 12, padding: 0 }}
                                                 onClick={() => setEditing(true)}>
-                                                Editar
+                                                {t("editBtn")}
                                               </button>
                                             )}
                                           </p>
@@ -1959,7 +1968,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                             <div className="flex-picker-menu">
                               <button className="flex-picker-item flex-picker-new"
                                 onClick={() => { addSlot(pi); setAddSlotMenu(null); }}>
-                                <i className="ti ti-plus" aria-hidden /> Criar novo papel
+                                <i className="ti ti-plus" aria-hidden /> {t("createNewRoleBtn")}
                               </button>
                               {pickableSlots.map((item, idx) => (
                                 <button key={idx} className="flex-picker-item"
@@ -1982,7 +1991,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                         style={{ width: 20, height: 20, flexShrink: 0 }}
                                         onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
                                     : <span style={{ width: 20, flexShrink: 0 }} />}
-                                  <span className="flex-picker-name">{item.primary.name || "Sem nome"}</span>
+                                  <span className="flex-picker-name">{item.primary.name || t("noNamePlaceholder")}</span>
                                   {item.fn && (() => { const ft = getFnDef(item.fn, fnTypes); return ft ? (
                                     <span className="rc-fn-badge" style={{ background: ft.color + "25", color: ft.color, flexShrink: 0 }}>
                                       {fnLabel(ft)}
@@ -1996,7 +2005,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                 </button>
                               ))}
                               {!pickableSlots.length && (
-                                <span className="flex-picker-empty">Nenhuma role na comp</span>
+                                <span className="flex-picker-empty">{t("noRoleInComp")}</span>
                               )}
                             </div>
                           );
@@ -2005,7 +2014,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                           onClick={() => setAddSlotMenu(addSlotMenu === pi ? null : pi)}
                           disabled={party.slots.length >= MAX_SLOTS}>
                           <i className="ti ti-plus" aria-hidden />
-                          {party.slots.length >= MAX_SLOTS ? "Cheio" : "Adicionar papel"}
+                          {party.slots.length >= MAX_SLOTS ? t("fullLabel") : t("addRoleBtn")}
                         </button>
                       </>
                     )}
@@ -2018,7 +2027,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
           {/* Add party */}
           {editing && (
             <button className="party-col-add" onClick={addParty}>
-              <i className="ti ti-plus" aria-hidden /> Nova party
+              <i className="ti ti-plus" aria-hidden /> {t("newPartyBtn")}
             </button>
           )}
         </div>

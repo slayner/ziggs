@@ -229,8 +229,31 @@ def _members(db: Session, guild_id: str, min_players: int = 0, min_kills: int = 
 
 
 def _guilds_in_alliance(db: Session, alliance_id: str, min_players: int = 0, min_kills: int = 0) -> list[dict]:
-    """Guildas vistas em batalhas desta aliança, ordenadas por presença."""
-    filters = [BattleGuild.alliance_id == alliance_id]
+    """Guildas cuja ÚLTIMA aparição em batalha ainda mostra elas nesta aliança —
+    mesmo critério usado pro roster de uma guilda (ver _members): só a
+    aparição mais recente conta pro roster, senão uma guilda que já saiu da
+    aliança continuaria aparecendo pra sempre só por ter lutado junto antes."""
+    latest_sub = (
+        select(BattleGuild.albion_guild_id, func.max(Battle.id).label("bid"))
+        .join(Battle, Battle.id == BattleGuild.battle_id)
+        .group_by(BattleGuild.albion_guild_id)
+        .subquery()
+    )
+    current_ids = set(db.scalars(
+        select(BattleGuild.albion_guild_id)
+        .join(Battle, Battle.id == BattleGuild.battle_id)
+        .join(
+            latest_sub,
+            (latest_sub.c.albion_guild_id == BattleGuild.albion_guild_id) &
+            (latest_sub.c.bid == Battle.id),
+        )
+        .where(BattleGuild.alliance_id == alliance_id)
+        .distinct()
+    ).all())
+    if not current_ids:
+        return []
+
+    filters = [BattleGuild.alliance_id == alliance_id, BattleGuild.albion_guild_id.in_(current_ids)]
     if min_players > 0:
         filters.append(Battle.players_total >= min_players)
     if min_kills > 0:
@@ -457,11 +480,11 @@ def _battles_guild(db: Session, guild_id: str, page: int = 0, min_players: int =
         .order_by(Battle.start_time.desc())
         .limit(PAGE_SIZE).offset(page * PAGE_SIZE)
     ).all()
+    groups = battle_groups.get_or_create_groups_bulk(db, [battle.id for battle, _ in rows])
     out = []
     for battle, bg in rows:
-        group = battle_groups.get_or_create_group(db, [battle.id])
         out.append({
-            "public_id": group.public_id,
+            "public_id": groups[battle.id].public_id,
             "region": battle.region,
             "start_time": _aware(battle.start_time).isoformat(),
             "cluster": battle.cluster,
@@ -519,15 +542,15 @@ def _battles_alliance(db: Session, alliance_id: str, page: int = 0, min_players:
         ).all()
     }
 
+    groups = battle_groups.get_or_create_groups_bulk(db, list(battles.keys()))
     out = []
     for bid in battle_ids:
         battle = battles.get(bid)
         a = agg.get(bid)
         if not battle or not a:
             continue
-        group = battle_groups.get_or_create_group(db, [battle.id])
         out.append({
-            "public_id": group.public_id,
+            "public_id": groups[battle.id].public_id,
             "region": battle.region,
             "start_time": _aware(battle.start_time).isoformat(),
             "cluster": battle.cluster,
@@ -666,12 +689,13 @@ def _search(db: Session, q: str) -> dict:
 
     battles = []
     if all_bids:
-        for b in db.scalars(
+        top_battles = db.scalars(
             select(Battle).where(Battle.id.in_(all_bids)).order_by(Battle.start_time.desc()).limit(6)
-        ).all():
-            group = battle_groups.get_or_create_group(db, [b.id])
+        ).all()
+        groups = battle_groups.get_or_create_groups_bulk(db, [b.id for b in top_battles])
+        for b in top_battles:
             battles.append({
-                "public_id": group.public_id,
+                "public_id": groups[b.id].public_id,
                 "start_time": _aware(b.start_time).isoformat(),
                 "cluster": b.cluster,
                 "kill_count": b.kill_count,
@@ -762,29 +786,46 @@ def alliance_profile(albion_id: str, db: Session = Depends(deps.db_session)):
 
 
 async def _check_albion_entity(entity_type: str, albion_id: str, path: str, db: Session) -> dict:
+    """IDs de guilda/aliança são por REGIÃO (não existem nas outras 2, ver
+    AlbionPlayer.region) — checar só o host Americas (como era antes)
+    marcava "deletada" qualquer entidade de Europe/Asia, mesmo bem viva.
+    Tenta os 3 hosts regionais (mesmo padrão de
+    battle_tracker.resolve_by_albion_id) e só marca deletado de verdade se
+    os 3 confirmarem 404 — qualquer timeout/erro no meio vira "unknown",
+    nunca deletado."""
     import httpx
-    from app.services.player_tracker import make_client
-    try:
-        async with make_client() as c:
-            resp = await c.get(
-                f"https://gameinfo.albiononline.com/api/gameinfo/{path}/{albion_id}",
-                timeout=8.0,
-            )
-            exists = resp.status_code == 200
-    except (httpx.TimeoutException, httpx.NetworkError):
-        return {"exists": True, "unknown": True}
+    from app.services.player_tracker import HOSTS, make_client
+
+    found = False
+    inconclusive = False
+    async with make_client() as c:
+        for host in HOSTS.values():
+            try:
+                resp = await c.get(f"https://{host}/api/gameinfo/{path}/{albion_id}", timeout=8.0)
+            except (httpx.TimeoutException, httpx.NetworkError):
+                inconclusive = True
+                continue
+            if resp.status_code == 200:
+                found = True
+                break
+            if resp.status_code != 404:
+                inconclusive = True
 
     row = db.scalar(select(DeletedProfile).where(
         DeletedProfile.entity_type == entity_type, DeletedProfile.albion_id == albion_id
     ))
-    if not exists and row is None:
+    if found:
+        if row is not None:
+            db.delete(row)
+            db.commit()
+        return {"exists": True}
+    if inconclusive:
+        return {"exists": True, "unknown": True}
+    if row is None:
         db.add(DeletedProfile(entity_type=entity_type, albion_id=albion_id,
                               deleted_at=datetime.now(timezone.utc)))
         db.commit()
-    elif exists and row is not None:
-        db.delete(row)
-        db.commit()
-    return {"exists": exists}
+    return {"exists": False}
 
 
 @router.get("/guilds/{albion_id}/check")

@@ -42,6 +42,25 @@ class Battle(Base):
     # TODOS os participantes dessa batalha — fila de processar 1 vez só,
     # nunca reprocessa a mesma batalha (ver app/services/profile_warmer.py).
     profiles_synced: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Fila genérica de reprocessamento: quando uma mudança de lógica de
+    # processamento (faction_key, elegibilidade etc.) invalida dados já
+    # gravados, marca as batalhas afetadas com um motivo (string curta,
+    # qualquer texto serve, é só rótulo) em vez de escrever um script avulso
+    # que reprocessa tudo de uma vez — ver app/services/battle_reprocessor.py,
+    # que varre isso aos poucos, rodando dentro do mesmo processo da API (não
+    # um processo separado disputando lock do SQLite com tráfego real).
+    # None = nada pendente. Vira None de novo depois que reprocessa com sucesso.
+    reprocess_reason: Mapped[str | None] = mapped_column(String(64), index=True)
+
+
+class ReprocessCampaign(Base):
+    """Total de batalhas já marcadas pra cada reprocess_reason (ver Battle) —
+    só pra calcular % de progresso na barra do menu de Configurações
+    (pending = count atual com esse motivo; done = total - pending)."""
+    __tablename__ = "reprocess_campaigns"
+
+    reason: Mapped[str] = mapped_column(String(64), primary_key=True)
+    total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class BattleSyncCursor(Base):
@@ -117,6 +136,10 @@ class BattleParticipant(Base):
     damage_dealt: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     damage_taken: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     healing_done: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    # Vezes que apareceu em Participants[] de uma kill sem ser o matador —
+    # crédito de assist (ver _write_deep_data). Usado no sistema de pontos
+    # por arma do perfil de jogador (routes/players.py).
+    assists: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Lista de builds DISTINTAS vistas no jogador durante a batalha (troca de
     # gear no meio da luta não é raro). Cada item no mesmo formato usado em

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { navigate } from "../router";
 import { fetchRetry } from "../api";
+import { useLang, useT, REGION_LABELS } from "../i18n";
 
 // Em dev o Vite proxy não encaminha /players corretamente, então chamamos a API
 // diretamente. Em produção o frontend é servido do mesmo servidor (URL relativa).
@@ -10,10 +11,10 @@ const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 // busca nos 3 em paralelo e mostra de qual região é cada resultado, já que
 // o usuário não necessariamente sabe de antemão. Ver router.ts (mesmos
 // prefixos usados no link de perfil, /am/Nome etc).
-const REGIONS: { key: string; label: string; prefix: string }[] = [
-  { key: "americas", label: "Americas", prefix: "am" },
-  { key: "europe", label: "Europe", prefix: "eu" },
-  { key: "asia", label: "Asia", prefix: "as" },
+const REGIONS: { key: string; prefix: string }[] = [
+  { key: "americas", prefix: "am" },
+  { key: "europe", prefix: "eu" },
+  { key: "asia", prefix: "as" },
 ];
 
 interface PlayerSearchResult {
@@ -27,7 +28,7 @@ interface PlayerSearchResult {
   DeathFame: number;
 }
 
-interface RegionResults { key: string; label: string; prefix: string; players: PlayerSearchResult[] }
+interface RegionResults { key: string; prefix: string; players: PlayerSearchResult[] }
 
 const fameColor = (n: number) =>
   n >= 1_000_000_000 ? "text-amber-300" :
@@ -82,6 +83,8 @@ function PlayerAvatar({ avatar, name, size = 40 }: { avatar?: string | null; nam
 }
 
 export default function PlayerLookup() {
+  const t = useT();
+  const { lang } = useLang();
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<RegionResults[] | null>(null);
@@ -123,7 +126,7 @@ export default function PlayerLookup() {
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Buscar jogador por nick…"
+          placeholder={t("playerSearchPlaceholder")}
           className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-sm text-zinc-100 outline-none focus:border-amber-500 placeholder:text-zinc-600"
         />
         <button
@@ -131,23 +134,23 @@ export default function PlayerLookup() {
           disabled={searching || query.trim().length < 2}
           className="rounded-lg border border-zinc-700 bg-zinc-800 px-5 py-2.5 text-sm font-semibold text-zinc-200 hover:border-zinc-500 disabled:opacity-40"
         >
-          {searching ? "…" : "Buscar"}
+          {searching ? "…" : t("searchBtn")}
         </button>
       </form>
 
       {searchError && <p className="mb-4 rounded-lg border border-red-800 bg-red-900/20 px-4 py-3 text-sm text-red-400">{searchError}</p>}
 
-      {searching && <div className="py-16 text-center text-zinc-500">Buscando nas 3 regiões…</div>}
+      {searching && <div className="py-16 text-center text-zinc-500">{t("searchingRegions")}</div>}
 
       {!searching && results !== null && (
         totalResults === 0 ? (
-          <p className="py-12 text-center text-zinc-500">Nenhum jogador encontrado para "{query}".</p>
+          <p className="py-12 text-center text-zinc-500">{t("noPlayerFoundFor")} "{query}".</p>
         ) : (
           <div className="space-y-6">
             {results.map(r => (
               <div key={r.key}>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                  {r.label} <span className="text-zinc-600">· {r.players.length}</span>
+                  {REGION_LABELS[lang][r.key] ?? r.key} <span className="text-zinc-600">· {r.players.length}</span>
                 </p>
                 <div className="space-y-2">
                   {r.players.map(p => (
@@ -164,13 +167,13 @@ export default function PlayerLookup() {
                             {p.AllianceTag && <span className="text-xs text-amber-400">[{p.AllianceTag}]</span>}
                           </div>
                           <div className="text-xs text-zinc-500 truncate">
-                            {p.GuildName ?? "Sem guilda"}
+                            {p.GuildName ?? t("noGuild")}
                             {p.AllianceName && <span className="ml-1">· {p.AllianceName}</span>}
                           </div>
                         </div>
                         <div className="text-right shrink-0">
-                          <div className={`text-xs font-semibold ${fameColor(p.KillFame)}`}>{fameShort(p.KillFame)} kill</div>
-                          <div className="text-[10px] text-zinc-600">{fameShort(p.DeathFame)} death</div>
+                          <div className={`text-xs font-semibold ${fameColor(p.KillFame)}`}>{fameShort(p.KillFame)} {t("killLabel")}</div>
+                          <div className="text-[10px] text-zinc-600">{fameShort(p.DeathFame)} {t("deathLabel")}</div>
                         </div>
                       </div>
                     </button>
@@ -185,8 +188,8 @@ export default function PlayerLookup() {
       {!searching && results === null && (
         <div className="py-20 text-center">
           <div className="text-4xl mb-4">⚔️</div>
-          <p className="text-zinc-400 font-medium">Busque qualquer jogador de Albion</p>
-          <p className="mt-1 text-sm text-zinc-600">Perfil público · Stats · Kills · Histórico de guilds</p>
+          <p className="text-zinc-400 font-medium">{t("emptyLookupTitle")}</p>
+          <p className="mt-1 text-sm text-zinc-600">{t("emptyLookupSub")}</p>
         </div>
       )}
     </div>

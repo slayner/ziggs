@@ -47,6 +47,13 @@ class Guild(Base, TimestampMixin):
     albion_guild_id: Mapped[str | None] = mapped_column(String(64))
     albion_guild_name: Mapped[str | None] = mapped_column(String(255))
 
+    # Aliança da guilda acima — descoberta sozinha (sem endpoint dedicado): toda
+    # vez que um membro da guilda passa por /register, a API já devolve o
+    # AllianceId/Name dele, e como aliança é atributo da guilda, isso já basta
+    # pra preencher os campos abaixo sem nenhuma chamada extra à API da Albion.
+    albion_alliance_id: Mapped[str | None] = mapped_column(String(64))
+    albion_alliance_name: Mapped[str | None] = mapped_column(String(255))
+
     bot_present: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Saldo do banco da guilda em prata. Pode ficar negativo (ex.: regear pago sem

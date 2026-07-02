@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, BOT_INVITE, type DiscordGuild, type SiteGuild } from "../api";
+import { useT } from "../i18n";
 
 interface Props {
   onSelect: (guildId: string, name: string, botPresent: boolean) => void;
@@ -12,6 +13,7 @@ function iconUrl(id: number | string, icon?: string | null) {
 }
 
 export default function GuildPicker({ onSelect }: Props) {
+  const t = useT();
   const [items, setItems]   = useState<Item[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]   = useState<string | null>(null);
@@ -76,23 +78,21 @@ export default function GuildPicker({ onSelect }: Props) {
     <div className="guild-picker">
       <div className="guild-picker-card">
         <i className="ti ti-shield-bolt guild-picker-icon" aria-hidden="true" />
-        <h2 className="guild-picker-title">Selecione seu servidor</h2>
+        <h2 className="guild-picker-title">{t("guildPickerTitle")}</h2>
         <p className="guild-picker-sub">
-          {setupMode
-            ? "Servidores Discord com o Ziggs ativo."
-            : "Servidores onde o Ziggs está ativo."}
+          {setupMode ? t("guildPickerSubSetup") : t("guildPickerSubNormal")}
         </p>
 
-        {loading && <p className="hint" style={{ marginTop: 16 }}>Buscando servidores…</p>}
+        {loading && <p className="hint" style={{ marginTop: 16 }}>{t("searchingServers")}</p>}
         {error   && <p style={{ color: "var(--red)", marginTop: 16 }}>{error}</p>}
         {isEmpty && !setupMode && (
           <p className="hint" style={{ marginTop: 16 }}>
-            Nenhum servidor com o Ziggs encontrado.
+            {t("noServersFound")}
           </p>
         )}
         {isEmpty && setupMode && (
           <p className="hint" style={{ marginTop: 16 }}>
-            Nenhum servidor Discord com o bot ativo.
+            {t("noServersWithBot")}
           </p>
         )}
 
@@ -118,7 +118,7 @@ export default function GuildPicker({ onSelect }: Props) {
         </div>
 
         <a href={BOT_INVITE} target="_blank" rel="noreferrer" className="guild-picker-invite">
-          <i className="ti ti-plus" /> Adicionar Ziggs a um servidor
+          <i className="ti ti-plus" /> {t("addZiggsToServer")}
         </a>
 
         {!setupMode && (
@@ -127,7 +127,7 @@ export default function GuildPicker({ onSelect }: Props) {
             style={{ background: "none", border: "none", cursor: "pointer", marginTop: 4 }}
             onClick={() => setSetupMode(true)}
           >
-            <i className="ti ti-refresh" /> Já adicionou? Atualizar lista
+            <i className="ti ti-refresh" /> {t("refreshServerList")}
           </button>
         )}
         {setupMode && (
@@ -136,7 +136,7 @@ export default function GuildPicker({ onSelect }: Props) {
             style={{ background: "none", border: "none", cursor: "pointer", marginTop: 4 }}
             onClick={() => setSetupMode(false)}
           >
-            <i className="ti ti-arrow-left" /> Voltar
+            <i className="ti ti-arrow-left" /> {t("back")}
           </button>
         )}
       </div>

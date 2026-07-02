@@ -68,6 +68,13 @@ a { color: var(--info); text-decoration: none; }
 }
 .dash-text-glow { animation: dash-text-glow 1.6s ease-out; }
 
+@keyframes dash-rank-overtake {
+  0%   { transform: translateY(8px); background: rgba(212, 163, 56, 0); }
+  30%  { transform: translateY(0); background: rgba(212, 163, 56, 0.2); }
+  100% { transform: translateY(0); background: rgba(212, 163, 56, 0); }
+}
+.dash-rank-overtake { animation: dash-rank-overtake 0.9s ease-out; }
+
 .container { max-width: 1024px; margin: 0 auto; padding: 24px 20px; }
 
 .card {
@@ -685,6 +692,12 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--gold); margin-left: auto; flex-shrink: 0;
 }
+.user-menu-progress { padding: 10px 14px; font-size: 11px; color: var(--hint); }
+.user-menu-progress-bar {
+  height: 5px; border-radius: 3px; background: var(--surface-2);
+  margin: 6px 0 4px; overflow: hidden;
+}
+.user-menu-progress-bar > div { height: 100%; background: var(--gold); }
 
 /* ── Guild Switcher (dropdown multi-servidor) ───── */
 .guild-switcher { position: relative; }

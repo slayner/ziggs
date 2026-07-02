@@ -12,10 +12,11 @@ from fastapi import Depends, HTTPException, Path, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.permissions import has_permission
 from app.auth.session import verify_session
 from app.config import get_settings
 from app.db import get_session
-from app.models.tenancy import Guild, User
+from app.models.tenancy import Guild, GuildMember, User
 
 
 def db_session() -> Iterator[Session]:
@@ -55,3 +56,36 @@ def tenant_guild(
     if guild is None:
         raise HTTPException(status_code=404, detail="guilda não encontrada")
     return guild
+
+
+def require_guild_member(
+    guild_id: int = Path(...),
+    user: User = Depends(require_user),
+    db: Session = Depends(db_session),
+) -> GuildMember:
+    """Exige que o usuário logado seja MEMBRO da guilda do path (403 caso contrário).
+
+    Sem isso, `tenant_guild` só confere que a guilda existe — qualquer pessoa
+    logada (ou nem isso) conseguiria operar dados de qualquer guilda só sabendo
+    o guild_id (snowflake do Discord, não é segredo).
+    """
+    member = db.scalar(select(GuildMember).where(
+        GuildMember.guild_id == guild_id, GuildMember.user_id == user.id,
+    ))
+    if member is None:
+        raise HTTPException(status_code=403, detail="sem acesso a essa guilda")
+    return member
+
+
+def require_permission(key: str):
+    """Factory de dependência: exige a permissão `key` (ou admin de servidor) na
+    guilda do path. Usa a mesma lógica de app/auth/permissions.py que alimenta
+    /auth/my-permissions — o que a API aplica é o que a UI mostra."""
+    def _check(
+        member: GuildMember = Depends(require_guild_member),
+        db: Session = Depends(db_session),
+    ) -> GuildMember:
+        if not member.is_guild_admin and not has_permission(db, member, key):
+            raise HTTPException(status_code=403, detail=f"permissão '{key}' necessária")
+        return member
+    return _check

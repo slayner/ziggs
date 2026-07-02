@@ -28,6 +28,7 @@ def _guild_db_user(
 def list_events(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("events.view")),
 ):
     return svc.list_events(db, guild.id)
 
@@ -38,6 +39,7 @@ def create_event(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.create")),
 ):
     eid = svc.create_event(
         db, guild.id, payload,
@@ -55,6 +57,7 @@ def get_event(
     event_id: int,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("events.view")),
 ):
     detail = svc.get_event(db, guild.id, event_id)
     if detail is None:
@@ -69,6 +72,7 @@ def transition(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     try:
         detail = svc.transition(
@@ -88,6 +92,7 @@ def set_type(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     try:
         detail = svc.set_type(
@@ -108,6 +113,7 @@ def set_step(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     try:
         detail = svc.set_step(
@@ -129,6 +135,7 @@ def add_participant(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     try:
         detail = svc.add_participant(
@@ -148,6 +155,7 @@ def update_participant(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     try:
         detail = svc.update_participant(
@@ -166,6 +174,7 @@ async def regear_estimate(
     participant_id: int,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("events.view")),
 ):
     from app.services.prices import estimate_regear
     try:
@@ -199,6 +208,7 @@ def remove_participant(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     try:
         detail = svc.remove_participant(
@@ -219,6 +229,7 @@ def add_death(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     try:
         detail = svc.add_death(
@@ -238,6 +249,7 @@ def update_death(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     try:
         detail = svc.update_death(
@@ -257,6 +269,7 @@ def remove_death(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
 ):
     try:
         detail = svc.remove_death(

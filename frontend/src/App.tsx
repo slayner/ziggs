@@ -1,21 +1,26 @@
-import { useEffect, useRef, useState } from "react";
-import Dashboard from "./components/Dashboard";
-import CompBuilder from "./components/CompBuilder";
-import EventsPage from "./components/EventsPage";
-import CraftCalculator from "./components/CraftCalculator";
-import BattleTracker from "./components/BattleTracker";
-import BattlePage from "./components/BattlePage";
-import PlayerProfilePage from "./components/PlayerProfilePage";
+import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { useLocation, navigate, parseBattleRoute, parsePlayerRoute, parseGuildRoute } from "./router";
-import PlayerLookup from "./components/PlayerLookup";
-import GuildPicker from "./components/GuildPicker";
-import GuildConfig from "./components/GuildConfig";
-import GuildProfilePage from "./components/GuildProfilePage";
 import { api, setGuild, NO_PERMS, type Me, type Permissions, type SiteGuild } from "./api";
 import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, type Lang, type GameServer } from "./i18n";
-import ClaimsPanel from "./components/ClaimsPanel";
 
-type PublicView = "dashboard" | "craft" | "players" | "battles";
+// code-split por página: cada view só baixa seu próprio JS quando é aberta
+// pela primeira vez, em vez de tudo (CompBuilder ~2000 linhas incluso) no bundle inicial.
+const Dashboard = lazy(() => import("./components/Dashboard"));
+const CompBuilder = lazy(() => import("./components/CompBuilder"));
+const EventsPage = lazy(() => import("./components/EventsPage"));
+const CraftCalculator = lazy(() => import("./components/CraftCalculator"));
+const BattleTracker = lazy(() => import("./components/BattleTracker"));
+const HighscoresPage = lazy(() => import("./components/HighscoresPage"));
+const BattlePage = lazy(() => import("./components/BattlePage"));
+const PlayerProfilePage = lazy(() => import("./components/PlayerProfilePage"));
+const PlayerLookup = lazy(() => import("./components/PlayerLookup"));
+const GuildPicker = lazy(() => import("./components/GuildPicker"));
+const GuildConfig = lazy(() => import("./components/GuildConfig"));
+const GuildProfilePage = lazy(() => import("./components/GuildProfilePage"));
+const ClaimsPanel = lazy(() => import("./components/ClaimsPanel"));
+const BotDocsPage = lazy(() => import("./components/BotDocsPage"));
+
+type PublicView = "dashboard" | "craft" | "players" | "battles" | "highscores" | "docs";
 type GuildView = "comps" | "events" | "config";
 type View = PublicView | GuildView;
 
@@ -30,12 +35,18 @@ export default function App() {
   const t = useT();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [view, setView] = useState<View>("dashboard");
+  // "Ver todos" no card de ranking semanal do dashboard pula direto pra
+  // Highscores já com fama PvP semanal selecionada — HighscoresPage não tem
+  // rota própria (view em memória, ver PublicView), então isso é passado
+  // como prop em vez de query string.
+  const [highscoresInitialWindow, setHighscoresInitialWindow] = useState<"alltime" | "week">("alltime");
   const [siteGuilds, setSiteGuilds] = useState<SiteGuild[]>([]);
   const [perms, setPerms] = useState<Permissions>(NO_PERMS);
   const [pickingGuild, setPickingGuild] = useState(false);
   const [guildDropOpen, setGuildDropOpen] = useState(false);
   const [userDropOpen, setUserDropOpen] = useState(false);
   const [userPanel, setUserPanel] = useState<"main" | "lang" | "server" | "claims">("main");
+  const [reprocessProgress, setReprocessProgress] = useState<{ percent: number; pending: number } | null>(null);
   const dropRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
   const loc = useLocation();
@@ -72,6 +83,14 @@ export default function App() {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
+
+  useEffect(() => {
+    if (!userDropOpen) return;
+    const poll = () => fetch("/meta/reprocess-progress").then(r => r.json()).then(setReprocessProgress).catch(() => {});
+    poll();
+    const id = setInterval(poll, 3000);
+    return () => clearInterval(id);
+  }, [userDropOpen]);
 
   if (me === undefined) return null;
 
@@ -142,7 +161,9 @@ export default function App() {
         <div className="topbar-dropdown-menu user-menu">
 
           {userPanel === "claims" && (
-            <ClaimsPanel onBack={() => setUserPanel("main")} />
+            <Suspense fallback={null}>
+              <ClaimsPanel onBack={() => setUserPanel("main")} />
+            </Suspense>
           )}
 
           {userPanel === "main" && <>
@@ -154,7 +175,7 @@ export default function App() {
               <div className="user-menu-divider" />
               <button className="topbar-dropdown-item" onClick={() => setUserPanel("claims")}>
                 <i className="ti ti-user-check" />
-                Meus personagens
+                {t("myCharacters")}
                 <i className="ti ti-chevron-right" style={{ fontSize: 11 }} />
               </button>
               <div className="user-menu-divider" />
@@ -181,6 +202,14 @@ export default function App() {
                 <i className="ti ti-brand-discord" /> {t("loginDiscord")}
               </a>
             )}
+            {reprocessProgress && reprocessProgress.pending > 0 && <>
+              <div className="user-menu-divider" />
+              <div className="user-menu-progress">
+                {t("reprocessProgress")}
+                <div className="user-menu-progress-bar"><div style={{ width: `${reprocessProgress.percent}%` }} /></div>
+                {reprocessProgress.percent.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+              </div>
+            </>}
           </>}
 
           {userPanel === "lang" && <>
@@ -250,10 +279,19 @@ export default function App() {
     );
   } else if (loggedIn && (view === "comps" || view === "events") && !hasGuild) {
     content = <GuildPicker onSelect={onGuildSelected} />;
-  } else if (view === "dashboard") { content = <Dashboard onOpenBattles={() => { navigate("/"); setView("battles"); }} />; }
+  } else if (view === "dashboard") {
+    content = (
+      <Dashboard
+        onOpenBattles={() => { navigate("/"); setView("battles"); }}
+        onOpenHighscores={() => { setHighscoresInitialWindow("week"); navigate("/"); setView("highscores"); }}
+      />
+    );
+  }
   else if (view === "battles") { content = <BattleTracker />; }
+  else if (view === "highscores") { content = <HighscoresPage initialWindow={highscoresInitialWindow} />; }
   else if (view === "players")   { content = <PlayerLookup />; }
   else if (view === "craft")     { content = <CraftCalculator />; }
+  else if (view === "docs")      { content = <BotDocsPage />; }
   else if (view === "comps")     { content = <CompBuilder perms={perms} />; }
   else if (view === "events")    { content = <EventsPage perms={perms} />; }
   else                           { content = <GuildConfig guildId={me!.guild_id!} onSwitch={() => setPickingGuild(true)} />; }
@@ -311,7 +349,7 @@ export default function App() {
       </button>
     ) : (
       <span className="nav-guild-label">
-        <i className="ti ti-lock" /> Guilda
+        <i className="ti ti-lock" /> {t("guildLockedLabel")}
       </span>
     )
   );
@@ -334,7 +372,9 @@ export default function App() {
           {nb("dashboard", "ti-home",         t("dashboard"))}
           {nb("battles", "ti-shield-bolt",    t("battles"))}
           {nb("players", "ti-sword",          t("players"))}
+          {nb("highscores", "ti-trophy",      t("highscores"))}
           {nb("craft",   "ti-hammer",         t("craft"))}
+          {nb("docs",    "ti-book-2",         t("botDocs"))}
         </nav>
 
         <div className="nav-sep" />
@@ -356,7 +396,9 @@ export default function App() {
         </div>
       </div>
 
-      {content}
+      <Suspense fallback={null}>
+        {content}
+      </Suspense>
     </>
   );
 }

@@ -99,3 +99,15 @@ def fetch_guild(guild_id: str, bot_token: str) -> dict:
 def fetch_guild_roles(guild_id: str, bot_token: str) -> list[dict]:
     """GET /guilds/{guild_id}/roles — lista de cargos do servidor (usa bot token)."""
     return _bot_get(f"/guilds/{guild_id}/roles", bot_token)  # type: ignore[return-value]
+
+
+def remove_guild_member_role(guild_id: str, user_id: str, role_id: str, bot_token: str) -> None:
+    """DELETE /guilds/{guild_id}/members/{user_id}/roles/{role_id} — usado pelo
+    check periódico de /register (sem interação ativa pra remover via bot.py)."""
+    with httpx.Client(timeout=5) as c:
+        r = c.delete(
+            f"{API}/guilds/{guild_id}/members/{user_id}/roles/{role_id}",
+            headers={"Authorization": f"Bot {bot_token}"},
+        )
+        if r.status_code not in (204, 404):
+            r.raise_for_status()

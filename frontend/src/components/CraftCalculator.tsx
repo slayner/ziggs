@@ -30,7 +30,7 @@ import {
 } from "../lib/craft/catalog";
 import type { PriceServer, PriceQuote } from "../lib/prices/types";
 import { fetchAdpPrices, fetchAdpDemand, fetchAdpPriceSeries } from "../lib/prices/adp";
-import { useServer } from "../i18n";
+import { useLang, useT, type TKey } from "../i18n";
 import { silver, silverShort, decimal, percent } from "../lib/format";
 
 const iconUrl = (id: string, size = 64, quality?: number) =>
@@ -63,14 +63,16 @@ const CITY_COLOR: Record<string, string> = {
   "Black Market": "#b8b8bd",
 };
 const cityColor = (city?: string) => (city ? CITY_COLOR[city] : undefined);
-const CITY_BIOME: Record<string, string> = {
-  Lymhurst: "Floresta",
-  "Fort Sterling": "Montanha",
-  Bridgewatch: "Estepe",
-  Martlock: "Planalto",
-  Thetford: "Pântano",
-};
-const cityBiome = (city?: string) => (city ? CITY_BIOME[city] : undefined);
+function useCityBiome(): Record<string, string> {
+  const t = useT();
+  return {
+    Lymhurst: t("biomeForest"),
+    "Fort Sterling": t("biomeMountain"),
+    Bridgewatch: t("biomeSteppe"),
+    Martlock: t("biomeHighland"),
+    Thetford: t("biomeSwamp"),
+  };
+}
 const DEMAND_CITIES = ["Lymhurst", "Fort Sterling", "Bridgewatch", "Martlock", "Thetford"];
 const SELL_QUALITIES = [1, 2, 3, 4];
 const ALL_QUALITIES = [1, 2, 3, 4, 5];
@@ -89,10 +91,14 @@ const timeAgo = (ms: number) => {
 const isFresh = (date?: number) => !!date && nowMs() - date <= WEEK_MS;
 const isStale = (date?: number) => (date ? nowMs() - date > DAY_MS : false);
 
-const GROUP_LABELS: Record<string, string> = {
-  METALBAR: "Metal", PLANKS: "Madeira", LEATHER: "Couro", CLOTH: "Tecido", STONEBLOCK: "Pedra",
-  Artefatos: "Artefatos", Jornais: "Jornais",
-};
+function useGroupLabels(): Record<string, string> {
+  const t = useT();
+  return {
+    METALBAR: t("groupMetal"), PLANKS: t("groupWood"), LEATHER: t("groupLeather"),
+    CLOTH: t("groupCloth"), STONEBLOCK: t("groupStone"),
+    Artefatos: t("groupArtifacts"), Jornais: t("groupJournals"),
+  };
+}
 const DEFAULT_GROUP_CITY: Record<string, string> = {
   PLANKS: "Fort Sterling", METALBAR: "Thetford", CLOTH: "Lymhurst", LEATHER: "Martlock", STONEBLOCK: "Bridgewatch",
   POTATO: "Martlock", WHEAT: "Martlock", FOXGLOVE: "Martlock", MILK: "Martlock", BUTTER: "Martlock",
@@ -109,7 +115,6 @@ function marketGroup(id: string): string {
   if (isJournal(id)) return "Jornais";
   return id.replace(/^T\d+_/, "").replace(/_LEVEL\d$/, "");
 }
-const groupLabel = (g: string) => GROUP_LABELS[g] ?? g.charAt(0) + g.slice(1).toLowerCase();
 
 const PROFESSION_BY_CATEGORY: Record<string, string> = {
   cloth_armor: "MAGE", cloth_helmet: "MAGE", cloth_shoes: "MAGE",
@@ -166,14 +171,19 @@ interface Order {
   journalId: string | null;
 }
 
-function placeLabel(loc: LocationConfig): string {
-  if (loc.place === "city") return "Cidade";
-  if (loc.place === "island") return "Ilha";
+function placeLabel(loc: LocationConfig, t: (key: TKey) => string): string {
+  if (loc.place === "city") return t("placeCity");
+  if (loc.place === "island") return t("placeIsland");
   return `HO Q${loc.hideoutQuality}/Nv${loc.hideoutLevel}`;
 }
 
 export default function CraftCalculator() {
-  const { server } = useServer();
+  const t = useT();
+  const { server } = useLang();
+  const CITY_BIOME = useCityBiome();
+  const GROUP_LABELS = useGroupLabels();
+  const cityBiome = (city?: string) => (city ? CITY_BIOME[city] : undefined);
+  const groupLabel = (g: string) => GROUP_LABELS[g] ?? g.charAt(0) + g.slice(1).toLowerCase();
   const [families, setFamilies] = useState<CatalogFamily[] | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
   const [weights, setWeights] = useState<Record<string, number>>({});
@@ -285,7 +295,7 @@ export default function CraftCalculator() {
   const autoSpecialized = place === "city" ? hasBonusCity : place === "hideout" ? hideoutEligible : false;
   const bonusBiome = hideoutEligible ? cityBiome(family?.bonusCity ?? undefined) : undefined;
   const placeIcon = place === "city" ? "🏛️" : place === "island" ? "🏝️" : "🏠";
-  const placeName = place === "city" ? "Cidade" : place === "island" ? "Ilha" : "Hideout";
+  const placeName = place === "city" ? t("placeCity") : place === "island" ? t("placeIsland") : "Hideout";
   const location: LocationConfig = { place, specialized: autoSpecialized, eventBonus, hideoutQuality: hoQuality, hideoutLevel: hoLevel };
   useEffect(() => {
     if (place === "hideout" && family && !hideoutEligible) setPlace("city");
@@ -344,7 +354,7 @@ export default function CraftCalculator() {
         qty: batchQty,
         useFocus,
         rr: useFocus ? rrFocus : rrNoFocus,
-        placeLabel: placeLabel(location),
+        placeLabel: placeLabel(location, t),
         journalId: prof ? journalId(v.tier, prof) : null,
       },
     ]);
@@ -497,7 +507,7 @@ export default function CraftCalculator() {
           <div className="flex items-center gap-2">
             <ItemIcon id={v.uniqueName} size={36} city={sellCity} server={server} name={`${nameOf(v.uniqueName)} ${tierLabel(v)}`} />
             <span className={`font-medium ${isProfit ? "text-emerald-400" : "text-zinc-200"}`}>{tierLabel(v)}</span>
-            {v.outputPerCraft && v.outputPerCraft > 1 && <span className="rounded bg-zinc-800 px-1 text-[10px] text-zinc-400" title="Itens por craft">×{v.outputPerCraft}</span>}
+            {v.outputPerCraft && v.outputPerCraft > 1 && <span className="rounded bg-zinc-800 px-1 text-[10px] text-zinc-400" title={t("itemsPerCraftTitle")}>×{v.outputPerCraft}</span>}
           </div>
         </td>
         <td className="px-2 py-2">
@@ -506,7 +516,7 @@ export default function CraftCalculator() {
               <div key={res.uniqueName} className="flex items-center gap-1">
                 <span className="relative shrink-0">
                   <ItemIcon id={res.uniqueName} size={28} city={cityForMat(res.uniqueName)} server={server} name={nameOf(res.uniqueName)} />
-                  <span className="absolute bottom-0.5 right-0 rounded bg-zinc-900/85 px-0.5 text-[9px] leading-tight tabular-nums text-zinc-300" title="Quantidade por craft">{res.count}</span>
+                  <span className="absolute bottom-0.5 right-0 rounded bg-zinc-900/85 px-0.5 text-[9px] leading-tight tabular-nums text-zinc-300" title={t("qtyPerCraftTitle")}>{res.count}</span>
                 </span>
                 <PriceField value={matPrices[res.uniqueName]} meta={matMeta[res.uniqueName]} onChange={(val) => setMat(res.uniqueName, val)} w="w-20" />
               </div>
@@ -534,16 +544,16 @@ export default function CraftCalculator() {
     <div className="mx-auto w-full max-w-[1600px] px-4 py-5" style={{ zoom: uiScale }}>
       {/* Navbar */}
       <nav className="mb-4 flex items-center gap-4 border-b border-zinc-800 pb-3">
-        <span className="text-lg font-bold text-amber-400">Calculadora de Craft</span>
+        <span className="text-lg font-bold text-amber-400">{t("craftCalcTitle")}</span>
         <div className="ml-auto flex items-center gap-2">
           <span className="mr-1 hidden text-xs text-zinc-500 sm:inline">
-            {fetchError ? <span className="text-red-400">Erro ao buscar preços</span> : loadingPrices ? "Atualizando…" : lastFetch ? `Preços ${timeAgo(lastFetch)} atrás · ADP` : "—"}
+            {fetchError ? <span className="text-red-400">{t("priceFetchError")}</span> : loadingPrices ? t("pricesUpdating") : lastFetch ? `${timeAgo(lastFetch)} ${t("pricesAgoSuffix")}` : "—"}
           </span>
-          <IconButton onClick={fetchMarket} disabled={loadingPrices || !family} title="Atualizar preços" spinning={loadingPrices}>⟳</IconButton>
+          <IconButton onClick={fetchMarket} disabled={loadingPrices || !family} title={t("updatePricesTitle")} spinning={loadingPrices}>⟳</IconButton>
           <button
             ref={settingsBtnRef}
             onClick={() => setShowSettings((s) => !s)}
-            title="Configurações"
+            title={t("settingsTitle")}
             className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-semibold ${showSettings ? "border-amber-500 text-amber-300" : "border-zinc-700 text-zinc-300 hover:border-zinc-600"}`}
           >
             <span className="text-base">⚙</span>
@@ -559,13 +569,13 @@ export default function CraftCalculator() {
             {family && (
               <img src={iconUrl(displayVariation(family).uniqueName, 96, displayQuality(family))} alt="" width={28} height={28} />
             )}
-            <span className="flex-1 truncate text-sm font-semibold text-zinc-100">{family?.name ?? "Carregando…"}</span>
-            {family?.bonusCity && <span className="hidden rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium sm:inline" style={{ color: cityColor(family.bonusCity) }} title={bonusBiome ? `Bioma de bônus de craft (+15%) · ${family.bonusCity}` : "Cidade de bônus de craft (+15%)"}>{bonusBiome ?? family.bonusCity}</span>}
+            <span className="flex-1 truncate text-sm font-semibold text-zinc-100">{family?.name ?? t("loading")}</span>
+            {family?.bonusCity && <span className="hidden rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium sm:inline" style={{ color: cityColor(family.bonusCity) }} title={bonusBiome ? `${t("craftBonusBiomeTitle")} · ${family.bonusCity}` : t("craftBonusCityTitle")}>{bonusBiome ?? family.bonusCity}</span>}
             <span className="text-zinc-500">▾</span>
           </button>
           {pickerOpen && (
             <div className="absolute z-40 mt-1 w-96 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl">
-              <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar item…" className="mb-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-sm outline-none focus:border-amber-500" />
+              <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("searchItemPlaceholder")} className="mb-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-sm outline-none focus:border-amber-500" />
               <div className="max-h-96 space-y-0.5 overflow-y-auto">
                 {filteredFamilies.map((f) => (
                   <button key={f.familyKey} onClick={() => { setFamilyKey(f.familyKey); setPickerOpen(false); setSearch(""); }} className={`flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm ${f.familyKey === familyKey ? "bg-amber-500/15 text-amber-300" : "text-zinc-300 hover:bg-zinc-800"}`}>
@@ -580,20 +590,20 @@ export default function CraftCalculator() {
 
         {/* Production controls */}
         <div className="flex flex-wrap items-center gap-2">
-          <InlineNum label="Qtd" value={batchQty} onChange={setBatchQty} w="w-28" />
+          <InlineNum label={t("qtyLabel")} value={batchQty} onChange={setBatchQty} w="w-28" />
           <ToggleBtn active={premium} on="Premium" off="Premium" onClick={() => setPremium((p) => !p)} />
-          <InlineNum label="Fee/100" value={stationFeePer100} onChange={setStationFeePer100} w="w-32" />
+          <InlineNum label={t("feePerHundredLabel")} value={stationFeePer100} onChange={setStationFeePer100} w="w-32" />
           {/* Daily/event bonus */}
           <div className="flex h-9 w-[130px] shrink-0 gap-1">
             {bonusOpen ? (
               <>
-                <BonusBtn label="Sem" active={eventBonus === 0} onClick={() => { setEventBonus(0); setBonusOpen(false); }} />
+                <BonusBtn label={t("bonusNone")} active={eventBonus === 0} onClick={() => { setEventBonus(0); setBonusOpen(false); }} />
                 <BonusBtn label="+10%" active={eventBonus === 0.1} onClick={() => { setEventBonus(0.1); setBonusOpen(false); }} />
                 <BonusBtn label="+20%" active={eventBonus === 0.2} onClick={() => { setEventBonus(0.2); setBonusOpen(false); }} />
               </>
             ) : (
-              <button onClick={() => setBonusOpen(true)} title="Bônus de evento/diário" className={`flex h-9 w-full items-center justify-center rounded-md border px-2 text-sm ${eventBonus !== 0 ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600"}`}>
-                {eventBonus === 0 ? "Bônus" : `Bônus +${Math.round(eventBonus * 100)}%`}
+              <button onClick={() => setBonusOpen(true)} title={t("bonusEventTitle")} className={`flex h-9 w-full items-center justify-center rounded-md border px-2 text-sm ${eventBonus !== 0 ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600"}`}>
+                {eventBonus === 0 ? t("bonusLabel") : `${t("bonusLabel")} +${Math.round(eventBonus * 100)}%`}
               </button>
             )}
           </div>
@@ -603,15 +613,15 @@ export default function CraftCalculator() {
         <div className="flex h-9 w-[184px] shrink-0 gap-1">
           {placeOpen ? (
             <>
-              <PlaceBtn icon="🏛️" label="Cidade" active={place === "city"} onClick={() => { setPlace("city"); setPlaceOpen(false); }} />
-              <PlaceBtn icon="🏝️" label="Ilha" active={place === "island"} onClick={() => { setPlace("island"); setPlaceOpen(false); }} />
+              <PlaceBtn icon="🏛️" label={t("placeCity")} active={place === "city"} onClick={() => { setPlace("city"); setPlaceOpen(false); }} />
+              <PlaceBtn icon="🏝️" label={t("placeIsland")} active={place === "island"} onClick={() => { setPlace("island"); setPlaceOpen(false); }} />
               {hideoutEligible && <PlaceBtn icon="🏠" label="Hideout" active={place === "hideout"} onClick={() => { setPlace("hideout"); setPlaceOpen(false); }} />}
             </>
           ) : place === "hideout" && hideoutEligible ? (
             <>
-              <button onClick={() => setPlaceOpen(true)} title="Hideout — trocar local de craft" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-amber-500 bg-amber-500/15 text-base text-amber-300">🏠</button>
-              <select value={hoQuality} onChange={(e) => setHoQuality(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1 px-1`} title="Qualidade da zona do HO">{HIDEOUT_QUALITY.map((_, i) => <option key={i} value={i + 1}>{`Q${i + 1}`}</option>)}</select>
-              <select value={hoLevel} onChange={(e) => setHoLevel(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1 px-1`} title="Nível de poder do HO">{HIDEOUT_LEVEL.map((_, i) => <option key={i} value={i + 1}>{`Nv${i + 1}`}</option>)}</select>
+              <button onClick={() => setPlaceOpen(true)} title={t("hideoutSwitchTitle")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-amber-500 bg-amber-500/15 text-base text-amber-300">🏠</button>
+              <select value={hoQuality} onChange={(e) => setHoQuality(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1 px-1`} title={t("hoZoneQualityTitle")}>{HIDEOUT_QUALITY.map((_, i) => <option key={i} value={i + 1}>{`Q${i + 1}`}</option>)}</select>
+              <select value={hoLevel} onChange={(e) => setHoLevel(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1 px-1`} title={t("hoPowerLevelTitle")}>{HIDEOUT_LEVEL.map((_, i) => <option key={i} value={i + 1}>{`Nv${i + 1}`}</option>)}</select>
             </>
           ) : (
             <PlaceBtn icon={placeIcon} label={placeName} active expanded onClick={() => setPlaceOpen(true)} />
@@ -623,25 +633,25 @@ export default function CraftCalculator() {
       {showSettings && (
         <div ref={settingsRef} className="mb-4 grid gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-3">
           <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Mercado</h3>
-            <Field label="Vender em">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("marketHeader")}</h3>
+            <Field label={t("sellAtLabel")}>
               <select value={sellCity} onChange={(e) => setSellCity(e.target.value)} className={selectCls}>
                 {CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </Field>
             <Field label={
               <span className="inline-flex items-center gap-1">
-                Preço do ouro (prata/ouro)
-                <span className="cursor-help text-zinc-600" title="Usado para o SPF mínimo: uma premium custa 3750 de ouro e rende ~300k de focus/mês.">ⓘ</span>
+                {t("goldPriceLabel")}
+                <span className="cursor-help text-zinc-600" title={t("goldPriceTooltip")}>ⓘ</span>
               </span>
             }>
               <input type="number" value={goldPrice || ""} placeholder="—" onChange={(e) => setGoldPrice(e.target.value === "" ? 0 : +e.target.value)} className={`${selectCls} w-full placeholder:text-zinc-600`} />
             </Field>
-            {minSpf > 0 && <p className="text-xs text-zinc-500">SPF mínimo: <b className="text-zinc-300">{decimal(minSpf)}</b> prata/focus</p>}
+            {minSpf > 0 && <p className="text-xs text-zinc-500">{t("minSpfLabel")} <b className="text-zinc-300">{decimal(minSpf)}</b> {t("minSpfSuffix")}</p>}
           </div>
 
           <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Mercado por material</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("marketByMaterialHeader")}</h3>
             {groups.map((g) => (
               <div key={g} className="flex items-end gap-2">
                 <Field label={groupLabel(g)}>
@@ -649,44 +659,44 @@ export default function CraftCalculator() {
                     {CITIES.filter((c) => c !== "Black Market").map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </Field>
-                <select value={orderForGroup(g)} onChange={(e) => setGroupOrder((m) => ({ ...m, [g]: e.target.value as OrderMode }))} className={selectCls} title="Tipo de ordem">
-                  <option value="sell">Sell order</option>
-                  <option value="buy">Buy order</option>
+                <select value={orderForGroup(g)} onChange={(e) => setGroupOrder((m) => ({ ...m, [g]: e.target.value as OrderMode }))} className={selectCls} title={t("orderTypeTitle")}>
+                  <option value="sell">{t("sellOrderOption")}</option>
+                  <option value="buy">{t("buyOrderOption")}</option>
                 </select>
               </div>
             ))}
           </div>
 
           <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Craft</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("craftHeader")}</h3>
             <Field label={
               <span className="inline-flex items-center gap-1">
-                Focus Efficiency (0–40000)
-                <span className="cursor-help text-zinc-600" title="Pontos de eficiência do Destiny Board. Reduz o custo de focus: 0 = sem redução, 40000 = custo x1/16.">ⓘ</span>
+                {t("focusEfficiencyLabel")}
+                <span className="cursor-help text-zinc-600" title={t("focusEfficiencyTooltip")}>ⓘ</span>
               </span>
             }>
               <input type="number" min={0} max={40000} value={focusEfficiency || ""} placeholder="0" onChange={(e) => setFocusEfficiency(e.target.value === "" ? 0 : Math.min(40000, Math.max(0, +e.target.value)))} className={`${selectCls} w-full`} />
             </Field>
             <div className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Ignorar jornais (tier)</h3>
-              <p className="text-xs text-zinc-500">Tiers marcados não entram no carrinho.</p>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("ignoreJournalsHeader")}</h3>
+              <p className="text-xs text-zinc-500">{t("ignoreJournalsHint")}</p>
               <div className="flex flex-wrap gap-1.5">
-                {TIERS.map((t) => (
-                  <button key={t} onClick={() => toggleJournalTier(t)} className={`rounded-md border px-2 py-1 text-xs ${ignoredJournalTiers.has(t) ? "border-red-500/60 bg-red-900/20 text-red-300" : "border-zinc-700 text-zinc-300"}`}>T{t}</button>
+                {TIERS.map((tier) => (
+                  <button key={tier} onClick={() => toggleJournalTier(tier)} className={`rounded-md border px-2 py-1 text-xs ${ignoredJournalTiers.has(tier) ? "border-red-500/60 bg-red-900/20 text-red-300" : "border-zinc-700 text-zinc-300"}`}>T{tier}</button>
                 ))}
               </div>
             </div>
           </div>
 
           <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Interface</h3>
-            <Field label="Tamanho (ícones + texto)">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("interfaceHeader")}</h3>
+            <Field label={t("uiSizeLabel")}>
               <select value={uiScale} onChange={(e) => setUiScale(+e.target.value)} className={selectCls}>
-                <option value={0.9}>Compacto</option>
-                <option value={1}>Padrão</option>
-                <option value={1.15}>Grande</option>
-                <option value={1.3}>Maior</option>
-                <option value={1.5}>Máximo</option>
+                <option value={0.9}>{t("uiScaleCompact")}</option>
+                <option value={1}>{t("uiScaleDefault")}</option>
+                <option value={1.15}>{t("uiScaleLarge")}</option>
+                <option value={1.3}>{t("uiScaleLarger")}</option>
+                <option value={1.5}>{t("uiScaleMax")}</option>
               </select>
             </Field>
           </div>
@@ -700,17 +710,17 @@ export default function CraftCalculator() {
             <thead>
               <tr className="border-b border-zinc-800 text-left text-[11px] uppercase tracking-wide text-zinc-500">
                 <Th>Item</Th>
-                <Th>Materiais (preço unit.)</Th>
+                <Th>{t("colMaterials")}</Th>
                 <Th right>Focus cost</Th>
-                <Th right>Venda (méd)</Th>
-                <Th right><span title="Lucro sem focus">Lucro −F</span></Th>
-                <Th right><span title="Lucro com focus">Lucro +F</span></Th>
+                <Th right>{t("colSellAvg")}</Th>
+                <Th right><span title={t("colProfitNoFocusTitle")}>{t("colProfitNoFocus")}</span></Th>
+                <Th right><span title={t("colProfitFocusTitle")}>{t("colProfitFocus")}</span></Th>
                 <Th right>SPF</Th>
-                <Th right>Jornais</Th>
+                <Th right>{t("colJournals")}</Th>
                 <Th right>
                   <span className="inline-flex items-center gap-1">
-                    Demanda
-                    <span className="cursor-help text-zinc-600" title="Soma de vendas diárias nas 5 cidades reais, todas as qualidades.">ⓘ</span>
+                    {t("colDemand")}
+                    <span className="cursor-help text-zinc-600" title={t("demandTooltip")}>ⓘ</span>
                   </span>
                 </Th>
               </tr>
@@ -744,6 +754,7 @@ function Cart({
   onRemove: (id: string) => void;
   onClear: () => void;
 }) {
+  const t = useT();
   const journalUnit = (id: string) => matPrices[id] ?? journalBase[id]?.base ?? 0;
   const orderProfit = (o: Order) =>
     computeCraft({
@@ -798,39 +809,39 @@ function Cart({
   return (
     <aside className="space-y-3 xl:sticky xl:top-4 xl:self-start">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-zinc-200">🛒 Carrinho de craft</h2>
+        <h2 className="text-sm font-semibold text-zinc-200">{t("craftCartTitle")}</h2>
         <div className="flex items-center gap-2 text-xs text-zinc-400">
-          <span>ret. s/f <b className="text-zinc-100">{percent(rrNoFocus)}</b></span>
-          <span>c/f <b className="text-zinc-100">{percent(rrFocus)}</b></span>
+          <span>{t("retNoFocusAbbr")} <b className="text-zinc-100">{percent(rrNoFocus)}</b></span>
+          <span>{t("retFocusAbbr")} <b className="text-zinc-100">{percent(rrFocus)}</b></span>
         </div>
       </div>
 
       {cart.length === 0 ? (
         <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/30 p-6 text-center text-sm text-zinc-500">
-          Dê <b className="text-zinc-300">duplo-clique</b> em uma linha da tabela para adicionar o pedido ao carrinho.
+          {t("cartEmptyHint")} <b className="text-zinc-300">{t("cartEmptyHintBold")}</b> {t("cartEmptyHintSuffix")}
         </div>
       ) : (
         <>
           <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-3">
             <div className="mb-2 grid grid-cols-2 gap-2">
               <div>
-                <div className="text-[11px] uppercase tracking-wide text-zinc-500">Total a comprar</div>
+                <div className="text-[11px] uppercase tracking-wide text-zinc-500">{t("totalToBuyLabel")}</div>
                 <div className="text-base font-bold text-amber-300">{silver(grandTotal)}</div>
               </div>
               <div className="text-right">
-                <div className="text-[11px] uppercase tracking-wide text-zinc-500">Lucro planejado</div>
+                <div className="text-[11px] uppercase tracking-wide text-zinc-500">{t("plannedProfitLabel")}</div>
                 <div className={`text-base font-bold ${plannedProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}>{silver(plannedProfit)}</div>
               </div>
             </div>
             <div className="mb-2 flex items-center justify-between border-t border-zinc-800 pt-2 text-xs">
-              <span className="text-zinc-500">Peso</span>
+              <span className="text-zinc-500">{t("weightLabel")}</span>
               <span onDoubleClick={selectAllText} className="font-semibold text-zinc-300">{decimal(totalLoad)} kg</span>
             </div>
             {journalTotal > 0 && (
               <div className="mb-2 flex items-center justify-between text-xs">
                 <span className="inline-flex items-center gap-1 text-zinc-500">
-                  Lucro jornais
-                  <span className="cursor-help text-zinc-600" title="Lucro de vender os jornais cheios (preço cheio − preço/base do vazio).">ⓘ</span>
+                  {t("journalProfitLabel")}
+                  <span className="cursor-help text-zinc-600" title={t("journalProfitTooltip")}>ⓘ</span>
                 </span>
                 {journalPriced ? (
                   <span onDoubleClick={selectAllText} className={`font-semibold ${journalProfit >= 0 ? "text-emerald-400" : "text-red-400"}`}>{silver(journalProfit)} ({journalTotal})</span>
@@ -839,7 +850,7 @@ function Cart({
                 )}
               </div>
             )}
-            <button onClick={onClear} className="mb-2 text-xs text-zinc-500 hover:text-red-400">limpar tudo</button>
+            <button onClick={onClear} className="mb-2 text-xs text-zinc-500 hover:text-red-400">{t("clearAllBtn")}</button>
             <table className="w-full table-fixed text-xs">
               <tbody>
                 {[
@@ -865,12 +876,12 @@ function Cart({
                     <div onDoubleClick={selectAllText} className="text-sm font-medium text-zinc-100">{o.qty}× {o.name} {tierLabel(o.variation)}</div>
                     <div className="flex flex-wrap gap-1.5 text-[11px] text-zinc-400">
                       <span className="rounded bg-zinc-800 px-1.5 py-0.5">{o.placeLabel}</span>
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5">{o.useFocus ? "com focus" : "sem focus"}</span>
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5">{decimal(journals)} jornais</span>
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5">{o.useFocus ? t("withFocusBadge") : t("withoutFocusBadge")}</span>
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5">{decimal(journals)} {t("journalsBadgeSuffix")}</span>
                       <span className="rounded bg-zinc-800 px-1.5 py-0.5">{silver(total)}</span>
                     </div>
                   </div>
-                  <button onClick={() => onRemove(o.id)} className="text-zinc-500 hover:text-red-400" title="Excluir pedido">✕</button>
+                  <button onClick={() => onRemove(o.id)} className="text-zinc-500 hover:text-red-400" title={t("deleteOrderTitle")}>✕</button>
                 </div>
               </div>
             );
@@ -899,6 +910,7 @@ function CartItemRow({ id, count, subtotal, name }: { id: string; count: number;
 /* ---------------- Item icon with hover price history ---------------- */
 
 function ItemIcon({ id, size, city, server, name }: { id: string; size: number; city: string; server: PriceServer; name: string }) {
+  const t = useT();
   const [show, setShow] = useState(false);
   const [data, setData] = useState<{ series: { t: string; price: number }[]; avg: number } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -928,12 +940,12 @@ function ItemIcon({ id, size, city, server, name }: { id: string; size: number; 
         <div className="absolute left-0 top-full z-30 mt-1 w-96 rounded-lg border border-zinc-700 bg-zinc-900 p-3 shadow-xl">
           <div className="mb-1 flex items-center justify-between gap-2 text-sm">
             <span className="truncate font-semibold text-zinc-200">{name}</span>
-            <span className="shrink-0 text-zinc-500">4 sem · {cityAbbr(city)}</span>
+            <span className="shrink-0 text-zinc-500">{t("weeksAgoSuffix")} {cityAbbr(city)}</span>
           </div>
           {!data ? (
-            <div className="py-6 text-center text-xs text-zinc-500">Carregando histórico…</div>
+            <div className="py-6 text-center text-xs text-zinc-500">{t("loadingHistory")}</div>
           ) : data.series.length === 0 ? (
-            <div className="py-6 text-center text-xs text-zinc-500">Sem histórico em {city}</div>
+            <div className="py-6 text-center text-xs text-zinc-500">{t("noHistoryInCity")} {city}</div>
           ) : (
             <PriceHistory series={data.series} avg={data.avg} />
           )}
@@ -944,6 +956,7 @@ function ItemIcon({ id, size, city, server, name }: { id: string; size: number; 
 }
 
 function PriceHistory({ series, avg }: { series: { t: string; price: number }[]; avg: number }) {
+  const t = useT();
   const W = 320, H = 132;
   const padL = 6, padR = 70, padTop = 8, padBottom = 24;
   const plotW = W - padL - padR;
@@ -958,9 +971,9 @@ function PriceHistory({ series, avg }: { series: { t: string; price: number }[];
   const baseY = padTop + plotH;
   const line = series.map((p, i) => `${x(i).toFixed(1)},${y(p.price).toFixed(1)}`).join(" ");
   const refs = [
-    { v: max, c: "#34d399", label: "máx", strong: false },
-    { v: avg, c: "#fbbf24", label: "méd", strong: true },
-    { v: min, c: "#f87171", label: "mín", strong: false },
+    { v: max, c: "#34d399", label: t("chartMax"), strong: false },
+    { v: avg, c: "#fbbf24", label: t("chartAvg"), strong: true },
+    { v: min, c: "#f87171", label: t("chartMin"), strong: false },
   ];
   const weeks = [1, 2, 3, 4];
   const weekX = (w: number) => padL + (1 - w / 4) * plotW;
@@ -972,7 +985,7 @@ function PriceHistory({ series, avg }: { series: { t: string; price: number }[];
       {weeks.map((w) => (
         <g key={`w${w}`}>
           <line x1={weekX(w)} x2={weekX(w)} y1={padTop} y2={baseY} stroke="#52525b" strokeWidth="0.6" strokeDasharray="2 2" opacity="0.7" />
-          <text x={weekX(w)} y={baseY + 16} textAnchor="middle" fontSize="11" fill="#71717a">{`${w}w`}</text>
+          <text x={weekX(w)} y={baseY + 16} textAnchor="middle" fontSize="11" fill="#71717a">{`${w}${t("weekAbbr")}`}</text>
         </g>
       ))}
       {refs.map((r, i) => (
@@ -1067,12 +1080,13 @@ function Td({ children, right, muted, value, sub }: { children: React.ReactNode;
 }
 
 function MetaInline({ meta }: { meta?: PriceInfo }) {
+  const t = useT();
   if (!meta) return null;
   if (meta.source === "manual")
-    return <span className="flex w-7 shrink-0 items-center justify-center text-[10px] text-amber-400" title="Editado manualmente">✎</span>;
+    return <span className="flex w-7 shrink-0 items-center justify-center text-[10px] text-amber-400" title={t("manuallyEditedTitle")}>✎</span>;
   const stale = isStale(meta.date);
   return (
-    <span className={`flex w-7 shrink-0 flex-col items-center justify-center leading-none ${stale ? "text-orange-400" : "text-sky-400"}`} title={`Preço da API${meta.city ? ` em ${meta.city}` : ""}`}>
+    <span className={`flex w-7 shrink-0 flex-col items-center justify-center leading-none ${stale ? "text-orange-400" : "text-sky-400"}`} title={`${t("apiPriceTitle")}${meta.city ? ` ${t("inCityWord")} ${meta.city}` : ""}`}>
       <span className="text-[9px]" style={{ color: cityColor(meta.city) }}>{meta.date ? timeAgo(meta.date) : "—"}</span>
       <span className="text-[9px] font-semibold" style={{ color: cityColor(meta.city) }}>{cityAbbr(meta.city)}</span>
     </span>

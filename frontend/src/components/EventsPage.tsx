@@ -1,22 +1,20 @@
 import { useEffect, useState } from "react";
 import { api, type CatalogRole, type Death, type EventDetail, type EventSummary, type LootReconcile, type MissingItem, type Participant, type PayoutPreview, type Permissions, type RegearEstimate, type RegearItemEstimate, type VerificationStep } from "../api";
+import { useT, type TKey } from "../i18n";
 
-const STATE_LABELS: Record<string, string> = {
-  scheduled: "Agendado", in_progress: "Andamento", definition: "Definição",
-  verification: "Verificação", waiting: "Espera", finalized: "Finalizado",
-  cancelled: "Cancelado", deleted: "Excluído",
-};
 const PIPELINE = ["scheduled", "in_progress", "definition", "verification", "waiting", "finalized"];
 const TYPE_LABELS: Record<string, string> = {
   lootsplit: "Lootsplit", regear: "Regear", lootsplit_regear: "Lootsplit + Regear",
 };
-const STEP_LABELS: Record<string, string> = {
-  participation: "Participações verificadas",
-  missing_loots: "Loots faltantes revisados",
-  tab_value: "Valor da tab definido",
-  tab_image: "Print da tab enviada",
-  battles: "Batalhas registradas",
-  nodes: "Nodes definidos",
+const STATE_KEYS: Record<string, TKey> = {
+  scheduled: "stateScheduled", in_progress: "stateInProgress", definition: "stateDefinition",
+  verification: "stateVerification", waiting: "stateWaiting", finalized: "stateFinalized",
+  cancelled: "stateCancelled", deleted: "stateDeleted",
+};
+const STEP_KEYS: Record<string, TKey> = {
+  participation: "stepParticipation", missing_loots: "stepMissingLoots",
+  tab_value: "stepTabValue", tab_image: "stepTabImage",
+  battles: "stepBattles", nodes: "stepNodes",
 };
 
 function fmt(n: number): string {
@@ -24,6 +22,7 @@ function fmt(n: number): string {
 }
 
 export default function EventsPage({ perms }: { perms: Permissions }) {
+  const t = useT();
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [sel, setSel] = useState<number | null>(null);
   const [detail, setDetail] = useState<EventDetail | null>(null);
@@ -61,18 +60,18 @@ export default function EventsPage({ perms }: { perms: Permissions }) {
             {perms["events.create"] && (
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
                 <input
-                  className="input" style={{ flex: 1 }} placeholder="Nome do CTA…"
+                  className="input" style={{ flex: 1 }} placeholder={t("evCtaNamePlaceholder")}
                   value={title} onChange={(e) => setTitle(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && create()}
                 />
                 <button className="btn primary" onClick={create}>
-                  <i className="ti ti-plus" aria-hidden /> Criar
+                  <i className="ti ti-plus" aria-hidden /> {t("createBtn")}
                 </button>
               </div>
             )}
 
             {error && <p style={{ color: "#e07a7a", fontSize: 13, marginBottom: 10 }}>{error}</p>}
-            {events.length === 0 && <p className="muted">Nenhum evento ainda.</p>}
+            {events.length === 0 && <p className="muted">{t("noEventsYet")}</p>}
             {events.map((e) => (
               <button key={e.id} className={"event-row" + (sel === e.id ? " sel" : "")} onClick={() => setSel(e.id)}>
                 <i className="ti ti-calendar-event" style={{ color: "var(--muted)" }} aria-hidden />
@@ -89,7 +88,7 @@ export default function EventsPage({ perms }: { perms: Permissions }) {
           {detail ? (
             <EventDetailCard detail={detail} act={act} canManage={perms["events.manage"]} />
           ) : (
-            <div className="card"><p className="muted">Selecione um evento para ver as etapas.</p></div>
+            <div className="card"><p className="muted">{t("selectEventHint")}</p></div>
           )}
         </div>
       </div>
@@ -98,12 +97,15 @@ export default function EventsPage({ perms }: { perms: Permissions }) {
 }
 
 function StatePill({ state }: { state: string }) {
+  const t = useT();
   const cls = state === "cancelled" || state === "deleted" ? "bad"
     : state === "finalized" ? "done" : "cur";
-  return <span className={"state-pill " + cls}>{STATE_LABELS[state] ?? state}</span>;
+  const key = STATE_KEYS[state];
+  return <span className={"state-pill " + cls}>{key ? t(key) : state}</span>;
 }
 
 function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act: (p: Promise<EventDetail>) => void; canManage: boolean }) {
+  const t = useT();
   const curIdx = PIPELINE.indexOf(detail.state);
   const [pName, setPName] = useState("");
   const [pPct, setPPct] = useState("");
@@ -129,7 +131,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
         {PIPELINE.map((s, i) => (
           <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span className={"state-pill " + (i === curIdx ? "cur" : curIdx >= 0 && i < curIdx ? "done" : "")}>
-              {STATE_LABELS[s]}
+              {t(STATE_KEYS[s])}
             </span>
             {i < PIPELINE.length - 1 && <i className="ti ti-chevron-right arrow" aria-hidden />}
           </span>
@@ -139,7 +141,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
       {/* Definição: escolher tipo */}
       {detail.state === "definition" && (
         <div style={{ marginBottom: 16 }}>
-          <div className="hint" style={{ marginBottom: 6 }}>Tipo do CTA (define a logística):</div>
+          <div className="hint" style={{ marginBottom: 6 }}>{t("ctaTypeLabel")}</div>
           {canManage ? (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {Object.entries(TYPE_LABELS).map(([v, label]) => (
@@ -154,7 +156,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
           )}
           {!detail.type && canManage && (
             <p className="hint" style={{ marginTop: 6 }}>
-              <i className="ti ti-info-circle" aria-hidden /> Defina o tipo para avançar para Verificação.
+              <i className="ti ti-info-circle" aria-hidden /> {t("defineTypeHint")}
             </p>
           )}
         </div>
@@ -163,7 +165,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
       {/* Verificação: passos */}
       {detail.state === "verification" && (
         <div style={{ marginBottom: 16 }}>
-          <div className="hint" style={{ marginBottom: 8 }}>Passos obrigatórios (todos para liberar Espera):</div>
+          <div className="hint" style={{ marginBottom: 8 }}>{t("requiredStepsLabel")}</div>
           {detail.verification.map((v) =>
             v.step === "tab_value" ? (
               <TabValueStep key={v.step} v={v} eventId={detail.id} act={canManage ? act : () => {}} />
@@ -175,7 +177,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
                 <span className={"box" + (v.completed ? " on" : "")}>
                   {v.completed && <i className="ti ti-check" aria-hidden />}
                 </span>
-                {STEP_LABELS[v.step] ?? v.step}
+                {STEP_KEYS[v.step] ? t(STEP_KEYS[v.step]) : v.step}
               </button>
             )
           )}
@@ -187,12 +189,12 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
             <i className="ti ti-clipboard-check" aria-hidden style={{ color: "var(--gold)" }} />
-            Revisão antes de finalizar
+            {t("reviewBeforeFinalize")}
           </div>
           {detail.payout ? (
             <PayoutTable payout={detail.payout} type={detail.type} />
           ) : (
-            <p className="hint">Adicione participantes e defina o tipo para ver o preview de payout.</p>
+            <p className="hint">{t("addParticipantsForPayout")}</p>
           )}
           <DeathsSection detail={detail} act={act} />
         </div>
@@ -203,7 +205,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
             <i className="ti ti-circle-check" aria-hidden style={{ color: "#6bbf73" }} />
-            Evento finalizado
+            {t("eventFinalized")}
           </div>
           <PayoutTable payout={detail.payout} type={detail.type} />
         </div>
@@ -220,14 +222,14 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
       {/* Botões de transição */}
       {canManage && (
         <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
-          <div className="hint" style={{ marginBottom: 6 }}>Mover para:</div>
+          <div className="hint" style={{ marginBottom: 6 }}>{t("moveToLabel")}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {detail.allowed_transitions.length === 0 && <span className="muted">— (estado final)</span>}
+            {detail.allowed_transitions.length === 0 && <span className="muted">{t("finalStateLabel")}</span>}
             {detail.allowed_transitions.map((to) => (
               <button key={to}
                 className={"btn" + (to === "cancelled" || to === "deleted" ? "" : " primary")}
                 onClick={() => act(api.transition(detail.id, to))}>
-                {STATE_LABELS[to] ?? to}
+                {STATE_KEYS[to] ? t(STATE_KEYS[to]) : to}
               </button>
             ))}
           </div>
@@ -244,6 +246,7 @@ function TabValueStep({ v, eventId, act }: {
   eventId: number;
   act: (p: Promise<EventDetail>) => void;
 }) {
+  const t = useT();
   const [val, setVal] = useState(String(v.data?.value ?? ""));
   const savedVal = v.data?.value as number | undefined;
 
@@ -259,27 +262,27 @@ function TabValueStep({ v, eventId, act }: {
         <span className={"box" + (v.completed ? " on" : "")}>
           {v.completed && <i className="ti ti-check" aria-hidden />}
         </span>
-        <span>{STEP_LABELS[v.step]}</span>
+        <span>{t(STEP_KEYS.tab_value)}</span>
         {v.completed && savedVal !== undefined && (
-          <span className="hint" style={{ marginLeft: "auto" }}>{fmt(savedVal)} prata</span>
+          <span className="hint" style={{ marginLeft: "auto" }}>{fmt(savedVal)} {t("silverWord")}</span>
         )}
       </div>
       {!v.completed && (
         <div style={{ display: "flex", gap: 6, paddingLeft: 26 }}>
           <input
             className="input" style={{ width: 180 }}
-            placeholder="Ex.: 500000000"
+            placeholder={t("tabValuePlaceholder")}
             value={val}
             onChange={(e) => setVal(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && save()}
           />
-          <button className="btn primary" onClick={save} disabled={!val}>Definir</button>
+          <button className="btn primary" onClick={save} disabled={!val}>{t("defineBtn")}</button>
         </div>
       )}
       {v.completed && (
         <button className="btn" style={{ marginLeft: 26, fontSize: 12, padding: "3px 8px" }}
           onClick={() => { act(api.setStep(eventId, "tab_value", false)); setVal(""); }}>
-          <i className="ti ti-edit" aria-hidden /> Alterar
+          <i className="ti ti-edit" aria-hidden /> {t("changeBtn")}
         </button>
       )}
     </div>
@@ -291,6 +294,7 @@ function TabValueStep({ v, eventId, act }: {
 function LootStep({ v, eventId, act }: {
   v: VerificationStep; eventId: number; act: (p: Promise<EventDetail>) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [loot, setLoot] = useState<LootReconcile | null>(null);
   const [loading, setLoading] = useState(false);
@@ -314,17 +318,17 @@ function LootStep({ v, eventId, act }: {
           <span className={"box" + (v.completed ? " on" : "")}>
             {v.completed && <i className="ti ti-check" aria-hidden />}
           </span>
-          {STEP_LABELS[v.step]}
+          {t(STEP_KEYS.missing_loots)}
           <i className={"ti " + (open ? "ti-chevron-down" : "ti-chevron-right")} style={{ marginLeft: "auto", color: "var(--hint)" }} aria-hidden />
         </button>
         <button className="btn" style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
           onClick={() => act(api.setStep(eventId, "missing_loots", !v.completed))}>
-          {v.completed ? "Desmarcar" : "Marcar OK"}
+          {v.completed ? t("uncheckBtn") : t("markOkBtn")}
         </button>
       </div>
       {open && (
         <div style={{ paddingLeft: 26, marginTop: 8 }}>
-          {loading && <p className="hint">Carregando…</p>}
+          {loading && <p className="hint">{t("loading")}</p>}
           {loot && <LootPanel reconcile={loot} onRefresh={refresh} />}
         </div>
       )}
@@ -333,30 +337,31 @@ function LootStep({ v, eventId, act }: {
 }
 
 function LootPanel({ reconcile, onRefresh }: { reconcile: LootReconcile; onRefresh: () => void }) {
+  const t = useT();
   return (
     <div>
       {/* Status dos uploads */}
       <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
         <span className={"badge " + (reconcile.has_loot_log ? "done" : "bad")}>
           <i className={"ti " + (reconcile.has_loot_log ? "ti-check" : "ti-x")} aria-hidden />
-          {" "}Log de loot
+          {" "}{t("lootLogLabel")}
         </span>
         <span className={"badge " + (reconcile.has_chest_log ? "done" : "bad")}>
           <i className={"ti " + (reconcile.has_chest_log ? "ti-check" : "ti-x")} aria-hidden />
-          {" "}Inventário do baú
+          {" "}{t("chestInventoryLabel")}
         </span>
         <button className="btn" style={{ fontSize: 11, padding: "3px 8px", marginLeft: "auto" }} onClick={onRefresh}>
-          <i className="ti ti-refresh" aria-hidden /> Atualizar
+          <i className="ti ti-refresh" aria-hidden /> {t("updateBtn")}
         </button>
       </div>
 
       {!reconcile.has_loot_log ? (
         <p className="hint" style={{ fontSize: 12 }}>
-          <i className="ti ti-info-circle" aria-hidden /> Aguardando o bot enviar o log de loot via Discord.
+          <i className="ti ti-info-circle" aria-hidden /> {t("waitingLootLogBot")}
         </p>
       ) : reconcile.missing.length === 0 ? (
         <p style={{ color: "#6bbf73", fontSize: 13 }}>
-          <i className="ti ti-circle-check" aria-hidden /> Todos os itens estão cobertos no baú.
+          <i className="ti ti-circle-check" aria-hidden /> {t("allItemsCoveredInChest")}
         </p>
       ) : (
         <MissingItemsTable missing={reconcile.missing} missingValue={reconcile.missing_value} />
@@ -365,16 +370,16 @@ function LootPanel({ reconcile, onRefresh }: { reconcile: LootReconcile; onRefre
       {reconcile.has_loot_log && reconcile.looted.length > 0 && (
         <details style={{ marginTop: 10 }}>
           <summary style={{ fontSize: 12, color: "var(--hint)", cursor: "pointer", userSelect: "none" }}>
-            Todos os loots ({reconcile.looted.length} entradas — {fmt(reconcile.total_looted_value)} prata)
+            {t("allLootsLabel")} ({reconcile.looted.length} {t("entriesWord")} — {fmt(reconcile.total_looted_value)} {t("silverWord")})
           </summary>
           <div style={{ marginTop: 6, maxHeight: 220, overflowY: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  <th style={{ textAlign: "left", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>Jogador</th>
+                  <th style={{ textAlign: "left", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("playerWord")}</th>
                   <th style={{ textAlign: "left", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>Item</th>
-                  <th style={{ textAlign: "right", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>Qty</th>
-                  <th style={{ textAlign: "right", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>Baú</th>
+                  <th style={{ textAlign: "right", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("qtyAbbrev")}</th>
+                  <th style={{ textAlign: "right", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("colChest")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -398,20 +403,21 @@ function LootPanel({ reconcile, onRefresh }: { reconcile: LootReconcile; onRefre
 }
 
 function MissingItemsTable({ missing, missingValue }: { missing: MissingItem[]; missingValue: number }) {
+  const t = useT();
   return (
     <div>
       <p style={{ color: "#e07a7a", fontSize: 13, marginBottom: 6 }}>
         <i className="ti ti-alert-triangle" aria-hidden />{" "}
-        {missing.length} {missing.length === 1 ? "item faltando" : "itens faltando"} — {fmt(missingValue)} prata
+        {missing.length} {missing.length === 1 ? t("missingItemSingular") : t("missingItemPlural")} — {fmt(missingValue)} {t("silverWord")}
       </p>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
         <thead>
           <tr style={{ borderBottom: "1px solid var(--border)" }}>
             <th style={{ textAlign: "left", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>Item</th>
-            <th style={{ textAlign: "right", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>Looteado</th>
-            <th style={{ textAlign: "right", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>No baú</th>
-            <th style={{ textAlign: "right", padding: "4px 6px", color: "#e07a7a", fontWeight: 500 }}>Faltando</th>
-            <th style={{ textAlign: "right", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>Valor</th>
+            <th style={{ textAlign: "right", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("colLooted")}</th>
+            <th style={{ textAlign: "right", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("colInChest")}</th>
+            <th style={{ textAlign: "right", padding: "4px 6px", color: "#e07a7a", fontWeight: 500 }}>{t("colMissing")}</th>
+            <th style={{ textAlign: "right", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("colValue")}</th>
           </tr>
         </thead>
         <tbody>
@@ -433,6 +439,7 @@ function MissingItemsTable({ missing, missingValue }: { missing: MissingItem[]; 
 // ── Mortes / Regear ───────────────────────────────────────────────────────
 
 function DeathsSection({ detail, act }: { detail: EventDetail; act: (p: Promise<EventDetail>) => void }) {
+  const t = useT();
   const [dName, setDName] = useState("");
   const [dVal, setDVal] = useState("");
   const hasRegear = detail.type === "regear" || detail.type === "lootsplit_regear";
@@ -449,22 +456,22 @@ function DeathsSection({ detail, act }: { detail: EventDetail; act: (p: Promise<
     <div style={{ marginTop: 14 }}>
       <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
         <i className="ti ti-skull" aria-hidden style={{ color: "#e07a7a" }} />
-        Mortes / Regear
+        {t("deathsRegearTitle")}
       </div>
       {detail.deaths.length === 0 && (
-        <p className="hint" style={{ marginBottom: 8 }}>Nenhuma morte registrada.</p>
+        <p className="hint" style={{ marginBottom: 8 }}>{t("noDeathsRecorded")}</p>
       )}
       {detail.deaths.map((d) => (
         <DeathRow key={d.id} death={d} eventId={detail.id} act={act} />
       ))}
       <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-        <input className="input" style={{ flex: 1, minWidth: 120 }} placeholder="Nome do jogador"
+        <input className="input" style={{ flex: 1, minWidth: 120 }} placeholder={t("playerNamePlaceholder")}
           value={dName} onChange={(e) => setDName(e.target.value)} />
-        <input className="input" style={{ width: 140 }} placeholder="Valor (prata)"
+        <input className="input" style={{ width: 140 }} placeholder={t("silverValuePlaceholder")}
           value={dVal} onChange={(e) => setDVal(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && addDeath()} />
         <button className="btn primary" onClick={addDeath} disabled={!dName.trim()}>
-          <i className="ti ti-plus" aria-hidden /> Adicionar
+          <i className="ti ti-plus" aria-hidden /> {t("addBtn")}
         </button>
       </div>
     </div>
@@ -474,6 +481,7 @@ function DeathsSection({ detail, act }: { detail: EventDetail; act: (p: Promise<
 function DeathRow({ death, eventId, act }: {
   death: Death; eventId: number; act: (p: Promise<EventDetail>) => void;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(String(death.silver_value));
 
@@ -498,15 +506,15 @@ function DeathRow({ death, eventId, act }: {
         </>
       ) : (
         <span style={{ color: "var(--muted)", fontSize: 13, cursor: "pointer" }}
-          onClick={() => setEditing(true)} title="Clique para editar">
-          {fmt(death.silver_value)} prata
+          onClick={() => setEditing(true)} title={t("clickToEditTitle")}>
+          {fmt(death.silver_value)} {t("silverWord")}
         </span>
       )}
       <button
         className={"btn" + (death.approved ? " primary" : "")}
         style={{ fontSize: 11, padding: "3px 8px" }}
         onClick={() => act(api.updateDeath(eventId, death.id, { approved: !death.approved }))}>
-        {death.approved ? <><i className="ti ti-check" aria-hidden /> Aprovado</> : "Aprovar"}
+        {death.approved ? <><i className="ti ti-check" aria-hidden /> {t("approvedBtn")}</> : t("approveBtn")}
       </button>
       <button style={{ background: "none", border: "none", color: "var(--hint)", cursor: "pointer", padding: "2px 4px" }}
         onClick={() => act(api.removeDeath(eventId, death.id))}>
@@ -519,6 +527,7 @@ function DeathRow({ death, eventId, act }: {
 // ── Tabela de payout ──────────────────────────────────────────────────────
 
 function PayoutTable({ payout, type }: { payout: PayoutPreview; type: string | null }) {
+  const t = useT();
   const showLS = type === "lootsplit" || type === "lootsplit_regear";
   const showRG = type === "regear" || type === "lootsplit_regear";
   const showTotal = type === "lootsplit_regear";
@@ -527,23 +536,23 @@ function PayoutTable({ payout, type }: { payout: PayoutPreview; type: string | n
     <div style={{ marginBottom: 12 }}>
       {showLS && (
         <p style={{ fontSize: 13, marginBottom: 8 }}>
-          <span className="hint">Valor da tab: </span>
-          <strong>{fmt(payout.tab_value)} prata</strong>
+          <span className="hint">{t("tabValueLabel")} </span>
+          <strong>{fmt(payout.tab_value)} {t("silverWord")}</strong>
         </p>
       )}
       {payout.payouts.length === 0 ? (
-        <p className="hint">Adicione participantes para ver o payout.</p>
+        <p className="hint">{t("addParticipantsForPayoutSimple")}</p>
       ) : (
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              <th style={{ textAlign: "left", padding: "4px 8px", color: "var(--hint)", fontWeight: 600 }}>Jogador</th>
+              <th style={{ textAlign: "left", padding: "4px 8px", color: "var(--hint)", fontWeight: 600 }}>{t("playerWord")}</th>
               {showLS && <>
                 <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--hint)", fontWeight: 600 }}>%</th>
                 <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--hint)", fontWeight: 600 }}>Lootsplit</th>
               </>}
               {showRG && <th style={{ textAlign: "right", padding: "4px 8px", color: "#e07a7a", fontWeight: 600 }}>Regear</th>}
-              {showTotal && <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--gold)", fontWeight: 600 }}>Total</th>}
+              {showTotal && <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--gold)", fontWeight: 600 }}>{t("totalWord")}</th>}
             </tr>
           </thead>
           <tbody>
@@ -570,7 +579,7 @@ function PayoutTable({ payout, type }: { payout: PayoutPreview; type: string | n
           {(payout.total_lootsplit > 0 || payout.total_regear > 0) && (
             <tfoot>
               <tr style={{ borderTop: "1px solid var(--border-strong)" }}>
-                <td style={{ padding: "5px 8px", color: "var(--hint)", fontSize: 11 }}>Total</td>
+                <td style={{ padding: "5px 8px", color: "var(--hint)", fontSize: 11 }}>{t("totalWord")}</td>
                 {showLS && <>
                   <td />
                   <td style={{ textAlign: "right", padding: "5px 8px", fontWeight: 600 }}>{fmt(payout.total_lootsplit)}</td>
@@ -600,6 +609,7 @@ function ParticipantsSection({ detail, act, canManage, pName, setPName, pPct, se
   pPct: string; setPPct: (v: string) => void;
   onAdd: () => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [roles, setRoles] = useState<CatalogRole[]>([]);
   const [regearPanel, setRegearPanel] = useState<{ pid: number; est: RegearEstimate | null; loading: boolean } | null>(null);
@@ -626,7 +636,7 @@ function ParticipantsSection({ detail, act, canManage, pName, setPName, pPct, se
     act(api.addDeath(detail.id, {
       display_name: p.user_name || `#${p.user_id}`,
       silver_value: est.total,
-      notes: `Regear automático (${est.game_role_name ?? "sem função"}) — ${est.price_basis}`,
+      notes: `${t("autoRegearNote")} (${est.game_role_name ?? t("noRoleFallback")}) — ${est.price_basis}`,
     }));
     setRegearPanel(null);
   }
@@ -639,7 +649,7 @@ function ParticipantsSection({ detail, act, canManage, pName, setPName, pPct, se
       >
         <i className={"ti " + (open ? "ti-chevron-down" : "ti-chevron-right")} aria-hidden />
         <i className="ti ti-users" aria-hidden />
-        Participantes
+        {t("participantsLabel")}
         {count > 0 && <span className="badge info" style={{ marginLeft: 4 }}>{count}</span>}
       </button>
 
@@ -647,7 +657,7 @@ function ParticipantsSection({ detail, act, canManage, pName, setPName, pPct, se
         <div style={{ marginTop: 10 }}>
           {count === 0 && (
             <p className="hint" style={{ marginBottom: 8 }}>
-              Serão adicionados pelo bot quando os jogadores registrarem nas parties. Você pode adicionar manualmente aqui para testes.
+              {t("participantsAutoAddHint")}
             </p>
           )}
           {detail.participants.map((p) => (
@@ -669,7 +679,7 @@ function ParticipantsSection({ detail, act, canManage, pName, setPName, pPct, se
                       game_role_id: e.target.value ? Number(e.target.value) : null,
                     }))}
                   >
-                    <option value="">— função —</option>
+                    <option value="">{t("roleSelectPlaceholder")}</option>
                     {roles.map(r => (
                       <option key={r.id} value={r.id}>{r.name}</option>
                     ))}
@@ -678,16 +688,16 @@ function ParticipantsSection({ detail, act, canManage, pName, setPName, pPct, se
                 {!isActive && p.game_role_name && (
                   <span style={{ fontSize: 11, color: "var(--info)" }}>{p.game_role_name}</span>
                 )}
-                {p.is_trial && <span className="hint" style={{ fontSize: 11 }}>trial</span>}
+                {p.is_trial && <span className="hint" style={{ fontSize: 11 }}>{t("trialBadge")}</span>}
                 <span className="hint">{p.percent}%</span>
                 {p.silver_received > 0 && (
-                  <span style={{ color: "#6bbf73", fontSize: 12 }}>{fmt(p.silver_received)} prata</span>
+                  <span style={{ color: "#6bbf73", fontSize: 12 }}>{fmt(p.silver_received)} {t("silverWord")}</span>
                 )}
                 {/* Botão de regear por função */}
                 {(isActive || detail.state === "definition") && p.game_role_id && (
                   <button
                     style={{ background: "none", border: "none", color: "var(--info)", cursor: "pointer", padding: "2px 4px", fontSize: 12 }}
-                    title="Calcular regear pela função"
+                    title={t("calcRegearTitle")}
                     onClick={() => regearPanel?.pid === p.id ? setRegearPanel(null) : showRegear(p)}
                   >
                     <i className="ti ti-calculator" aria-hidden />
@@ -713,13 +723,13 @@ function ParticipantsSection({ detail, act, canManage, pName, setPName, pPct, se
           ))}
           {isActive && canManage && (
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-              <input className="input" style={{ flex: 1, minWidth: 120 }} placeholder="Nome"
+              <input className="input" style={{ flex: 1, minWidth: 120 }} placeholder={t("nameWord")}
                 value={pName} onChange={(e) => setPName(e.target.value)} />
               <input className="input" style={{ width: 56 }} placeholder="%"
                 value={pPct} onChange={(e) => setPPct(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && onAdd()} />
               <button className="btn" onClick={onAdd} disabled={!pName.trim()}>
-                <i className="ti ti-plus" aria-hidden /> Add
+                <i className="ti ti-plus" aria-hidden /> {t("addBtn")}
               </button>
             </div>
           )}
@@ -739,38 +749,39 @@ function RegearEstimatePanel({
   onApply: (est: RegearEstimate) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   return (
     <div style={{
       background: "var(--surface)", border: "1px solid var(--info)44",
       borderRadius: "var(--radius-sm)", padding: "10px 14px", marginBottom: 6,
       fontSize: 12,
     }}>
-      {loading && <p className="hint" style={{ margin: 0 }}>Buscando preços…</p>}
-      {!loading && !estimate && <p style={{ color: "#e07a7a", margin: 0 }}>Erro ao buscar estimativa.</p>}
+      {loading && <p className="hint" style={{ margin: 0 }}>{t("fetchingPricesLabel")}</p>}
+      {!loading && !estimate && <p style={{ color: "#e07a7a", margin: 0 }}>{t("estimateFetchError")}</p>}
       {!loading && estimate && (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <span style={{ fontWeight: 600 }}>
-              Regear: {estimate.game_role_name ?? "sem função"} — {estimate.price_basis}
+              {t("regearRoleLabel")} {estimate.game_role_name ?? t("noRoleFallback")} — {estimate.price_basis}
             </span>
             <span style={{ marginLeft: "auto", fontWeight: 700, color: "#6bbf73" }}>
-              {fmt(estimate.total)} prata
+              {fmt(estimate.total)} {t("silverWord")}
             </span>
           </div>
           {estimate.items.length === 0 && (
             <p className="hint" style={{ margin: 0 }}>
-              Nenhum item com item_id configurado na função. Edite a função em Funções → Itens de Regear.
+              {t("noRegearItemsConfigured")}
             </p>
           )}
           {estimate.items.length > 0 && (
             <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
               <thead>
                 <tr style={{ color: "var(--muted)", fontSize: 11 }}>
-                  <th style={{ textAlign: "left", paddingBottom: 4 }}>Slot</th>
+                  <th style={{ textAlign: "left", paddingBottom: 4 }}>{t("colSlot")}</th>
                   <th style={{ textAlign: "left" }}>Item</th>
-                  <th style={{ textAlign: "right" }}>Qtd</th>
-                  <th style={{ textAlign: "right" }}>Preço unit.</th>
-                  <th style={{ textAlign: "right" }}>Total</th>
+                  <th style={{ textAlign: "right" }}>{t("qtyAbbrev")}</th>
+                  <th style={{ textAlign: "right" }}>{t("colUnitPrice")}</th>
+                  <th style={{ textAlign: "right" }}>{t("totalWord")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -783,7 +794,7 @@ function RegearEstimatePanel({
                     </td>
                     <td style={{ textAlign: "right" }}>{item.quantity}</td>
                     <td style={{ textAlign: "right" }}>
-                      {item.unit_price ? fmt(item.unit_price) : <span className="hint">sem preço</span>}
+                      {item.unit_price ? fmt(item.unit_price) : <span className="hint">{t("noPriceFallback")}</span>}
                     </td>
                     <td style={{ textAlign: "right", fontWeight: item.total_price ? 600 : 400 }}>
                       {item.total_price ? fmt(item.total_price) : "—"}
@@ -797,11 +808,11 @@ function RegearEstimatePanel({
             {estimate.total > 0 && (
               <button className="btn primary" style={{ fontSize: 11, padding: "4px 10px" }}
                 onClick={() => onApply(estimate)}>
-                <i className="ti ti-plus" aria-hidden /> Criar registro de morte ({fmt(estimate.total)})
+                <i className="ti ti-plus" aria-hidden /> {t("createDeathRecordBtn")} ({fmt(estimate.total)})
               </button>
             )}
             <button className="btn" style={{ fontSize: 11, padding: "4px 10px" }} onClick={onClose}>
-              Fechar
+              {t("closeBtn")}
             </button>
           </div>
         </>

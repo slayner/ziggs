@@ -3,6 +3,7 @@ import { itemRenderUrl, ITEM_BY_ID, NO_WEAPON_ICON_ID } from "../data/albion-ite
 import { imgRetry } from "../api";
 import { navigate, navigateReplace } from "../router";
 import { EquipGrid, PriceHistoryChart, is2H, type DraftEquip } from "./CompBuilder";
+import { useT, type TKey } from "../i18n";
 
 const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 
@@ -71,19 +72,24 @@ interface BattleDetail {
     top_death_fame?: Highlight | null;
   };
   kill_timeline: KillEvent[];
+  unresolved_ids?: string[];
 }
 
-const REGION_LABELS: Record<string, string> = {
-  europe: "Europe", americas: "Americas", asia: "Asia", multi: "Múltiplas regiões",
-};
+function useRegionLabels(): Record<string, string> {
+  const t = useT();
+  return { europe: "Europe", americas: "Americas", asia: "Asia", multi: t("regionMultiple") };
+}
 const EQUIP_SLOTS = ["weapon", "offhand", "helmet", "armor", "boots", "cape", "mount", "bag", "food", "potion"];
 // ponytail: pedido explícito — montaria/capa/comida/pot/bolsa não diferenciam a "build" de uma role.
 const COMPOSITION_SLOTS = ["weapon", "offhand", "helmet", "armor", "boots"];
 
-const ROLE_LABELS: Record<string, string> = {
-  tank: "Tank", healer: "Healer", support: "Suporte", dps: "DPS", pierce: "Pierce",
-  battlemount: "BM", utility: "Utilidade", unknown: "Build desconhecida",
-};
+function useRoleLabels(): Record<string, string> {
+  const t = useT();
+  return {
+    tank: "Tank", healer: "Healer", support: t("roleSupport"), dps: "DPS", pierce: "Pierce",
+    battlemount: "BM", utility: t("roleUtility"), unknown: t("roleUnknownBuild"),
+  };
+}
 // pro search aceitar o termo em inglês mesmo quando o label do site é PT (igual às comps).
 const ROLE_LABELS_EN: Record<string, string> = {
   tank: "Tank", healer: "Healer", support: "Support", dps: "DPS", pierce: "Pierce",
@@ -163,8 +169,8 @@ function formatUtc(iso: string): string {
   return `${dd}/${mm}/${d.getUTCFullYear()}, ${hh}:${min} UTC`;
 }
 
-function durationLabel(start: string, end: string | null): string {
-  if (!end) return "em andamento";
+function durationLabel(start: string, end: string | null, t: (key: TKey) => string): string {
+  if (!end) return t("inProgressLabel");
   const min = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60_000);
   return min < 60 ? `${min}min` : `${(min / 60).toFixed(1)}h`;
 }
@@ -211,6 +217,7 @@ function matchesGuildFilter(p: Participant, filter: string): boolean {
 function GuildFilterSelect({ participants, value, onChange }: {
   participants: Participant[]; value: string; onChange: (v: string) => void;
 }) {
+  const t = useT();
   const groups = useMemo(() => computeGuildGroups(participants), [participants]);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -224,7 +231,7 @@ function GuildFilterSelect({ participants, value, onChange }: {
     return () => document.removeEventListener("mousedown", onDocMouseDown);
   }, [open]);
 
-  const currentLabel = !value ? "Todas as guildas"
+  const currentLabel = !value ? t("allGuildsOption")
     : value.startsWith("a:") ? `[${value.slice(2)}]`
     : value.slice(2);
 
@@ -243,7 +250,7 @@ function GuildFilterSelect({ participants, value, onChange }: {
       </button>
       {open && (
         <div className="absolute right-0 z-20 mt-1 max-h-72 w-56 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-xs shadow-lg">
-          <button onClick={() => pick("")} className={rowCls(!value)}>Todas as guildas</button>
+          <button onClick={() => pick("")} className={rowCls(!value)}>{t("allGuildsOption")}</button>
           {groups.alliances.map(([alliance, guilds]) => (
             <div key={alliance} className="mt-1 border-t border-zinc-800 pt-1">
               <button onClick={() => pick(`a:${alliance}`)} className={`${rowCls(value === `a:${alliance}`)} font-bold`}>
@@ -271,7 +278,7 @@ function GuildFilterSelect({ participants, value, onChange }: {
   );
 }
 
-function searchHaystack(p: Participant): string {
+function searchHaystack(p: Participant, roleLabels: Record<string, string>): string {
   const itemNames = (p.equipment ?? []).flatMap(build =>
     EQUIP_SLOTS.map(slot => build[slot]).filter((id): id is string => !!id)
       .flatMap(id => {
@@ -279,7 +286,7 @@ function searchHaystack(p: Participant): string {
         return [item?.name ?? id, item?.nameEn];
       })
   );
-  const role = p.role ? [p.role, ROLE_LABELS[p.role], ROLE_LABELS_EN[p.role]] : [];
+  const role = p.role ? [p.role, roleLabels[p.role], ROLE_LABELS_EN[p.role]] : [];
   return [p.name, p.guild_name, p.alliance_name, ...role, ...itemNames].filter(Boolean).join(" ").toLowerCase();
 }
 
@@ -308,7 +315,8 @@ function BuildIcons({ equipment, slots = EQUIP_SLOTS, size = "h-7 w-7" }: { equi
 }
 
 function EquipRow({ equipment }: { equipment: Build[] | null }) {
-  if (!equipment || equipment.length === 0) return <span className="text-zinc-600 text-xs">sem build</span>;
+  const t = useT();
+  if (!equipment || equipment.length === 0) return <span className="text-zinc-600 text-xs">{t("noBuildLabel")}</span>;
   const unique = dedupeBuilds(equipment);
   return (
     <div className="space-y-1">
@@ -344,6 +352,7 @@ function Highlight({ icon, label, h, region }: { icon: string; label: string; h?
 const REGION_PREFIX: Record<string, string> = { americas: "am", asia: "as", europe: "eu" };
 
 function ParticipantRow({ p, color, region }: { p: Participant; color: string; region: string }) {
+  const t = useT();
   const prefix = REGION_PREFIX[region];
   return (
     <div
@@ -368,25 +377,31 @@ function ParticipantRow({ p, color, region }: { p: Participant; color: string; r
       </div>
       <div className="text-right text-xs shrink-0 tabular-nums w-[240px] grid grid-cols-5 gap-2 text-zinc-400">
         <span title="IP">{p.ip ? Math.round(p.ip) : "—"}</span>
-        <span title="Cura">{p.healing_done ? fameShort(p.healing_done) : "—"}</span>
+        <span title={t("healingWord")}>{p.healing_done ? fameShort(p.healing_done) : "—"}</span>
         <span title="Kills" className="text-emerald-400">{p.kills}</span>
-        <span title="Mortes">{p.deaths}</span>
-        <span title="Fama" className="text-amber-400/80">{fameShort(p.kill_fame)}</span>
+        <span title={t("deathsColLabel")}>{p.deaths}</span>
+        <span title={t("fameWord")} className="text-amber-400/80">{fameShort(p.kill_fame)}</span>
       </div>
     </div>
   );
 }
 
 type SortKey = "ip" | "healing_done" | "kills" | "deaths" | "kill_fame";
-const SORT_COLS: { key: SortKey; label: string }[] = [
-  { key: "ip", label: "IP" },
-  { key: "healing_done", label: "Cura" },
-  { key: "kills", label: "Kills" },
-  { key: "deaths", label: "Mortes" },
-  { key: "kill_fame", label: "Fama" },
-];
+function useSortCols(): { key: SortKey; label: string }[] {
+  const t = useT();
+  return [
+    { key: "ip", label: "IP" },
+    { key: "healing_done", label: t("healingWord") },
+    { key: "kills", label: "Kills" },
+    { key: "deaths", label: t("deathsColLabel") },
+    { key: "kill_fame", label: t("fameWord") },
+  ];
+}
 
 function ParticipantTable({ participants, region }: { participants: Participant[]; region: string }) {
+  const t = useT();
+  const roleLabels = useRoleLabels();
+  const SORT_COLS = useSortCols();
   // mesma cor por guilda/aliança da lista de guildas/alianças, em vez do
   // azul/vermelho genérico de lado A/B (pedido explícito).
   const groups = useMemo(() => buildAllianceGroups(participants, EMPTY_SILVER), [participants]);
@@ -400,8 +415,8 @@ function ParticipantTable({ participants, region }: { participants: Participant[
   const [page, setPage] = useState(1);
 
   const haystacks = useMemo(
-    () => new Map(participants.map(p => [p.albion_player_id, searchHaystack(p)])),
-    [participants],
+    () => new Map(participants.map(p => [p.albion_player_id, searchHaystack(p, roleLabels)])),
+    [participants, roleLabels],
   );
 
   const filtered = useMemo(
@@ -441,7 +456,7 @@ function ParticipantTable({ participants, region }: { participants: Participant[
         <input
           value={search}
           onChange={e => { setSearch(e.target.value); setPage(1); }}
-          placeholder="Buscar jogador, guilda, build, função…"
+          placeholder={t("searchParticipantsPlaceholder")}
           className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-amber-500 placeholder:text-zinc-600 w-64"
         />
         <div className="flex-1" />
@@ -465,7 +480,7 @@ function ParticipantTable({ participants, region }: { participants: Participant[
           <ParticipantRow key={p.albion_player_id} p={p} region={region} color={colorMap.get(guildKeyMap.get(p.guild_name ?? p.name) ?? "") ?? OTHERS_COLOR} />
         ))}
         {pageItems.length === 0 && (
-          <div className="px-4 py-8 text-center text-sm text-zinc-500">Nenhum jogador com esses filtros.</div>
+          <div className="px-4 py-8 text-center text-sm text-zinc-500">{t("noPlayersWithFilters")}</div>
         )}
       </div>
 
@@ -485,7 +500,7 @@ function ParticipantTable({ participants, region }: { participants: Participant[
           <button disabled={pageClamped === totalPages} onClick={() => setPage(p => p + 1)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">›</button>
           <button disabled={pageClamped === totalPages} onClick={() => setPage(totalPages)} className="px-2 py-1 rounded disabled:opacity-30 text-zinc-400 hover:text-zinc-200">»</button>
         </div>
-        <span className="text-zinc-500">{sorted.length} jogadores</span>
+        <span className="text-zinc-500">{sorted.length} {t("playersWord")}</span>
       </div>
     </div>
   );
@@ -671,14 +686,17 @@ function AllianceRow({ group, color }: { group: AllianceGroup; color: string }) 
 }
 
 type AllianceSortKey = "player_count" | "silver" | "kills" | "deaths" | "kill_fame" | "ip";
-const ALLIANCE_SORT_COLS: { key: AllianceSortKey; label: string }[] = [
-  { key: "player_count", label: "Jogadores" },
-  { key: "silver", label: "Prata" },
-  { key: "kills", label: "Kills" },
-  { key: "deaths", label: "Mortes" },
-  { key: "kill_fame", label: "Fama" },
-  { key: "ip", label: "IP" },
-];
+function useAllianceSortCols(): { key: AllianceSortKey; label: string }[] {
+  const t = useT();
+  return [
+    { key: "player_count", label: t("playersColLabel") },
+    { key: "silver", label: t("silverColLabel") },
+    { key: "kills", label: "Kills" },
+    { key: "deaths", label: t("deathsColLabel") },
+    { key: "kill_fame", label: t("fameWord") },
+    { key: "ip", label: "IP" },
+  ];
+}
 
 function allianceSortValue(g: AllianceGroup, key: AllianceSortKey): number {
   return key === "ip" ? avgIp(g) : g[key];
@@ -687,6 +705,8 @@ function allianceSortValue(g: AllianceGroup, key: AllianceSortKey): number {
 function AllianceList({ participants, silverByVictim, title }: {
   participants: Participant[]; silverByVictim: Map<string, number>; title: string;
 }) {
+  const t = useT();
+  const ALLIANCE_SORT_COLS = useAllianceSortCols();
   const groups = useMemo(() => buildAllianceGroups(participants, silverByVictim), [participants, silverByVictim]);
   const { main: mainGroups, low: lowGroups } = useMemo(() => splitByImpact(groups), [groups]);
   // cor sempre pelo ranking de kills entre os grupos de alto impacto (igual ao
@@ -734,14 +754,14 @@ function AllianceList({ participants, silverByVictim, title }: {
         {sorted.map(g => (
           <AllianceRow key={g.key} group={g} color={colorMap.get(g.key) ?? OTHERS_COLOR} />
         ))}
-        {sorted.length === 0 && <div className="px-4 py-8 text-center text-sm text-zinc-500">Sem dados.</div>}
+        {sorted.length === 0 && <div className="px-4 py-8 text-center text-sm text-zinc-500">{t("noDataLabel")}</div>}
       </div>
       {lowGroups.length > 0 && (
         <button
           onClick={() => setShowLowImpact(v => !v)}
           className="w-full border-t border-zinc-800 px-4 py-2 text-center text-xs text-zinc-500 hover:text-zinc-300"
         >
-          {showLowImpact ? "Ocultar baixo impacto" : `Mostrar mais ${lowGroups.length} guilds/alianças`}
+          {showLowImpact ? t("hideLowImpactBtn") : `${t("showMorePrefix")} ${lowGroups.length} ${t("guildsAlliancesSuffix")}`}
         </button>
       )}
     </div>
@@ -886,6 +906,7 @@ function unifiedBuilds(participants: Participant[], role: string): { build: Buil
 }
 
 function RoleBuildList({ role, participants }: { role: string; participants: Participant[] }) {
+  const t = useT();
   const builds = useMemo(() => unifiedBuilds(participants, role), [participants, role]);
   return (
     <div className="h-[264px] space-y-2 overflow-y-auto pr-5">
@@ -895,12 +916,14 @@ function RoleBuildList({ role, participants }: { role: string; participants: Par
           <BuildIcons equipment={b.build} slots={slotsForRole(isBattlemount(b.build.mount) ? "battlemount" : role)} size="h-[60px] w-[60px]" />
         </div>
       ))}
-      {builds.length === 0 && <div className="text-xs text-zinc-600">Nenhuma build registrada.</div>}
+      {builds.length === 0 && <div className="text-xs text-zinc-600">{t("noBuildsRegistered")}</div>}
     </div>
   );
 }
 
 function CompositionSection({ participants }: { participants: Participant[] }) {
+  const t = useT();
+  const roleLabels = useRoleLabels();
   const [guildFilter, setGuildFilter] = useState("");
   const filtered = useMemo(
     () => participants.filter(p => matchesGuildFilter(p, guildFilter)),
@@ -929,7 +952,7 @@ function CompositionSection({ participants }: { participants: Participant[] }) {
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-zinc-200 shrink-0">Composição</div>
+        <div className="text-sm font-semibold text-zinc-200 shrink-0">{t("compositionTitle")}</div>
         <div className="flex flex-nowrap gap-1 overflow-x-auto">
           <button
             onClick={() => setSelectedRole(ALL_ROLES)}
@@ -937,7 +960,7 @@ function CompositionSection({ participants }: { participants: Participant[] }) {
               activeRole === ALL_ROLES ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-zinc-700 text-zinc-500 hover:text-zinc-300"
             }`}
           >
-            Todas ({totalKnown})
+            {t("allRolesBtn")} ({totalKnown})
           </button>
           {roles.map(r => (
             <button
@@ -947,7 +970,7 @@ function CompositionSection({ participants }: { participants: Participant[] }) {
                 activeRole === r ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-zinc-700 text-zinc-500 hover:text-zinc-300"
               }`}
             >
-              {ROLE_LABELS[r] ?? r} ({roleCounts[r]})
+              {roleLabels[r] ?? r} ({roleCounts[r]})
             </button>
           ))}
         </div>
@@ -965,8 +988,8 @@ function CompositionSection({ participants }: { participants: Participant[] }) {
   );
 }
 
-function weaponName(id: string | null): string {
-  if (!id) return "build desconhecida";
+function weaponName(id: string | null, t: (key: TKey) => string): string {
+  if (!id) return t("roleUnknownBuild");
   return ITEM_BY_ID.get(id)?.name ?? id;
 }
 
@@ -979,13 +1002,15 @@ function topFactions(events: KillEvent[], max: number): string[] {
 }
 
 function WeaponIcon({ id, quality }: { id: string | null; quality?: number }) {
+  const t = useT();
   const weaponId = id ?? NO_WEAPON_ICON_ID;
   const item = ITEM_BY_ID.get(weaponId);
+  const label = id ? weaponName(id, t) : t("noWeaponEquipped");
   return (
     <img
       src={itemRenderUrl(item ?? weaponId, id ? quality ?? 0 : 0)}
-      alt={id ? weaponName(id) : "Sem arma equipada"}
-      title={id ? weaponName(id) : "Sem arma equipada"}
+      alt={label}
+      title={label}
       className="h-7 w-7 rounded border border-zinc-700 bg-zinc-950 object-cover shrink-0"
       loading="lazy"
       onError={imgRetry()}
@@ -1021,6 +1046,7 @@ function timeHmsUTC(ts: string): string {
 }
 
 function KillTimelineChart({ events, startTime, hiddenFactions }: { events: KillEvent[]; startTime: string; hiddenFactions?: Set<string> }) {
+  const t = useT();
   const [hover, setHover] = useState<{ x: number; y: number; cluster: KillEvent[]; pinned: boolean } | null>(null);
   const visibleEvents = useMemo(
     () => hiddenFactions?.size ? events.filter(e => !hiddenFactions.has(e.faction)) : events,
@@ -1091,12 +1117,12 @@ function KillTimelineChart({ events, startTime, hiddenFactions }: { events: Kill
   return (
     <div>
       <div className="mb-2 flex items-start justify-between gap-3">
-        <div className="text-sm font-semibold text-zinc-200">Horizonte de eventos</div>
+        <div className="text-sm font-semibold text-zinc-200">{t("eventsHorizonTitle")}</div>
         <div className="flex flex-wrap justify-end gap-3 text-xs">
           {rows.map(f => (
             <span key={f} className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full shrink-0" style={{ background: rowColor(f) }} />
-              <span className="text-zinc-400">{f === "__others__" ? "Outros" : f}</span>
+              <span className="text-zinc-400">{f === "__others__" ? t("othersLabel") : f}</span>
             </span>
           ))}
         </div>
@@ -1152,7 +1178,7 @@ function KillTimelineChart({ events, startTime, hiddenFactions }: { events: Kill
                 <span className="text-zinc-500 tabular-nums">{timeHmsUTC(e.t)}</span>
                 <WeaponIcon id={e.weapon} quality={Number(e.killer_equipment?.weapon_quality) || 0} />
                 <span className="font-medium text-zinc-100">{e.killer}</span>
-                <span className="text-zinc-500">matou</span>
+                <span className="text-zinc-500">{t("killedVerb")}</span>
                 <WeaponIcon id={e.victim_weapon} quality={Number(e.victim_equipment?.weapon_quality) || 0} />
                 <span className="font-medium text-zinc-100">{e.victim ?? "?"}</span>
               </div>
@@ -1243,6 +1269,7 @@ const INVENTORY_VISIBLE = 14;
 // componentes da comp builder (mesmo clique-no-item-foca-o-gráfico) — só o
 // inventário (itens carregados + mount/bag, fora do grid de 8 slots) é novo.
 function KillEquipExpansion({ event, prices }: { event: KillEvent; prices: Map<string, number> }) {
+  const t = useT();
   const [focusedId, setFocusedId] = useState<string | undefined>(undefined);
   const equip = event.victim_equipment;
   const draftEquip = useMemo(() => killEquipToDraft(equip), [equip]);
@@ -1284,7 +1311,7 @@ function KillEquipExpansion({ event, prices }: { event: KillEvent; prices: Map<s
           <EquipGrid equip={draftEquip} weaponIs2H={is2H(draftEquip.weapon?.id)} potionQty={10} foodQty={1} onFocus={setFocusedId} gearQuality={gearQuality} />
           {extras.length > 0 && (
             <div>
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Inventário</div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{t("inventoryLabel")}</div>
               <div className="grid grid-cols-5 gap-1">
                 {shown.map((it, i) => (
                   <ExtraItemIcon key={i} id={it.id} qty={it.qty} quality={it.quality} onClick={() => setFocusedId(it.id)} />
@@ -1318,6 +1345,7 @@ function formatHms(iso: string): string {
 }
 
 function KillFeed({ events, prices }: { events: KillEvent[]; prices: Map<string, number> }) {
+  const t = useT();
   const [sortKey, setSortKey] = useState<KFSortKey>("t");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -1368,13 +1396,13 @@ function KillFeed({ events, prices }: { events: KillEvent[]; prices: Map<string,
     <div className="overflow-hidden rounded-lg border border-zinc-800">
       <div className="border-b border-zinc-800 px-4 py-2.5 flex items-center gap-3">
         <div className="w-4 shrink-0" />
-        <div className="w-20 shrink-0">{sortBtn("t", "Tempo (UTC)")}</div>
+        <div className="w-20 shrink-0">{sortBtn("t", t("timeUtcColLabel"))}</div>
         <div className="flex-1 grid grid-cols-2 gap-2 px-2 text-[11px] font-medium text-zinc-500">
-          <span>Matador</span><span>Vítima</span>
+          <span>{t("killerColLabel")}</span><span>{t("victimColLabel")}</span>
         </div>
         <div className="w-[176px] shrink-0 grid grid-cols-2 gap-2">
-          {sortBtn("value", "Prata")}
-          {sortBtn("fame", "Fama")}
+          {sortBtn("value", t("silverColLabel"))}
+          {sortBtn("fame", t("fameWord"))}
         </div>
       </div>
       <div className="max-h-[480px] divide-y divide-zinc-800/60 overflow-y-auto">
@@ -1423,6 +1451,8 @@ interface BattlePageProps {
 }
 
 export default function BattlePage({ code, albionIds, onBack }: BattlePageProps) {
+  const t = useT();
+  const regionLabels = useRegionLabels();
   const [battle, setBattle] = useState<BattleDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -1436,7 +1466,7 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
     if (code) {
       fetch(`${API}/battles/by-code/${code}`)
         .then(res => {
-          if (!res.ok) throw new Error(res.status === 404 ? "Link não encontrado" : `HTTP ${res.status}`);
+          if (!res.ok) throw new Error(res.status === 404 ? t("linkNotFoundError") : `HTTP ${res.status}`);
           return res.json();
         })
         .then(setBattle)
@@ -1447,8 +1477,15 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
     if (albionIds) {
       setResolving(true);
       let cancelled = false;
-      const RETRYABLE = new Set([404, 502, 503, 504]);
-      const attempt = (delay: number) => {
+      // 404 só é retryable um número limitado de vezes (~2min de tentativas):
+      // cobre o caso de a batalha ter acabado de acontecer e a API do Albion
+      // ainda não ter indexado. Batalha antiga demais (não existe mais na API)
+      // também cai em 404 — sem o limite, ficava tentando pra sempre sem nunca
+      // mostrar nada pro usuário. 502/503/504 (instabilidade da própria API)
+      // continuam tentando indefinidamente, como antes.
+      const ALWAYS_RETRYABLE = new Set([502, 503, 504]);
+      const MAX_404_RETRIES = 6;
+      const attempt = (delay: number, retries404Left: number) => {
         fetch(`${API}/battles/resolve`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1456,8 +1493,13 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
         })
           .then(res => {
             if (cancelled) return;
-            if (RETRYABLE.has(res.status)) {
-              setTimeout(() => { if (!cancelled) attempt(Math.min(delay * 2, 30_000)); }, delay);
+            if (res.status === 404 && retries404Left > 0) {
+              setTimeout(() => { if (!cancelled) attempt(Math.min(delay * 2, 30_000), retries404Left - 1); }, delay);
+              return;
+            }
+            if (res.status === 404) throw new Error(t("battleNotFoundOldError"));
+            if (ALWAYS_RETRYABLE.has(res.status)) {
+              setTimeout(() => { if (!cancelled) attempt(Math.min(delay * 2, 30_000), retries404Left); }, delay);
               return;
             }
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1471,7 +1513,7 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
           })
           .catch(e => { if (!cancelled) { setError(e instanceof Error ? e.message : String(e)); setResolving(false); } });
       };
-      attempt(3_000);
+      attempt(3_000, MAX_404_RETRIES);
       return () => { cancelled = true; };
     }
   }, [code, albionIds]);
@@ -1526,11 +1568,11 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
     <div className="mx-auto w-full max-w-5xl px-4 py-6">
       <div className="mb-5 flex items-center gap-3">
         <button onClick={onBack} className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:border-zinc-500">
-          ← Batalhas
+          {t("backToBattlesBtn")}
         </button>
         <div className="flex-1" />
         <button onClick={copyLink} className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:border-zinc-500">
-          {copied ? "Link copiado!" : "🔗 Copiar link"}
+          {copied ? t("linkCopiedLabel") : t("copyLinkBtn")}
         </button>
       </div>
 
@@ -1540,8 +1582,14 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
 
       {!battle && !error && (
         <div className="py-16 text-center text-zinc-500">
-          {resolving ? "Resolvendo batalha…" : "Carregando batalha…"}
+          {resolving ? t("resolvingBattleLabel") : t("loadingBattleLabel")}
         </div>
+      )}
+
+      {battle && !!battle.unresolved_ids?.length && (
+        <p className="mb-4 rounded-lg border border-amber-800/50 bg-amber-900/15 px-4 py-3 text-xs text-amber-400">
+          {battle.unresolved_ids.length} {t("ignoredBattlesNotice")} {battle.unresolved_ids.join(", ")}
+        </p>
       )}
 
       {battle && (
@@ -1550,23 +1598,23 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
             participants={allParticipants}
             silverByVictim={silverByVictim}
             title={
-              `${REGION_LABELS[battle.region] ?? battle.region}` +
+              `${regionLabels[battle.region] ?? battle.region}` +
               (battle.cluster ? ` · ${battle.cluster}` : "") +
-              ` · ${durationLabel(battle.start_time, battle.end_time)} · ${formatUtc(battle.start_time)}` +
-              (battle.battle_count > 1 ? ` · ${battle.battle_count} batalhas combinadas` : "")
+              ` · ${durationLabel(battle.start_time, battle.end_time, t)} · ${formatUtc(battle.start_time)}` +
+              (battle.battle_count > 1 ? ` · ${battle.battle_count} ${t("combinedBattlesSuffix")}` : "")
             }
           />
 
           <div className="mb-5 mt-3 text-center text-xs text-zinc-600">
-            {fameShort(battle.total_fame)} de fama total · {battle.kill_count} kills · {fameShort(totalSilver)} de prata dropada
+            {fameShort(battle.total_fame)} {t("totalFameSuffix")} · {battle.kill_count} kills · {fameShort(totalSilver)} {t("silverDroppedSuffix")}
           </div>
 
           {(() => {
             const items = [
-              { icon: "⚔️", label: "Mais kills", h: battle.highlights.top_kills },
-              { icon: "👑", label: "Mais fama", h: battle.highlights.top_fame },
-              { icon: "💚", label: "Mais curou", h: battle.highlights.top_healing },
-              { icon: "💀", label: "Top death fame", h: battle.highlights.top_death_fame },
+              { icon: "⚔️", label: t("highlightMostKills"), h: battle.highlights.top_kills },
+              { icon: "👑", label: t("highlightMostFame"), h: battle.highlights.top_fame },
+              { icon: "💚", label: t("highlightMostHealing"), h: battle.highlights.top_healing },
+              { icon: "💀", label: t("highlightTopDeathFame"), h: battle.highlights.top_death_fame },
             ].filter(it => it.h);
             if (!items.length) return null;
             // sem highlight (ex: ninguém curou) some o card e os outros esticam
@@ -1586,7 +1634,7 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
 
           <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
             {battle.kill_timeline.length === 0 ? (
-              <div className="text-xs text-zinc-500">Sem eventos de kill registrados pra essa batalha.</div>
+              <div className="text-xs text-zinc-500">{t("noKillEventsRecorded")}</div>
             ) : (
               <>
                 <KillTimelineChart events={battle.kill_timeline} startTime={battle.start_time} hiddenFactions={hiddenFactionLabels} />

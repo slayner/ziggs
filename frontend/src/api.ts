@@ -356,25 +356,34 @@ export const api = {
   switchGuild: (guild_id: string) =>
     req<{ guild_id: string; bot_present: boolean }>(`/auth/switch-guild/${guild_id}`, { method: "POST" }),
   mySiteGuilds: () => req<SiteGuild[]>("/auth/my-site-guilds"),
-  guildInfo: (guild_id: string) => req<SiteGuild & { settings: Record<string, unknown> }>(`/auth/guild-info/${guild_id}`),
-  updateGuildSettings: (guild_id: string, payload: { albion_guild_name?: string | null }) =>
-    req<{ ok: boolean }>(`/auth/guild-settings/${guild_id}`, {
+  guildInfo: (guild_id: string) => req<SiteGuild & { albion_alliance_id: string | null; albion_alliance_name: string | null; settings: Record<string, unknown> }>(`/auth/guild-info/${guild_id}`),
+  updateGuildSettings: (guild_id: string, payload: {
+    albion_guild_name?: string | null; albion_guild_region?: string | null; register_role_id?: string | null;
+    ally_role_id?: string | null; ally_allowed_guilds?: string[] | null; bot_language?: string | null;
+  }) =>
+    req<{ ok: boolean; albion_guild_resolved: boolean }>(`/auth/guild-settings/${guild_id}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
   myPermissions: () => req<Permissions>("/auth/my-permissions"),
   guildDiscordRoles: (guild_id: string) => req<DiscordRole[]>(`/auth/guild-discord-roles/${guild_id}`),
+  guildAllies: (guild_id: string) => req<{ id: string; name: string }[]>(`/auth/guild-allies/${guild_id}`),
   updateRolePermissions: (guild_id: string, role_id: string, role_name: string, permissions: Partial<Permissions>) =>
     req<{ ok: boolean }>(`/auth/guild-discord-roles/${guild_id}/${role_id}`, {
       method: "PATCH",
       body: JSON.stringify({ role_name, permissions }),
     }),
   guildCommands: (guild_id: string) =>
-    req<{ name: string; description: string; enabled: boolean }[]>(`/auth/guild-commands/${guild_id}`),
+    req<{ name: string; description: string; category: string; enabled: boolean; allowed_roles: string[] }[]>(`/auth/guild-commands/${guild_id}`),
   toggleGuildCommand: (guild_id: string, name: string, enabled: boolean) =>
     req<{ ok: boolean }>(`/auth/guild-commands/${guild_id}/${name}`, {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
+    }),
+  updateCommandRoles: (guild_id: string, name: string, role_keys: string[]) =>
+    req<{ ok: boolean }>(`/auth/guild-commands/${guild_id}/${name}/roles`, {
+      method: "PATCH",
+      body: JSON.stringify({ role_keys }),
     }),
 
   getComp: (c: number) => req<ApiComp>(`/guilds/${g()}/comps/${c}`),

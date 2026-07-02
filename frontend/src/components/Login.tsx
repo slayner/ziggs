@@ -1,3 +1,5 @@
+import { useT } from "../i18n";
+
 interface Props {
   onDemo: () => void;
 }
@@ -5,6 +7,7 @@ interface Props {
 // Login SÓ por Discord. O botão real manda pro backend (/auth/discord/login);
 // o "modo demonstração" deixa ver o site sem backend/Postgres no ar.
 export default function Login({ onDemo }: Props) {
+  const t = useT();
   return (
     <div className="login-wrap">
       <div className="card login-card">
@@ -13,12 +16,12 @@ export default function Login({ onDemo }: Props) {
         </div>
         <h1 style={{ fontSize: 24, margin: 0 }}>Ziggs</h1>
         <p className="muted" style={{ fontSize: 13, margin: "6px 0 22px" }}>
-          Controle de guildas de Albion Online
+          {t("loginTagline")}
         </p>
 
         <a className="btn discord" href="/auth/discord/login">
           <i className="ti ti-brand-discord" style={{ fontSize: 20 }} aria-hidden="true" />
-          Entrar com Discord
+          {t("loginDiscord")}
         </a>
 
         <button
@@ -27,11 +30,11 @@ export default function Login({ onDemo }: Props) {
           onClick={onDemo}
         >
           <i className="ti ti-eye" aria-hidden="true" />
-          Ver demonstração (sem login)
+          {t("loginDemo")}
         </button>
 
         <p className="hint" style={{ marginTop: 16 }}>
-          Acesso só por Discord · versão grátis e premium
+          {t("loginHint")}
         </p>
       </div>
     </div>

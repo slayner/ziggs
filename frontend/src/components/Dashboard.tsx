@@ -1,180 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useServer, SERVER_LABELS, type GameServer } from "../i18n";
-import { silver, dateUTC } from "../lib/format";
+import { useLang, useT, REGION_LABELS, SERVER_LABELS, type GameServer } from "../i18n";
+import { silver, silverShort, dateUTC } from "../lib/format";
 import { navigate } from "../router";
-
-// ── Busca global ─────────────────────────────────────────────────────────
-interface SearchPlayer   { albion_id: string; name: string; guild_name: string | null; alliance_name: string | null; battles: number; region: string }
-interface SearchGuild    { albion_id: string; name: string; alliance_name: string | null; battles: number }
-interface SearchAlliance { albion_id: string; name: string; guild_count: number; battles: number }
-// SearchBattle é compatível com RecentBattle — mesmos campos, reutiliza RecentBattleRow
-type SearchBattle = RecentBattle;
-interface SearchResults  { players: SearchPlayer[]; guilds: SearchGuild[]; alliances: SearchAlliance[]; battles: SearchBattle[] }
-
-const SEARCH_REGION_PREFIX: Record<string, string> = { americas: "am", asia: "as", europe: "eu" };
-
-function SectionHeader({ label, count }: { label: string; count: number }) {
-  return (
-    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-      {label} <span className="text-zinc-600">· {count}</span>
-    </p>
-  );
-}
-
-function SearchInitial({ char, className }: { char: string; className?: string }) {
-  return (
-    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-sm font-bold text-zinc-400 ${className ?? ""}`}>
-      {char.toUpperCase()}
-    </div>
-  );
-}
-
-function SearchCard({ onClick, left, title, sub, meta, delay }: {
-  onClick: () => void; left: React.ReactNode;
-  title: string; sub?: string; meta: string; delay: number;
-}) {
-  return (
-    <button onClick={onClick} style={{ animationDelay: `${delay}ms` }}
-      className="search-row w-full rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-900">
-      <div className="flex items-center gap-3">
-        {left}
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-semibold text-zinc-100">{title}</div>
-          {sub && <div className="truncate text-xs text-zinc-500">{sub}</div>}
-        </div>
-        <span className="shrink-0 whitespace-nowrap text-xs text-zinc-500 tabular-nums">{meta}</span>
-      </div>
-    </button>
-  );
-}
-
-function GlobalSearch() {
-  const [query, setQuery]   = useState("");
-  const [results, setResults] = useState<SearchResults | null>(null);
-  const [loading, setLoading] = useState(false);
-  // key muda a cada resultado novo → React remonta o container → animação retrigger
-  const [animKey, setAnimKey] = useState(0);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const q = e.target.value;
-    setQuery(q);
-    if (timer.current) clearTimeout(timer.current);
-    if (q.trim().length < 2) { setResults(null); setLoading(false); return; }
-    setLoading(true);
-    timer.current = setTimeout(() => {
-      fetch(`${BATTLES_API}/public/search?q=${encodeURIComponent(q.trim())}`)
-        .then(r => r.json())
-        .then((d: SearchResults) => { setResults(d); setLoading(false); setAnimKey(k => k + 1); })
-        .catch(() => setLoading(false));
-    }, 300);
-  }
-
-  const active  = query.trim().length >= 2;
-  const total   = results ? results.players.length + results.guilds.length + results.alliances.length + results.battles.length : 0;
-
-  // índice global para delay de stagger entre todas as linhas
-  let rowIdx = 0;
-  function nextDelay() { return rowIdx++ * 35; }
-
-  return (
-    <div className="mb-6">
-      {/* input */}
-      <div className="relative">
-        <i className="ti ti-search absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" />
-        <input type="text" value={query} onChange={handleChange}
-          placeholder="Buscar jogador, guilda, aliança ou batalha…"
-          className="w-full rounded-xl border border-zinc-700 bg-zinc-900/60 py-3 pl-10 pr-10 text-sm text-zinc-100 placeholder-zinc-600 transition-colors focus:border-amber-500/50 focus:outline-none focus:ring-1 focus:ring-amber-500/20" />
-        {loading && <i className="ti ti-loader-2 absolute right-3.5 top-1/2 -translate-y-1/2 animate-spin text-zinc-500" />}
-        {!loading && active && (
-          <button onClick={() => { setQuery(""); setResults(null); }}
-            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400">
-            <i className="ti ti-x text-xs" />
-          </button>
-        )}
-      </div>
-
-      {/* resultados */}
-      {active && !loading && results && (
-        <div key={animKey} className="search-expand mt-3 space-y-5">
-          {total === 0 ? (
-            <p className="py-8 text-center text-sm text-zinc-600">
-              Nenhum resultado para "{query}".
-            </p>
-          ) : (
-            <>
-              {results.players.length > 0 && (
-                <div>
-                  <SectionHeader label="Jogadores" count={results.players.length} />
-                  <div className="space-y-2">
-                    {results.players.map(p => (
-                      <SearchCard key={p.albion_id} delay={nextDelay()}
-                        onClick={() => navigate(`/${SEARCH_REGION_PREFIX[p.region] ?? "am"}/${encodeURIComponent(p.name)}`)}
-                        left={<SearchInitial char={p.name[0]} />}
-                        title={p.name}
-                        sub={[p.alliance_name ? `[${p.alliance_name}]` : "", p.guild_name ?? ""].filter(Boolean).join(" ") || undefined}
-                        meta={`${p.battles} lutas`} />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {results.guilds.length > 0 && (
-                <div>
-                  <SectionHeader label="Guildas" count={results.guilds.length} />
-                  <div className="space-y-2">
-                    {results.guilds.map(g => (
-                      <SearchCard key={g.albion_id} delay={nextDelay()}
-                        onClick={() => navigate(`/guild/${g.albion_id}`)}
-                        left={<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800"><i className="ti ti-shield text-sm text-zinc-400" /></div>}
-                        title={g.name}
-                        sub={g.alliance_name ? `[${g.alliance_name}]` : undefined}
-                        meta={`${g.battles} lutas`} />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {results.alliances.length > 0 && (
-                <div>
-                  <SectionHeader label="Alianças" count={results.alliances.length} />
-                  <div className="space-y-2">
-                    {results.alliances.map(a => (
-                      <SearchCard key={a.albion_id} delay={nextDelay()}
-                        onClick={() => navigate(`/alliance/${a.albion_id}`)}
-                        left={<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800"><i className="ti ti-users text-sm text-zinc-400" /></div>}
-                        title={a.name}
-                        sub={`${a.guild_count} guilda${a.guild_count !== 1 ? "s" : ""}`}
-                        meta={`${a.battles} lutas`} />
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {results.battles.length > 0 && (
-                <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                    {results.players.length > 0
-                      ? <>Batalhas recentes de <span className="text-zinc-300">{results.players.map(p => p.name).join(", ")}</span></>
-                      : <>Batalhas <span className="text-zinc-600">· {results.battles.length}</span></>
-                    }
-                  </p>
-                  <div className="space-y-2">
-                    {results.battles.map((b, i) => (
-                      <div key={b.public_id} className="search-row" style={{ animationDelay: `${nextDelay()}ms` }}>
-                        <RecentBattleRow b={b} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+import GlobalSearch, { RecentBattleRow, type RecentBattle } from "./GlobalSearch";
 
 // ── Patch notes (Steam News, ver app/api/routes/meta.py pro porquê) ────────
 interface PatchNote { title: string; url: string; date: number }
@@ -202,15 +30,16 @@ function PatchNoteRow({ n }: { n: PatchNote }) {
 }
 
 function PatchNotesCard({ onSeeAll }: { onSeeAll: () => void }) {
+  const t = useT();
   const notes = usePatchNotes();
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-      <button onClick={onSeeAll} className="group mb-1 flex w-full items-center justify-between text-left">
-        <h2 className="text-sm font-bold text-zinc-100 group-hover:text-amber-300">Patch Notes</h2>
-        <span className="text-xs text-zinc-500 group-hover:text-amber-300">Ver todos →</span>
-      </button>
-      {notes === null && <div className="py-8 text-center text-sm text-zinc-500">Carregando…</div>}
-      {notes?.length === 0 && <div className="py-8 text-center text-sm text-zinc-500">Changelog indisponível.</div>}
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-bold text-zinc-100">{t("patchNotesTitle")}</h2>
+        <button onClick={onSeeAll} className="text-xs text-zinc-500 hover:text-amber-300">{t("seeAllPatchNotes")}</button>
+      </div>
+      {notes === null && <div className="py-8 text-center text-sm text-zinc-500">{t("loading")}</div>}
+      {notes?.length === 0 && <div className="py-8 text-center text-sm text-zinc-500">{t("changelogUnavailable")}</div>}
       <div className="divide-y divide-zinc-800/60">
         {notes?.slice(0, 10).map(n => <PatchNoteRow key={n.url} n={n} />)}
       </div>
@@ -219,12 +48,13 @@ function PatchNotesCard({ onSeeAll }: { onSeeAll: () => void }) {
 }
 
 function PatchNotesPage({ onBack }: { onBack: () => void }) {
+  const t = useT();
   const notes = usePatchNotes();
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6">
-      <button onClick={onBack} className="mb-4 text-sm text-zinc-400 hover:text-zinc-200">← Voltar</button>
-      <h1 className="mb-4 text-lg font-bold text-zinc-100">Patch Notes — Albion Online</h1>
-      {notes === null && <div className="py-16 text-center text-zinc-500">Carregando…</div>}
+      <button onClick={onBack} className="mb-4 text-sm text-zinc-400 hover:text-zinc-200">← {t("back")}</button>
+      <h1 className="mb-4 text-lg font-bold text-zinc-100">{t("patchNotesPageTitle")}</h1>
+      {notes === null && <div className="py-16 text-center text-zinc-500">{t("loading")}</div>}
       <div className="divide-y divide-zinc-800/60 rounded-xl border border-zinc-800 bg-zinc-900/40 px-4">
         {notes?.map(n => <PatchNoteRow key={n.url} n={n} />)}
       </div>
@@ -233,139 +63,183 @@ function PatchNotesPage({ onBack }: { onBack: () => void }) {
 }
 
 // ── Jogadores ativos (substitui patch notes na posição original) ───────
-interface ActivePlayersStat { current: number; previous: number; delta_pct: number | null }
-interface ActivePlayersData {
-  americas: ActivePlayersStat; europe: ActivePlayersStat; asia: ActivePlayersStat; global: ActivePlayersStat;
-}
-const ACTIVE_PLAYERS_ROWS: { key: keyof ActivePlayersData; label: string }[] = [
-  { key: "global", label: "Global" },
-  { key: "americas", label: "Americas" },
-  { key: "europe", label: "Europe" },
-  { key: "asia", label: "Asia" },
-];
+type ActiveRegionKey = "global" | "americas" | "europe" | "asia";
+const ACTIVE_PLAYERS_ROWS: ActiveRegionKey[] = ["global", "americas", "europe", "asia"];
 
-function DeltaBadge({ pct }: { pct: number | null }) {
-  if (pct === null) return <span className="text-xs text-zinc-600">—</span>;
-  const up = pct >= 0;
-  return (
-    <span className={`text-xs font-semibold tabular-nums ${up ? "text-emerald-400" : "text-red-400"}`}>
-      {up ? "▲" : "▼"} {Math.abs(pct)}%
-    </span>
-  );
+const ACTIVE_REGION_COLORS: Record<ActiveRegionKey, string> = {
+  global: "#a78bfa", americas: "#34d399", europe: "#38bdf8", asia: "#fbbf24",
+};
+
+type CountPoint = { t: number; count: number };
+type ActivePlayersHistory = { since: number | null; series: Record<ActiveRegionKey, CountPoint[]> };
+
+async function fetchActivePlayersHistory(range: ChartRange): Promise<ActivePlayersHistory> {
+  const res = await fetch(`${BATTLES_API}/battles/active-players/history?range=${range}`);
+  if (!res.ok) throw new Error(`active-players-history ${res.status}`);
+  const d: { collected_since: string | null; series: Record<ActiveRegionKey, CountPoint[]> } = await res.json();
+  return { since: d.collected_since ? Date.parse(d.collected_since) : null, series: d.series };
 }
 
+function downsampleCount(points: CountPoint[]): CountPoint[] {
+  return downsample(points, bucket => ({ count: Math.round(bucket.reduce((s, p) => s + p.count, 0) / bucket.length) }));
+}
+
+// Coleta começou agora (ver services/player_count_snapshot.py) — não faz
+// sentido oferecer "1 ano" quando só existe 1 dia de histórico. Cada botão
+// só aparece quando já dá pra preencher aquele período de verdade; "Tudo"
+// não tem mínimo, sempre mostra o que já foi coletado.
+const RANGE_MIN_DAYS: Record<ChartRange, number> = { "1m": 31, "6m": 183, "1y": 366, all: 0 };
+
+// O gráfico SUBSTITUI os números (pedido explícito) — o valor "atual" de
+// cada região já aparece no fim da linha global (série primária) e no rótulo
+// de cada série; não precisa mais do fetch/lista separada de active-players.
 function ActivePlayersCard() {
-  const [data, setData] = useState<ActivePlayersData | null>(null);
-  const prevRef = useRef<ActivePlayersData | null>(null);
-  const [glowing, setGlowing] = useState<Set<string>>(new Set());
+  const t = useT();
+  const { lang } = useLang();
+  const RANGES = useRanges();
+
+  const [range, setRange] = useState<ChartRange>("all");
+  const [history, setHistory] = useState<ActivePlayersHistory | null>(null);
+  const [historyError, setHistoryError] = useState(false);
+  const [zoom, setZoom] = useState<{ t0: number; t1: number } | null>(null);
+
+  function selectRange(r: ChartRange) {
+    setRange(r);
+    setZoom(null);
+  }
 
   useEffect(() => {
     function load() {
-      fetch(`${BATTLES_API}/battles/active-players`)
-        .then(r => r.json())
-        .then((d: ActivePlayersData) => {
-          if (prevRef.current) {
-            const changed = ACTIVE_PLAYERS_ROWS
-              .filter(r => d[r.key].current !== prevRef.current![r.key].current)
-              .map(r => r.key);
-            if (changed.length) setGlowing(prev => new Set([...prev, ...changed]));
-          }
-          prevRef.current = d;
-          setData(d);
-        })
-        .catch(() => setData(null));
+      setHistoryError(false);
+      fetchActivePlayersHistory(range).then(setHistory).catch(() => setHistoryError(true));
     }
     load();
     const timer = setInterval(load, 300_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [range]);
+
+  const series: ChartSeriesInput[] | null = history ? [...ACTIVE_PLAYERS_ROWS]
+    .sort((a, b) => (a === "global" ? 1 : 0) - (b === "global" ? 1 : 0))
+    .map(key => ({
+      key, label: REGION_LABELS[lang][key], color: ACTIVE_REGION_COLORS[key], primary: key === "global",
+      points: downsampleCount(history.series[key] ?? []).map(p => ({ t: p.t, v: p.count })),
+    })) : null;
+
+  const collectedDays = history?.since != null ? (Date.now() - history.since) / 86_400_000 : 0;
+  const availableRanges = RANGES.filter(r => collectedDays >= RANGE_MIN_DAYS[r.key]);
 
   return (
-    <div className="relative rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-      <i
-        className="ti ti-info-circle absolute right-3 top-3 text-zinc-600"
-        title="Dados dos últimos 7 dias, comparado à semana anterior."
-      />
-      <h2 className="mb-3 text-sm font-bold text-zinc-100">Personagens em Atividade</h2>
-      {data === null ? (
-        <div className="py-8 text-center text-sm text-zinc-500">Carregando…</div>
-      ) : (
-        <div className="divide-y divide-zinc-800/60">
-          {ACTIVE_PLAYERS_ROWS.map(({ key, label }) => (
-            <div key={key} className="flex items-center justify-between gap-3 py-2.5">
-              <span className="text-sm text-zinc-300">{label}</span>
-              <div className="flex items-center gap-3">
-                <span
-                  className={`text-sm font-bold tabular-nums text-zinc-100${glowing.has(key) ? " dash-text-glow" : ""}`}
-                  onAnimationEnd={() => setGlowing(prev => { const n = new Set(prev); n.delete(key); return n; })}
-                >
-                  {data[key].current.toLocaleString("pt-BR")}
-                </span>
-                <DeltaBadge pct={data[key].delta_pct} />
-              </div>
-            </div>
+    <div className="flex h-full min-h-[300px] flex-col rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5">
+          <h2 className="text-sm font-bold text-zinc-100">{t("activePlayersTitle")}</h2>
+          <i className="ti ti-info-circle text-zinc-600" title={t("activePlayersTooltip")} />
+        </span>
+        <div className="flex gap-1 text-xs">
+          {zoom ? (
+            <button
+              onClick={() => setZoom(null)}
+              className="rounded-lg border border-amber-500 bg-amber-500/10 px-2 py-1 text-amber-300"
+            >
+              ↺ {t("resetZoom")}
+            </button>
+          ) : availableRanges.map(r => (
+            <button
+              key={r.key}
+              onClick={() => selectRange(r.key)}
+              className={`rounded-lg px-2 py-1 ${r.key === range ? "bg-amber-500/10 text-amber-300 border border-amber-500" : "text-zinc-400 hover:text-zinc-200 border border-transparent"}`}
+            >
+              {r.label}
+            </button>
           ))}
+        </div>
+      </div>
+      {historyError && <div className="flex flex-1 items-center justify-center text-center text-sm text-red-400">{t("chartLoadError")}</div>}
+      {!historyError && !series && <div className="min-h-0 flex-1"><ChartSkeleton /></div>}
+      {!historyError && series && (
+        <div className="min-h-0 flex-1">
+          <MultiLineChart
+            key={range} series={series} formatValue={v => v.toLocaleString("pt-BR")}
+            zoom={zoom} onZoomChange={setZoom}
+          />
         </div>
       )}
     </div>
   );
 }
 
-// ── Destaques do servidor ────────────────────────────────────────────────
-interface HighlightPlayer {
-  albion_player_id: string; name: string; guild_name: string | null; alliance_name: string | null;
-  region: string; appearances: number;
+// ── Destaques do servidor: ranking semanal de fama PvP por guilda ─────────
+// Reseta todo domingo 00:00 UTC (ver _week_start_utc no backend). Só conta
+// fama de batalha elegível: guilda com mais de 15 jogadores NESSA luta, luta
+// letal, com cura registrada de qualquer lado.
+interface FameGuild {
+  albion_guild_id: string; name: string; alliance_name: string | null; fame: number; avg_players: number;
 }
-const HIGHLIGHT_REGION_PREFIX: Record<string, string> = { americas: "am", asia: "as", europe: "eu" };
 
-function HighlightRow({ p, rank, isGlowing, onGlowEnd }: {
-  p: HighlightPlayer; rank: number; isGlowing?: boolean; onGlowEnd?: () => void;
+function GuildFameRow({ g, rank, isGlowing, isOvertaking, onGlowEnd, onOvertakeEnd }: {
+  g: FameGuild; rank: number; isGlowing?: boolean; isOvertaking?: boolean;
+  onGlowEnd?: () => void; onOvertakeEnd?: () => void;
 }) {
-  const prefix = HIGHLIGHT_REGION_PREFIX[p.region];
   return (
     <button
-      onClick={() => prefix && navigate(`/${prefix}/${encodeURIComponent(p.name)}`)}
-      className="flex w-full items-center gap-3 rounded px-1 py-2 text-left hover:bg-zinc-800/30"
+      onClick={() => navigate(`/guild/${encodeURIComponent(g.albion_guild_id)}`)}
+      onAnimationEnd={e => { if (e.animationName === "dash-rank-overtake") onOvertakeEnd?.(); }}
+      className={`flex w-full items-center gap-3 rounded px-1 py-2.5 text-left hover:bg-zinc-800/30${isOvertaking ? " dash-rank-overtake" : ""}`}
     >
       <span className="w-5 shrink-0 text-center text-xs font-bold text-zinc-500">{rank}</span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm text-zinc-200">{p.name}</div>
-        <div className="truncate text-[11px] text-zinc-600">
-          {p.guild_name ?? "Sem guilda"}{p.alliance_name && <span className="ml-1">[{p.alliance_name}]</span>}
-        </div>
+      <div className="min-w-0 flex-1 truncate text-sm text-zinc-200">
+        {g.alliance_name && <span className="text-zinc-500">[{g.alliance_name}] </span>}
+        {g.name}
+        <span className="ml-1.5 align-middle text-[10px] text-zinc-600">{g.avg_players}</span>
       </div>
       <span
         className={`shrink-0 text-xs font-semibold text-amber-400/80 tabular-nums${isGlowing ? " dash-text-glow" : ""}`}
-        onAnimationEnd={onGlowEnd}
+        onAnimationEnd={e => { e.stopPropagation(); onGlowEnd?.(); }}
       >
-        {p.appearances} lutas
+        {silverShort(g.fame)}
       </span>
     </button>
   );
 }
 
-function ServerHighlightsCard() {
-  const { servers } = useServer();
-  const [players, setPlayers] = useState<HighlightPlayer[] | null>(null);
-  const prevRef = useRef<Map<string, number>>(new Map());
+function ServerHighlightsCard({ onSeeAll }: { onSeeAll: () => void }) {
+  const t = useT();
+  const { servers } = useLang();
+  const [guilds, setGuilds] = useState<FameGuild[] | null>(null);
+  const prevFameRef = useRef<Map<string, number>>(new Map());
+  const prevOrderRef = useRef<string[]>([]);
   const [glowing, setGlowing] = useState<Set<string>>(new Set());
+  const [overtaking, setOvertaking] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     function load() {
       const regions = servers.map(s => SERVER_TO_REGION[s]).join(",");
       fetch(`${BATTLES_API}/battles/highlights?regions=${regions}`)
         .then(r => r.json())
-        .then((d: { players: HighlightPlayer[] }) => {
-          if (prevRef.current.size) {
-            const changed = d.players
-              .filter(p => prevRef.current.get(p.albion_player_id) !== p.appearances)
-              .map(p => p.albion_player_id);
-            if (changed.length) setGlowing(prev => new Set([...prev, ...changed]));
+        .then((d: { guilds: FameGuild[] }) => {
+          const newOrder = d.guilds.map(g => g.albion_guild_id);
+          if (prevFameRef.current.size) {
+            const changedFame = d.guilds
+              .filter(g => prevFameRef.current.get(g.albion_guild_id) !== g.fame)
+              .map(g => g.albion_guild_id);
+            if (changedFame.length) setGlowing(prev => new Set([...prev, ...changedFame]));
+
+            // "Passou" alguém = subiu de posição E foi a própria fama dela que
+            // mudou nesse ciclo (senão é só reordenação por causa de outra
+            // guilda, não a animação de "ultrapassagem" pedida).
+            const changedFameSet = new Set(changedFame);
+            const prevIndex = new Map(prevOrderRef.current.map((id, i) => [id, i]));
+            const movedUp = newOrder.filter((id, i) => {
+              const before = prevIndex.get(id);
+              return before !== undefined && i < before && changedFameSet.has(id);
+            });
+            if (movedUp.length) setOvertaking(prev => new Set([...prev, ...movedUp]));
           }
-          prevRef.current = new Map(d.players.map(p => [p.albion_player_id, p.appearances]));
-          setPlayers(d.players);
+          prevFameRef.current = new Map(d.guilds.map(g => [g.albion_guild_id, g.fame]));
+          prevOrderRef.current = newOrder;
+          setGuilds(d.guilds);
         })
-        .catch(() => setPlayers([]));
+        .catch(() => setGuilds([]));
     }
     load();
     const timer = setInterval(load, 300_000);
@@ -375,22 +249,296 @@ function ServerHighlightsCard() {
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-bold text-zinc-100">Destaques do Servidor</h2>
-        <span title="Considera apenas lutas dos últimos 7 dias (5+ jogadores, com cura)" className="flex h-4 w-4 cursor-default items-center justify-center rounded-full border border-zinc-600 text-[10px] text-zinc-400">i</span>
+        <span className="flex items-center gap-1.5">
+          <h2 className="text-sm font-bold text-zinc-100">{t("serverHighlightsTitle")}</h2>
+          <i className="ti ti-info-circle text-zinc-600" title={t("serverHighlightsTooltip")} />
+        </span>
+        <button onClick={onSeeAll} className="text-xs text-zinc-500 hover:text-amber-300">{t("seeAllHighscoresLink")}</button>
       </div>
-      {players === null && <div className="py-8 text-center text-sm text-zinc-500">Carregando…</div>}
-      {players?.length === 0 && <div className="py-8 text-center text-sm text-zinc-500">Sem dados suficientes ainda.</div>}
+      {guilds === null && <div className="py-8 text-center text-sm text-zinc-500">{t("loading")}</div>}
+      {guilds?.length === 0 && <div className="py-8 text-center text-sm text-zinc-500">{t("notEnoughData")}</div>}
       <div className="divide-y divide-zinc-800/60">
-        {players?.map((p, i) => (
-        <HighlightRow
-          key={p.albion_player_id}
-          p={p}
+        {guilds?.map((g, i) => (
+        <GuildFameRow
+          key={g.albion_guild_id}
+          g={g}
           rank={i + 1}
-          isGlowing={glowing.has(p.albion_player_id)}
-          onGlowEnd={() => setGlowing(prev => { const n = new Set(prev); n.delete(p.albion_player_id); return n; })}
+          isGlowing={glowing.has(g.albion_guild_id)}
+          isOvertaking={overtaking.has(g.albion_guild_id)}
+          onGlowEnd={() => setGlowing(prev => { const n = new Set(prev); n.delete(g.albion_guild_id); return n; })}
+          onOvertakeEnd={() => setOvertaking(prev => { const n = new Set(prev); n.delete(g.albion_guild_id); return n; })}
         />
       ))}
       </div>
+    </div>
+  );
+}
+
+// ── Chart primitives (compartilhado entre Gold Price e Active Players) ────
+// O card preenche a altura do quadrante (ver GoldPriceCard/ActivePlayersCard),
+// e essa altura varia (300px mínimo, mas cresce se o card vizinho for mais
+// alto) — um viewBox FIXO com preserveAspectRatio="none" pra preencher isso
+// esticava o desenho de forma não-uniforme (X e Y com escalas diferentes),
+// deixando tudo "espremido" (texto, círculos, tudo distorcido). Em vez
+// disso, viewBox = tamanho REAL medido do container (useElementSize) → 1
+// unidade de viewBox = 1px real, escala sempre 1:1, sem distorção nenhuma.
+// PAD_* já são pixels reais nesse sistema (não proporção de uma caixa
+// lógica de 320×115). PAD_L/PAD_R quase simétricos de propósito — o rótulo
+// de valor é ancorado à direita (textAnchor="end"), não precisa de uma
+// margem reservada enorme, e uma diferença grande puxa a linha visivelmente
+// pra esquerda (reportado).
+const PAD_L = 32, PAD_R = 48, PAD_TOP = 16, PAD_BOT = 32;
+
+function chartLayout(w: number, h: number) {
+  const plotW = Math.max(w - PAD_L - PAD_R, 1);
+  const plotH = Math.max(h - PAD_TOP - PAD_BOT, 1);
+  return { plotW, plotH, baseY: PAD_TOP + plotH };
+}
+
+// Mede o container em pixels reais (ResizeObserver) — usado pra dar ao
+// gráfico um viewBox que bate exatamente com o tamanho renderizado, sem
+// precisar esticar/distorcer nada. Default 320×160 é só o primeiro frame,
+// antes do observer disparar a primeira medição.
+function useElementSize<T extends Element>(): [React.RefObject<T>, { w: number; h: number }] {
+  const ref = useRef<T>(null);
+  const [size, setSize] = useState({ w: 320, h: 160 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      const { width, height } = entries[0].contentRect;
+      if (width > 0 && height > 0) setSize({ w: width, h: height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, size];
+}
+
+type ChartRange = "all" | "1y" | "6m" | "1m";
+function useRanges(): { key: ChartRange; label: string }[] {
+  const t = useT();
+  return [
+    { key: "1m", label: t("range1m") },
+    { key: "6m", label: t("range6m") },
+    { key: "1y", label: t("range1y") },
+    { key: "all", label: t("rangeAll") },
+  ];
+}
+
+type ChartPoint = { t: number; v: number };
+type ChartSeriesInput = { key: string; label: string; color: string; points: ChartPoint[]; primary: boolean };
+
+// passo "redondo" de grade horizontal quando o chamador não fixa um (preço
+// de ouro usa um fixo de 5000; contagem de jogadores varia demais pra isso).
+function niceGridStep(range: number): number {
+  const raw = range / 5;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  const norm = raw / mag;
+  const mult = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+  return mult * mag;
+}
+
+function ChartSkeleton() {
+  const t = useT();
+  const [ref, { w, h }] = useElementSize<HTMLDivElement>();
+  const { plotW, baseY } = chartLayout(w, h);
+  return (
+    <div ref={ref} className="h-full">
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="100%" style={{ display: "block", overflow: "visible" }}>
+        {Array.from({ length: 6 }, (_, i) => (
+          <line key={i} x1={PAD_L + (i / 5) * plotW} x2={PAD_L + (i / 5) * plotW} y1={PAD_TOP} y2={baseY}
+            stroke="var(--border)" strokeWidth="0.5" opacity="0.5" />
+        ))}
+        <text x={w / 2} y={h / 2} textAnchor="middle" fontSize="12" fill="var(--muted)">{t("loading")}</text>
+      </svg>
+    </div>
+  );
+}
+
+// Arraste horizontal no gráfico = zoom no trecho selecionado (limpa com o
+// botão "resetar zoom"). `key={range}` no chamador remonta o componente
+// (e descarta o zoom) toda vez que o range muda — mais simples que
+// sincronizar zoom com range via effect.
+function nearestChartPoint(points: ChartPoint[], t: number): ChartPoint | null {
+  if (!points.length) return null;
+  let best = points[0], bestDist = Math.abs(points[0].t - t);
+  for (const p of points) {
+    const d = Math.abs(p.t - t);
+    if (d < bestDist) { best = p; bestDist = d; }
+  }
+  return best;
+}
+
+// Zoom é controlado pelo card pai (vira o botão "resetar" no lugar dos
+// filtros de período — ver GoldPriceCard/ActivePlayersCard); arrasto e hover
+// continuam internos, são só interação transitória do próprio gráfico.
+function MultiLineChart({ series, formatValue, gridStep, zoom, onZoomChange }: {
+  series: ChartSeriesInput[]; formatValue: (v: number) => string; gridStep?: number;
+  zoom: { t0: number; t1: number } | null; onZoomChange: (z: { t0: number; t1: number } | null) => void;
+}) {
+  const t = useT();
+  const [svgRef, { w, h }] = useElementSize<SVGSVGElement>();
+  const { plotW, plotH, baseY } = chartLayout(w, h);
+  const [drag, setDrag] = useState<{ x0: number; x1: number } | null>(null);
+  const [hoverX, setHoverX] = useState<number | null>(null);
+
+  const allPoints = useMemo(() => series.flatMap(s => s.points), [series]);
+  if (allPoints.length < 1) {
+    return <div className="flex h-40 items-center justify-center text-sm text-zinc-500">{t("noDataForPeriod")}</div>;
+  }
+
+  const fullMinT = Math.min(...allPoints.map(p => p.t));
+  const fullMaxT = Math.max(...allPoints.map(p => p.t));
+  const minT = zoom ? Math.max(zoom.t0, fullMinT) : fullMinT;
+  const maxT = zoom ? Math.min(zoom.t1, fullMaxT) : fullMaxT;
+  const tSpan = Math.max(maxT - minT, 1);
+
+  const visible = series.map(s => ({ ...s, points: s.points.filter(p => p.t >= minT && p.t <= maxT) }));
+  const values = visible.flatMap(s => s.points.map(p => p.v));
+  if (!values.length) {
+    return <div className="flex h-40 items-center justify-center text-sm text-zinc-500">{t("noDataForPeriod")}</div>;
+  }
+  const vLo = Math.min(...values), vHi = Math.max(...values);
+  const vPad = Math.max((vHi - vLo) * 0.12, 1);
+  const yLo = vLo - vPad, yHi = vHi + vPad, yRange = Math.max(yHi - yLo, 1);
+
+  const cx = (t: number) => PAD_L + ((t - minT) / tSpan) * plotW;
+  const cy = (v: number) => PAD_TOP + (1 - (v - yLo) / yRange) * plotH;
+  const path = (pts: ChartPoint[]) => pts.map((p, i) => `${i === 0 ? "M" : "L"}${cx(p.t).toFixed(1)},${cy(p.v).toFixed(1)}`).join(" ");
+
+  const step = gridStep ?? niceGridStep(yRange);
+  const gridLines: number[] = [];
+  for (let v = Math.ceil(yLo / step) * step; v <= yHi; v += step) gridLines.push(v);
+
+  function viewBoxX(clientX: number): number {
+    const rect = svgRef.current!.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) * w;
+  }
+  function xToT(x: number): number {
+    const frac = Math.min(1, Math.max(0, (x - PAD_L) / plotW));
+    return minT + frac * tSpan;
+  }
+  function handleDown(e: React.MouseEvent<SVGSVGElement>) {
+    e.preventDefault(); // sem isso o arrasto seleciona o texto da página inteira (título, legendas etc.)
+    const x = viewBoxX(e.clientX);
+    setDrag({ x0: x, x1: x });
+  }
+  function handleMove(e: React.MouseEvent<SVGSVGElement>) {
+    const x = viewBoxX(e.clientX);
+    if (drag) setDrag(d => d && { ...d, x1: x });
+    else setHoverX(x);
+  }
+  function handleUp() {
+    setHoverX(null);
+    if (!drag) return;
+    const xa = Math.min(drag.x0, drag.x1), xb = Math.max(drag.x0, drag.x1);
+    setDrag(null);
+    if (xb - xa < 6) return; // arrasto curto demais = clique, ignora
+    onZoomChange({ t0: xToT(xa), t1: xToT(xb) });
+  }
+  function handleContextMenu(e: React.MouseEvent<SVGSVGElement>) {
+    if (!zoom) return; // sem zoom ativo, deixa o menu de contexto normal do navegador
+    e.preventDefault();
+    onZoomChange(null);
+  }
+
+  const ordered = [...visible].sort((a, b) => (a.primary ? 1 : 0) - (b.primary ? 1 : 0));
+
+  // tooltip de hover: ponto mais próximo do mouse em CADA série (podem ter
+  // timestamps levemente diferentes entre si — cada uma foi reduzida por
+  // downsample independentemente), agrupados sob o horário da série primária.
+  const hoverT = drag || hoverX === null ? null : xToT(hoverX);
+  const hoverAnchor = hoverT === null ? null : nearestChartPoint(
+    visible.find(s => s.primary)?.points ?? visible[0]?.points ?? [], hoverT,
+  );
+  const hoverRows = hoverT === null ? [] : visible
+    .map(s => ({ s, p: nearestChartPoint(s.points, hoverT) }))
+    .filter((r): r is { s: typeof visible[number]; p: ChartPoint } => r.p !== null);
+
+  return (
+    <div className="relative h-full">
+      <svg
+        ref={svgRef} viewBox={`0 0 ${w} ${h}`} width="100%" height="100%"
+        style={{ display: "block", overflow: "visible", cursor: "crosshair", userSelect: "none" }}
+        onMouseDown={handleDown} onMouseMove={handleMove} onMouseUp={handleUp} onMouseLeave={handleUp}
+        onContextMenu={handleContextMenu}
+      >
+        {Array.from({ length: 6 }, (_, i) => (
+          <line key={i} x1={PAD_L + (i / 5) * plotW} x2={PAD_L + (i / 5) * plotW} y1={PAD_TOP} y2={baseY}
+            stroke="var(--border)" strokeWidth="0.5" opacity="0.5" />
+        ))}
+        {gridLines.map(v => (
+          <line key={v} x1={PAD_L} x2={PAD_L + plotW} y1={cy(v)} y2={cy(v)}
+            stroke="var(--border)" strokeWidth="0.5" opacity="0.5" />
+        ))}
+        {[0, 1, 2, 3].map(i => {
+          const tt = minT + (i / 3) * tSpan;
+          return (
+            <text key={i} x={cx(tt)} y={baseY + 16} textAnchor="middle" fontSize="10" fill="var(--muted)">
+              {dateUTC(new Date(tt).toISOString())}
+            </text>
+          );
+        })}
+        {drag && (
+          <rect x={Math.min(drag.x0, drag.x1)} y={PAD_TOP} width={Math.abs(drag.x1 - drag.x0)} height={plotH}
+            fill="var(--gold, #f59e0b)" opacity={0.15} />
+        )}
+        {ordered.map(s => {
+          // Cada série é filtrada/downsample de forma independente — uma
+          // pode ficar sem NENHUM ponto no trecho visível (zoom estreito,
+          // ou região com histórico mais curto) mesmo com outras series
+          // cheias. Sem esse guard, s.points[-1] vira undefined e
+          // cx(last.t) explode (TypeError não tratado = tela em branco).
+          if (!s.points.length) return null;
+          const first = s.points[0], last = s.points[s.points.length - 1];
+          return (
+            <g key={s.key} opacity={s.primary ? 1 : 0.3}>
+              <path d={path(s.points)} fill="none" stroke={s.color} strokeWidth={s.primary ? 1.8 : 1.2} strokeLinejoin="round" />
+              <circle cx={cx(last.t)} cy={cy(last.v)} r={s.primary ? 1.6 : 1.4} fill={s.color} />
+              <text x={2} y={cy(first.v) + 4} fontSize="11" fontWeight="700" fill={s.color}>{s.label}</text>
+              {s.primary && (
+                <text x={w - 2} y={cy(last.v) + 4} textAnchor="end" fontSize="11" fontWeight="700" fill={s.color}>
+                  {formatValue(last.v)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+        {hoverAnchor && (
+          <g pointerEvents="none">
+            <line x1={cx(hoverAnchor.t)} x2={cx(hoverAnchor.t)} y1={PAD_TOP} y2={baseY}
+              stroke="var(--muted)" strokeWidth="0.4" strokeDasharray="2,2" opacity="0.7" />
+            {hoverRows.map(({ s, p }) => (
+              <circle key={s.key} cx={cx(p.t)} cy={cy(p.v)} r={2.2} fill={s.color} stroke="#000" strokeWidth={0.5} />
+            ))}
+            {(() => {
+              const boxW = 112, boxH = 20 + hoverRows.length * 14;
+              const rawX = cx(hoverAnchor.t) + 5;
+              const boxX = rawX + boxW > w ? cx(hoverAnchor.t) - 5 - boxW : rawX;
+              const boxY = Math.min(Math.max(PAD_TOP, cy(hoverAnchor.v) - boxH / 2), baseY - boxH);
+              const iso = new Date(hoverAnchor.t).toISOString();
+              return (
+                <g transform={`translate(${boxX},${boxY})`}>
+                  <rect width={boxW} height={boxH} rx={3} fill="#18181b" stroke="var(--border)" strokeWidth="0.5" opacity="0.95" />
+                  <text x={7} y={14} fontSize="10" fontWeight="700" fill="var(--text, #e4e4e7)">
+                    {dateUTC(iso)} {iso.slice(11, 16)} UTC
+                  </text>
+                  {hoverRows.map(({ s, p }, i) => (
+                    <g key={s.key} transform={`translate(7,${26 + i * 14})`}>
+                      <circle cx={2.5} cy={-3.5} r={2.5} fill={s.color} />
+                      <text x={9} y={0} fontSize="10" fill="var(--muted)">{s.label}: </text>
+                      <text x={9 + s.label.length * 5.6 + 8} y={0} fontSize="10" fontWeight="700" fill="var(--text, #e4e4e7)">
+                        {formatValue(p.v)}
+                      </text>
+                    </g>
+                  ))}
+                </g>
+              );
+            })()}
+          </g>
+        )}
+      </svg>
     </div>
   );
 }
@@ -407,27 +555,21 @@ const SERVERS: GameServer[] = ["europe", "west", "east"];
 const SERVER_COLORS: Record<GameServer, string> = { europe: "#38bdf8", west: "#34d399", east: "#fbbf24" };
 
 type GoldPoint = { t: number; price: number };
-type GoldRange = "all" | "1y" | "6m" | "1m";
-const RANGES: { key: GoldRange; label: string }[] = [
-  { key: "1m", label: "1 mês" },
-  { key: "6m", label: "6 meses" },
-  { key: "1y", label: "1 ano" },
-  { key: "all", label: "Tudo" },
-];
 // histórico de ouro existe desde dez/2017 (checado direto na API) — "Tudo"
-// busca a partir daí.
-const RANGE_START: Record<GoldRange, () => Date> = {
+// busca a partir daí; mesma data usada na legenda "coletando desde".
+const GOLD_SINCE = new Date("2017-01-01T00:00:00Z");
+const RANGE_START: Record<ChartRange, () => Date> = {
   "1m": () => new Date(Date.now() - 31 * 86_400_000),
   "6m": () => new Date(Date.now() - 183 * 86_400_000),
   "1y": () => new Date(Date.now() - 366 * 86_400_000),
-  all: () => new Date("2017-01-01T00:00:00Z"),
+  all: () => GOLD_SINCE,
 };
 
 function mmddyyyy(d: Date): string {
   return `${d.getUTCMonth() + 1}-${d.getUTCDate()}-${d.getUTCFullYear()}`;
 }
 
-async function fetchGoldHistory(server: GameServer, range: GoldRange): Promise<GoldPoint[]> {
+async function fetchGoldHistory(server: GameServer, range: ChartRange): Promise<GoldPoint[]> {
   const date = mmddyyyy(RANGE_START[range]());
   const endDate = mmddyyyy(new Date());
   const url = `${GOLD_BASE[server]}/api/v2/stats/gold.json?date=${date}&end_date=${endDate}`;
@@ -443,123 +585,39 @@ async function fetchGoldHistory(server: GameServer, range: GoldRange): Promise<G
 // O período "Tudo" tem ~70k pontos horários — reduz pra uma quantidade
 // renderizável sem perder a forma da curva, fazendo a média de cada bucket.
 const TARGET_POINTS = 150;
-function downsample(points: GoldPoint[]): GoldPoint[] {
+function downsample<T extends { t: number }>(points: T[], avg: (bucket: T[]) => Omit<T, "t">): T[] {
   if (points.length <= TARGET_POINTS) return points;
   const bucketSize = points.length / TARGET_POINTS;
-  const out: GoldPoint[] = [];
+  const out: T[] = [];
   for (let i = 0; i < TARGET_POINTS; i++) {
     const start = Math.floor(i * bucketSize);
     const end = Math.max(start + 1, Math.floor((i + 1) * bucketSize));
     const bucket = points.slice(start, end);
     if (!bucket.length) continue;
-    out.push({
-      t: bucket[Math.floor(bucket.length / 2)].t,
-      price: Math.round(bucket.reduce((s, p) => s + p.price, 0) / bucket.length),
-    });
+    out.push({ t: bucket[Math.floor(bucket.length / 2)].t, ...avg(bucket) } as T);
   }
   return out;
 }
 
-// H mais baixo (era 160) — pra ficar do tamanho do quadrante de Personagens
-// em Atividade ao lado, em vez de deixar um buraco vazio nele (pedido explícito).
-const VW = 320, H = 115, PAD_L = 22, PAD_R = 56, PAD_TOP = 10, PAD_BOT = 22;
-const PLOT_W = VW - PAD_L - PAD_R, PLOT_H = H - PAD_TOP - PAD_BOT, BASE_Y = PAD_TOP + PLOT_H;
-
-function GoldChartSkeleton() {
-  return (
-    <svg viewBox={`0 0 ${VW} ${H}`} width="100%" style={{ display: "block", overflow: "visible" }}>
-      {Array.from({ length: 6 }, (_, i) => (
-        <line key={i} x1={PAD_L + (i / 5) * PLOT_W} x2={PAD_L + (i / 5) * PLOT_W} y1={PAD_TOP} y2={BASE_Y}
-          stroke="var(--border)" strokeWidth="0.3" opacity="0.5" />
-      ))}
-      <text x={VW / 2} y={H / 2} textAnchor="middle" fontSize="10" fill="var(--muted)">Carregando…</text>
-    </svg>
-  );
-}
-
-function GoldPriceChart({ data, range, primary }: {
-  data: Record<GameServer, GoldPoint[]>; range: GoldRange; primary: GameServer;
-}) {
-  const cutoff = RANGE_START[range]().getTime();
-  const series = useMemo(() => SERVERS.map(s => ({
-    server: s,
-    points: downsample(data[s].filter(p => p.t >= cutoff)),
-  })), [data, cutoff]);
-
-  const allPoints = series.flatMap(s => s.points);
-  if (allPoints.length < 2) {
-    return <div className="flex h-40 items-center justify-center text-sm text-zinc-500">Sem dados pra esse período.</div>;
-  }
-
-  const minT = Math.min(...allPoints.map(p => p.t));
-  const maxT = Math.max(...allPoints.map(p => p.t));
-  const tSpan = Math.max(maxT - minT, 1);
-  const prices = allPoints.map(p => p.price);
-  const pLo = Math.min(...prices), pHi = Math.max(...prices);
-  const pPad = Math.max((pHi - pLo) * 0.12, 1);
-  const yLo = pLo - pPad, yHi = pHi + pPad, yRange = Math.max(yHi - yLo, 1);
-
-  const cx = (t: number) => PAD_L + ((t - minT) / tSpan) * PLOT_W;
-  const cy = (price: number) => PAD_TOP + (1 - (price - yLo) / yRange) * PLOT_H;
-  const path = (pts: GoldPoint[]) => pts.map((p, i) => `${i === 0 ? "M" : "L"}${cx(p.t).toFixed(1)},${cy(p.price).toFixed(1)}`).join(" ");
-
-  // servidor escolhido nas configurações desenhado por último (fica em cima
-  // quando as linhas se cruzam) — os outros 2 servidores "disputam" junto,
-  // todos sempre visíveis (pedido explícito), só com opacidade bem mais baixa
-  // pra dar ênfase ao escolhido.
-  const ordered = [...series].sort((a, b) => (a.server === primary ? 1 : 0) - (b.server === primary ? 1 : 0));
-
-  const GOLD_GRID_STEP = 5000;
-  const goldGridLines: number[] = [];
-  for (let p = Math.ceil(yLo / GOLD_GRID_STEP) * GOLD_GRID_STEP; p <= yHi; p += GOLD_GRID_STEP) {
-    goldGridLines.push(p);
-  }
-
-  return (
-    <svg viewBox={`0 0 ${VW} ${H}`} width="100%" style={{ display: "block", overflow: "visible" }}>
-      {Array.from({ length: 6 }, (_, i) => (
-        <line key={i} x1={PAD_L + (i / 5) * PLOT_W} x2={PAD_L + (i / 5) * PLOT_W} y1={PAD_TOP} y2={BASE_Y}
-          stroke="var(--border)" strokeWidth="0.3" opacity="0.5" />
-      ))}
-      {goldGridLines.map(p => (
-        <line key={p} x1={PAD_L} x2={PAD_L + PLOT_W} y1={cy(p)} y2={cy(p)}
-          stroke="var(--border)" strokeWidth="0.3" opacity="0.5" />
-      ))}
-      {[0, 1, 2, 3].map(i => {
-        const t = minT + (i / 3) * tSpan;
-        return (
-          <text key={i} x={cx(t)} y={BASE_Y + 14} textAnchor="middle" fontSize="8" fill="var(--muted)">
-            {dateUTC(new Date(t).toISOString())}
-          </text>
-        );
-      })}
-      {ordered.map(({ server, points }) => {
-        const color = SERVER_COLORS[server];
-        const isPrimary = server === primary;
-        const first = points[0], last = points[points.length - 1];
-        return (
-          <g key={server} opacity={isPrimary ? 1 : 0.3}>
-            <path d={path(points)} fill="none" stroke={color} strokeWidth={isPrimary ? 1.8 : 1.2} strokeLinejoin="round" />
-            <text x={2} y={cy(first.price) + 3} fontSize="9" fontWeight="700" fill={color}>{SERVER_LABELS[server]}</text>
-            {isPrimary && (
-              <text x={PAD_L + PLOT_W + 4} y={cy(last.price) + 3} fontSize="9" fontWeight="700" fill={color}>
-                {silver(last.price)}
-              </text>
-            )}
-          </g>
-        );
-      })}
-    </svg>
-  );
+function downsampleGold(points: GoldPoint[]): GoldPoint[] {
+  return downsample(points, bucket => ({ price: Math.round(bucket.reduce((s, p) => s + p.price, 0) / bucket.length) }));
 }
 
 function GoldPriceCard() {
-  const { server: primary } = useServer();
-  const [range, setRange] = useState<GoldRange>("6m");
-  const [cache, setCache] = useState<Partial<Record<GoldRange, Record<GameServer, GoldPoint[]>>>>({});
+  const t = useT();
+  const RANGES = useRanges();
+  const { server: primary } = useLang();
+  const [range, setRange] = useState<ChartRange>("6m");
+  const [cache, setCache] = useState<Partial<Record<ChartRange, Record<GameServer, GoldPoint[]>>>>({});
   const [error, setError] = useState(false);
   const lastTRef = useRef<number>(0);
   const [chartGlowing, setChartGlowing] = useState(false);
+  const [zoom, setZoom] = useState<{ t0: number; t1: number } | null>(null);
+
+  function selectRange(r: ChartRange) {
+    setRange(r);
+    setZoom(null);
+  }
 
   useEffect(() => {
     function fetchRange(isRefresh = false) {
@@ -588,16 +646,30 @@ function GoldPriceCard() {
   }, [range]);
 
   const data = cache[range];
+  const cutoff = RANGE_START[range]().getTime();
+  const series: ChartSeriesInput[] | null = data ? [...SERVERS]
+    .sort((a, b) => (a === primary ? 1 : 0) - (b === primary ? 1 : 0))
+    .map(s => ({
+      key: s, label: SERVER_LABELS[s], color: SERVER_COLORS[s], primary: s === primary,
+      points: downsampleGold(data[s].filter(p => p.t >= cutoff)).map(p => ({ t: p.t, v: p.price })),
+    })) : null;
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+    <div className="flex h-full min-h-[300px] flex-col rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-bold text-zinc-100">Preço do Ouro</h2>
+        <h2 className="text-sm font-bold text-zinc-100">{t("goldPriceTitle")}</h2>
         <div className="flex gap-1 text-xs">
-          {RANGES.map(r => (
+          {zoom ? (
+            <button
+              onClick={() => setZoom(null)}
+              className="rounded-lg border border-amber-500 bg-amber-500/10 px-2 py-1 text-amber-300"
+            >
+              ↺ {t("resetZoom")}
+            </button>
+          ) : RANGES.map(r => (
             <button
               key={r.key}
-              onClick={() => setRange(r.key)}
+              onClick={() => selectRange(r.key)}
               className={`rounded-lg px-2 py-1 ${r.key === range ? "bg-amber-500/10 text-amber-300 border border-amber-500" : "text-zinc-400 hover:text-zinc-200 border border-transparent"}`}
             >
               {r.label}
@@ -605,14 +677,14 @@ function GoldPriceCard() {
           ))}
         </div>
       </div>
-      {error && <div className="py-8 text-center text-sm text-red-400">Não foi possível carregar o preço do ouro.</div>}
-      {!error && !data && <GoldChartSkeleton />}
-      {!error && data && (
+      {error && <div className="flex flex-1 items-center justify-center text-center text-sm text-red-400">{t("goldPriceError")}</div>}
+      {!error && !series && <div className="min-h-0 flex-1"><ChartSkeleton /></div>}
+      {!error && series && (
         <div
-          className={chartGlowing ? "dash-glow rounded-lg" : ""}
+          className={`min-h-0 flex-1${chartGlowing ? " dash-glow rounded-lg" : ""}`}
           onAnimationEnd={() => setChartGlowing(false)}
         >
-          <GoldPriceChart data={data} range={range} primary={primary} />
+          <MultiLineChart key={range} series={series} formatValue={silver} gridStep={5000} zoom={zoom} onZoomChange={setZoom} />
         </div>
       )}
     </div>
@@ -625,116 +697,15 @@ function GoldPriceCard() {
 // fixo e sem busca/data (pedido explícito: nada de filtro aqui).
 const BATTLES_API = import.meta.env.DEV ? "http://localhost:8000" : "";
 const SERVER_TO_REGION: Record<GameServer, string> = { west: "americas", east: "asia", europe: "europe" };
-const BATTLE_REGION_LABELS: Record<string, string> = { americas: "Americas", europe: "Europe", asia: "Asia" };
 const RECENT_BATTLES_LIMIT = 5;
 const DEFAULT_MIN_PLAYERS = 5;
 const DEFAULT_MIN_KILLS = 5;
 
-interface RecentFaction { guild_id: string; guild_name: string; alliance_name: string | null; kills: number; player_count: number }
-interface RecentBattle {
-  public_id: string; region: string; start_time: string;
-  total_fame: number; kill_count: number; cluster: string | null;
-  factions: RecentFaction[];
-}
-
-// Heatmap de kills — mesmas cores/lógica da listagem de batalhas (ver BattleTracker.tsx).
-const BATTLE_HEAT_MAX: [number, number, number] = [0x66, 0x71, 0x60];
-const BATTLE_HEAT_MIN: [number, number, number] = [0x52, 0x52, 0x5c];
-
-function battleHeatColor(kills: number, maxKills: number, minKills: number): string {
-  const t = maxKills === minKills ? 0 : (maxKills - kills) / (maxKills - minKills);
-  const [r, g, b] = BATTLE_HEAT_MAX.map((c, i) => Math.round(c + (BATTLE_HEAT_MIN[i] - c) * t));
-  return `rgb(${r}, ${g}, ${b})`;
-}
-
-function battleFactionTag(f: RecentFaction): string {
-  return f.alliance_name ? `[${f.alliance_name}]` : f.guild_name;
-}
-
-function battleFameShort(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
-  return n > 0 ? String(n) : "—";
-}
-
-function battleTimeAgo(ts: string): string {
-  const diff = Date.now() - new Date(ts).getTime();
-  const m = Math.floor(diff / 60_000);
-  if (m < 60) return `${m}m atrás`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h atrás`;
-  return `${Math.floor(h / 24)}d atrás`;
-}
-
-/** dd/mm hh:mm UTC, ou dd/mm/yy hh:mm se for de um ano anterior ao atual (UTC). */
-function battleDateTimeUTC(ts: string): string {
-  const d = new Date(ts);
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const min = String(d.getUTCMinutes()).padStart(2, "0");
-  const isOld = d.getUTCFullYear() !== new Date().getUTCFullYear();
-  if (isOld) {
-    const yy = String(d.getUTCFullYear()).slice(-2);
-    return `${dd}/${mm}/${yy} ${hh}:${min}`;
-  }
-  return `${dd}/${mm} ${hh}:${min} UTC`;
-}
-
-function RecentBattleRow({ b, isNew, onGlowEnd }: { b: RecentBattle; isNew?: boolean; onGlowEnd?: () => void }) {
-  const maxFactionKills = b.factions.length ? Math.max(...b.factions.map(f => f.kills)) : 0;
-  const minFactionKills = b.factions.length ? Math.min(...b.factions.map(f => f.kills)) : 0;
-  return (
-    <a
-      href={`/${b.public_id}`}
-      onClick={e => {
-        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-        e.preventDefault();
-        navigate(`/${b.public_id}`);
-      }}
-      className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-800/40${isNew ? " dash-glow" : ""}`}
-      onAnimationEnd={onGlowEnd}
-    >
-      <span className="w-24 shrink-0 flex flex-col leading-tight">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-600">
-          {BATTLE_REGION_LABELS[b.region] ?? b.region}
-        </span>
-        <span className="text-xs text-zinc-500 tabular-nums">{battleDateTimeUTC(b.start_time)}</span>
-      </span>
-
-      <span className="flex-1 min-w-0 text-center">
-        {b.factions.length > 0 ? (
-          <span className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-sm font-semibold">
-            {b.factions.map(f => (
-              <span key={f.guild_id} className="flex flex-col items-center leading-tight">
-                <span style={{ color: battleHeatColor(f.kills, maxFactionKills, minFactionKills) }}>
-                  {battleFactionTag(f)}
-                </span>
-                <span className="text-[10px] font-normal text-zinc-600">{f.player_count}</span>
-              </span>
-            ))}
-          </span>
-        ) : (
-          <div className="truncate text-sm text-zinc-200" title={b.cluster ?? ""}>
-            {b.cluster ?? "Zona desconhecida"}
-          </div>
-        )}
-      </span>
-
-      <span className="w-12 shrink-0 text-right text-xs font-semibold text-amber-400/80 tabular-nums">
-        {battleFameShort(b.total_fame)}
-      </span>
-      <span className="w-16 shrink-0 text-right text-xs text-zinc-500 tabular-nums">{b.kill_count} kills</span>
-      <span className="w-16 shrink-0 text-right text-xs text-zinc-600 tabular-nums">{battleTimeAgo(b.start_time)}</span>
-    </a>
-  );
-}
-
 const STAGGER_MS = 350;
 
 function BattlesCard({ onSeeAll }: { onSeeAll: () => void }) {
-  const { servers } = useServer();
+  const t = useT();
+  const { servers } = useLang();
   const [battles, setBattles] = useState<RecentBattle[] | null>(null);
   const knownIdsRef = useRef<Set<string>>(new Set());
   const insertQueueRef = useRef<RecentBattle[]>([]);
@@ -805,12 +776,12 @@ function BattlesCard({ onSeeAll }: { onSeeAll: () => void }) {
 
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-      <button onClick={onSeeAll} className="group mb-3 flex w-full items-center justify-between text-left">
-        <h2 className="text-sm font-bold text-zinc-100 group-hover:text-amber-300">Batalhas Recentes</h2>
-        <span className="text-xs text-zinc-500 group-hover:text-amber-300">Ver todas →</span>
-      </button>
-      {battles === null && <div className="py-8 text-center text-sm text-zinc-500">Carregando…</div>}
-      {battles?.length === 0 && <div className="py-8 text-center text-sm text-zinc-500">Nenhuma batalha encontrada.</div>}
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-bold text-zinc-100">{t("recentBattlesTitle")}</h2>
+        <button onClick={onSeeAll} className="text-xs text-zinc-500 hover:text-amber-300">{t("seeAllBattlesLink")}</button>
+      </div>
+      {battles === null && <div className="py-8 text-center text-sm text-zinc-500">{t("loading")}</div>}
+      {battles?.length === 0 && <div className="py-8 text-center text-sm text-zinc-500">{t("noBattlesFound")}</div>}
       <div className="space-y-2">
         {battles?.map(b => (
           <RecentBattleRow
@@ -826,7 +797,9 @@ function BattlesCard({ onSeeAll }: { onSeeAll: () => void }) {
 }
 
 // ── Dashboard ───────────────────────────────────────────────────────────
-export default function Dashboard({ onOpenBattles }: { onOpenBattles: () => void }) {
+export default function Dashboard({ onOpenBattles, onOpenHighscores }: {
+  onOpenBattles: () => void; onOpenHighscores: () => void;
+}) {
   const [showAllPatchNotes, setShowAllPatchNotes] = useState(false);
 
   if (showAllPatchNotes) return <PatchNotesPage onBack={() => setShowAllPatchNotes(false)} />;
@@ -842,7 +815,7 @@ export default function Dashboard({ onOpenBattles }: { onOpenBattles: () => void
         <BattlesCard onSeeAll={onOpenBattles} />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ServerHighlightsCard />
+        <ServerHighlightsCard onSeeAll={onOpenHighscores} />
         <PatchNotesCard onSeeAll={() => setShowAllPatchNotes(true)} />
       </div>
     </div>

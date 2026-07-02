@@ -7,32 +7,40 @@ import {
   type RegearItem,
   type WeaponOut,
 } from "../api";
+import { useT } from "../i18n";
 
-const BUILD_FIELDS: { key: keyof GameRoleDetail; label: string; multiline?: boolean }[] = [
-  { key: "offhand",   label: "Off-hand" },
-  { key: "helmet",    label: "Capacete" },
-  { key: "armor",     label: "Armadura" },
-  { key: "boots",     label: "Botas" },
-  { key: "cape",      label: "Capa" },
-  { key: "food",      label: "Comida" },
-  { key: "abilities", label: "Habilidades", multiline: true },
-  { key: "play_style",label: "Estilo de jogo", multiline: true },
-  { key: "obs",       label: "Observações", multiline: true },
-];
+function useBuildFields(): { key: keyof GameRoleDetail; label: string; multiline?: boolean }[] {
+  const t = useT();
+  return [
+    { key: "offhand",   label: t("rfOffhand") },
+    { key: "helmet",    label: t("rfHelmet") },
+    { key: "armor",     label: t("rfArmor") },
+    { key: "boots",     label: t("rfBoots") },
+    { key: "cape",      label: t("rfCape") },
+    { key: "food",      label: t("rfFood") },
+    { key: "abilities", label: t("rfAbilities"), multiline: true },
+    { key: "play_style",label: t("rfPlayStyle"), multiline: true },
+    { key: "obs",       label: t("rfObs"), multiline: true },
+  ];
+}
 
 // Slots que podem ter item_id para cálculo de regear
-const REGEAR_SLOTS: { slot: string; label: string }[] = [
-  { slot: "offhand", label: "Off-hand" },
-  { slot: "helmet",  label: "Capacete" },
-  { slot: "armor",   label: "Armadura" },
-  { slot: "boots",   label: "Botas" },
-  { slot: "cape",    label: "Capa" },
-  { slot: "food",    label: "Comida" },
-];
+function useRegearSlots(): { slot: string; label: string }[] {
+  const t = useT();
+  return [
+    { slot: "offhand", label: t("rfOffhand") },
+    { slot: "helmet",  label: t("rfHelmet") },
+    { slot: "armor",   label: t("rfArmor") },
+    { slot: "boots",   label: t("rfBoots") },
+    { slot: "cape",    label: t("rfCape") },
+    { slot: "food",    label: t("rfFood") },
+  ];
+}
 
-const QUALITY_LABELS: Record<number, string> = {
-  1: "Normal", 2: "Bom", 3: "Excepcional", 4: "Excelente", 5: "Obra-prima",
-};
+function useQualityLabels(): Record<number, string> {
+  const t = useT();
+  return { 1: t("qualityNormal"), 2: t("qualityGood"), 3: t("qualityOutstanding"), 4: t("qualityExcellent"), 5: t("qualityMasterpiece") };
+}
 
 const FUNCTION_COLORS: Record<string, string> = {
   support: "#6fa3db",
@@ -75,6 +83,8 @@ function emptyBuildItem(slot: string): RegearItem {
 }
 
 export default function RolesPage() {
+  const t = useT();
+  const BUILD_FIELDS = useBuildFields();
   const [roles, setRoles]     = useState<CatalogRole[]>([]);
   const [weapons, setWeapons] = useState<WeaponOut[]>([]);
   const [sel, setSel]         = useState<number | null>(null);  // role id or -1 (novo)
@@ -186,7 +196,7 @@ export default function RolesPage() {
   }
 
   async function save() {
-    if (!draft.name.trim()) { setError("Nome obrigatório"); return; }
+    if (!draft.name.trim()) { setError(t("nameRequiredError")); return; }
     setSaving(true); setError(null);
     try {
       const payload = {
@@ -220,7 +230,7 @@ export default function RolesPage() {
 
   async function del() {
     if (!draft.id || draft.id < 0) return;
-    if (!confirm(`Remover a função "${draft.name}"? Slots que usam ela ficarão vazios.`)) return;
+    if (!confirm(`${t("removeRoleConfirmPrefix")} "${draft.name}"${t("removeRoleConfirmSuffix")}`)) return;
     await api.deleteRole(draft.id).catch(() => {});
     setSel(null);
     setDraft(emptyDraft());
@@ -235,12 +245,12 @@ export default function RolesPage() {
         <div style={{ flex: "0 0 260px" }}>
           <div className="card">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>Funções</span>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{t("rolesPageTitle")}</span>
               <button className="btn primary" style={{ fontSize: 12, padding: "4px 10px" }} onClick={newRole}>
-                <i className="ti ti-plus" aria-hidden /> Nova
+                <i className="ti ti-plus" aria-hidden /> {t("newRoleBtn")}
               </button>
             </div>
-            {roles.length === 0 && <p className="muted" style={{ fontSize: 13 }}>Nenhuma função cadastrada.</p>}
+            {roles.length === 0 && <p className="muted" style={{ fontSize: 13 }}>{t("noRolesRegistered")}</p>}
             {roles.map(r => (
               <button
                 key={r.id}
@@ -266,12 +276,12 @@ export default function RolesPage() {
             <div className="card">
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>
-                  {draft.id && draft.id > 0 ? "Editar função" : "Nova função"}
+                  {draft.id && draft.id > 0 ? t("editRoleTitle") : t("newRoleTitle")}
                 </span>
                 {invisFn && <FnTag fn={invisFn} />}
                 {draft.id && draft.id > 0 && (
                   <button className="btn" style={{ marginLeft: "auto", fontSize: 12, color: "#e07a7a" }} onClick={del}>
-                    <i className="ti ti-trash" aria-hidden /> Remover
+                    <i className="ti ti-trash" aria-hidden /> {t("removeBtn")}
                   </button>
                 )}
               </div>
@@ -279,22 +289,22 @@ export default function RolesPage() {
               {/* Nome + Arma */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
                 <div>
-                  <label className="cs-field-lbl">Nome da função *</label>
+                  <label className="cs-field-lbl">{t("roleNameLabel")}</label>
                   <input
                     className="input" style={{ width: "100%" }}
-                    placeholder="ex.: Locus Suporte"
+                    placeholder={t("roleNamePlaceholder")}
                     value={draft.name}
                     onChange={e => set("name", e.target.value as DraftRole["name"])}
                   />
                 </div>
                 <div>
-                  <label className="cs-field-lbl">Arma</label>
+                  <label className="cs-field-lbl">{t("equipSlotWeapon")}</label>
                   <select
                     className="cs-select" style={{ width: "100%" }}
                     value={draft.weapon_id ?? ""}
                     onChange={e => set("weapon_id", (e.target.value ? Number(e.target.value) : null) as DraftRole["weapon_id"])}
                   >
-                    <option value="">— sem arma —</option>
+                    <option value="">{t("noWeaponOption")}</option>
                     {weapons.map(w => (
                       <option key={w.id} value={w.id}>
                         {w.name}{w.invisible_function ? ` [${w.invisible_function}]` : ""}
@@ -332,7 +342,7 @@ export default function RolesPage() {
                           <span
                             style={{ fontSize: 10, color: "var(--info)", cursor: "pointer", fontWeight: 400 }}
                             onClick={() => applySuggestion(f.key, sug.value)}
-                            title={`Sugestão: ${sug.value} (${sug.votes}/${sug.total})`}
+                            title={`${t("suggestionLabel")} ${sug.value} (${sug.votes}/${sug.total})`}
                           >
                             💡 {sug.votes}/{sug.total}
                           </span>
@@ -342,7 +352,7 @@ export default function RolesPage() {
                         <textarea
                           className="input"
                           style={{ width: "100%", minHeight: 68, resize: "vertical" }}
-                          placeholder={sug && !currentVal ? `Sugestão: ${sug.value}` : ""}
+                          placeholder={sug && !currentVal ? `${t("suggestionLabel")} ${sug.value}` : ""}
                           value={currentVal}
                           onChange={e => setDraft(dr => ({ ...dr, [f.key]: e.target.value || null }))}
                         />
@@ -350,7 +360,7 @@ export default function RolesPage() {
                         <input
                           className="input"
                           style={{ width: "100%" }}
-                          placeholder={sug && !currentVal ? `Sugestão: ${sug.value}` : ""}
+                          placeholder={sug && !currentVal ? `${t("suggestionLabel")} ${sug.value}` : ""}
                           value={currentVal}
                           onChange={e => setDraft(dr => ({ ...dr, [f.key]: e.target.value || null }))}
                         />
@@ -375,10 +385,10 @@ export default function RolesPage() {
                   disabled={saving}
                 >
                   <i className="ti ti-device-floppy" aria-hidden />
-                  {saving ? " Salvando…" : " Salvar"}
+                  {saving ? ` ${t("saving")}` : ` ${t("save")}`}
                 </button>
                 <button className="btn" onClick={() => { setSel(null); setDraft(emptyDraft()); }}>
-                  Cancelar
+                  {t("cancel")}
                 </button>
               </div>
             </div>
@@ -398,6 +408,9 @@ function RegearItemsPanel({
   buildItems: RegearItem[];
   onSet: (slot: string, field: keyof RegearItem, value: string | number) => void;
 }) {
+  const t = useT();
+  const REGEAR_SLOTS = useRegearSlots();
+  const QUALITY_LABELS = useQualityLabels();
   const [open, setOpen] = useState(false);
   const itemMap = new Map(buildItems.map(bi => [bi.slot, bi]));
   const filledCount = REGEAR_SLOTS.filter(s => itemMap.get(s.slot)?.item_id).length;
@@ -416,16 +429,15 @@ function RegearItemsPanel({
         }}
       >
         <i className={`ti ti-${open ? "chevron-down" : "chevron-right"}`} aria-hidden />
-        <span style={{ fontSize: 13, fontWeight: 500 }}>Itens de Regear</span>
+        <span style={{ fontSize: 13, fontWeight: 500 }}>{t("regearItemsTitle")}</span>
         <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted)" }}>
-          {filledCount} / {REGEAR_SLOTS.length} slots preenchidos
+          {filledCount} / {REGEAR_SLOTS.length} {t("slotsFilledSuffix")}
         </span>
       </button>
       {open && (
         <div style={{ padding: "12px 14px" }}>
           <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12, marginTop: 0 }}>
-            Informe o ID canônico do Albion Online para calcular o valor de regear automaticamente.
-            Ex.: <code style={{ fontSize: 10 }}>T8_HEAD_CLOTH_MORGANA@4</code>
+            {t("regearIdHint")} <code style={{ fontSize: 10 }}>T8_HEAD_CLOTH_MORGANA@4</code>
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             {REGEAR_SLOTS.map(({ slot, label }) => {
@@ -449,7 +461,7 @@ function RegearItemsPanel({
                     <input
                       className="input"
                       style={{ flex: 1, fontSize: 11 }}
-                      placeholder="Nome amigável (opcional)"
+                      placeholder={t("friendlyNamePlaceholder")}
                       value={item?.name ?? ""}
                       onChange={e => onSet(slot, "name", e.target.value)}
                     />
@@ -468,7 +480,7 @@ function RegearItemsPanel({
                       style={{ width: 48, fontSize: 11, textAlign: "center" }}
                       type="number"
                       min={1}
-                      title="Quantidade"
+                      title={t("quantityWord")}
                       value={item?.quantity ?? 1}
                       onChange={e => onSet(slot, "quantity", Math.max(1, Number(e.target.value)))}
                     />
@@ -494,6 +506,8 @@ function SuggestionPanel({
   onApply: (field: string, value: string) => void;
   onApplyAll: () => void;
 }) {
+  const t = useT();
+  const BUILD_FIELDS = useBuildFields();
   const d = draft as Record<string, unknown>;
   const hasEmpty = suggestion
     ? Object.entries(suggestion.fields).some(([k]) => !d[k])
@@ -509,8 +523,8 @@ function SuggestionPanel({
         <i className="ti ti-bulb" style={{ color: "var(--info)" }} aria-hidden />
         <span style={{ fontSize: 13, fontWeight: 500 }}>
           {loading
-            ? "Buscando sugestões…"
-            : `Sugestão — ${suggestion!.sample_size} ${suggestion!.sample_size !== 1 ? "funções similares" : "função similar"}`}
+            ? t("fetchingSuggestions")
+            : `${t("suggestionPrefix")} ${suggestion!.sample_size} ${suggestion!.sample_size !== 1 ? t("similarRolesPlural") : t("similarRoleSingular")}`}
         </span>
         {!loading && hasEmpty && (
           <button
@@ -518,7 +532,7 @@ function SuggestionPanel({
             style={{ marginLeft: "auto", fontSize: 11, padding: "3px 8px" }}
             onClick={onApplyAll}
           >
-            Aplicar vazios
+            {t("applyEmptyBtn")}
           </button>
         )}
       </div>
@@ -539,7 +553,7 @@ function SuggestionPanel({
                   cursor: alreadyFilled ? "default" : "pointer",
                   opacity: alreadyFilled ? 0.6 : 1,
                 }}
-                title={`${fieldLabel}: ${s.value} — ${s.votes} de ${s.total} funções`}
+                title={`${fieldLabel}: ${s.value} — ${s.votes} ${t("ofWord")} ${s.total} ${t("rolesWord")}`}
               >
                 <strong>{fieldLabel}</strong>{" "}
                 {s.value.length > 20 ? s.value.slice(0, 20) + "…" : s.value}

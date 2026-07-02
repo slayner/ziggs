@@ -7,6 +7,7 @@ nunca mais é buscado de novo pra essa mesma combinação id+quality+size.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from urllib.parse import quote
@@ -18,6 +19,12 @@ from fastapi.responses import FileResponse
 router = APIRouter(prefix="/render", tags=["render"])
 
 _CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "render_cache" / "items"
+
+# ponytail: fila simples — limita quantos fetches concorrentes batem na CDN da
+# Albion de uma vez (uma página com cache frio pode pedir 100+ ícones juntos).
+# O resto espera a vez em vez de disparar tudo em paralelo. Sobe pra Redis/worker
+# dedicado só se isso virar múltiplos processos.
+_FETCH_SEM = asyncio.Semaphore(8)
 
 # IDs da Albion (T5_HEAD_PLATE_SET1@2) + nomes em inglês usados pras crystal
 # weapons (Elder's Astral Staff@3) — único formato que esse endpoint precisa aceitar.
@@ -43,8 +50,12 @@ async def render_item(key: str, quality: int = 0, size: int = 0) -> Response:
 
     url = f"https://render.albiononline.com/v1/item/{quote(key, safe='')}.png"
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, params=params)
+        async with _FETCH_SEM:
+            # outra request pode ter preenchido o cache enquanto esperava a vez
+            if cache_path.exists():
+                return FileResponse(cache_path, media_type="image/png", headers=_CACHE_HEADERS)
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, params=params)
     except httpx.HTTPError:
         raise HTTPException(502, "render da Albion indisponível")
 

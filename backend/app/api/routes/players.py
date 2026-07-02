@@ -5,13 +5,16 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api import deps
-from app.api.routes.battles import _factions_summary, _wbase, _weapon_function_map
+from app.api.routes.battles import (
+    _factions_summary, _wbase, _weapon_function_map,
+    SUPPORT_ELIGIBLE_FIGHT_POINTS, TANK_ELIGIBLE_FIGHT_POINTS,
+)
 from app.models.battles import Battle, BattleParticipant
-from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, PlayerSnapshot
+from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, PlayerSnapshot, PlayerWeaponStat
 from app.services import battle_groups, prices
 from app.services.player_tracker import HOSTS, make_client, sync_player_kills, upsert_player
 
@@ -42,9 +45,12 @@ def _battle_history(db: Session, albion_player_id: str, region: str) -> list[dic
         .where(BattleParticipant.albion_player_id == albion_player_id, Battle.region == region)
         .order_by(Battle.start_time.desc())
     ).all()
+    # Em lote — um commit só pra lista inteira, não um por batalha (pode ser
+    # centenas pra jogador ativo desde que DEEP_PROCESS_MIN_PLAYERS virou 0).
+    groups = battle_groups.get_or_create_groups_bulk(db, [battle.id for battle, _ in rows])
     out = []
     for battle, bp in rows:
-        group = battle_groups.get_or_create_group(db, [battle.id])
+        group = groups[battle.id]
         out.append({
             "public_id": group.public_id,
             "region": battle.region,
@@ -63,18 +69,20 @@ def _battle_history(db: Session, albion_player_id: str, region: str) -> list[dic
     return out
 
 
-def _battle_link(db: Session, region: str, albion_battle_id: str | None) -> tuple[str | None, list[dict]]:
-    """public_id do bracket + resumo de facções (heatmap) pra renderizar a
-    mesma etiqueta centralizada da listagem de batalhas no link da kill. As
-    facções só existem se a luta passou por deep-processing (>= 5 players) —
-    luta "light" linka normal, só sem heatmap."""
-    if not albion_battle_id:
-        return None, []
-    battle = db.scalar(select(Battle).where(Battle.region == region, Battle.albion_id == albion_battle_id))
-    if battle is None:
-        return None, []
-    public_id = battle_groups.get_or_create_group(db, [battle.id]).public_id
-    return public_id, _factions_summary(db, battle.id)
+def _battle_links_bulk(db: Session, region: str, albion_battle_ids: list[str | None]) -> dict[str, tuple[str | None, list[dict]]]:
+    """Versão em lote de resolução de link público + heatmap de facções
+    (mesma etiqueta centralizada da listagem de batalhas) pra várias
+    battle_id de uma vez, com um commit só (ver
+    battle_groups.get_or_create_groups_bulk) — usado pela lista de
+    kills/mortes do perfil, que não tem paginação e pode ter centenas de
+    eventos pra jogador ativo. Luta "light" (< deep-processing) linka
+    normal, só sem heatmap (facções vazias)."""
+    ids = sorted({i for i in albion_battle_ids if i})
+    if not ids:
+        return {}
+    battles = db.scalars(select(Battle).where(Battle.region == region, Battle.albion_id.in_(ids))).all()
+    groups = battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
+    return {b.albion_id: (groups[b.id].public_id, _factions_summary(db, b.id)) for b in battles}
 
 
 def _counts_for_activity(ev: PlayerKillEvent) -> bool:
@@ -108,12 +116,39 @@ def _kill_ledger_rows(db: Session, player_id: int, region: str, role: str) -> li
 _BUILD_SLOTS = ("MainHand", "OffHand", "Head", "Armor", "Shoes")
 
 
+def _weapon_points(db: Session, player: AlbionPlayer, by_weapon: dict[str, list[PlayerKillEvent]]) -> dict[str, int]:
+    """Pontos por arma — kills (by_weapon, ledger ao vivo) + bônus de função
+    lido de PlayerWeaponStat (contadores brutos pré-calculados, ver
+    app.services.weapon_stats; mesma fórmula usada no Highscores all-time)."""
+    weapon_fn = _weapon_function_map(db)
+    points: dict[str, int] = {wb: len(evs) for wb, evs in by_weapon.items()}
+
+    stats = db.scalars(
+        select(PlayerWeaponStat).where(PlayerWeaponStat.albion_player_id == player.albion_id)
+    ).all()
+    for s in stats:
+        role = weapon_fn.get(s.weapon_base, "dps")
+        if role == "dps":
+            continue  # já coberto inteiramente pelas kills (PlayerKillEvent)
+        if role == "pierce":
+            points[s.weapon_base] = points.get(s.weapon_base, 0) + s.pierce_points
+        elif role == "healer":
+            points[s.weapon_base] = points.get(s.weapon_base, 0) + s.healer_points
+        elif role == "support":
+            points[s.weapon_base] = points.get(s.weapon_base, 0) + s.zero_death_eligible_fights * SUPPORT_ELIGIBLE_FIGHT_POINTS
+        elif role == "tank":
+            points[s.weapon_base] = points.get(s.weapon_base, 0) + s.tank_ok_fights * TANK_ELIGIBLE_FIGHT_POINTS
+
+    return points
+
+
 def _top_weapons(db: Session, player: AlbionPlayer) -> list[dict]:
-    """Top 5 armas mais usadas nos abates (só kills que deram fama — mesmo
-    critério da aba Atividade) e, pra cada uma, as top 5 builds usadas com
-    ela — build identificada só pela BASE do item (ignora tier/encantamento
-    e capa, pedido explícito)."""
-    rows = db.scalars(
+    """Top 5 armas em destaque do perfil, ordenadas pelo peso/pontos (ver
+    _weapon_points — não kills puras) e, pra cada uma, as top 5 builds usadas
+    nos abates com ela — build identificada só pela BASE do item (ignora
+    tier/encantamento e capa, pedido explícito). Pontos não vêm só de kills,
+    então uma arma pode aparecer aqui mesmo com poucos (ou zero) abates."""
+    kill_rows = db.scalars(
         select(PlayerKillEvent).where(
             PlayerKillEvent.killer_player_id == player.id,
             PlayerKillEvent.region == player.region,
@@ -122,16 +157,18 @@ def _top_weapons(db: Session, player: AlbionPlayer) -> list[dict]:
     ).all()
 
     by_weapon: dict[str, list[PlayerKillEvent]] = {}
-    for ev in rows:
+    for ev in kill_rows:
         weapon_base = _wbase(((ev.killer_equipment or {}).get("MainHand") or {}).get("Type"))
-        if not weapon_base:
-            continue
-        by_weapon.setdefault(weapon_base, []).append(ev)
+        if weapon_base:
+            by_weapon.setdefault(weapon_base, []).append(ev)
 
-    top_weapons = sorted(by_weapon.items(), key=lambda kv: len(kv[1]), reverse=True)[:5]
+    points = _weapon_points(db, player, by_weapon)
+    top_weapons = [(wb, p) for wb, p in points.items() if p > 0]
+    top_weapons.sort(key=lambda kv: kv[1], reverse=True)
 
     out = []
-    for weapon_base, evs in top_weapons:
+    for weapon_base, weight in top_weapons[:5]:
+        evs = by_weapon.get(weapon_base, [])
         build_counts: dict[tuple[str | None, ...], int] = {}
         for ev in evs:
             equip = ev.killer_equipment or {}
@@ -140,7 +177,7 @@ def _top_weapons(db: Session, player: AlbionPlayer) -> list[dict]:
         top_builds = sorted(build_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
         out.append({
             "weapon_base": weapon_base,
-            "kills": len(evs),
+            "points": weight,
             "builds": [
                 {
                     "weapon_base": key[0], "offhand_base": key[1], "helmet_base": key[2],
@@ -152,7 +189,10 @@ def _top_weapons(db: Session, player: AlbionPlayer) -> list[dict]:
     return out
 
 
-def _serialize_kill(db: Session, ev: PlayerKillEvent, region: str, role: str, weapon_fn_map: dict[str, str]) -> dict:
+def _serialize_kill(
+    db: Session, ev: PlayerKillEvent, role: str, weapon_fn_map: dict[str, str],
+    battle_links: dict[str, tuple[str | None, list[dict]]],
+) -> dict:
     # O "outro" é sempre o oponente (vítima numa kill, matador numa morte).
     # `equipment` é sempre o set do PRÓPRIO jogador do perfil, `other_equipment`
     # o do oponente — a UI mostra os dois lados do confronto, não só o nosso.
@@ -161,7 +201,7 @@ def _serialize_kill(db: Session, ev: PlayerKillEvent, region: str, role: str, we
     other_equipment = ev.victim_equipment if role == "kills" else ev.killer_equipment
     other = db.get(AlbionPlayer, other_id) if other_id else None
     own_weapon = (own_equipment or {}).get("MainHand") or {}
-    battle_public_id, battle_factions = _battle_link(db, region, ev.albion_battle_id)
+    battle_public_id, battle_factions = battle_links.get(ev.albion_battle_id, (None, []))
     return {
         "event_id": ev.albion_event_id,
         "timestamp": _aware(ev.timestamp).isoformat(),
@@ -315,6 +355,13 @@ async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -
     death_rows_for_activity = [ev for ev in death_rows if _counts_for_activity(ev)]
     kill_rows_for_activity = [ev for ev in kill_rows if _counts_for_activity(ev)]
 
+    # Em lote — um commit só pra lista inteira de kills+mortes, não um por
+    # evento (sem paginação aqui, pode ser centenas pra jogador ativo).
+    battle_links = _battle_links_bulk(
+        db, player.region,
+        [ev.albion_battle_id for ev in kill_rows_for_activity + death_rows_for_activity],
+    )
+
     return {
         **raw,
         "_is_deleted": player.is_deleted,
@@ -326,8 +373,8 @@ async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -
             "fame_history": fame_history,
             "battle_history": _battle_history(db, player.albion_id, player.region),
             "top_weapons": _top_weapons(db, player),
-            "kills": [_serialize_kill(db, ev, player.region, "kills", weapon_fn_map) for ev in kill_rows_for_activity],
-            "deaths": [_serialize_kill(db, ev, player.region, "deaths", weapon_fn_map) for ev in death_rows_for_activity],
+            "kills": [_serialize_kill(db, ev, "kills", weapon_fn_map, battle_links) for ev in kill_rows_for_activity],
+            "deaths": [_serialize_kill(db, ev, "deaths", weapon_fn_map, battle_links) for ev in death_rows_for_activity],
             "silver_dropped": await _silver_dropped(db, death_rows_for_activity),
         },
     }

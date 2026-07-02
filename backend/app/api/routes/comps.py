@@ -20,6 +20,7 @@ def list_comps(
     include_archived: bool = False,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.view")),
 ):
     return svc.list_comps(db, guild.id, include_archived)
 
@@ -30,6 +31,7 @@ def create_comp(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     actor_id: int | None = Depends(deps.current_user_id),
+    _member=Depends(deps.require_permission("comps.create")),
 ):
     try:
         result = svc.create_comp(db, guild.id, payload, actor_id)
@@ -44,6 +46,7 @@ def get_comp(
     comp_id: int,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.view")),
 ):
     comp = svc.get_comp(db, guild.id, comp_id)
     if comp is None:
@@ -58,6 +61,7 @@ def update_comp(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     actor_id: int | None = Depends(deps.current_user_id),
+    _member=Depends(deps.require_permission("comps.manage")),
 ):
     try:
         comp = svc.update_comp(db, guild.id, comp_id, payload, actor_id)
@@ -75,6 +79,7 @@ def delete_comp(
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
     actor_id: int | None = Depends(deps.current_user_id),
+    _member=Depends(deps.require_permission("comps.manage")),
 ):
     if not svc.delete_comp(db, guild.id, comp_id, actor_id):
         raise HTTPException(status_code=404, detail="comp não encontrada")
@@ -87,6 +92,7 @@ def suggest_build(
     payload: SuggestRequest,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("comps.view")),
 ):
     try:
         return svc.suggest(db, guild.id, comp_id, payload.target_function, payload.scope)

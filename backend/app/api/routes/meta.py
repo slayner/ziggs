@@ -12,7 +12,12 @@ from __future__ import annotations
 import time
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.api import deps
+from app.models.battles import Battle, ReprocessCampaign
 
 router = APIRouter(prefix="/meta", tags=["meta"])
 
@@ -57,3 +62,15 @@ async def patch_notes() -> list[dict]:
     _cache = _parse_changelog(items)
     _cache_at = time.time()
     return _cache
+
+
+@router.get("/reprocess-progress")
+def reprocess_progress(db: Session = Depends(deps.db_session)) -> dict:
+    """% de batalhas já reprocessadas, somado entre todas as campanhas de
+    Battle.reprocess_reason já marcadas (ver app/services/battle_reprocessor.py)."""
+    total = db.scalar(select(func.sum(ReprocessCampaign.total))) or 0
+    pending = db.scalar(select(func.count()).where(Battle.reprocess_reason.isnot(None))) or 0
+    if total == 0:
+        return {"total": 0, "pending": 0, "percent": 100.0}
+    done = max(total - pending, 0)
+    return {"total": total, "pending": pending, "percent": round(done / total * 100, 2)}

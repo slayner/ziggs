@@ -60,3 +60,13 @@ export function monthYearUTC(ts: string): string {
   const d = new Date(ts);
   return `${MONTHS_PT[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
+
+/** "5m atrás" / "3h ago" / etc — unidades já traduzidas via i18n (agoMinutes/agoHours/agoDays). */
+export function timeAgo(ts: string, units: { min: string; hour: string; day: string }): string {
+  const diff = Date.now() - new Date(ts).getTime();
+  const m = Math.floor(diff / 60_000);
+  if (m < 60) return `${m}${units.min}`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}${units.hour}`;
+  return `${Math.floor(h / 24)}${units.day}`;
+}

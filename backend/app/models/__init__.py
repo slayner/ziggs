@@ -14,11 +14,16 @@ from app.models.events import (  # noqa: F401
 from app.models.audit import AuditLog  # noqa: F401
 from app.models.loot import EventLootEntry, GuildChestEntry, ItemPriceCache  # noqa: F401
 from app.models.prices import ItemPrice, ItemPriceLatest  # noqa: F401
-from app.models.players import AlbionPlayer, PlayerSnapshot, PlayerKillEvent  # noqa: F401
+from app.models.players import (  # noqa: F401
+    AlbionPlayer, PlayerSnapshot, PlayerKillEvent, PlayerWeaponStat, PlayerCountSnapshot,
+)
 from app.models.battles import (  # noqa: F401
     Battle, BattleGuild, BattleSide, BattleParticipant, BattleKillEvent,
-    BattleGroup, BattleGroupMember,
+    BattleGroup, BattleGroupMember, ReprocessCampaign,
 )
+from app.models.claims import CharacterClaim, RegisteredCharacter  # noqa: F401
+from app.models.registration import BotRegistration  # noqa: F401
+from app.models.economy import EconomyBalance, EconomyTransaction  # noqa: F401
 
 __all__ = [
     "Base",
@@ -29,7 +34,10 @@ __all__ = [
     "AuditLog",
     "EventLootEntry", "GuildChestEntry", "ItemPriceCache",
     "ItemPrice", "ItemPriceLatest",
-    "AlbionPlayer", "PlayerSnapshot", "PlayerKillEvent",
+    "AlbionPlayer", "PlayerSnapshot", "PlayerKillEvent", "PlayerWeaponStat", "PlayerCountSnapshot",
     "Battle", "BattleGuild", "BattleSide", "BattleParticipant", "BattleKillEvent",
-    "BattleGroup", "BattleGroupMember",
+    "BattleGroup", "BattleGroupMember", "ReprocessCampaign",
+    "CharacterClaim", "RegisteredCharacter",
+    "BotRegistration",
+    "EconomyBalance", "EconomyTransaction",
 ]

@@ -124,6 +124,73 @@ class PlayerKillEvent(Base):
     victim_guild_name: Mapped[str | None] = mapped_column(String(255))
 
 
+class PlayerWeaponStat(Base):
+    """Contadores BRUTOS por (jogador, arma base) — all-time, todas as
+    regiões. Reconstruída do zero periodicamente (ver
+    app.services.weapon_stats.rebuild_player_weapon_stats) a partir de
+    PlayerKillEvent + BattleParticipant; é a fonte do ranking "maior
+    pontuador com uma arma" do Highscores e do destaque de armas do perfil
+    de jogador (routes/players.py).
+
+    Guarda os FATOS (aparições, elegibilidade) como contadores puros — somar
+    e multiplicar por uma constante nova não exige rebuild, então mudar
+    SUPPORT_ELIGIBLE_FIGHT_POINTS/TANK_ELIGIBLE_FIGHT_POINTS ou reclassificar
+    uma arma de função (routes/battles.py) já reflete na hora, sem rebuild.
+
+    pierce_points/healer_points são EXCEÇÃO: o sistema ao vivo (e o perfil de
+    jogador, antes desta tabela existir) sempre fez "assists // 3" POR LUTA
+    e somou os pontos já arredondados — não dá pra reconstruir isso a partir
+    de só uma soma de assists (floor não é distributivo: floor(1/3)+floor(1/3)
+    != floor(2/3)). Por isso aqui já vêm com ASSISTS_PER_POINT/HEALING_PER_POINT
+    aplicados NA HORA DO REBUILD — mudar essas duas constantes específicas
+    exige rodar o rebuild de novo pra refletir (ver
+    app.services.weapon_stats.rebuild_player_weapon_stats)."""
+    __tablename__ = "player_weapon_stats"
+    __table_args__ = (UniqueConstraint("albion_player_id", "weapon_base"),)
+
+    id: Mapped[int] = pk()
+    albion_player_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    weapon_base: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+
+    # Kills com essa arma (PlayerKillEvent.killer_equipment) — vale 1 ponto
+    # cada, pra qualquer função (dps inclusive, que não tem bônus nenhum).
+    kills: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Vezes que essa arma apareceu como build principal (equipment[0]) numa
+    # luta deep-processada — independe de elegibilidade.
+    appearances: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Dessas aparições, quantas foram em luta ELEGÍVEL (letal + cura
+    # registrada + guilda com >15 jogadores NESSA luta — mesmo critério do
+    # ranking semanal). appearances - eligible_appearances = quantas vezes
+    # a arma apareceu numa luta que NÃO entrava no critério do KB.
+    eligible_appearances: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Pontos de pierce/healer já com floor por luta aplicado e somados (ver
+    # docstring da classe — não são soma bruta de assists/cura).
+    pierce_points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    healer_points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Das aparições ELEGÍVEIS, quantas tiveram 0 mortes (gate de suporte) e,
+    # dessas, quantas a guilda não perdeu mais que o time adversário (gate
+    # extra de tank). Contagem pura — multiplicar pela constante atual na
+    # leitura, não precisa de rebuild se só a constante mudar.
+    zero_death_eligible_fights: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tank_ok_fights: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PlayerCountSnapshot(Base):
+    """Snapshot periódico (15min, ver services/player_count_snapshot.py) da
+    contagem de jogadores ativos (7 dias, mesma métrica de
+    routes/battles.py:active_players) por região + global — alimenta o
+    gráfico histórico do dashboard. active_players sozinho só sabe "agora vs
+    7 dias atrás"; esta tabela guarda os pontos intermediários pro gráfico."""
+    __tablename__ = "player_count_snapshots"
+
+    id: Mapped[int] = pk()
+    region: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # "global"|"americas"|"europe"|"asia"
+    count: Mapped[int] = mapped_column(Integer, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class DeletedProfile(Base):
     """Guildas e alianças marcadas como excluídas do jogo (detectado via API do Albion).
     Jogadores usam AlbionPlayer.is_deleted; aqui ficam apenas guild/alliance."""
