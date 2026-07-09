@@ -85,7 +85,14 @@ def get_or_create_groups_bulk(db: Session, battle_ids: list[int]) -> dict[int, B
     voltar 500 pro usuário por causa de um pico momentâneo de escrita.
     Depois de rollback os objetos ainda-não-commitados são descartados da
     sessão, então cada tentativa refaz a checagem+criação do zero — só
-    repetir o commit sozinho não reinsere nada."""
+    repetir o commit sozinho não reinsere nada.
+
+    Corrida concorrente: duas requisições podem pegar a mesma battle_id ainda
+    sem grupo ao mesmo tempo (o SELECT de `existing` acima não vê o INSERT da
+    outra até ela commitar) — a perdedora bate no UNIQUE de fingerprint.
+    get_or_create_group (versão singular) já tratava isso com savepoint +
+    IntegrityError; aqui precisa do mesmo tratamento por item, sem descartar
+    o resto do lote — só essa criação é refeita como um SELECT do vencedor."""
     fingerprints = {bid: _fingerprint([bid]) for bid in battle_ids}
 
     for attempt in range(2):
@@ -99,10 +106,14 @@ def get_or_create_groups_bulk(db: Session, battle_ids: list[int]) -> dict[int, B
             fp = fingerprints[bid]
             group = existing.get(fp)
             if group is None:
-                group = BattleGroup(public_id=_generate_code(db), fingerprint=fp)
-                db.add(group)
-                db.flush()
-                db.add(BattleGroupMember(group_id=group.id, battle_id=bid, position=0))
+                try:
+                    with db.begin_nested():  # savepoint — rollback só deste item se perder a corrida
+                        group = BattleGroup(public_id=_generate_code(db), fingerprint=fp)
+                        db.add(group)
+                        db.flush()
+                        db.add(BattleGroupMember(group_id=group.id, battle_id=bid, position=0))
+                except IntegrityError:
+                    group = db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fp))
                 existing[fp] = group
             out[bid] = group
 

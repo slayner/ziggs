@@ -10,10 +10,17 @@ export interface AlbionItem {
   slot: ItemSlot;
 }
 
-// Tier prefix para render URL por nome EN
-const TIER_PREFIX: Record<number, string> = {
+// Tier prefix para render URL por nome EN (crystal weapons render by EN name,
+// não por id). Único source of truth — RENDER_URL_EN e specTree.ts usam isto.
+export const TIER_PREFIX: Record<number, string> = {
   4: "Adept's", 5: "Expert's", 6: "Master's", 7: "Grandmaster's", 8: "Elder's",
 };
+
+/** Nome de render EN de um crystal weapon num tier/encant: "Elder's Infinity Blade@2". */
+export function crystalRenderName(nameEn: string, tier: number, enchant = 0): string {
+  const prefix = TIER_PREFIX[tier] ?? "Elder's";
+  return `${prefix} ${nameEn}${enchant ? `@${enchant}` : ""}`;
+}
 
 // Gera variantes de tier × encantamento para um item base.
 function gen(
@@ -238,25 +245,25 @@ export const ALBION_ITEMS: AlbionItem[] = [
   // COMIDA
   // ═══════════════════════════════════════════════════════════
 
-  ...gen(T, [0,1,2,3], "MEAL_GRILLEDFISH",      "Peixe Grelhado",     "food", "Grilled Fish"),
-  ...gen(T, [0,1,2,3], "MEAL_SEAWEEDSALAD",    "Salada de Algas",    "food", "Seaweed Salad"),
-  ...gen(T, [0,1,2,3], "MEAL_SOUP",            "Sopa",               "food", "Wheat Soup Cabbage Soup"),
-  ...gen(T, [0,1,2,3], "MEAL_SOUP_FISH",       "Sopa de Peixe",      "food", "Blackbog Clam Soup Fish Soup"),
-  ...gen(T, [0,1,2,3], "MEAL_SALAD",           "Salada",             "food", "Turnip Salad Potato Salad"),
-  ...gen(T, [0,1,2,3], "MEAL_SALAD_FISH",      "Salada de Peixe",    "food", "Midwater Octopus Salad Deepwater Kraken Salad"),
-  ...gen(T, [0,1,2,3], "MEAL_PIE",             "Torta",              "food", "Chicken Pie Goose Pie Pork Pie"),
-  ...gen(T, [0,1,2,3], "MEAL_PIE_FISH",        "Torta de Peixe",     "food", "Fish Pie Frostpeak Deadeye Pie Mountain Blindeye Pie"),
-  ...gen(T, [0,1,2,3], "MEAL_OMELETTE",        "Omelete",            "food", "Chicken Omelette Goose Omelette Pork Omelette"),
-  ...gen(T, [0,1,2,3], "MEAL_OMELETTE_FISH",   "Omelete de Caranguejo", "food", "Crab Omelette Dusthole Drybrook"),
-  ...gen(T, [0,1,2,3], "MEAL_OMELETTE_AVALON", "Omelete Avaloniana", "food", "Avalonian Omelette Avalonian Pork Omelette Avalonian Goose Omelette"),
-  ...gen(T, [0,1,2,3], "MEAL_STEW",            "Ensopado",           "food", "Goat Stew Mutton Stew Beef Stew"),
-  ...gen(T, [0,1,2,3], "MEAL_STEW_FISH",       "Ensopado de Enguia", "food", "Eel Stew Greenriver Redspring Deadwater"),
-  ...gen(T, [0,1,2,3], "MEAL_STEW_AVALON",     "Ensopado Avaloniano","food", "Avalonian Goat Stew Avalonian Mutton Stew Avalonian Beef Stew"),
-  ...gen(T, [0,1,2,3], "MEAL_SANDWICH",        "Sanduíche",          "food", "Goat Sandwich Mutton Sandwich Beef Sandwich"),
-  ...gen(T, [0,1,2,3], "MEAL_SANDWICH_FISH",   "Sanduíche de Peixe", "food", "Lurcher Sandwich Stonestream Rushwater Thunderfall"),
-  ...gen(T, [0,1,2,3], "MEAL_SANDWICH_AVALON", "Sanduíche Avaloniano","food", "Avalonian Goat Sandwich Avalonian Mutton Sandwich Avalonian Beef Sandwich"),
-  ...gen(T, [0,1,2,3], "MEAL_ROAST",           "Assado",             "food", "Roast Chicken Roast Pork Roast Goose"),
-  ...gen(T, [0,1,2,3], "MEAL_ROAST_FISH",      "Peixe Assado",       "food", "Roasted Snapper Puremist Clearhaze"),
+  ...gen(T, [0,1,2,3], "MEAL_GRILLEDFISH",      "Peixe Grelhado",     "food"),
+  ...gen(T, [0,1,2,3], "MEAL_SEAWEEDSALAD",    "Salada de Algas",    "food"),
+  ...gen(T, [0,1,2,3], "MEAL_SOUP",            "Sopa",               "food"),
+  ...gen(T, [0,1,2,3], "MEAL_SOUP_FISH",       "Sopa de Peixe",      "food"),
+  ...gen(T, [0,1,2,3], "MEAL_SALAD",           "Salada",             "food"),
+  ...gen(T, [0,1,2,3], "MEAL_SALAD_FISH",      "Salada de Peixe",    "food"),
+  ...gen(T, [0,1,2,3], "MEAL_PIE",             "Torta",              "food"),
+  ...gen(T, [0,1,2,3], "MEAL_PIE_FISH",        "Torta de Peixe",     "food"),
+  ...gen(T, [0,1,2,3], "MEAL_OMELETTE",        "Omelete",            "food"),
+  ...gen(T, [0,1,2,3], "MEAL_OMELETTE_FISH",   "Omelete de Caranguejo", "food"),
+  ...gen(T, [0,1,2,3], "MEAL_OMELETTE_AVALON", "Omelete Avaloniana", "food"),
+  ...gen(T, [0,1,2,3], "MEAL_STEW",            "Ensopado",           "food"),
+  ...gen(T, [0,1,2,3], "MEAL_STEW_FISH",       "Ensopado de Enguia", "food"),
+  ...gen(T, [0,1,2,3], "MEAL_STEW_AVALON",     "Ensopado Avaloniano","food"),
+  ...gen(T, [0,1,2,3], "MEAL_SANDWICH",        "Sanduíche",          "food"),
+  ...gen(T, [0,1,2,3], "MEAL_SANDWICH_FISH",   "Sanduíche de Peixe", "food"),
+  ...gen(T, [0,1,2,3], "MEAL_SANDWICH_AVALON", "Sanduíche Avaloniano","food"),
+  ...gen(T, [0,1,2,3], "MEAL_ROAST",           "Assado",             "food"),
+  ...gen(T, [0,1,2,3], "MEAL_ROAST_FISH",      "Peixe Assado",       "food"),
 
   // ═══════════════════════════════════════════════════════════
   // POÇÕES
@@ -466,8 +473,7 @@ export const RENDER_URL_EN = (nameEn: string, itemId: string, quality = 0): stri
   const q = quality ? `?quality=${quality}` : "";
   const tier = parseInt(itemId.match(/^T(\d+)_/)?.[1] ?? "8");
   const enchant = itemId.match(/@(\d+)$/)?.[1];
-  const prefix = TIER_PREFIX[tier] ?? "Elder's";
-  const name = `${prefix} ${nameEn}${enchant ? `@${enchant}` : ""}`;
+  const name = crystalRenderName(nameEn, tier, enchant ? +enchant : 0);
   return `/render/item/${encodeURIComponent(name)}${q}`;
 };
 

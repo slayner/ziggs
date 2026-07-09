@@ -6,19 +6,18 @@ um evento passando por aqui — nunca escrevendo `events.state` na mão. Toda
 transição válida gera (1) uma linha em `event_state_transitions` e (2) um registro
 no audit log append-only. Transição inválida levanta `InvalidTransition`.
 
-Estados (em PT, como o usuário descreveu):
+Estados (4 + 2 terminais de limpeza):
   agendado     scheduled    — criado para começar no futuro
   andamento    in_progress  — CTA acontecendo (pingado por site ou comando)
-  definicao    definition   — deu /callout; threads abrem, logística define o tipo
-  verificacao  verification  — os 7 passos de conferência
-  espera       waiting      — tudo conferido; ÚNICO estado que libera "finalizar"
+  revisao      review       — deu /callout; freeze voice%, abre thread de embed,
+                               verificações básicas (presença, valor da tab, nodes)
   finalizado   finalized    — pagamentos/logs gerados; terminal
   cancelado    cancelled    — abortado antes de pagar; terminal
   excluido     deleted      — apagado/estornado; terminal
 
-Não há ordem fixa imposta além das arestas abaixo: a partir de quase qualquer
-estado não-terminal dá para cancelar/excluir, e de `espera` dá para voltar a
-`verificacao` se a logística achar algo errado.
+`review` substitui as antigas definition+verification+waiting. O botão concluir
+(review → finalized) está SEMPRE disponível — sem guard, sem checklist obrigatório.
+Se finalizado sem valor de tab ou nodes capturados, assume tudo 0.
 """
 from __future__ import annotations
 
@@ -28,19 +27,34 @@ import enum
 class EventState(str, enum.Enum):
     SCHEDULED = "scheduled"        # agendado
     IN_PROGRESS = "in_progress"    # andamento
-    DEFINITION = "definition"      # definição
-    VERIFICATION = "verification"  # verificação
-    WAITING = "waiting"            # espera
+    REVIEW = "review"              # revisão (antigo definition+verification+waiting)
     FINALIZED = "finalized"        # finalizado
     CANCELLED = "cancelled"        # cancelado
     DELETED = "deleted"            # excluído
 
 
 class EventType(str, enum.Enum):
-    """Definido na fase de `definicao` pela logística — não na criação."""
+    """LEGADO — eventos não têm mais tipo (regear e lootsplit são sempre
+    calculados; o que muda é o lootsplit_mode da guilda, ver
+    events.get_lootsplit_mode). Mantido só pra ler Event.type de eventos
+    antigos já finalizados; não é mais escrito em eventos novos."""
     LOOTSPLIT = "lootsplit"
     REGEAR = "regear"
     LOOTSPLIT_REGEAR = "lootsplit_regear"
+
+
+class EventSeriousness(str, enum.Enum):
+    """Quão sério é o CTA — casual não exige atenção de todo mundo, sério sim."""
+    CASUAL = "casual"
+    SERIOUS = "serious"
+
+
+class ParticipationMode(str, enum.Enum):
+    """Como a participação é capturada. voice_percent existe no modelo desde já,
+    mas só presence tem a captura implementada por enquanto — ver
+    app/services/event_signups.py."""
+    PRESENCE = "presence"
+    VOICE_PERCENT = "voice_percent"
 
 
 # Estados terminais: não saem para lugar nenhum (exceto excluído, ver abaixo).
@@ -49,25 +63,18 @@ TERMINAL: frozenset[EventState] = frozenset(
 )
 
 
-# Transições do "caminho feliz" + ramos de cancelamento/volta.
+# Transições do "caminho feliz" + ramos de cancelamento.
 # Origem -> conjunto de destinos permitidos.
 _TRANSITIONS: dict[EventState, frozenset[EventState]] = {
     EventState.SCHEDULED: frozenset(
         {EventState.IN_PROGRESS, EventState.CANCELLED, EventState.DELETED}
     ),
     EventState.IN_PROGRESS: frozenset(
-        {EventState.DEFINITION, EventState.CANCELLED, EventState.DELETED}
+        {EventState.REVIEW, EventState.CANCELLED, EventState.DELETED}
     ),
-    EventState.DEFINITION: frozenset(
-        {EventState.VERIFICATION, EventState.CANCELLED, EventState.DELETED}
-    ),
-    EventState.VERIFICATION: frozenset(
-        {EventState.WAITING, EventState.CANCELLED, EventState.DELETED}
-    ),
-    EventState.WAITING: frozenset(
-        # espera -> verificação (voltar p/ corrigir) | finalizado | cancelado | excluído
-        {EventState.VERIFICATION, EventState.FINALIZED,
-         EventState.CANCELLED, EventState.DELETED}
+    # review -> finalized SEM guard (concluir sempre disponível; assume 0 se faltar).
+    EventState.REVIEW: frozenset(
+        {EventState.FINALIZED, EventState.CANCELLED, EventState.DELETED}
     ),
     # Um evento já finalizado ainda pode ser EXCLUÍDO (estorna pagamentos), como o
     # /deleteevent do bot faz hoje. Cancelado também pode virar excluído (limpeza).
@@ -96,24 +103,21 @@ def can_transition(src: EventState, dst: EventState) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Os 7 passos da fase de VERIFICAÇÃO.
+# Passos de verificação — agora OPCIONAIS (marcadores, sem gating).
 #
-# A fase só pode avançar para `espera` quando todos os passos OBRIGATÓRIOS estão
-# concluídos. A ordem aqui é a ordem em que aparecem na UI; o usuário pode marcar
-# em qualquer ordem, mas todos precisam estar OK para liberar `espera`.
+# `review` faz só verificações básicas: presença (editada direto nos participantes),
+# valor da tab e nodes capturados. Só TAB_VALUE e NODES sobrevivem como marcadores
+# de "já preenchido"; os outros (participation/missing_loots/tab_image/battles)
+# ficam no enum por compatibilidade com dados antigos mas não são mais usados.
 # ---------------------------------------------------------------------------
 class VerificationStep(str, enum.Enum):
-    PARTICIPATION = "participation"   # 1. verificar as participações (%)
-    MISSING_LOOTS = "missing_loots"   # 2. verificar loots faltantes (desvios)
-    TAB_VALUE = "tab_value"           # 3. definir o valor da tab
-    TAB_IMAGE = "tab_image"           # 4. print da tab
-    BATTLES = "battles"               # 5. registrar as batalhas do horário do CTA
-    NODES = "nodes"                   # 6. definir nodes capturados no evento
+    PARTICIPATION = "participation"   # legado — presença agora via participantes
+    MISSING_LOOTS = "missing_loots"   # legado — não usado no fluxo novo
+    TAB_VALUE = "tab_value"           # definir o valor da tab
+    TAB_IMAGE = "tab_image"           # legado — não usado no fluxo novo
+    BATTLES = "battles"               # legado — não usado no fluxo novo
+    NODES = "nodes"                   # marcar nodes capturados + valor vendido
 
 
-# Observação: o usuário citou "7 passos" numerados 1,2,4,5,6,7 (sem 3) na visão.
-# Consolidei em 6 passos canônicos sem buraco; "valor da tab" e "print da tab"
-# ficaram separados (eram os antigos 4 e 5). Se quiser exatamente 7, é só
-# adicionar um passo extra aqui — a lógica de gating não muda.
-
-REQUIRED_VERIFICATION_STEPS: frozenset[VerificationStep] = frozenset(VerificationStep)
+# ponytail: sem gating — review → finalized é sempre livre.
+REQUIRED_VERIFICATION_STEPS: frozenset[VerificationStep] = frozenset()

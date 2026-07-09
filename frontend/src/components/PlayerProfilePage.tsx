@@ -84,6 +84,11 @@ type BuildBase = {
 };
 type TopWeapon = { weapon_base: string; points: number; builds: BuildBase[] };
 
+// Personalização do dono verificado do personagem (ver ClaimsPanel →
+// "Personalizar perfil"; desbloqueada só com RegisteredCharacter, não pelo
+// /register do bot). null = personagem não verificado por ninguém no site.
+interface CustomProfile { theme: string; avatar_url: string | null; banner_url: string | null }
+
 interface PlayerProfile {
   Id: string;
   Name: string;
@@ -96,6 +101,7 @@ interface PlayerProfile {
   KillFame: number;
   DeathFame: number;
   LifetimeStatistics?: LifetimeStatistics;
+  custom_profile: CustomProfile | null;
   _ziggs: ZiggsData;
   _is_deleted?: boolean;
 }
@@ -143,8 +149,24 @@ function defaultAvatarFor(name: string): string {
   return DEFAULT_AVATARS[Math.abs(h) % DEFAULT_AVATARS.length];
 }
 
-function PlayerAvatar({ avatar, name, size = 48 }: { avatar?: string | null; name: string; size?: number }) {
-  const [stage, setStage] = useState<"primary" | "default" | "initials">(avatar ? "primary" : "default");
+function PlayerAvatar({ avatar, customUrl, name, size = 48 }: {
+  avatar?: string | null; customUrl?: string | null; name: string; size?: number;
+}) {
+  const [stage, setStage] = useState<"custom" | "primary" | "default" | "initials">(
+    customUrl ? "custom" : avatar ? "primary" : "default"
+  );
+  if (stage === "custom") {
+    return (
+      <img
+        src={customUrl!}
+        alt={name}
+        width={size}
+        height={size}
+        className="rounded-full object-cover"
+        onError={() => setStage(avatar ? "primary" : "default")}
+      />
+    );
+  }
   if (stage !== "initials") {
     const id = stage === "primary" ? avatar! : defaultAvatarFor(name);
     return (
@@ -771,7 +793,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
   const historyItems = (z?.guild_history ?? []).slice((historyPageClamped - 1) * PROFILE_PAGE_SIZE, historyPageClamped * PROFILE_PAGE_SIZE);
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-6">
+    <div className="mx-auto w-full max-w-5xl px-4 py-6" data-profile-theme={profile?.custom_profile?.theme}>
       <button onClick={onBack} className="mb-4 text-sm text-zinc-400 hover:text-zinc-200">← {t("back")}</button>
 
       {loading && <ProfileSkeleton />}
@@ -782,9 +804,16 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
       {profile && z && !loading && (
         <div className="space-y-4">
           {/* Header */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+          <div className="relative overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+            {profile.custom_profile?.banner_url && (
+              <>
+                <img src={profile.custom_profile.banner_url} alt="" className="absolute inset-0 h-full w-full object-cover opacity-25" />
+                <div className="absolute inset-0 bg-gradient-to-t from-zinc-900/95 via-zinc-900/70 to-zinc-900/40" />
+              </>
+            )}
+            <div className="relative">
             <div className="flex flex-wrap items-center gap-4">
-              <PlayerAvatar avatar={profile.Avatar} name={profile.Name} size={64} />
+              <PlayerAvatar avatar={profile.Avatar} customUrl={profile.custom_profile?.avatar_url} name={profile.Name} size={64} />
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-baseline gap-2">
                   <h2 className="text-xl font-bold text-zinc-100">{profile.Name}</h2>
@@ -861,6 +890,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
                 </div>
               </div>
             )}
+            </div>
           </div>
 
           {/* Abas */}

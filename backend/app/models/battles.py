@@ -213,3 +213,23 @@ class BattleGroupMember(Base):
         ForeignKey("battles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class BattleIdProbe(Base):
+    """Memória de sondagem do battle_sweeper — uma linha por albion_id que
+    sondamos no endpoint de detalhe (fora da janela de offset 10000 da
+    listagem). Sem isto, cada ciclo re-sondaria todos os buracos (404s) de novo
+    e viraria tempestade de 429. status='found' = achado em ≥1 região (light-
+    capturado, marcado reprocess_reason='sweeper' pro battle_reprocessor fazer
+    o deep); status='missing' = 404 nos 3 hosts, batalha inexistente."""
+    __tablename__ = "battle_id_probes"
+
+    albion_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # "found" | "missing"
+    region: Mapped[str | None] = mapped_column(String(16), nullable=True)  # primeira região que achou
+    probed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    battle_id: Mapped[int | None] = mapped_column(
+        ForeignKey("battles.id", ondelete="SET NULL"), nullable=True
+    )

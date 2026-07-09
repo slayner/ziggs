@@ -14,25 +14,33 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-_buckets: dict[tuple[str, str], tuple[float, int]] = {}
+_buckets: dict[tuple[str, "tuple[str, ...] | None", str], tuple[float, int]] = {}
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, limit: int, window: float, prefix: str = "", exclude_prefix: str = ""):
+    def __init__(self, app, *, limit: int, window: float, prefix: str = "",
+                 exclude_prefix: str | tuple[str, ...] = "", methods: tuple[str, ...] | None = None):
         super().__init__(app)
         self.limit = limit
         self.window = window
         self.prefix = prefix
         self.exclude_prefix = exclude_prefix
+        # None = todo método. Usado pra separar orçamento de leitura (barato,
+        # é a maioria do tráfego de navegação normal numa SPA) do de escrita
+        # (onde abuso de verdade — spam de forms, script batendo em POST —
+        # concentra) em vez de um balde único pros dois.
+        self.methods = methods
 
     async def dispatch(self, request: Request, call_next):
         if self.prefix and not request.url.path.startswith(self.prefix):
             return await call_next(request)
         if self.exclude_prefix and request.url.path.startswith(self.exclude_prefix):
             return await call_next(request)
+        if self.methods and request.method not in self.methods:
+            return await call_next(request)
 
         ip = request.client.host if request.client else "unknown"
-        key = (self.prefix, ip)
+        key = (self.prefix, self.methods, ip)
         now = time.monotonic()
         window_start, count = _buckets.get(key, (now, 0))
         if now - window_start > self.window:
@@ -53,12 +61,29 @@ if __name__ == "__main__":
     async def ok(request):
         return JSONResponse({"ok": True})
 
-    app = Starlette(routes=[Route("/x", ok), Route("/render/item/y", ok)])
-    app.add_middleware(RateLimitMiddleware, limit=3, window=60, exclude_prefix="/render/item")
+    app = Starlette(routes=[Route("/x", ok, methods=["GET", "POST"]),
+                            Route("/render/item/y", ok), Route("/bot/z", ok)])
+    app.add_middleware(RateLimitMiddleware, limit=3, window=60, exclude_prefix=("/render/item", "/bot/"))
     client = TestClient(app)
 
     statuses = [client.get("/x").status_code for _ in range(5)]
     assert statuses == [200, 200, 200, 429, 429], statuses
     render_statuses = [client.get("/render/item/y").status_code for _ in range(5)]
     assert render_statuses == [200] * 5, render_statuses
-    print("rate_limit OK", statuses, render_statuses)
+    bot_statuses = [client.get("/bot/z").status_code for _ in range(5)]
+    assert bot_statuses == [200] * 5, bot_statuses
+    print("rate_limit OK", statuses, render_statuses, bot_statuses)
+
+    # methods=(...): orçamento de leitura/escrita separado — estourar um não
+    # deve afetar o outro.
+    app2 = Starlette(routes=[Route("/x", ok, methods=["GET", "POST"])])
+    app2.add_middleware(RateLimitMiddleware, limit=2, window=60, methods=("POST",))
+    app2.add_middleware(RateLimitMiddleware, limit=4, window=60, methods=("GET", "HEAD"))
+    client2 = TestClient(app2)
+
+    get_statuses = [client2.get("/x").status_code for _ in range(6)]
+    assert get_statuses == [200, 200, 200, 200, 429, 429], get_statuses
+    # GET já estourou o próprio teto (4), mas POST tem balde separado — ainda livre.
+    post_statuses = [client2.post("/x").status_code for _ in range(3)]
+    assert post_statuses == [200, 200, 429], post_statuses
+    print("rate_limit methods-split OK", get_statuses, post_statuses)

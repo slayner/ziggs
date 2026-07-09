@@ -96,9 +96,32 @@ def fetch_guild(guild_id: str, bot_token: str) -> dict:
     return _bot_get(f"/guilds/{guild_id}", bot_token)  # type: ignore[return-value]
 
 
+def fetch_guild_member_bot(guild_id: str, user_id: str, bot_token: str) -> dict | None:
+    """GET /guilds/{guild_id}/members/{user_id} via bot token — confirma filiação
+    de um usuário ao server sem depender do token OAuth dele (que expira).
+    Devolve o member (com roles) ou None se o user não está no server / o bot
+    não está no server (403/404)."""
+    with httpx.Client(timeout=5) as c:
+        r = c.get(
+            f"{API}/guilds/{guild_id}/members/{user_id}",
+            headers={"Authorization": f"Bot {bot_token}"},
+        )
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code in (403, 404):
+            return None
+        r.raise_for_status()
+    return None
+
+
 def fetch_guild_roles(guild_id: str, bot_token: str) -> list[dict]:
     """GET /guilds/{guild_id}/roles — lista de cargos do servidor (usa bot token)."""
     return _bot_get(f"/guilds/{guild_id}/roles", bot_token)  # type: ignore[return-value]
+
+
+def fetch_guild_channels(guild_id: str, bot_token: str) -> list[dict]:
+    """GET /guilds/{guild_id}/channels — lista de canais do servidor (usa bot token)."""
+    return _bot_get(f"/guilds/{guild_id}/channels", bot_token)  # type: ignore[return-value]
 
 
 def remove_guild_member_role(guild_id: str, user_id: str, role_id: str, bot_token: str) -> None:

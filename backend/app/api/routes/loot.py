@@ -6,10 +6,11 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.api.schemas.loot import (
-    ChestUpload, ItemPriceOut, LootUpload, ReconcileResult,
+    ChestUpload, ItemPriceOut, LootReconcileOut, LootUpload, ReconcileResult,
 )
 from app.models.tenancy import Guild
 from app.services import loot as svc
+from app.services import loot_reconcile
 
 router = APIRouter(tags=["loot"])
 
@@ -66,6 +67,22 @@ def upload_chest(
     result = svc.upload_chest(db, guild.id, event_id, payload)
     db.commit()
     return result
+
+
+# ── Reconciliação própria (lootlog + baú + mortes) ──────────────────────────────
+
+@router.get(
+    "/guilds/{guild_id}/events/{event_id}/reconcile",
+    response_model=LootReconcileOut,
+)
+def unified_reconcile(
+    guild_id: int,
+    event_id: int,
+    guild: Guild = Depends(deps.tenant_guild),
+    db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission("events.view")),
+):
+    return loot_reconcile.unified_reconcile(db, guild.id, event_id)
 
 
 # ── Preços ────────────────────────────────────────────────────────────────────

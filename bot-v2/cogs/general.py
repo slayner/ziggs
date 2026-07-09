@@ -26,12 +26,22 @@ _ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 
 
 async def _guild_command_config(guild_id: int) -> dict:
-    """{"disabled": frozenset[str], "command_roles": dict[str, list[str]], "language": str} (cache 60s)."""
+    """{"disabled", "command_roles", "language", "events_channel_id",
+    "event_role_gates"} (cache 60s)."""
     now = time.monotonic()
     cached = _cmd_cache.get(guild_id)
     if cached and (now - cached[1]) < _CMD_TTL:
         return cached[0]
-    empty = {"disabled": frozenset(), "command_roles": {}, "language": "pt"}
+    empty = {
+        "disabled": frozenset(), "command_roles": {}, "language": "pt",
+        "events_channel_id": None, "event_review_channel_id": None,
+        "event_role_gates": {}, "massinfo_message_id": None,
+        "nodes_calendar_channel_id": None, "voice_cta_channel_id": None, "trial_percent": None,
+        "trial_role_id": None, "logs_channel_id": None,
+        "regear_thread_channel_id": None,
+        "lootlog_thread_channel_id": None,
+        "bot_logs_enabled": True,
+    }
     if not SITE_URL or not API_SECRET:
         return empty
     try:
@@ -47,6 +57,18 @@ async def _guild_command_config(guild_id: int) -> dict:
                     "disabled": frozenset(data.get("disabled", [])),
                     "command_roles": data.get("command_roles", {}),
                     "language": data.get("language") or "pt",
+                    "events_channel_id": data.get("events_channel_id"),
+                    "event_review_channel_id": data.get("event_review_channel_id"),
+                    "event_role_gates": data.get("event_role_gates", {}),
+                    "massinfo_message_id": data.get("massinfo_message_id"),
+                    "nodes_calendar_channel_id": data.get("nodes_calendar_channel_id"),
+                    "voice_cta_channel_id": data.get("voice_cta_channel_id"),
+                    "trial_percent": data.get("trial_percent"),
+                    "trial_role_id": data.get("trial_role_id"),
+                    "logs_channel_id": data.get("logs_channel_id"),
+                    "regear_thread_channel_id": data.get("regear_thread_channel_id"),
+                    "lootlog_thread_channel_id": data.get("lootlog_thread_channel_id"),
+                    "bot_logs_enabled": data.get("bot_logs_enabled", True),
                 }
                 _cmd_cache[guild_id] = (cfg, now)
                 return cfg

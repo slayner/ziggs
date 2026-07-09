@@ -1,0 +1,293 @@
+"""Escalação: assentar os inscritos nos slots da comp de um evento.
+
+Diferente de `event_signups` (auto-inscrição por função, sem build) e de
+`EventParticipant` (presença/payout), aqui o admin move cada jogador pra um
+`CompSlot` e escolhe qual `GameRole` (flex) ele vai jogar. O bypass é por design:
+não há checagem de que as funções escolhidas pelo inscrito batem com o slot —
+o admin decide. Mudanças setam `Event.signup_message_dirty` (mesmo outbox do
+mass-info do bot-v2)."""
+from __future__ import annotations
+
+import json
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from app.auth.permissions import has_permission
+from app.models.audit import AuditLog
+from app.models.catalog import GameRole, Weapon
+from app.models.comps import Comp, CompParty, CompSlot
+from app.models.events import Event, EventAssignment
+from app.models.registration import BotRegistration
+from app.models.tenancy import GuildMember
+from app.services.events import ServiceError
+
+
+def _load_comp_tree(db: Session, comp_id: int | None) -> Comp | None:
+    if comp_id is None:
+        return None
+    return db.scalar(
+        select(Comp).where(Comp.id == comp_id)
+        .options(selectinload(Comp.parties).selectinload(CompParty.slots).selectinload(CompSlot.roles))
+    )
+
+
+def _load_roles_and_weapons(
+    db: Session, comp: Comp | None,
+) -> tuple[dict[int, GameRole], dict[int, Weapon]]:
+    if comp is None:
+        return {}, {}
+    role_ids = {
+        csr.game_role_id
+        for party in comp.parties for slot in party.slots for csr in slot.roles
+    }
+    roles: dict[int, GameRole] = {}
+    if role_ids:
+        roles = {r.id: r for r in db.scalars(select(GameRole).where(GameRole.id.in_(role_ids)))}
+    weapon_ids = {r.weapon_id for r in roles.values() if r.weapon_id}
+    weapons: dict[int, Weapon] = {}
+    if weapon_ids:
+        weapons = {w.id: w for w in db.scalars(select(Weapon).where(Weapon.id.in_(weapon_ids)))}
+    return roles, weapons
+
+
+def _parse_gear_spells(raw: str | None) -> dict:
+    # gear_spells é Text JSON: {"helmet_Q": "SPELL_ID", ...}. Vira dict no payload.
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): (v if v is None else str(v)) for k, v in parsed.items()}
+
+
+def _role_out(role: GameRole, weapons: dict[int, Weapon]) -> dict:
+    w = weapons.get(role.weapon_id) if role.weapon_id else None
+    return {
+        "id": role.id,
+        "name": role.name,
+        "invisible_function": w.invisible_function if w else None,
+        "weapon_name": w.name if w else None,
+        "offhand": role.offhand,
+        "helmet": role.helmet,
+        "armor": role.armor,
+        "boots": role.boots,
+        "cape": role.cape,
+        "food": role.food,
+        "play_style": role.play_style,
+        "obs": role.obs,
+        "build_items": role.build_items or [],
+        "color": role.color,
+        "q_spell": role.q_spell,
+        "w_spell": role.w_spell,
+        "passive_spell": role.passive_spell,
+        "gear_spells": _parse_gear_spells(role.gear_spells),
+    }
+
+
+def _get_event(db: Session, guild_id: int, event_id: int) -> Event:
+    ev = db.scalar(
+        select(Event).where(Event.id == event_id, Event.guild_id == guild_id)
+        .options(selectinload(Event.signups), selectinload(Event.assignments))
+    )
+    if ev is None:
+        raise ServiceError("evento não encontrado")
+    return ev
+
+
+def build_escalation(
+    db: Session, guild_id: int, event_id: int, member: GuildMember | None,
+) -> dict:
+    ev = _get_event(db, guild_id, event_id)
+    comp = _load_comp_tree(db, ev.comp_id)
+    roles, weapons = _load_roles_and_weapons(db, comp)
+
+    parties: list[dict] = []
+    valid_slot_ids: set[int] = set()
+    if comp is not None:
+        for party in comp.parties:
+            slots = []
+            for slot in party.slots:
+                valid_slot_ids.add(slot.id)
+                slots.append({
+                    "id": slot.id,
+                    "position": slot.position,
+                    "label": slot.label,
+                    "fn": slot.fn,
+                    "notes": slot.notes,
+                    "roles": [
+                        _role_out(roles[csr.game_role_id], weapons)
+                        for csr in slot.roles
+                        if csr.game_role_id in roles
+                    ],
+                })
+            parties.append({
+                "id": party.id,
+                "position": party.position,
+                "name": party.name,
+                "slots": slots,
+            })
+
+    # Órfãos (comp_slot_id None ou fora da árvore atual) são escondidos, não
+    # deletados — a comp pode ser reeditada e o ciclo de vida é do ondelete=SET NULL.
+    # Resolve nomes de personagem do /register (BotRegistration) — fallback é o
+    # user_name que veio do Discord (display_name do servidor) no momento do signup.
+    signup_user_ids = {s.user_id for s in ev.signups}
+    assignment_user_ids = {a.user_id for a in ev.assignments}
+    all_user_ids = signup_user_ids | assignment_user_ids
+    char_names: dict[int, str] = {}
+    if all_user_ids:
+        regs = db.scalars(
+            select(BotRegistration).where(
+                BotRegistration.guild_id == guild_id,
+                BotRegistration.discord_user_id.in_(all_user_ids),
+                BotRegistration.active.is_(True),
+            )
+        ).all()
+        # Se o mesmo user tem mais de um registro ativo (multi-char), pega o
+        # primeiro — não há como saber qual personagem ele vai jogar só pelo ID.
+        for r in regs:
+            char_names.setdefault(r.discord_user_id, r.albion_player_name)
+
+    def _display_name(uid: int, fallback: str | None) -> str | None:
+        return char_names.get(uid) or fallback
+
+    assignments = [
+        {
+            "slot_id": a.comp_slot_id,
+            "user_id": a.user_id,
+            "user_name": _display_name(a.user_id, a.user_name),
+            "game_role_id": a.game_role_id,
+        }
+        for a in ev.assignments
+        if a.comp_slot_id is not None and a.comp_slot_id in valid_slot_ids
+    ]
+
+    enlisted = [
+        {
+            "user_id": s.user_id,
+            "user_name": _display_name(s.user_id, s.user_name),
+            "functions": list(s.functions or []),
+        }
+        for s in ev.signups
+    ]
+
+    can_manage = bool(member is not None and (
+        member.is_guild_admin or has_permission(db, member, "escalacao.manage")
+    ))
+
+    comp_name = comp.name if comp is not None else None
+    return {
+        "event": {
+            "id": ev.id,
+            "title": ev.title,
+            "scheduled_at": ev.scheduled_at,
+            "seriousness": ev.seriousness.value,
+            "state": ev.state.value,
+            "comp_id": ev.comp_id,
+            "comp_name": comp_name,
+            "functions_released": ev.functions_released,
+        },
+        "parties": parties,
+        "assignments": assignments,
+        "enlisted": enlisted,
+        "can_manage": can_manage,
+    }
+
+
+def assign(
+    db: Session, guild_id: int, event_id: int,
+    slot_id: int, user_id: int, user_name: str | None, game_role_id: int,
+    actor_id: int | None = None,
+) -> EventAssignment:
+    ev = db.scalar(select(Event).where(Event.id == event_id, Event.guild_id == guild_id))
+    if ev is None:
+        raise ServiceError("evento não encontrado")
+    if ev.comp_id is None:
+        raise ServiceError("evento sem comp vinculado")
+    comp = _load_comp_tree(db, ev.comp_id)
+    if comp is None:
+        raise ServiceError("comp não encontrada")
+
+    slot = next(
+        (s for p in comp.parties for s in p.slots if s.id == slot_id), None,
+    )
+    if slot is None:
+        raise ServiceError("slot inválido")
+    flex_ids = {csr.game_role_id for csr in slot.roles}
+    if game_role_id not in flex_ids:
+        raise ServiceError("game_role não é flex desse slot")
+
+    # Bump: se o slot já tem outro jogador, ele volta pra piscina de inscritos.
+    occupant = db.scalar(select(EventAssignment).where(
+        EventAssignment.event_id == event_id,
+        EventAssignment.comp_slot_id == slot_id,
+    ))
+    bumped = None
+    if occupant is not None and occupant.user_id != user_id:
+        bumped = {"user_id": occupant.user_id, "slot_id": slot_id}
+        db.delete(occupant)
+        db.flush()
+
+    # Upsert pelo user (1 assento por jogador): move o jogador pra o slot novo,
+    # liberando o slot antigo automaticamente.
+    row = db.scalar(select(EventAssignment).where(
+        EventAssignment.event_id == event_id, EventAssignment.user_id == user_id,
+    ))
+    prev_slot = row.comp_slot_id if row is not None else None
+    if row is None:
+        row = EventAssignment(event_id=event_id, guild_id=guild_id, user_id=user_id)
+        db.add(row)
+    row.comp_slot_id = slot_id
+    row.user_name = user_name
+    row.game_role_id = game_role_id
+
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+        action="escalacao.assign", entity="event_assignment", entity_id=str(row.id),
+        event_id=event_id,
+        before={"prev_slot": prev_slot, "bumped": bumped},
+        after={"slot_id": slot_id, "user_id": user_id, "game_role_id": game_role_id},
+    ))
+    ev.signup_message_dirty = True
+    db.flush()
+    return row
+
+
+def unassign_slot(db: Session, guild_id: int, event_id: int, slot_id: int, actor_id: int | None = None) -> None:
+    ev = db.scalar(select(Event).where(Event.id == event_id, Event.guild_id == guild_id))
+    if ev is None:
+        raise ServiceError("evento não encontrado")
+    row = db.scalar(select(EventAssignment).where(
+        EventAssignment.event_id == event_id, EventAssignment.comp_slot_id == slot_id,
+    ))
+    if row is not None:
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+            action="escalacao.unassign_slot", entity="event_assignment", entity_id=str(row.id),
+            event_id=event_id, before={"user_id": row.user_id, "slot_id": slot_id},
+        ))
+        db.delete(row)
+        ev.signup_message_dirty = True
+        db.flush()
+
+
+def unassign_user(db: Session, guild_id: int, event_id: int, user_id: int, actor_id: int | None = None) -> None:
+    ev = db.scalar(select(Event).where(Event.id == event_id, Event.guild_id == guild_id))
+    if ev is None:
+        raise ServiceError("evento não encontrado")
+    row = db.scalar(select(EventAssignment).where(
+        EventAssignment.event_id == event_id, EventAssignment.user_id == user_id,
+    ))
+    if row is not None:
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+            action="escalacao.unassign_user", entity="event_assignment", entity_id=str(row.id),
+            event_id=event_id, before={"user_id": user_id, "slot_id": row.comp_slot_id},
+        ))
+        db.delete(row)
+        ev.signup_message_dirty = True
+        db.flush()

@@ -20,6 +20,7 @@ from app.api.routes.battles import (
 from app.models.battles import Battle, BattleGuild, BattleParticipant, BattleSide
 from app.models.catalog import Weapon
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerWeaponStat
+from app.services.search_norm import match as search_match, norm_sql, normalize as norm_name
 
 router = APIRouter(prefix="/highscores", tags=["highscores"])
 
@@ -373,8 +374,8 @@ def highscore_rankings(
         if search_term:
             ranked = [
                 (rank, (gid, v)) for rank, (gid, v) in ranked
-                if search_term in names.get(gid, (gid, None))[0].lower()
-                or (names.get(gid, (None, None))[1] or "").lower().find(search_term) != -1
+                if search_match(search_term, names.get(gid, (gid, None))[0] or "")
+                or search_match(search_term, names.get(gid, (None, None))[1] or "")
             ]
         total = len(ranked)
         page = ranked[offset:offset + limit]
@@ -406,7 +407,7 @@ def highscore_rankings(
         # candidato all-time pode ter ~100k jogadores distintos, muito além
         # do limite de parâmetros do SQLite) e cruza com os candidatos em Python.
         matching_ids = set(db.scalars(
-            select(AlbionPlayer.albion_id).where(func.lower(AlbionPlayer.name).like(f"%{search_term}%"))
+            select(AlbionPlayer.albion_id).where(norm_sql(AlbionPlayer.name).like(f"%{norm_name(search_term)}%"))
         ).all())
         ranked3 = [(rank, c) for rank, c in ranked3 if c[0] in matching_ids]
     total = len(ranked3)

@@ -24,11 +24,20 @@ from app.models.battles import BattleGuild
 from app.models.economy import EconomyBalance, EconomyTransaction
 from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildMember, GuildRolePermission, User
+from app.services import economy as economy_svc
+from app.services import event_signups as event_signups_svc
+from app.services import events as events_svc
+from app.services import nodes as nodes_svc
+from app.services.events import ServiceError
+from app.services.albion_gate import BOT_REGISTER, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client
 
 router = APIRouter(tags=["auth"])
 
 _STATE_COOKIE = "ziggs_oauth_state"
+# Pra onde voltar depois do OAuth (deep links tipo /eventos/.../escalacao): evita
+# o fallback fixo no raiz do front pra o usuário não perder a página que abriu.
+_NEXT_COOKIE = "ziggs_oauth_next"
 # Cache de 60s para guilds Discord do usuário — evita rate limit 429
 _guilds_cache: dict[int, tuple[list, float]] = {}
 _GUILDS_TTL = 60
@@ -42,11 +51,18 @@ def _require_bot_secret(authorization: str) -> None:
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
 
+def _valid_next(next_url: str | None) -> bool:
+    """Relativo same-origin (anti open-redirect): começa com "/" mas não com "//"."""
+    return bool(next_url) and next_url.startswith("/") and not next_url.startswith("//")
+
+
 @router.get("/auth/discord/login")
-def discord_login():
+def discord_login(next: str | None = Query(default=None)):
     state = secrets.token_urlsafe(24)
     resp = RedirectResponse(discord.build_authorize_url(state))
     resp.set_cookie(_STATE_COOKIE, state, max_age=600, httponly=True, samesite="lax")
+    if _valid_next(next):
+        resp.set_cookie(_NEXT_COOKIE, next, max_age=600, httponly=True, samesite="lax")
     return resp
 
 
@@ -55,6 +71,7 @@ def discord_callback(
     code: str = Query(...),
     state: str = Query(...),
     oauth_state: str | None = Cookie(default=None, alias=_STATE_COOKIE),
+    oauth_next: str | None = Cookie(default=None, alias=_NEXT_COOKIE),
     db: Session = Depends(deps.db_session),
 ):
     if not oauth_state or not secrets.compare_digest(oauth_state, state):
@@ -86,13 +103,15 @@ def discord_callback(
     db.commit()
 
     s = get_settings()
-    resp = RedirectResponse(s.frontend_url)
+    redirect_to = oauth_next if _valid_next(oauth_next) else s.frontend_url
+    resp = RedirectResponse(redirect_to)
     resp.set_cookie(
         s.session_cookie_name, make_session(uid),
         max_age=s.session_max_age, httponly=True, samesite="lax",
         secure=(s.environment != "development"),
     )
     resp.delete_cookie(_STATE_COOKIE)
+    resp.delete_cookie(_NEXT_COOKIE)
     return resp
 
 
@@ -191,8 +210,12 @@ def select_guild(
         guild.name = body.guild_name
         if body.icon:
             guild.icon = body.icon
-    db.flush()
-
+    # ponytail: NÃO flushar aqui. flush() abriria a transação de escrita e
+    # seguraria o write lock do SQLite durante as ~15s das chamadas Discord
+    # abaixo (_sync_member_roles + fetch_guild) — todo outro writer busy-wait
+    # até 30s (db.py timeout=30) segurando suas conexões, esgota o pool e
+    # congela o site inteiro. O commit() final flusha tudo; os IDs são
+    # explícitos (gid / composite), nenhum flush precoce é necessário.
     member = db.scalar(select(GuildMember).where(
         GuildMember.guild_id == gid,
         GuildMember.user_id == user.id,
@@ -320,20 +343,22 @@ async def _lookup_albion_guild(name: str, region: str | None = None) -> dict | N
     nl = name.lower()
     hosts = [HOSTS[region]] if region in HOSTS else list(HOSTS.values())
     async with make_client() as client:
-        for host in hosts:
-            for attempt in range(ALBION_LOOKUP_RETRIES):
-                try:
-                    resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
-                    resp.raise_for_status()
-                except httpx.HTTPError:
-                    if attempt + 1 < ALBION_LOOKUP_RETRIES:
-                        await asyncio.sleep(ALBION_LOOKUP_BACKOFF * (attempt + 1))
-                    continue
-                candidates = resp.json().get("guilds", [])
-                match = next((g for g in candidates if (g.get("Name") or "").lower() == nl), None)
-                if match:
-                    return match
-                break  # resposta válida (só não tem essa guilda nessa região) — não repete
+        async with albion_scope(BOT_REGISTER):
+            for host in hosts:
+                for attempt in range(ALBION_LOOKUP_RETRIES):
+                    try:
+                        async with slot():
+                            resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
+                        resp.raise_for_status()
+                    except httpx.HTTPError:
+                        if attempt + 1 < ALBION_LOOKUP_RETRIES:
+                            await asyncio.sleep(ALBION_LOOKUP_BACKOFF * (attempt + 1))
+                        continue
+                    candidates = resp.json().get("guilds", [])
+                    match = next((g for g in candidates if (g.get("Name") or "").lower() == nl), None)
+                    if match:
+                        return match
+                    break  # resposta válida (só não tem essa guilda nessa região) — não repete
     return None
 
 
@@ -347,6 +372,61 @@ class GuildSettingsIn(BaseModel):
     ally_role_id: str | None = None
     ally_allowed_guilds: list[str] | None = None
     bot_language: str | None = None
+    events_channel_id: str | None = None
+    # Sala onde o bot-v2 cria uma thread por evento ao entrar em review e posta
+    # o embed 📑 EVENTO #N dentro dela. Null = cai no events_channel_id como
+    # mensagem simples (legacy). Ver cogs/event_embeds.py.
+    event_review_channel_id: str | None = None
+    # Canal dedicado onde o bot-v2 cria uma thread de regear por evento ao
+    # entrar em IN_PROGRESS. Prints postadas na thread viram RegearRequests
+    # atrelados ao evento (landmark). Null = sem thread automática (regears
+    # soltos caem na fila geral sem vínculo). Ver cogs/regear_threads.py.
+    regear_thread_channel_id: str | None = None
+    # Canal dedicado onde o bot-v2 cria uma thread de lootlog por evento ao
+    # entrar em IN_PROGRESS. .csv do lootlogger postado na thread vira
+    # LootLogSubmission atrelado ao evento (resolve por lootlog_thread_id).
+    # Null = sem thread automática. Espelho do regear_thread_channel_id.
+    lootlog_thread_channel_id: str | None = None
+    # {nome_da_funcao_minusculo: [discord_role_id, ...]} — substitui a tabela
+    # role_gates do bot antigo (ver app/services/event_gates.py).
+    event_role_gates: dict[str, list[str]] | None = None
+    # Mín/máx de builds (funções) que um inscrito deve/pode escolher. Min>1
+    # conta só builds não-flex; max conta tudo (flex incluído).
+    signup_min_builds: int | None = None
+    signup_max_builds: int | None = None
+    # Canal onde o bot-v2 posta o calendário de nodes (embed persistente).
+    nodes_calendar_channel_id: str | None = None
+    # Canal de voz "CTA" — o snapshot loop do bot-v2 mede presença aqui p/ o
+    # modo participation_mode=voice_percent (ver app/services/nodes_voice.py).
+    voice_cta_channel_id: str | None = None
+    # Desconto % aplicado ao base_percent de trials no freeze do evento (0..100).
+    trial_percent: int | None = None
+    # Role do Discord que marca um membro como trial — o bot-v2 lê isso no voice
+    # snapshot (cogs/voice_presence.py) e seta is_trial=true em quem tem a role.
+    trial_role_id: str | None = None
+    # Todo evento SEMPRE calcula regear; este setting só decide o lootsplit.
+    # "none" = sem lootsplit (regear sai do banco da guilda, igual sempre foi).
+    # "leftover" = regear sai da PRÓPRIA tab primeiro; o que sobrar é o split
+    # (rombo negativo zera, ninguém cobre). "full" = tab inteira (menos corte
+    # de logger) vira split; regear é custo à parte do banco (era o antigo
+    # tipo lootsplit_regear). "guild_backed" = igual "leftover", mas rombo
+    # negativo é descontado igualmente do saldo (EconomyBalance) de TODO
+    # membro da guilda. Ver events.LOOTSPLIT_MODES/_calc_payout/_finalize_payouts.
+    lootsplit_mode: str | None = None
+    # Momentos em que o mass-info do bot deleta a embed e reenvia com @everyone.
+    # Subconjunto de {created, t10min, in_progress, review}; default (chave
+    # ausente) = os 3 primeiros. [] = tudo off (status triggers ainda bumpam
+    # silenciosamente, só sem @everyone — ver event_signups._enqueue_ping).
+    events_ping_triggers: list[str] | None = None
+    # Canal de logs do bot (retransmissão do AuditLog). Default (null) = o bot
+    # cria e mantém um canal próprio admin-only "logs-bot" (ver cogs/audit_log.py
+    # ensure_logs_channel). Setar um canal aqui faz o bot usar esse em vez do
+    # auto-criado — útil pra centralizar logs num canal existente da guilda.
+    logs_channel_id: str | None = None
+    # Feature era sempre-ativa (sem toggle) — default (chave ausente) = True,
+    # preserva o comportamento de guildas existentes. False faz o bot parar de
+    # criar/manter o canal de logs e de postar (ver cogs/audit_log.py).
+    bot_logs_enabled: bool | None = None
 
 
 @router.patch("/auth/guild-settings/{guild_id}")
@@ -406,6 +486,95 @@ async def update_guild_settings(
             settings["bot_language"] = body.bot_language
         else:
             settings.pop("bot_language", None)
+    if "events_channel_id" in body.model_fields_set:
+        if body.events_channel_id:
+            settings["events_channel_id"] = body.events_channel_id
+        else:
+            settings.pop("events_channel_id", None)
+    if "event_review_channel_id" in body.model_fields_set:
+        if body.event_review_channel_id:
+            settings["event_review_channel_id"] = body.event_review_channel_id
+        else:
+            settings.pop("event_review_channel_id", None)
+    if "regear_thread_channel_id" in body.model_fields_set:
+        if body.regear_thread_channel_id:
+            settings["regear_thread_channel_id"] = body.regear_thread_channel_id
+        else:
+            settings.pop("regear_thread_channel_id", None)
+    if "lootlog_thread_channel_id" in body.model_fields_set:
+        if body.lootlog_thread_channel_id:
+            settings["lootlog_thread_channel_id"] = body.lootlog_thread_channel_id
+        else:
+            settings.pop("lootlog_thread_channel_id", None)
+    if "event_role_gates" in body.model_fields_set:
+        if body.event_role_gates:
+            settings["event_role_gates"] = body.event_role_gates
+        else:
+            settings.pop("event_role_gates", None)
+    if "signup_min_builds" in body.model_fields_set:
+        if body.signup_min_builds and body.signup_min_builds > 0:
+            settings["signup_min_builds"] = body.signup_min_builds
+        else:
+            settings.pop("signup_min_builds", None)
+    if "signup_max_builds" in body.model_fields_set:
+        if body.signup_max_builds and body.signup_max_builds > 0:
+            settings["signup_max_builds"] = body.signup_max_builds
+        else:
+            settings.pop("signup_max_builds", None)
+    if "nodes_calendar_channel_id" in body.model_fields_set:
+        if body.nodes_calendar_channel_id:
+            settings["nodes_calendar_channel_id"] = body.nodes_calendar_channel_id
+        else:
+            settings.pop("nodes_calendar_channel_id", None)
+    if "voice_cta_channel_id" in body.model_fields_set:
+        if body.voice_cta_channel_id:
+            settings["voice_cta_channel_id"] = body.voice_cta_channel_id
+        else:
+            settings.pop("voice_cta_channel_id", None)
+    if "trial_percent" in body.model_fields_set:
+        if body.trial_percent is not None and 0 <= body.trial_percent <= 100:
+            settings["trial_percent"] = body.trial_percent
+        else:
+            settings.pop("trial_percent", None)
+    if "trial_role_id" in body.model_fields_set:
+        if body.trial_role_id:
+            settings["trial_role_id"] = body.trial_role_id
+        else:
+            settings.pop("trial_role_id", None)
+    if "lootsplit_mode" in body.model_fields_set:
+        if body.lootsplit_mode in events_svc.LOOTSPLIT_MODES:
+            settings["lootsplit_mode"] = body.lootsplit_mode
+        else:
+            settings.pop("lootsplit_mode", None)
+    if "events_ping_triggers" in body.model_fields_set:
+        valid = [t for t in (body.events_ping_triggers or []) if t in event_signups_svc.ALL_PING_TRIGGERS]
+        # [] explícito = admin desligou tudo (fica gravado, distinto de "nunca
+        # configurado" = default). Preserva ordem/dedup pra a UI bater com o banco.
+        if body.events_ping_triggers is None:
+            settings.pop("events_ping_triggers", None)
+        else:
+            seen: list[str] = []
+            for t in valid:
+                if t not in seen:
+                    seen.append(t)
+            settings["events_ping_triggers"] = seen
+    if "logs_channel_id" in body.model_fields_set:
+        if body.logs_channel_id:
+            settings["logs_channel_id"] = body.logs_channel_id
+            # Inicializa o cursor de AuditLog só se ainda não existir — senão
+            # trocar de canal despejaria todo o histórico acumulado no canal
+            # novo (desde o id 0). Mesma lógica do /bot/guilds/.../logs-channel
+            # que o bot chama ao auto-criar. Cursor já setado = continua de
+            # onde parou, sem gap nem dump.
+            if "logs_last_sent_id" not in settings:
+                max_id = db.scalar(select(func.max(AuditLog.id)).where(AuditLog.guild_id == guild_id)) or 0
+                settings["logs_last_sent_id"] = max_id
+        else:
+            # null = volta pro auto-create do bot (canal logs-bot admin-only).
+            # Mantém o cursor p/ não re-despejar histórico quando ele recriar.
+            settings.pop("logs_channel_id", None)
+    if "bot_logs_enabled" in body.model_fields_set:
+        settings["bot_logs_enabled"] = bool(body.bot_logs_enabled)
     g.settings = settings
 
     db.commit()
@@ -421,16 +590,18 @@ async def _is_guild_in_alliance(guild_id: str, alliance_id: str, region: str | N
     é o ally_allowed_guilds + o check ao vivo em bot_register/registration_checker."""
     hosts = [HOSTS[region]] if region in HOSTS else list(HOSTS.values())
     async with make_client() as client:
-        for host in hosts:
-            try:
-                resp = await client.get(f"https://{host}/api/gameinfo/guilds/{guild_id}")
-                if resp.status_code == 404:
+        async with albion_scope(BOT_REGISTER):
+            for host in hosts:
+                try:
+                    async with slot():
+                        resp = await client.get(f"https://{host}/api/gameinfo/guilds/{guild_id}")
+                    if resp.status_code == 404:
+                        continue
+                    resp.raise_for_status()
+                except httpx.HTTPError:
                     continue
-                resp.raise_for_status()
-            except httpx.HTTPError:
-                continue
-            data = resp.json()
-            return (str(data.get("AllianceId") or "") or None) == alliance_id
+                data = resp.json()
+                return (str(data.get("AllianceId") or "") or None) == alliance_id
     return True
 
 
@@ -566,6 +737,44 @@ def update_role_permissions(
     rp.permissions = {k: bool(v) for k, v in body.permissions.items() if k in PERMISSION_KEYS}
     db.commit()
     return {"ok": True}
+
+
+# Tipos de canal do Discord que aceitam mensagem de texto de bot (text=0,
+# announcement=5) — categorias/voz/etc. não servem pra postar o mass-info.
+_TEXT_CHANNEL_TYPES = {0, 5}
+# Canais de voz (voice=2, stage=13) — pra escolher onde o bot entra dar o CTA
+# de evento em voz.
+_VOICE_CHANNEL_TYPES = {2, 13}
+
+
+@router.get("/auth/guild-discord-channels/{guild_id}")
+def guild_discord_channels(
+    guild_id: int,
+    voice: bool = False,
+    user: User = Depends(deps.require_user),
+    db: Session = Depends(deps.db_session),
+):
+    """Lista canais do servidor Discord. Por padrão só os de texto (mass-info
+    de eventos/nodes). `voice=true` retorna só os de voz (CTA em voz do evento)."""
+    _require_admin(db, user, guild_id)
+    s = get_settings()
+    if not s.discord_bot_token:
+        raise HTTPException(503, "bot token não configurado")
+    try:
+        channels = discord.fetch_guild_channels(str(guild_id), s.discord_bot_token)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            raise HTTPException(502, "Token do bot inválido. Redefina o token no Discord Developer Portal e atualize o .env do backend.")
+        raise HTTPException(502, f"Discord retornou {e.response.status_code}")
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Erro de conexão com Discord: {e}")
+
+    allowed = _VOICE_CHANNEL_TYPES if voice else _TEXT_CHANNEL_TYPES
+    return [
+        {"id": c["id"], "name": c["name"], "position": c.get("position", 0)}
+        for c in channels
+        if c.get("type") in allowed
+    ]
 
 
 # ── Comandos por servidor ─────────────────────────────────────────────────────
@@ -708,7 +917,102 @@ def bot_guild_commands(
         "register_role_id": settings.get("register_role_id"),
         "command_roles": command_roles,
         "language": settings.get("bot_language") or "pt",
+        "events_channel_id": settings.get("events_channel_id"),
+        "event_review_channel_id": settings.get("event_review_channel_id"),
+        "regear_thread_channel_id": settings.get("regear_thread_channel_id"),
+        "lootlog_thread_channel_id": settings.get("lootlog_thread_channel_id"),
+        "event_role_gates": settings.get("event_role_gates", {}),
+        "massinfo_message_id": settings.get("massinfo_message_id"),
+        "nodes_calendar_channel_id": settings.get("nodes_calendar_channel_id"),
+        "voice_cta_channel_id": settings.get("voice_cta_channel_id"),
+        "trial_percent": settings.get("trial_percent"),
+        "trial_role_id": settings.get("trial_role_id"),
+        "logs_channel_id": settings.get("logs_channel_id"),
+        "bot_logs_enabled": settings.get("bot_logs_enabled", True),
     }
+
+
+# ── Bot: canal de logs (retransmissão do AuditLog) ─────────────────────────
+#
+# Feature sempre ativa (sem toggle no site) — ver GuildConfig.tsx. Se a guilda
+# não tiver logs_channel_id, o bot-v2 cria o canal (admin-only) e reporta o id
+# aqui. O cursor logs_last_sent_id vive em Guild.settings (mesmo padrão de
+# massinfo_message_id) — o site é a fonte da verdade, o bot não guarda estado.
+
+_AUDIT_LOG_BATCH = 25
+
+
+class LogsChannelIn(BaseModel):
+    channel_id: str
+
+
+@router.post("/bot/guilds/{guild_id}/logs-channel")
+def bot_set_logs_channel(
+    guild_id: int, body: LogsChannelIn,
+    authorization: str = Header(...), db: Session = Depends(deps.db_session),
+):
+    """Chamado uma vez pelo bot logo após criar o canal. Inicializa o cursor no
+    id máximo ATUAL do AuditLog da guilda — sem isso, a ativação despejaria todo
+    o histórico acumulado (inclusive de antes da feature existir) no canal novo."""
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    max_id = db.scalar(select(func.max(AuditLog.id)).where(AuditLog.guild_id == guild_id)) or 0
+    settings = dict(g.settings or {})
+    settings["logs_channel_id"] = body.channel_id
+    settings.setdefault("logs_last_sent_id", max_id)
+    g.settings = settings
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/bot/guilds/{guild_id}/audit-log")
+def bot_audit_log_work(
+    guild_id: int, authorization: str = Header(...), db: Session = Depends(deps.db_session),
+):
+    """Próximo lote de AuditLog ainda não retransmitido (cursor em
+    Guild.settings.logs_last_sent_id). Bot posta e confirma via
+    /audit-log-synced pra avançar o cursor."""
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    since_id = (g.settings or {}).get("logs_last_sent_id", 0) if g else 0
+    rows = db.scalars(
+        select(AuditLog)
+        .where(AuditLog.guild_id == guild_id, AuditLog.id > since_id)
+        .order_by(AuditLog.id.asc())
+        .limit(_AUDIT_LOG_BATCH)
+    ).all()
+    return {"entries": [
+        {
+            "id": r.id, "actor_id": str(r.actor_id) if r.actor_id else None,
+            "actor_type": r.actor_type, "source": r.source, "action": r.action,
+            "entity": r.entity, "entity_id": r.entity_id,
+            "before": r.before, "after": r.after, "note": r.note,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]}
+
+
+class AuditLogSyncedIn(BaseModel):
+    last_id: int
+
+
+@router.post("/bot/guilds/{guild_id}/audit-log-synced")
+def bot_audit_log_synced(
+    guild_id: int, body: AuditLogSyncedIn,
+    authorization: str = Header(...), db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    settings = dict(g.settings or {})
+    settings["logs_last_sent_id"] = body.last_id
+    g.settings = settings
+    db.commit()
+    return {"ok": True}
 
 
 # ── Bot: /register ────────────────────────────────────────────────────────
@@ -746,23 +1050,25 @@ async def bot_register(
     # personagem com o mesmo nick em outra região pode "casar" com a guilda errada.
     hosts = {guild_region: HOSTS[guild_region]} if guild_region in HOSTS else HOSTS
     async with make_client() as client:
-        for r, host in hosts.items():
-            for attempt in range(ALBION_LOOKUP_RETRIES):
-                try:
-                    resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
-                    resp.raise_for_status()
-                except httpx.HTTPError:
-                    if attempt + 1 < ALBION_LOOKUP_RETRIES:
-                        await asyncio.sleep(ALBION_LOOKUP_BACKOFF * (attempt + 1))
-                    continue
-                any_host_ok = True
-                candidates = resp.json().get("players", [])
-                match = next((p for p in candidates if (p.get("Name") or "").lower() == nl), None)
-                if match:
-                    found, region = match, r
-                break  # resposta válida (só não achou esse nick nessa região) — não repete
-            if found:
-                break
+        async with albion_scope(BOT_REGISTER):
+            for r, host in hosts.items():
+                for attempt in range(ALBION_LOOKUP_RETRIES):
+                    try:
+                        async with slot():
+                            resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
+                        resp.raise_for_status()
+                    except httpx.HTTPError:
+                        if attempt + 1 < ALBION_LOOKUP_RETRIES:
+                            await asyncio.sleep(ALBION_LOOKUP_BACKOFF * (attempt + 1))
+                        continue
+                    any_host_ok = True
+                    candidates = resp.json().get("players", [])
+                    match = next((p for p in candidates if (p.get("Name") or "").lower() == nl), None)
+                    if match:
+                        found, region = match, r
+                    break  # resposta válida (só não achou esse nick nessa região) — não repete
+                if found:
+                    break
 
     if not found:
         # Sem NENHUMA resposta válida da API da Albion (fora do ar/instável) é
@@ -971,15 +1277,7 @@ def bot_goodbye(
 # (check_command_access, já configurável pelo site); aqui só valida o dinheiro
 # em si (valor positivo, saldo suficiente).
 
-def _get_or_create_balance(db: Session, guild_id: int, discord_user_id: int) -> EconomyBalance:
-    bal = db.scalar(select(EconomyBalance).where(
-        EconomyBalance.guild_id == guild_id, EconomyBalance.discord_user_id == discord_user_id,
-    ))
-    if bal is None:
-        bal = EconomyBalance(guild_id=guild_id, discord_user_id=discord_user_id)
-        db.add(bal)
-        db.flush()
-    return bal
+_get_or_create_balance = economy_svc.get_or_create_balance
 
 
 @router.get("/bot/economy/balance/{guild_id}/{discord_user_id}")
@@ -1166,6 +1464,857 @@ def bot_economy_stats(
         .where(EconomyBalance.guild_id == guild_id)
     ).one()
     return {"user_count": row[0], "balances_sum": int(row[1])}
+
+
+# ── Bot: eventos (mass-info + inscrições) ───────────────────────────────────────
+# Fonte da verdade do gate/inscrições é o site — o bot só chama estas rotas e
+# renderiza; nunca reimplementa a cascata de parties/cargos (ver
+# app/services/event_gates.py e event_signups.py).
+
+def _parse_role_ids(raw: str | None) -> set[int]:
+    if not raw:
+        return set()
+    out: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.add(int(part))
+    return out
+
+
+@router.get("/bot/events/{guild_id}/pending-work")
+def bot_events_pending_work(
+    guild_id: int,
+    force: bool = False,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    events = event_signups_svc.list_active_events(db, guild_id)
+    # Catch-up: avança SCHEDULED cujo horário chegou (robusto a períodos offline
+    # do bot — roda no primeiro poll após reconectar). Transition marca dirty,
+    # então o has_pending_work abaixo devolve o embed atualizado no mesmo ciclo.
+    event_signups_svc.catch_up_states(db, guild_id, events)
+    # t10min: enfileira gatilho de @everyone pra eventos SCHEDULED que acabaram
+    # de entrar na janela lupa (T-10min). Idempotente via settings.lupa_announced.
+    # Depois do catch_up (eventos podem ter virado in_progress e saído do set
+    # "scheduled" — esses não pegam t10min, só in_progress, que é o correto).
+    # Commit explícito: get_session (deps) não commita, e esse é um GET que agora
+    # escreve no outbox — sem isso o t10min enfileirado se perde no rollback.
+    event_signups_svc.announce_lupa_starts(db, guild_id, events)
+    db.commit()
+    # Outbox de pings: o que o bot vai bumpar/@pingar nesse ciclo. force=True
+    # (on_ready) pula o outbox — só reedita in-place pra religar botões mortos
+    # pelo restart, sem re-pingar eventos já pingados antes da queda.
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    settings = (g.settings or {}) if g else {}
+    ping_triggers = [] if force else event_signups_svc.get_pending_ping_triggers(settings)
+    # force=True ignora o gate de dirty/staleness — usado só no catch-up de
+    # on_ready do bot-v2: um restart invalida os bindings de View em memória
+    # (botões do mass-info) independente de o conteúdo ter mudado, então o
+    # embed precisa ser reeditado mesmo "fresco" pra religar os botões.
+    if not force and not event_signups_svc.has_pending_work(db, guild_id, events) and not ping_triggers:
+        return {"events": [], "ping_triggers": []}
+    # needs_rebuild sinaliza ao bot pra reeditar o embed MESMO quando events é
+    # vazio — caso do último evento ativo ter sido cancelado/finalizado/excluído:
+    # o dirty mora num evento terminal (fora de ACTIVE_STATES), has_pending_work
+    # retorna True, mas build_pending_work não lista nada. Sem este flag o bot
+    # deixaria a linha cancelada estampada no embed antigo.
+    payload = event_signups_svc.build_pending_work(db, guild_id, events)
+    payload["needs_rebuild"] = True
+    payload["ping_triggers"] = ping_triggers
+    return payload
+
+
+class MassinfoSyncedIn(BaseModel):
+    message_id: str
+
+
+@router.post("/bot/events/{guild_id}/massinfo-synced")
+def bot_events_massinfo_synced(
+    guild_id: int,
+    body: MassinfoSyncedIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    settings = dict(g.settings or {})
+    settings["massinfo_message_id"] = body.message_id
+    g.settings = settings
+    event_signups_svc.mark_massinfo_synced(db, guild_id)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/bot/events/{guild_id}/ping-triggers-acked")
+def bot_events_ping_triggers_acked(
+    guild_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Bot chama DEPOIS de consumir o outbox de pings (bump + @everyone) pra
+    esvaziar settings.pending_ping_triggers — sem isso o próximo poll de 5s
+    re-pingaria os mesmos gatilhos. Separado do /massinfo-synced porque o
+    on_ready (force=True) lê o outbox vazio e NÃO deve limpá-lo (os pings
+    pendentes ficam pro próximo poll normal disparar de fato)."""
+    _require_bot_secret(authorization)
+    event_signups_svc.ack_ping_triggers(db, guild_id)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/bot/events/{guild_id}/{event_id}/eligible-functions")
+def bot_events_eligible_functions(
+    guild_id: int,
+    event_id: int,
+    discord_user_id: int,
+    discord_role_ids: str = "",
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    event_role_gates = ((g.settings or {}) if g else {}).get("event_role_gates", {})
+    try:
+        functions, reason, current, categories, min_builds, max_builds, flex_names = event_signups_svc.get_eligible_functions(
+            db, guild_id, event_id, discord_user_id, _parse_role_ids(discord_role_ids), event_role_gates,
+        )
+    except ServiceError as e:
+        raise HTTPException(404, str(e))
+    return {
+        "functions": functions,
+        "categories": {f: categories.get(f, "other") for f in functions},
+        "denial_reason": reason,
+        "signup_min_builds": min_builds,
+        "signup_max_builds": max_builds,
+        "flex_names": sorted(flex_names),
+        "current_signup": (
+            {
+                "functions": list(current.functions or []),
+            }
+            if current else None
+        ),
+    }
+
+
+class BotSignupIn(BaseModel):
+    user_id: int
+    user_name: str | None = None
+    functions: list[str] = []
+    discord_role_ids: list[int] = []
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/signups")
+def bot_events_upsert_signup(
+    guild_id: int,
+    event_id: int,
+    body: BotSignupIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    event_role_gates = ((g.settings or {}) if g else {}).get("event_role_gates", {})
+    try:
+        row = event_signups_svc.upsert_signup(
+            db, guild_id, event_id, body.user_id, body.user_name, body.functions,
+            set(body.discord_role_ids), event_role_gates,
+        )
+    except ServiceError as e:
+        raise HTTPException(404, str(e))
+    db.commit()
+    return {
+        "ok": True,
+        "functions": list(row.functions or []),
+    }
+
+
+@router.delete("/bot/events/{guild_id}/{event_id}/signups/{user_id}")
+def bot_events_remove_signup(
+    guild_id: int,
+    event_id: int,
+    user_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    try:
+        event_signups_svc.remove_signup(db, guild_id, event_id, user_id)
+    except ServiceError as e:
+        raise HTTPException(404, str(e))
+    db.commit()
+    return {"ok": True}
+
+
+class BotVoiceSnapshotIn(BaseModel):
+    present: list[dict] = []          # [{user_id, user_name, is_trial?}]
+    at: str | None = None             # ISO; opcional (default = agora)
+
+
+@router.get("/bot/events/{guild_id}/voice-active")
+def bot_events_voice_active(
+    guild_id: int, authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Lista eventos IN_PROGRESS + VOICE_PERCENT — alvo do snapshot loop do
+    bot-v2 (cogs/voice_presence.py, a cada 30s)."""
+    _require_bot_secret(authorization)
+    return {"events": events_svc.list_voice_active(db, guild_id)}
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/voice-snapshot")
+def bot_events_voice_snapshot(
+    guild_id: int, event_id: int, body: BotVoiceSnapshotIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Snapshot da sala CTA: acumula total_snapshots + snapshots_present por
+    jogador. No-op se o evento não for VOICE_PERCENT ou não estiver IN_PROGRESS
+    — o bot pode chamar a cada 30s sem raciocinar. Freeze roda no callout."""
+    _require_bot_secret(authorization)
+    from datetime import datetime as _dt
+    at = None
+    if body.at:
+        try:
+            at = _dt.fromisoformat(body.at)
+        except ValueError:
+            at = None
+    try:
+        res = events_svc.voice_snapshot(db, guild_id, event_id, body.present, at)
+    except events_svc.ServiceError as e:
+        raise HTTPException(404, str(e))
+    db.commit()
+    return res
+
+
+# ── Bot: mutações de evento + embed por evento (thread 📑 EVENTO #N) ───────────
+# O bot-v2 faz gate de cargo local (como em /bot/economy/*) e chama estas rotas
+# com BOT_API_SECRET. actor_id vem do body (quem clicou o botão no Discord); o
+# audit de transição grava source="bot". Escalação (assign) fica só no site.
+
+class BotTransitionIn(BaseModel):
+    to: str
+    actor_id: int | None = None
+    actor_name: str | None = None
+    reason: str | None = None
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/transition")
+def bot_events_transition(
+    guild_id: int, event_id: int, body: BotTransitionIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    try:
+        detail = events_svc.transition(
+            db, guild_id, event_id, body.to,
+            actor_id=body.actor_id, reason=body.reason, actor_source="bot",
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return detail
+
+
+class BotNodeClaimIn(BaseModel):
+    captured: bool = True
+    sold_value: int = 0
+    actor_id: int | None = None
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/nodes/{node_log_id}/claim")
+def bot_events_claim_node(
+    guild_id: int, event_id: int, node_log_id: int, body: BotNodeClaimIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    from app.services import nodes as nodes_svc
+    try:
+        nodes_svc.claim_node(
+            db, guild_id, event_id, node_log_id,
+            body.captured, body.sold_value, body.actor_id,
+        )
+    except nodes_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return events_svc.get_event(db, guild_id, event_id)
+
+
+class BotStepIn(BaseModel):
+    completed: bool = True
+    data: dict | None = None
+    actor_id: int | None = None
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/verification/{step}")
+def bot_events_set_step(
+    guild_id: int, event_id: int, step: str, body: BotStepIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    try:
+        detail = events_svc.set_step(
+            db, guild_id, event_id, step, body.completed, body.data, body.actor_id,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return detail
+
+
+class BotReleaseIn(BaseModel):
+    released: bool = True
+    actor_id: int | None = None
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/release-functions")
+def bot_events_release_functions(
+    guild_id: int, event_id: int, body: BotReleaseIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    try:
+        detail = events_svc.set_functions_released(
+            db, guild_id, event_id, body.released, body.actor_id,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return detail
+
+
+class BotParticipantIn(BaseModel):
+    user_id: int
+    user_name: str | None = None
+    percent: int = 0
+    base_percent: int = 0
+    is_trial: bool = False
+    actor_id: int | None = None
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/participants")
+def bot_events_add_participant(
+    guild_id: int, event_id: int, body: BotParticipantIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    from app.api.schemas.events import ParticipantIn
+    try:
+        detail = events_svc.add_participant(
+            db, guild_id, event_id,
+            ParticipantIn(user_id=body.user_id, user_name=body.user_name,
+                          percent=body.percent, base_percent=body.base_percent,
+                          is_trial=body.is_trial),
+            actor_id=body.actor_id,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return detail
+
+
+class BotParticipantUpdateIn(BaseModel):
+    game_role_id: int | None = None
+    percent: int | None = None
+    is_trial: bool | None = None
+    actor_id: int | None = None
+
+
+@router.patch("/bot/events/{guild_id}/{event_id}/participants/{participant_id}")
+def bot_events_update_participant(
+    guild_id: int, event_id: int, participant_id: int, body: BotParticipantUpdateIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    from app.api.schemas.events import ParticipantUpdate
+    try:
+        detail = events_svc.update_participant(
+            db, guild_id, event_id, participant_id,
+            ParticipantUpdate(game_role_id=body.game_role_id, percent=body.percent,
+                              is_trial=body.is_trial),
+            actor_id=body.actor_id,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return detail
+
+
+@router.delete("/bot/events/{guild_id}/{event_id}/participants/{participant_id}")
+def bot_events_remove_participant(
+    guild_id: int, event_id: int, participant_id: int,
+    actor_id: int | None = None,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    try:
+        detail = events_svc.remove_participant(
+            db, guild_id, event_id, participant_id, actor_id=actor_id,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return detail
+
+
+class BotDeathIn(BaseModel):
+    display_name: str
+    user_id: int | None = None
+    silver_value: int = 0
+    notes: str | None = None
+    actor_id: int | None = None
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/deaths")
+def bot_events_add_death(
+    guild_id: int, event_id: int, body: BotDeathIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    from app.api.schemas.events import DeathIn
+    try:
+        detail = events_svc.add_death(
+            db, guild_id, event_id,
+            DeathIn(display_name=body.display_name, user_id=body.user_id,
+                    silver_value=body.silver_value, notes=body.notes),
+            actor_id=body.actor_id,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return detail
+
+
+class BotDeathUpdateIn(BaseModel):
+    approved: bool | None = None
+    silver_value: int | None = None
+    notes: str | None = None
+    actor_id: int | None = None
+
+
+@router.patch("/bot/events/{guild_id}/{event_id}/deaths/{death_id}")
+def bot_events_update_death(
+    guild_id: int, event_id: int, death_id: int, body: BotDeathUpdateIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    from app.api.schemas.events import DeathUpdate
+    try:
+        detail = events_svc.update_death(
+            db, guild_id, event_id, death_id,
+            DeathUpdate(approved=body.approved, silver_value=body.silver_value, notes=body.notes),
+            actor_id=body.actor_id,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return detail
+
+
+@router.delete("/bot/events/{guild_id}/{event_id}/deaths/{death_id}")
+def bot_events_remove_death(
+    guild_id: int, event_id: int, death_id: int,
+    actor_id: int | None = None,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    try:
+        detail = events_svc.remove_death(
+            db, guild_id, event_id, death_id, actor_id=actor_id,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return detail
+
+
+@router.get("/bot/events/{guild_id}/{event_id}/embed")
+def bot_events_embed(
+    guild_id: int, event_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """DTO único pro embed 📑 EVENTO #N: detail + nodes próximos do callout +
+    escalação (read-only). Única chamada de leitura do embed."""
+    _require_bot_secret(authorization)
+    dto = events_svc.embed_dto(db, guild_id, event_id)
+    if dto is None:
+        raise HTTPException(404, "evento não encontrado")
+    return dto
+
+
+@router.get("/bot/events/{guild_id}/embed-work")
+def bot_events_embed_work(
+    guild_id: int, force: bool = False, authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Eventos com embed sujo (mutação ocorreu) e thread ativa — o loop do bot-v2
+    puxa isto, busca /embed de cada um, reedita, e chama /embed-synced.
+    force=True devolve todos os eventos com thread ativa, sujo ou não — ver
+    events.list_embed_dirty. Também devolve eventos terminais com thread de
+    embed ainda não trancada (archive), espelho do regear-thread-work."""
+    _require_bot_secret(authorization)
+    return {
+        "events": events_svc.list_embed_dirty(db, guild_id, force=force),
+        "archive": events_svc.list_event_thread_terminal(db, guild_id),
+    }
+
+
+class BotEmbedSyncedIn(BaseModel):
+    event_channel_id: str | None = None
+    event_message_id: str | None = None
+    lootlog_thread_id: str | None = None
+    split_thread_id: str | None = None
+    regear_thread_id: str | None = None
+    clear_dirty: bool = True
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/embed-synced")
+def bot_events_embed_synced(
+    guild_id: int, event_id: int, body: BotEmbedSyncedIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Grava os ids de canal/mensagem/thread que o bot criou/achou e limpa o
+    flag event_embed_dirty. Chamado após criar a thread (callout) E após cada
+    refresh do embed."""
+    _require_bot_secret(authorization)
+    def _opt(s: str | None) -> int | None:
+        return int(s) if s else None
+    ok = events_svc.set_embed_ids(
+        db, guild_id, event_id,
+        event_channel_id=_opt(body.event_channel_id),
+        event_message_id=_opt(body.event_message_id),
+        lootlog_thread_id=_opt(body.lootlog_thread_id),
+        split_thread_id=_opt(body.split_thread_id),
+        regear_thread_id=_opt(body.regear_thread_id),
+        clear_dirty=body.clear_dirty,
+    )
+    if not ok:
+        raise HTTPException(404, "evento não encontrado")
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/event-thread-archived")
+def bot_events_event_thread_archived(
+    guild_id: int, event_id: int, authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Sinaliza que o bot trancou (lock) a thread do embed do evento — tira o
+    evento da lista de arquivamento do loop. Best-effort (200 mesmo se já
+    estava, ou se o evento nunca teve thread pra trancar)."""
+    _require_bot_secret(authorization)
+    events_svc.mark_event_thread_archived(db, guild_id, event_id)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Bot: threads de regear por evento ──────────────────────────────────────────
+# O bot-v2 cria uma thread no regear_thread_channel_id quando o evento entra em
+# IN_PROGRESS (outbox: events.regear_thread_dirty). Prints postadas na thread
+# viram RegearRequests atrelados ao evento (landmark). Em estados terminais o
+# bot arquiva a thread.
+
+@router.get("/bot/events/{guild_id}/regear-thread-work")
+def bot_events_regear_thread_work(
+    guild_id: int, authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Eventos IN_PROGRESS com thread de regear pendente de criação. O loop do
+    bot-v2 puxa isto, cria a thread no regear_thread_channel_id, e chama
+    /regear-thread-synced. Também devolve eventos terminais com thread ativa
+    pra arquivamento (best-effort)."""
+    _require_bot_secret(authorization)
+    return {
+        "create": events_svc.list_regear_thread_dirty(db, guild_id),
+        "archive": events_svc.list_regear_thread_terminal(db, guild_id),
+    }
+
+
+class BotRegearThreadSyncedIn(BaseModel):
+    regear_thread_id: str
+    clear_dirty: bool = True
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/regear-thread-synced")
+def bot_events_regear_thread_synced(
+    guild_id: int, event_id: int, body: BotRegearThreadSyncedIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Grava o id da thread de regear criada pelo bot e limpa o flag dirty."""
+    _require_bot_secret(authorization)
+    thread_id = int(body.regear_thread_id) if body.regear_thread_id else None
+    ok = events_svc.set_regear_thread_id(db, guild_id, event_id, thread_id,
+                                         clear_dirty=body.clear_dirty)
+    if not ok:
+        raise HTTPException(404, "evento não encontrado")
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/regear-thread-archived")
+def bot_events_regear_thread_archived(
+    guild_id: int, event_id: int, authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Sinaliza que o bot arquivou (lock) a thread de regear do evento — tira o
+    evento da lista de arquivamento do loop. Best-effort (200 mesmo se já estava)."""
+    _require_bot_secret(authorization)
+    events_svc.mark_regear_thread_archived(db, guild_id, event_id)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Bot: threads de lootlog por evento (espelho do regear) ───────────────────
+# O bot-v2 cria uma thread no lootlog_thread_channel_id quando o evento entra em
+# IN_PROGRESS (outbox: events.lootlog_thread_dirty). .csv do lootlogger postado
+# na thread vira LootLogSubmission atrelado ao evento. Em terminais arquiva.
+
+@router.get("/bot/events/{guild_id}/lootlog-thread-work")
+def bot_events_lootlog_thread_work(
+    guild_id: int, authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Eventos com thread de lootlog pendente de criação + terminais pra
+    arquivamento. Mesmo formato do regear-thread-work."""
+    _require_bot_secret(authorization)
+    return {
+        "create": events_svc.list_lootlog_thread_dirty(db, guild_id),
+        "archive": events_svc.list_lootlog_thread_terminal(db, guild_id),
+    }
+
+
+class BotLootlogThreadSyncedIn(BaseModel):
+    lootlog_thread_id: str
+    clear_dirty: bool = True
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/lootlog-thread-synced")
+def bot_events_lootlog_thread_synced(
+    guild_id: int, event_id: int, body: BotLootlogThreadSyncedIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Grava o id da thread de lootlog criada pelo bot e limpa o flag dirty."""
+    _require_bot_secret(authorization)
+    thread_id = int(body.lootlog_thread_id) if body.lootlog_thread_id else None
+    ok = events_svc.set_lootlog_thread_id(db, guild_id, event_id, thread_id,
+                                          clear_dirty=body.clear_dirty)
+    if not ok:
+        raise HTTPException(404, "evento não encontrado")
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/bot/events/{guild_id}/{event_id}/lootlog-thread-archived")
+def bot_events_lootlog_thread_archived(
+    guild_id: int, event_id: int, authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Sinaliza que o bot arquivou (lock) a thread de lootlog do evento."""
+    _require_bot_secret(authorization)
+    events_svc.mark_lootlog_thread_archived(db, guild_id, event_id)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Bot: nodes (calendário) ────────────────────────────────────────────────────
+# O bot-v2 renderiza o calendário embed e faz proxy por aqui. Gate de cargo é
+# feito no bot (como em /bot/economy/*); o endpoint confia no BOT_API_SECRET.
+
+class BotNodeEventIn(BaseModel):
+    node_type: str
+    map_name: str
+    spawn_at: str          # ISO; o bot manda UTC
+    channel_id: int | None = None
+    added_by_id: int | None = None
+    added_by_name: str | None = None
+    allow_duplicate: bool = False
+
+
+@router.get("/bot/guilds/{guild_id}/nodes/calendar")
+def bot_nodes_get_calendar(guild_id: int, authorization: str = Header(...),
+                           db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    row = nodes_svc.get_calendar(db, guild_id)
+    return {"channel_id": str(row.channel_id) if row and row.channel_id else None,
+            "message_id": str(row.message_id) if row and row.message_id else None}
+
+
+class BotCalendarIn(BaseModel):
+    channel_id: str | None = None
+    message_id: str | None = None
+
+
+@router.post("/bot/guilds/{guild_id}/nodes/calendar")
+def bot_nodes_set_calendar(guild_id: int, body: BotCalendarIn,
+                           authorization: str = Header(...),
+                           db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    ch = int(body.channel_id) if body.channel_id else None
+    mid = int(body.message_id) if body.message_id else None
+    row = nodes_svc.set_calendar(db, guild_id, channel_id=ch, message_id=mid)
+    db.commit()
+    return {"ok": True, "channel_id": str(row.channel_id) if row.channel_id else None,
+            "message_id": str(row.message_id) if row.message_id else None}
+
+
+@router.get("/bot/guilds/{guild_id}/nodes")
+def bot_nodes_list(guild_id: int, authorization: str = Header(...),
+                   db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    rows = nodes_svc.list_events(db, guild_id)
+    return {"events": [
+        {"id": e.id, "node_type": e.node_type, "map_name": e.map_name,
+         "spawn_at": e.spawn_at.isoformat() if e.spawn_at else None,
+         "added_by_id": str(e.added_by_id) if e.added_by_id else None,
+         "added_by_name": e.added_by_name}
+        for e in rows
+    ]}
+
+
+@router.post("/bot/guilds/{guild_id}/nodes")
+def bot_nodes_add(guild_id: int, body: BotNodeEventIn,
+                  authorization: str = Header(...),
+                  db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    from datetime import datetime as _dt
+    try:
+        spawn = _dt.fromisoformat(body.spawn_at)
+    except ValueError:
+        raise HTTPException(400, "spawn_at inválido (ISO)")
+    ch = body.channel_id
+    try:
+        e = nodes_svc.add_event(
+            db, guild_id, body.node_type, body.map_name, spawn,
+            channel_id=ch, added_by_id=body.added_by_id,
+            added_by_name=body.added_by_name, allow_duplicate=body.allow_duplicate,
+        )
+    except nodes_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return {"ok": True, "id": e.id}
+
+
+@router.delete("/bot/guilds/{guild_id}/nodes/{event_id}")
+def bot_nodes_delete(guild_id: int, event_id: int, authorization: str = Header(...),
+                     db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    ok = nodes_svc.delete_event(db, guild_id, event_id)
+    db.commit()
+    return {"ok": ok}
+
+
+@router.get("/bot/guilds/{guild_id}/nodes/removable")
+def bot_nodes_removable(guild_id: int, user_id: int, staff: bool = False,
+                        authorization: str = Header(...),
+                        db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    rows = nodes_svc.removable_events(db, guild_id, staff=staff, user_id=user_id)
+    return {"events": [
+        {"id": e.id, "node_type": e.node_type, "map_name": e.map_name,
+         "spawn_at": e.spawn_at.isoformat() if e.spawn_at else None,
+         "added_by_id": str(e.added_by_id) if e.added_by_id else None}
+        for e in rows
+    ]}
+
+
+@router.get("/bot/guilds/{guild_id}/nodes/defs")
+def bot_nodes_defs(guild_id: int, authorization: str = Header(...),
+                   db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    rows = nodes_svc.list_defs(db, guild_id)
+    return {"defs": [
+        {"id": d.id, "name": d.name, "emoji": d.emoji, "weight": d.weight, "sort": d.sort}
+        for d in rows
+    ]}
+
+
+@router.get("/bot/guilds/{guild_id}/nodes/maps")
+def bot_nodes_maps(guild_id: int, authorization: str = Header(...),
+                   db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    return {"maps": nodes_svc.effective_maps(db, guild_id)}
+
+
+class BotMapIn(BaseModel):
+    map_name: str
+
+
+@router.post("/bot/guilds/{guild_id}/nodes/maps")
+def bot_nodes_add_map(guild_id: int, body: BotMapIn,
+                      authorization: str = Header(...),
+                      db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    try:
+        nodes_svc.add_map(db, guild_id, body.map_name)
+    except nodes_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return {"ok": True, "maps": nodes_svc.effective_maps(db, guild_id)}
+
+
+@router.delete("/bot/guilds/{guild_id}/nodes/maps/{map_name}")
+def bot_nodes_remove_map(guild_id: int, map_name: str,
+                         authorization: str = Header(...),
+                         db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    nodes_svc.remove_map(db, guild_id, map_name)
+    db.commit()
+    return {"ok": True, "maps": nodes_svc.effective_maps(db, guild_id)}
+
+
+@router.post("/bot/guilds/{guild_id}/nodes/clear")
+def bot_nodes_clear(guild_id: int, authorization: str = Header(...),
+                    db: Session = Depends(deps.db_session)):
+    """Equivalente ao /stopnode do bot-v1: poda TODOS os nodes vivos e zera o
+    calendário (channel_id/message_id). O log permanente (`node_event_log`) é
+    preservado — é auditoria."""
+    _require_bot_secret(authorization)
+    from sqlalchemy import delete as _delete
+    from app.models.nodes import NodeEvent, NodeCalendar
+    db.execute(_delete(NodeEvent).where(NodeEvent.guild_id == guild_id))
+    cal = db.get(NodeCalendar, guild_id)
+    if cal is not None:
+        cal.channel_id = None
+        cal.message_id = None
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/bot/guilds/{guild_id}/nodes/near")
+def bot_nodes_near(guild_id: int, ts: str, authorization: str = Header(...),
+                   window: int = Query(nodes_svc.NEAR_CTA_WINDOW_SECONDS, ge=0, le=86400),
+                   db: Session = Depends(deps.db_session)):
+    _require_bot_secret(authorization)
+    from datetime import datetime as _dt
+    try:
+        ts_dt = _dt.fromisoformat(ts)
+    except ValueError:
+        raise HTTPException(400, "ts inválido (ISO)")
+    rows = nodes_svc.near_cta(db, guild_id, ts_dt, window)
+    return {"ts": ts, "window_seconds": window, "nodes": [
+        {"id": l.id, "node_type": l.node_type, "map_name": l.map_name,
+         "spawn_at": l.spawn_at.isoformat() if l.spawn_at else None,
+         "scout_id": str(l.scout_id) if l.scout_id else None,
+         "scout_name": l.scout_name}
+        for l in rows
+    ]}
 
 
 # ── Logout ─────────────────────────────────────────────────────────────────────

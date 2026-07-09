@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.db import get_session
 from app.models.claims import CLAIM_EXPIRY, CharacterClaim, RegisteredCharacter
 from app.models.players import AlbionPlayer, PlayerKillEvent
+from app.services.albion_gate import CLAIM_VERIFY, albion_scope, slot
 from app.services.challenge_pool import check_inventory
 from app.services.player_tracker import HOSTS, make_client, sync_player_kills, upsert_player
 
@@ -33,25 +34,27 @@ async def _sync_pending_players(db, pending: list[CharacterClaim]) -> None:
     """
     seen: set[tuple[str, str]] = set()
     async with make_client() as client:
-        for claim in pending:
-            key = (claim.region, claim.albion_player_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            host = HOSTS.get(claim.region)
-            if not host:
-                continue
-            try:
-                resp = await client.get(f"https://{host}/api/gameinfo/players/{claim.albion_player_id}")
-                if resp.status_code != 200:
+        async with albion_scope(CLAIM_VERIFY):
+            for claim in pending:
+                key = (claim.region, claim.albion_player_id)
+                if key in seen:
                     continue
-                raw = resp.json()
-                if not (isinstance(raw, dict) and raw.get("Id")):
+                seen.add(key)
+                host = HOSTS.get(claim.region)
+                if not host:
                     continue
-                upsert_player(db, raw, claim.region)
-                await sync_player_kills(client, db, host, claim.region, claim.albion_player_id)
-            except Exception as e:
-                log.debug("claim_checker: falha ao sincronizar %s (%s): %s", claim.albion_player_id, claim.region, e)
+                try:
+                    async with slot():
+                        resp = await client.get(f"https://{host}/api/gameinfo/players/{claim.albion_player_id}")
+                    if resp.status_code != 200:
+                        continue
+                    raw = resp.json()
+                    if not (isinstance(raw, dict) and raw.get("Id")):
+                        continue
+                    upsert_player(db, raw, claim.region)
+                    await sync_player_kills(client, db, host, claim.region, claim.albion_player_id)
+                except Exception as e:
+                    log.debug("claim_checker: falha ao sincronizar %s (%s): %s", claim.albion_player_id, claim.region, e)
 
 
 async def _check_once() -> None:

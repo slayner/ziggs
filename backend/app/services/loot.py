@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+import statistics
 
 import httpx
 from sqlalchemy import select
@@ -72,7 +73,10 @@ def _fetch_price_api(item_type: str) -> int:
             for d in data
             if d.get("sell_price_min", 0) > 0
         ]
-        return min(prices) if prices else 0
+        # Mediana, não min — uma única listing troll (vendedor sem concorrência
+        # pedindo um preço absurdo) era o `min` e puxava toda a valuation pra baixo.
+        # Mediana ignora esse outlier isolado. Mesma técnica de get_battle_prices.
+        return round(statistics.median(prices)) if prices else 0
     except Exception:
         return 0
 

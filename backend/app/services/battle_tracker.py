@@ -24,11 +24,14 @@ from app.models.battles import (
     Battle, BattleGuild, BattleKillEvent, BattleParticipant, BattleSide, BattleSyncCursor,
 )
 from app.services import battle_sides
+from app.services.albion_gate import (
+    NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, albion_scope, battle_priority, slot,
+)
 from app.services.player_tracker import HOSTS, make_client
 
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL = 60  # 1 min — pedido explícito; deep-process agora é paralelo e usa semáforo global (ver _deep_fetch_sem), sobra folga
+POLL_INTERVAL = 60  # 1 min — pedido explícito; deep-process é paralelo e compete no bg pool do albion_gate (6 slots), sobra folga
 DEEP_PROCESS_MIN_PLAYERS = 0    # sem mínimo — toda batalha é deep-processada, até 1v1/gank
 
 # Motivos de reprocess_reason marcados pelo caminho de DESCOBERTA AO VIVO
@@ -39,6 +42,7 @@ DEEP_PROCESS_MIN_PLAYERS = 0    # sem mínimo — toda batalha é deep-processad
 # atrás de trabalho que pode esperar.
 REPROCESS_REASON_EMPTY = "deep_process_empty"    # API ainda sem detalhe/eventos (comum pra batalha muito recente)
 REPROCESS_REASON_FAILED = "deep_process_failed"  # erro de rede/HTTP ao buscar
+REPROCESS_REASON_SWEEPER = "sweeper"  # batalha achada por sondagem de ID (battle_sweeper), aguarda deep-process na fila de fundo
 ZVZ_MIN_PLAYERS_PER_SIDE = 30   # corte de is_zvz, confirmado após a análise de lados
 DEEP_REPROCESS_WINDOW = timedelta(hours=1)  # batalha congela (para de reprocessar) depois disso
 EVENTS_PAGE_LIMIT = 51
@@ -104,10 +108,11 @@ def _simplify_inventory(raw: list[dict] | None) -> list[dict] | None:
 
 
 async def fetch_battles(client: httpx.AsyncClient, host: str, limit: int = 51, offset: int = 0) -> list[dict]:
-    resp = await client.get(
-        f"https://{host}/api/gameinfo/battles",
-        params={"sort": "recent", "limit": limit, "offset": offset},
-    )
+    async with slot():
+        resp = await client.get(
+            f"https://{host}/api/gameinfo/battles",
+            params={"sort": "recent", "limit": limit, "offset": offset},
+        )
     resp.raise_for_status()
     return resp.json()
 
@@ -115,10 +120,11 @@ async def fetch_battles(client: httpx.AsyncClient, host: str, limit: int = 51, o
 async def fetch_events(client: httpx.AsyncClient, host: str, albion_battle_id: str) -> list[dict]:
     events: list[dict] = []
     for page in range(EVENTS_MAX_PAGES):
-        resp = await client.get(
-            f"https://{host}/api/gameinfo/events/battle/{albion_battle_id}",
-            params={"offset": page * EVENTS_PAGE_LIMIT, "limit": EVENTS_PAGE_LIMIT},
-        )
+        async with slot():
+            resp = await client.get(
+                f"https://{host}/api/gameinfo/events/battle/{albion_battle_id}",
+                params={"offset": page * EVENTS_PAGE_LIMIT, "limit": EVENTS_PAGE_LIMIT},
+            )
         resp.raise_for_status()
         page_data = resp.json()
         if not isinstance(page_data, list) or not page_data:
@@ -434,7 +440,8 @@ async def deep_process(client: httpx.AsyncClient, db: Session, battle: Battle, h
 
 
 async def fetch_battle_detail(client: httpx.AsyncClient, host: str, albion_id: str) -> dict | None:
-    resp = await client.get(f"https://{host}/api/gameinfo/battles/{albion_id}")
+    async with slot():
+        resp = await client.get(f"https://{host}/api/gameinfo/battles/{albion_id}")
     if resp.status_code != 200:
         return None
     data = resp.json()
@@ -486,45 +493,33 @@ async def _get_cursor(db: Session, region: str) -> BattleSyncCursor:
     return cursor
 
 
-_BACKFILL_CONCURRENCY = 4  # deep-processa várias batalhas em paralelo (só a parte de rede)
+# Concorrência de deep-fetch agora vive no bg pool do albion_gate (6 slots,
+# heap por prioridade). Cada fetch_one seta o scope da batalha (NEW/OLD ×
+# ELIGIBLE/SMALL) e os `slot()` dentro de fetch_battle_detail/fetch_events
+# disputam o bg pool — prioridade decide quem entra primeiro quando o pool
+# enche. Antes eram 3 Semaphore(4) (=12) sem ordem entre sync_recent/backfill/
+# reprocessor; agora 6 slots com ordem, e perfil/claim/regear têm reserved
+# pool separado (ver albion_gate) então nunca esperam atrás disso aqui.
 
-# Três semáforos em nível de MÓDULO, não criados a cada chamada:
-# - _deep_fetch_sem: trabalho de FUNDO histórico (backfill_step,
-#   _reverse_startup_sweep, motivo NÃO urgente do battle_reprocessor.py —
-#   ex.: "guildless_bracket") — reprocessamento perpétuo, "no seu ritmo".
-# - _recent_fetch_sem: só sync_recent, a descoberta de batalha NOVA — tem que
-#   ficar em dia a cada ciclo de POLL_INTERVAL (1min), não pode ficar na fila
-#   atrás do volume enorme e contínuo do backfill de fundo.
-# - _reprocess_urgent_sem: motivo urgente do battle_reprocessor.py (batalha
-#   RECÉM-descoberta que falhou o deep-process na hora — ver _URGENT_REASONS
-#   em battle_reprocessor.py). Mesmo raciocínio do _recent_fetch_sem: sem
-#   pool próprio, a fila "batalha nova" ficava atrás do backfill histórico
-#   (que nunca para) no MESMO _deep_fetch_sem e o backlog urgente vivia na
-#   casa dos milhares, batalha nova levando ~13-17h pra aparecer completa.
-# Sem separação nenhuma, um semáforo GLOBAL só (versão anterior desta
-# correção) resolveu o 429 (menos requisições concorrentes no total) mas fez
-# sync_recent competir pelas mesmas vagas que o backfill perpétuo — que nunca
-# para —, e um ciclo de sync_recent passou a bater quase no limite de 60s
-# (59.9s medido), sem margem nenhuma. Total de concorrência combinado
-# (4+4+4=12) continua bem abaixo do que gerava 429 antes (~24+).
-_deep_fetch_sem = asyncio.Semaphore(_BACKFILL_CONCURRENCY)
-_recent_fetch_sem = asyncio.Semaphore(_BACKFILL_CONCURRENCY)
-_reprocess_urgent_sem = asyncio.Semaphore(_BACKFILL_CONCURRENCY)
+# priority_fn(battle) -> int: qual tier de bg pool pra deep-fetch dessa batalha.
+# Callers escolhem conforme o ciclo (sync_recent=novo, backfill=velho, sweep=OTHER).
+def _prio_new(b: Battle) -> int: return battle_priority(b, is_new=True)
+def _prio_old(b: Battle) -> int: return battle_priority(b, is_new=False)
+def _prio_other(_b: Battle) -> int: return OTHER
 
 
 async def _backfill_deep_fetch_all(
-    client: httpx.AsyncClient, host: str, battles: list[Battle], *, sem: asyncio.Semaphore | None = None,
+    client: httpx.AsyncClient, host: str, battles: list[Battle], *, priority_fn,
 ) -> list[tuple[Battle, dict | None, list[dict]] | tuple[Battle, Exception]]:
     """Busca em paralelo (rede só, sem DB) os dados profundos de várias batalhas
     de uma vez — é a paginação de eventos (até 40 páginas/batalha) que faz o
     backfill sequencial ser absurdamente lento, então aqui é onde o tempo de
     espera de rede das várias batalhas se sobrepõe em vez de somar.
-    `sem` default (_deep_fetch_sem) é o pool de fundo — sync_recent passa
-    _recent_fetch_sem explicitamente pra ter vagas garantidas, ver módulo."""
-    sem = sem or _deep_fetch_sem
-
+    `priority_fn(battle)` decide o tier do bg pool praquele deep-fetch — o
+    `slot()` real vive dentro de fetch_battle_detail/fetch_events e lê o
+    contextvar que o scope aqui seta."""
     async def fetch_one(battle: Battle):
-        async with sem:
+        async with albion_scope(priority_fn(battle)):
             try:
                 raw, events = await _fetch_deep_data(client, host, battle)
                 return battle, raw, events
@@ -565,7 +560,11 @@ async def _retry_stuck_battles(client: httpx.AsyncClient, db: Session, region: s
     if not stuck:
         return 0
 
-    for result in await _backfill_deep_fetch_all(client, host, stuck):
+    now = datetime.now(timezone.utc)
+    # retry_stuck: batalha nova (não-frozen) que falhou → NEW_*; antiga → OLD_*.
+    def _prio(b: Battle) -> int: return battle_priority(b, is_new=not _is_frozen(b, now))
+
+    for result in await _backfill_deep_fetch_all(client, host, stuck, priority_fn=_prio):
         battle = result[0]
         if isinstance(result[1], Exception):
             log.warning("battle_tracker: retry de %s (%s) falhou de novo: %r",
@@ -636,7 +635,7 @@ async def _finish_lap(db: Session, cursor: BattleSyncCursor) -> None:
 
 async def _deep_process_batch(
     client: httpx.AsyncClient, db: Session, region: str, host: str, qualifying: list[Battle],
-    *, sem: asyncio.Semaphore | None = None,
+    *, priority_fn,
 ) -> None:
     """Deep-processa em paralelo uma lista de batalhas JÁ qualificadas (ver
     _backfill_deep_fetch_all) e grava. Usado por todo mundo que deep-processa
@@ -649,11 +648,11 @@ async def _deep_process_batch(
     sem disputar a API com o resto), garantindo que a batalha não se perde
     de vez por causa de um erro passageiro.
 
-    `sem`: sync_recent passa _recent_fetch_sem (vagas garantidas, não
-    disputa com o backfill de fundo); o resto usa o default (_deep_fetch_sem)."""
+    `priority_fn`: sync_recent passa _prio_new (batalha nova, prioridade
+    alta no bg pool); backfill passa _prio_old; reverse sweep passa _prio_other."""
     if not qualifying:
         return
-    for result in await _backfill_deep_fetch_all(client, host, qualifying, sem=sem):
+    for result in await _backfill_deep_fetch_all(client, host, qualifying, priority_fn=priority_fn):
         battle = result[0]
         if isinstance(result[1], Exception):
             log.warning("battle_tracker: falha no deep-process de %s (%s): %r",
@@ -673,24 +672,41 @@ async def _deep_process_batch(
             db.commit()
 
 
-async def _process_battle_batch(client: httpx.AsyncClient, db: Session, region: str, host: str, batch: list[dict]) -> None:
+async def _process_battle_batch(client: httpx.AsyncClient, db: Session, region: str, host: str, batch: list[dict], *, priority_fn) -> None:
     """Fluxo comum de uma página de batalhas cruas da API: upsert leve,
     filtra quem qualifica pra deep, e deep-processa (ver _deep_process_batch).
     Usado pelo avanço normal do backfill (backfill_step) e pela varredura
-    reversa de startup (_reverse_startup_sweep)."""
+    reversa de startup (_reverse_startup_sweep). `priority_fn` repassa pro
+    tier do bg pool de cada deep-fetch (backfill=_prio_old, sweep=_prio_other)."""
     qualifying: list[Battle] = []
     for raw in batch:
         try:
             battle = upsert_battle_light(db, raw, region)
         except Exception as e:
+            db.rollback()
             log.debug("battle_tracker: skip backfill %s (%s): %s", raw.get("id"), region, e)
             continue
         if battle is None or battle.processing_tier == "deep" or battle.players_total < DEEP_PROCESS_MIN_PLAYERS:
             continue
         qualifying.append(battle)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        # Sem isto, "database is locked" (contenção transitória com outro
+        # serviço de fundo) deixava a Session numa transação já abortada —
+        # TODO próximo commit nesta MESMA sessão falha de novo com "This
+        # Session's transaction has been rolled back...", em cascata pelo
+        # resto da página, pelo resto da varredura reversa de startup
+        # (~196 páginas/região) e pelas regiões seguintes (mesma sessão
+        # reusada em run_backfill_forever). Rollback aqui + pula o deep
+        # processing desta página: as batalhas voltam a ser vistas no
+        # próximo lap do backfill perpétuo normal (mesmo princípio de
+        # resiliência já documentado pra falha de rede/429).
+        db.rollback()
+        log.warning("battle_tracker: falha ao comitar página (%s): %r — recoberta num ciclo depois", region, e)
+        return
 
-    await _deep_process_batch(client, db, region, host, qualifying)
+    await _deep_process_batch(client, db, region, host, qualifying, priority_fn=priority_fn)
 
 
 async def backfill_step(client: httpx.AsyncClient, db: Session, region: str, host: str) -> None:
@@ -705,36 +721,37 @@ async def backfill_step(client: httpx.AsyncClient, db: Session, region: str, hos
     cursor = await _get_cursor(db, region)
     cutoff = datetime.now(timezone.utc) - BACKFILL_MAX_AGE
 
-    for _ in range(BACKFILL_PAGES_PER_CYCLE):
-        if cursor.next_offset + BACKFILL_PAGE_SIZE > BATTLES_API_OFFSET_LIMIT:
-            await _finish_lap(db, cursor)
-            return
+    async with albion_scope(OLD_ELIGIBLE):
+        for _ in range(BACKFILL_PAGES_PER_CYCLE):
+            if cursor.next_offset + BACKFILL_PAGE_SIZE > BATTLES_API_OFFSET_LIMIT:
+                await _finish_lap(db, cursor)
+                return
 
-        try:
-            batch = await fetch_battles(client, host, limit=BACKFILL_PAGE_SIZE, offset=cursor.next_offset)
-        except Exception as e:
-            log.warning("battle_tracker: falha no backfill (%s, offset=%d): %r", region, cursor.next_offset, e)
-            return
+            try:
+                batch = await fetch_battles(client, host, limit=BACKFILL_PAGE_SIZE, offset=cursor.next_offset)
+            except Exception as e:
+                log.warning("battle_tracker: falha no backfill (%s, offset=%d): %r", region, cursor.next_offset, e)
+                return
 
-        if not batch:
-            await _finish_lap(db, cursor)
-            return
+            if not batch:
+                await _finish_lap(db, cursor)
+                return
 
-        reached_cutoff = False
-        fresh: list[dict] = []
-        for raw in batch:
-            if _parse_dt(raw["startTime"]) < cutoff:
-                reached_cutoff = True
-                break
-            fresh.append(raw)
+            reached_cutoff = False
+            fresh: list[dict] = []
+            for raw in batch:
+                if _parse_dt(raw["startTime"]) < cutoff:
+                    reached_cutoff = True
+                    break
+                fresh.append(raw)
 
-        await _process_battle_batch(client, db, region, host, fresh)
+            await _process_battle_batch(client, db, region, host, fresh, priority_fn=_prio_old)
 
-        cursor.next_offset += len(batch)
-        if reached_cutoff or len(batch) < BACKFILL_PAGE_SIZE:
-            await _finish_lap(db, cursor)
-            return
-        db.commit()
+            cursor.next_offset += len(batch)
+            if reached_cutoff or len(batch) < BACKFILL_PAGE_SIZE:
+                await _finish_lap(db, cursor)
+                return
+            db.commit()
 
 
 async def _reverse_startup_sweep(client: httpx.AsyncClient, db: Session, region: str, host: str) -> None:
@@ -761,23 +778,24 @@ async def _reverse_startup_sweep(client: httpx.AsyncClient, db: Session, region:
     ainda é coberto depois pelo backfill perpétuo normal (backfill_cycle)."""
     offset = BATTLES_API_OFFSET_LIMIT - BACKFILL_PAGE_SIZE
     consecutive_failures = 0
-    while offset >= 0:
-        try:
-            batch = await fetch_battles(client, host, limit=BACKFILL_PAGE_SIZE, offset=offset)
-        except Exception as e:
-            consecutive_failures += 1
-            if consecutive_failures >= 5:
-                log.warning("battle_tracker: varredura reversa de startup abortada (%s, offset=%d): %r",
-                            region, offset, e)
-                return
+    async with albion_scope(OTHER):
+        while offset >= 0:
+            try:
+                batch = await fetch_battles(client, host, limit=BACKFILL_PAGE_SIZE, offset=offset)
+            except Exception as e:
+                consecutive_failures += 1
+                if consecutive_failures >= 5:
+                    log.warning("battle_tracker: varredura reversa de startup abortada (%s, offset=%d): %r",
+                                region, offset, e)
+                    return
+                offset -= BACKFILL_PAGE_SIZE
+                await asyncio.sleep(PAGE_PAUSE)
+                continue
+            consecutive_failures = 0
+            if batch:
+                await _process_battle_batch(client, db, region, host, batch, priority_fn=_prio_other)
             offset -= BACKFILL_PAGE_SIZE
             await asyncio.sleep(PAGE_PAUSE)
-            continue
-        consecutive_failures = 0
-        if batch:
-            await _process_battle_batch(client, db, region, host, batch)
-        offset -= BACKFILL_PAGE_SIZE
-        await asyncio.sleep(PAGE_PAUSE)
     log.info("battle_tracker: varredura reversa de startup concluída (%s)", region)
 
 
@@ -797,7 +815,7 @@ async def sync_recent() -> int:
     da API (ver BATTLES_API_OFFSET_LIMIT / _finish_lap).
 
     Deep-process em paralelo (ver _backfill_deep_fetch_all, concorrência
-    limitada por um semáforo GLOBAL — _deep_fetch_sem, compartilhado com
+    limitada pelo bg pool do albion_gate — 6 slots, compartilhado com
     todo outro serviço que deep-processa, pra não estourar rate limit da
     API) — com DEEP_PROCESS_MIN_PLAYERS=0 praticamente toda batalha do feed
     qualifica, então processar uma de cada vez aqui (await sequencial) fazia
@@ -819,17 +837,18 @@ async def sync_recent() -> int:
                 # volta do laço todo), zerando a descoberta da região naquele
                 # ciclo. Agora só para de paginar mais, mantém o que já pegou.
                 battles: list[dict] = []
-                for page in range(RECENT_PAGES_PER_CYCLE):
-                    try:
-                        batch = await fetch_battles(client, host, offset=page * BACKFILL_PAGE_SIZE)
-                    except Exception as e:
-                        log.warning("battle_tracker: falha ao buscar página %d do feed (%s): %r", page, region, e)
-                        break
-                    if not batch:
-                        break
-                    battles.extend(batch)
-                    if len(batch) < BACKFILL_PAGE_SIZE:
-                        break
+                async with albion_scope(NEW_ELIGIBLE):
+                    for page in range(RECENT_PAGES_PER_CYCLE):
+                        try:
+                            batch = await fetch_battles(client, host, offset=page * BACKFILL_PAGE_SIZE)
+                        except Exception as e:
+                            log.warning("battle_tracker: falha ao buscar página %d do feed (%s): %r", page, region, e)
+                            break
+                        if not batch:
+                            break
+                        battles.extend(batch)
+                        if len(batch) < BACKFILL_PAGE_SIZE:
+                            break
 
                 qualifying: list[Battle] = []
                 for raw in battles:
@@ -846,7 +865,7 @@ async def sync_recent() -> int:
                     qualifying.append(battle)
                 db.commit()
 
-                await _deep_process_batch(client, db, region, host, qualifying, sem=_recent_fetch_sem)
+                await _deep_process_batch(client, db, region, host, qualifying, priority_fn=_prio_new)
     finally:
         db.close()
     return count
@@ -890,7 +909,7 @@ async def run_backfill_forever() -> None:
     (ver _reverse_startup_sweep) — toda vez que o servidor sobe, cobre a
     janela de trás pra frente pra pegar primeiro quem está mais perto de
     sumir da janela de ~10000 que a API expõe."""
-    log.info("battle_tracker: backfill iniciando (concorrência=%d)", _BACKFILL_CONCURRENCY)
+    log.info("battle_tracker: backfill iniciando (bg pool do albion_gate)")
 
     db = SessionLocal()
     try:
@@ -900,6 +919,10 @@ async def run_backfill_forever() -> None:
                     await _reverse_startup_sweep(client, db, region, host)
                 except Exception as e:
                     log.error("battle_tracker: erro na varredura reversa de startup (%s): %s", region, e)
+                    # Backstop: mesma sessão é reusada pra região seguinte (não
+                    # recriada por região) — sem isto, uma falha aqui deixaria
+                    # a próxima região herdar uma transação já abortada.
+                    db.rollback()
     finally:
         db.close()
 

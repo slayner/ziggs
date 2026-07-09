@@ -16,7 +16,9 @@ from app.models.tenancy import GuildMember, GuildRolePermission
 PERMISSION_KEYS = [
     "events.view", "events.create", "events.manage",
     "comps.view",  "comps.create",  "comps.manage",
+    "nodes.view",  "nodes.manage",
     "guild.admin",
+    "escalacao.manage",
 ]
 ALL_TRUE  = {k: True  for k in PERMISSION_KEYS}
 ALL_FALSE = {k: False for k in PERMISSION_KEYS}

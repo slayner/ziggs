@@ -22,6 +22,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.battles import Battle
 from app.models.players import PlayerKillEvent
+from app.services.albion_gate import NEW_SMALL, albion_scope
 from app.services.battle_tracker import resolve_by_albion_id
 from app.services.player_tracker import HOSTS, make_client
 
@@ -65,7 +66,11 @@ async def _discover_region(client, db, region: str) -> int:
 
     for albion_id in missing:
         try:
-            await resolve_by_albion_id(client, db, albion_id)
+            # ponytail: NEW_SMALL flat — esses IDs vêm do ledger de kills recente,
+            # então prioridade de "batalha nova pequena". resolve_by_albion_id
+            # faz o deep só se não-frozen; o scope aqui só governa o bg pool.
+            async with albion_scope(NEW_SMALL):
+                await resolve_by_albion_id(client, db, albion_id)
         except Exception as e:
             log.warning("small_battle_discovery: falha ao resolver %s (%s): %r", albion_id, region, e)
 

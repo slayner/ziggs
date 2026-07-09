@@ -1,0 +1,246 @@
+"""Threads de regear por evento (outbox).
+
+Quando um evento entra em IN_PROGRESS o site marca `regear_thread_dirty`; este
+loop puxa `/bot/events/{g}/regear-thread-work`, cria uma thread pública no canal
+dedicado `regear_thread_channel_id` (header localizado) e chama
+`/regear-thread-synced` gravando `Event.regear_thread_id`. Prints postadas na
+thread viram RegearRequests atrelados ao evento (ver cogs/regears.py).
+
+Eventos em estado terminal (CANCELLED/DELETED/FINALIZED) com thread ativa são
+arquivados (lock) — best-effort; falha só reintenta no próximo tick."""
+from __future__ import annotations
+
+import asyncio
+import os
+
+import aiohttp
+import discord
+from discord.ext import commands, tasks
+
+from cogs.general import _guild_command_config, guild_lang_for
+from i18n import t
+
+SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
+API_SECRET = os.getenv("BOT_API_SECRET", "")
+
+
+async def _get(path: str) -> dict | None:
+    if not SITE_URL or not API_SECRET:
+        return None
+    try:
+        async with aiohttp.ClientSession() as s:
+            r = await s.get(f"{SITE_URL}{path}",
+                             headers={"Authorization": f"Bearer {API_SECRET}"},
+                             timeout=aiohttp.ClientTimeout(total=5))
+            if r.status == 200:
+                return await r.json()
+            if r.status == 401:
+                print(f"[regear_threads] 401 em GET {path} — BOT_API_SECRET do bot não bate com o backend")
+            await r.read()
+    except Exception:
+        pass
+    return None
+
+
+async def _post(path: str, body: dict) -> dict | None:
+    if not SITE_URL or not API_SECRET:
+        return None
+    try:
+        async with aiohttp.ClientSession() as s:
+            r = await s.post(f"{SITE_URL}{path}", json=body,
+                             headers={"Authorization": f"Bearer {API_SECRET}"},
+                             timeout=aiohttp.ClientTimeout(total=5))
+            if r.status == 200:
+                return await r.json()
+    except Exception:
+        pass
+    return None
+
+
+_cog_ref: "RegearThreads | None" = None
+
+
+class RegearThreads(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    async def cog_load(self) -> None:
+        global _cog_ref
+        _cog_ref = self
+        print("[regear_threads] cog carregada — loop de criação de threads ativo")
+        if not regear_thread_work_loop.is_running():
+            regear_thread_work_loop.start(self)
+
+    async def cog_unload(self) -> None:
+        regear_thread_work_loop.cancel()
+
+    # Backlog scan no restart: sem listener de on_ready próprio de propósito —
+    # um on_ready de cog dispara na hora que o gateway conecta, ANTES do
+    # backend estar necessariamente de pé (start-all.cmd sobe os dois em
+    # paralelo, bot costuma ganhar a corrida). Rodar sync_guild nesse momento
+    # sempre pegava _guild_command_config em erro de rede → config vazia →
+    # "regear_thread_channel_id não veio" e nada era criado, silenciosamente,
+    # sem nenhum benefício sobre esperar o loop de 10s. main.py chama
+    # sync_guild explicitamente DEPOIS de _wait_for_backend() (mesmo padrão
+    # já usado pra EventEmbeds/BotAuditLog) — ver on_ready em main.py.
+
+    async def sync_guild(self, guild: discord.Guild) -> None:
+        cfg = await _guild_command_config(guild.id)
+        channel_id = cfg.get("regear_thread_channel_id")
+        if not channel_id:
+            print(f"[regear_threads] {guild.id}: regear_thread_channel_id não veio na config do bot "
+                  f"(feature off ou /bot/guild-commands não devolveu)")
+            return  # sem canal dedicado configurado → feature off
+        try:
+            cid = int(channel_id)
+        except (TypeError, ValueError):
+            return
+        # get_channel é só cache; fetch_channel pega canais que não estão em
+        # memória (canal criado pós-start sem o evento on_guild_channel_create
+        # chegar, ou cache evictido). Sem o fetch, miss de cache = skip
+        # silencioso e a thread nunca abre.
+        channel = guild.get_channel(cid)
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(cid)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                print(f"[regear_threads] canal {cid} não encontrado/sem acesso "
+                      f"em {guild.id} — configure um canal de texto válido")
+                return
+        if not isinstance(channel, discord.TextChannel):
+            print(f"[regear_threads] canal {cid} não é de texto em {guild.id}")
+            return
+        lang = await guild_lang_for(guild.id)
+
+        work = await _get(f"/bot/events/{guild.id}/regear-thread-work")
+        if work is None:
+            print(f"[regear_threads] {guild.id}: regear-thread-work sem resposta "
+                  f"(backend fora do ar ou 401) — bot consegue reach? "
+                  f"BOT_SITE_URL={SITE_URL or '(vazio)'}")
+            return
+
+        create = work.get("create") or []
+        if create:
+            print(f"[regear_threads] {guild.id}: {len(create)} thread(s) pra criar no canal "
+                  f"{channel.id} → {[ev.get('event_id') for ev in create]}")
+        # Criação: IN_PROGRESS/REVIEW com regear_thread_dirty.
+        for ev in create:
+            await self._create_thread(guild, channel, lang, ev)
+
+        # Arquivamento: terminais com thread ativa.
+        for ev in work.get("archive") or []:
+            await self._archive_thread(guild, lang, ev)
+
+    async def _create_thread(self, guild: discord.Guild, channel: discord.TextChannel,
+                             lang: str, ev: dict) -> None:
+        event_id = ev.get("event_id")
+        title = ev.get("title") or ""
+        if not event_id:
+            return
+        name = t(lang, "ev_regear_thread_title", n=event_id, title=title)[:100]
+        print(f"[regear_threads] criando thread '{name}' p/ evento {event_id} no canal {channel.id}")
+        try:
+            thread = await channel.create_thread(
+                name=name, type=discord.ChannelType.public_thread,
+            )
+        except Exception as e:
+            print(f"[regear_threads] falhou criar thread p/ evento {event_id} "
+                  f"em {channel.id}: {type(e).__name__}: {e}")
+            return
+        print(f"[regear_threads] ✓ thread {thread.id} criada p/ evento {event_id}")
+        try:
+            await thread.send(t(lang, "ev_regear_thread_header", n=event_id))
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        await _post(
+            f"/bot/events/{guild.id}/{event_id}/regear-thread-synced",
+            {"regear_thread_id": str(thread.id), "clear_dirty": True},
+        )
+
+    async def _archive_thread(self, guild: discord.Guild, lang: str, ev: dict) -> None:
+        tid = ev.get("regear_thread_id")
+        event_id = ev.get("event_id")
+        if not tid or not event_id:
+            return
+        try:
+            thread = guild.get_thread(int(tid))
+            if thread is None:
+                # get_thread só cobre cache — discord.py não retém threads
+                # arquivadas por inatividade nele (confirmado na doc de
+                # get_thread: "does not always retrieve archived threads").
+                # Sem este fallback, uma thread auto-arquivada pelo Discord
+                # antes do evento finalizar era tratada como "deletada" abaixo
+                # e NUNCA era trancada de verdade (só marcada arquivada no
+                # backend pra sair da fila).
+                thread = await guild.fetch_channel(int(tid))
+        except (TypeError, ValueError, discord.NotFound, discord.Forbidden, discord.HTTPException):
+            thread = None
+        if thread is None:
+            # Thread sumiu (deletada) — marca arquivado pra sair da fila.
+            await _post(
+                f"/bot/events/{guild.id}/{event_id}/regear-thread-archived", {})
+            return
+        try:
+            await thread.edit(archived=True, locked=True)
+        except (discord.Forbidden, discord.HTTPException):
+            return
+        # Sinaliza p/ o backend tirar o evento da lista de arquivamento — evita
+        # re-arquivar a cada 10s (rate-limit do Discord).
+        await _post(
+            f"/bot/events/{guild.id}/{event_id}/regear-thread-archived", {})
+
+
+_tick_n = 0
+
+
+@tasks.loop(seconds=10)
+async def regear_thread_work_loop(cog: "RegearThreads") -> None:
+    # ponytail: tick sempre imprime algo (mesmo sem trabalho) — sem isto,
+    # silêncio é ambíguo entre "nada pra fazer" e "o loop morreu". Só remover
+    # depois de confirmar que o loop sobrevive entre restarts.
+    global _tick_n
+    _tick_n += 1
+    print(f"[regear_threads] tick #{_tick_n}")
+    for guild in cog.bot.guilds:
+        try:
+            await cog.sync_guild(guild)
+        except Exception as e:
+            print(f"[regear_threads] erro no loop ({guild.id}): {type(e).__name__}: {e}")
+
+
+@regear_thread_work_loop.before_loop
+async def _before() -> None:
+    # discord.py chama before_loop SEM os args de .start(cog) (só o corpo
+    # principal do loop recebe) — declarar `cog` aqui derruba a task com
+    # TypeError a CADA .start(), antes do primeiro tick (raiz do "só funciona
+    # quando o bot inicia": tudo que "funcionava" vinha só das chamadas
+    # diretas do on_ready em main.py, nunca deste loop). Usa o _cog_ref
+    # global (setado em cog_load) em vez de receber como parâmetro.
+    if _cog_ref is not None:
+        await _cog_ref.bot.wait_until_ready()
+
+
+@regear_thread_work_loop.error
+async def _on_error(error: BaseException) -> None:
+    # Confirmado empiricamente: se ISTO roda, o loop MORREU — tasks.loop só
+    # chama .error() pra log e deixa a task terminar, nunca reagenda sozinho.
+    # Sem handler nenhum (como era antes), essa morte é 100% silenciosa: o
+    # asyncio só emite "Task exception was never retrieved" quando o GC
+    # eventualmente coletar a task morta, o que pode nunca aparecer no
+    # console. Loga alto E reinicia — o sistema se autocura em vez de ficar
+    # morto pro resto do processo (mesmo espírito do retry em
+    # battle_price_reprocessor.py no backend).
+    import traceback
+    print(f"[regear_threads] LOOP MORREU, reiniciando: {type(error).__name__}: {error}")
+    traceback.print_exception(type(error), error, error.__traceback__)
+    if _cog_ref is not None:
+        # .error() roda ANTES do _loop() interno terminar a task de verdade —
+        # chamar .start()/.restart() aqui de forma síncrona corre com esse
+        # encerramento (testado: dá TypeError de "task already running").
+        # call_soon empurra pro próximo tick do event loop, depois que a task
+        # atual já terminou.
+        asyncio.get_running_loop().call_soon(lambda: regear_thread_work_loop.start(_cog_ref))
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(RegearThreads(bot))

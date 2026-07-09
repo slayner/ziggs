@@ -4,10 +4,14 @@ Aplicação de transições de estado de um evento.
 Ponto único por onde site e bot mudam o estado de um evento. Faz, em UMA
 transação:
   1. valida a aresta (states.can_transition)
-  2. roda os GUARDS da aresta (ex.: só vai p/ verificação se o tipo foi definido)
-  3. grava `events.state`
-  4. insere uma linha em `event_state_transitions`
-  5. escreve no audit log append-only
+  2. grava `events.state`
+  3. insere uma linha em `event_state_transitions`
+  4. escreve no audit log append-only
+
+Fluxo novo (4 estados): scheduled → in_progress → review → finalized
+(+ cancelled/deleted terminais). O botão concluir (review → finalized) está
+sempre disponível: sem guard, sem checklist obrigatório. Se finalizado sem
+valor de tab ou nodes capturados, assume tudo 0.
 
 Quem chama é responsável por dar `session.commit()`.
 """
@@ -16,19 +20,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.domain.states import (
     EventState,
     InvalidTransition,
     can_transition,
-    REQUIRED_VERIFICATION_STEPS,
 )
 
 
 class TransitionDenied(Exception):
-    """Aresta existe, mas um guard reprovou (ex.: tipo do CTA não definido)."""
+    """Aresta existe, mas um guard reprovou."""
 
 
 @dataclass(frozen=True)
@@ -39,44 +41,8 @@ class Actor:
     display: str | None = None
 
 
-# --- Guards -----------------------------------------------------------------
-# Cada guard recebe (event, session) e levanta TransitionDenied se não puder.
-def _require_type(event, session: Session) -> None:
-    if event.type is None:
-        raise TransitionDenied(
-            "defina o tipo do CTA (lootsplit/regear/lootsplit+regear) antes de verificar"
-        )
-
-
-def _require_verification_complete(event, session: Session) -> None:
-    from app.models.events import EventVerificationStep  # import tardio (evita ciclo)
-
-    done = set(
-        session.scalars(
-            select(EventVerificationStep.step).where(
-                EventVerificationStep.event_id == event.id,
-                EventVerificationStep.completed.is_(True),
-            )
-        ).all()
-    )
-    faltando = {s.value for s in REQUIRED_VERIFICATION_STEPS} - {
-        s.value if hasattr(s, "value") else s for s in done
-    }
-    if faltando:
-        raise TransitionDenied(
-            "passos de verificação pendentes: " + ", ".join(sorted(faltando))
-        )
-
-
-# Guards por aresta (origem, destino) -> lista de checagens.
-_GUARDS: dict[tuple[EventState, EventState], list[Callable]] = {
-    (EventState.DEFINITION, EventState.VERIFICATION): [_require_type],
-    (EventState.VERIFICATION, EventState.WAITING): [_require_verification_complete],
-    (EventState.WAITING, EventState.FINALIZED): [
-        _require_type,
-        _require_verification_complete,
-    ],
-}
+# ponytail: sem guards — review → finalized é sempre livre (assume 0 se faltar).
+_GUARDS: dict[tuple[EventState, EventState], list[Callable]] = {}
 
 
 def transition(

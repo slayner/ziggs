@@ -1,0 +1,91 @@
+"""Fila de retry de reconhecimento de regear.
+
+A API de killboard do Albion cai com frequência. Quando o reconhecimento na
+ingestão falha (status "manual"/"error" sem albion_event_id), esta task
+periódica re-roda o caminho por-jogador+CTA (sem OCR) nos pedidos pending
+recentes. Se a API voltou, sobe pra "recognized" e preenche os itens — a
+logística aprova como sempre.
+
+Capa por `recognition_attempts` e por idade do pedido (não roda pra sempre nem
+martela a API). OCR não é re-rodado (caro, e também depende da API).
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import select
+
+from app.db import get_session
+from app.models.audit import AuditLog
+from app.models.regear import RegearRequest
+from app.models.tenancy import Guild
+from app.services import regear_config, regear_recognition
+from app.services.albion_gate import REGEAR_RECOG, albion_scope
+from app.services.regear import _apply_recognition, _cta_times, _landmark_window, _requester_albion_names
+
+log = logging.getLogger(__name__)
+
+RETRY_INTERVAL = 60            # segundos entre ciclos
+MAX_ATTEMPTS = 8               # tenta no máximo N vezes por pedido
+MAX_AGE = timedelta(hours=6)   # só pedidos criados há menos de isso
+BATCH = 20                     # por ciclo, pra não estourar
+
+
+async def _retry_once() -> None:
+    db = next(get_session())
+    try:
+        cutoff = datetime.now(timezone.utc) - MAX_AGE
+        rows = db.scalars(
+            select(RegearRequest).where(
+                RegearRequest.status == "pending",
+                RegearRequest.recognition_status.in_(("manual", "error")),
+                RegearRequest.albion_event_id.is_(None),
+                RegearRequest.recognition_attempts < MAX_ATTEMPTS,
+                RegearRequest.created_at >= cutoff,
+            ).order_by(RegearRequest.created_at.asc()).limit(BATCH)
+        ).all()
+        if not rows:
+            return
+
+        # Cacheia settings/region/cta por guild_id neste ciclo.
+        for req in rows:
+            req.recognition_attempts += 1
+            guild = db.get(Guild, req.guild_id)
+            if guild is None:
+                continue
+            region = (guild.settings or {}).get("albion_guild_region")
+            names = _requester_albion_names(db, guild.id, req.requester_user_id)
+            if not names:
+                continue  # sem registro, OCR já tentou na ingest → não adianta
+            cta_times = _cta_times(db, guild.id)
+            landmark = _landmark_window(db, guild.id, req.event_id)
+            try:
+                rec = await regear_recognition.recognize_by_player(names, cta_times, region, landmark)
+            except Exception as e:
+                log.debug("regear retry #%s ainda falhou: %s", req.id, e)
+                continue
+            if rec is None or not rec.get("items"):
+                continue
+            settings = regear_config.get_regear_settings(guild)
+            await _apply_recognition(db, req, rec, settings)
+            db.add(AuditLog(
+                guild_id=guild.id, actor_id=None, actor_type="bot", source="bot",
+                action="regear.retry_recognize", entity="regear_request", entity_id=str(req.id),
+                after={"recognition": req.recognition_status, "albion_event_id": req.albion_event_id},
+            ))
+            log.info("regear #%s reconhecido na retry (event %s)", req.id, req.albion_event_id)
+        db.commit()
+    except Exception:
+        log.exception("Erro no regear_retry")
+        db.rollback()
+    finally:
+        db.close()
+
+
+async def run_forever() -> None:
+    while True:
+        await asyncio.sleep(RETRY_INTERVAL)
+        async with albion_scope(REGEAR_RECOG):
+            await _retry_once()

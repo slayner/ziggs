@@ -3,6 +3,7 @@ import { useLang, useT, type GameServer, type Lang } from "../i18n";
 import ES_ITEMS from "../i18n/es-items.json";
 import { ALBION_ITEMS, itemRenderUrl, type AlbionItem } from "../data/albion-items";
 import { silverShort } from "../lib/format";
+import { searchMatch } from "../lib/search";
 import { navigate } from "../router";
 import GlobalSearch from "./GlobalSearch";
 
@@ -235,7 +236,7 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
   }, [weapons, lang]);
 
   const filteredWeapons = query.trim()
-    ? weaponEntries.filter(w => w.label.toLowerCase().includes(query.trim().toLowerCase()))
+    ? weaponEntries.filter(w => searchMatch(query, w.label))
     : weaponEntries;
 
   const currentLabel = kind.startsWith("weapon:")

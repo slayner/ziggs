@@ -27,6 +27,9 @@ API_SECRET = os.getenv("BOT_API_SECRET", "")
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
+# voice_states: necessário p/ ler channel.members da sala CTA no snapshot loop
+# (cogs/voice_presence.py) — alimenta ParticipationMode.VOICE_PERCENT.
+intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 
@@ -46,6 +49,24 @@ async def _post(path: str, body: dict | None = None) -> None:
         pass
 
 
+async def _get(path: str) -> dict | None:
+    """GET no site (best-effort) — usado pelo polling de trabalho pendente."""
+    if not SITE_URL or not API_SECRET:
+        return None
+    try:
+        async with aiohttp.ClientSession() as s:
+            r = await s.get(
+                f"{SITE_URL}{path}",
+                headers={"Authorization": f"Bearer {API_SECRET}"},
+                timeout=aiohttp.ClientTimeout(total=5),
+            )
+            if r.status == 200:
+                return await r.json()
+    except Exception:
+        pass
+    return None
+
+
 async def heartbeat(guild: discord.Guild) -> None:
     body = {
         "guild_name": guild.name,
@@ -60,13 +81,157 @@ async def heartbeat_loop() -> None:
         await heartbeat(guild)
 
 
+@tasks.loop(seconds=5)
+async def event_work_loop() -> None:
+    """Site não consegue empurrar trabalho pro bot (sem servidor HTTP de
+    entrada) — o bot pergunta periodicamente se há mass-info pra postar/
+    atualizar. Ver app/services/event_signups.py (has_pending_work) no site.
+
+    Ciclo de 5s: mutações vindas do SITE (criar evento, transição de estado,
+    liberação de funções) chegam aqui. Mutações vindas do BOT (signup/remoção)
+    disparam refresh imediato via _trigger_massinfo_refresh no cog Events —
+    não esperam este ciclo.
+
+    Rebind pós-restart: guildas em cog._rebind_pending fazem o poll com
+    force=true (ignora o gate de staleness e NÃO consome o outbox de pings —
+    não pingua no rebind). O site pode não ter respondido no on_ready
+    (start-all.cmd pode ligar o bot antes do backend), então o reedit do
+    on_ready pode ter falhado; aqui reedita no primeiro poll bom pra religar
+    os botões mortos pelo restart. Pings pendentes disparam no próximo poll
+    normal (não-force)."""
+    cog = bot.get_cog("Events")
+    if cog is None:
+        return
+    for guild in bot.guilds:
+        rebind = guild.id in cog._rebind_pending
+        path = f"/bot/events/{guild.id}/pending-work"
+        if rebind:
+            path += "?force=true"
+        data = await _get(path)
+        if data is None:
+            continue  # site fora do ar — rebind fica pendente pro próximo tick
+        if rebind:
+            cog._rebind_pending.discard(guild.id)
+        if data.get("events") or data.get("needs_rebuild"):
+            await cog.sync_massinfo(
+                guild, data.get("events") or [],
+                ping_triggers=data.get("ping_triggers") or [],
+                purge_orphans=rebind,
+            )
+
+
+async def _wait_for_backend() -> None:
+    """Bloqueia até o backend responder /health. start-all.cmd liga bot e
+    backend em paralelo e o bot costuma ganhar a corrida — sem isto, o
+    catch-up do on_ready dispara contra um backend ainda fora do ar e
+    falha em silêncio (one-shot), deixando os botões mortos até a próxima
+    mutação marcar dirty. Sonda a cada 2s; loga a cada ~10s pra não floodar."""
+    if not SITE_URL:
+        print("✗ BOT_SITE_URL vazio — bot vai rodar sem backend (apenas comandos locais)")
+        return
+    import aiohttp as _aiohttp
+    url = f"{SITE_URL}/health"
+    last_log = 0.0
+    while True:
+        try:
+            async with _aiohttp.ClientSession() as s:
+                r = await s.get(url, timeout=_aiohttp.ClientTimeout(total=3))
+                if r.status == 200:
+                    print(f"✓ backend online ({SITE_URL})")
+                    return
+        except Exception:
+            pass
+        now = time.monotonic()
+        if now - last_log >= 10:
+            print(f"… esperando backend em {SITE_URL} …")
+            last_log = now
+        await asyncio.sleep(2)
+
+
 @bot.event
 async def on_ready() -> None:
     print(f"✓ {bot.user} — {len(bot.guilds)} servidor(es)")
+    # Confirma config essencial no console — sem isto, um BOT_SITE_URL/SECRET
+    # vazio faz todo _get/_post virar no-op silencioso (nenhum erro, nenhuma
+    # thread, nenhum snapshot) e não há como saber olhando só pro Discord.
+    print(f"  BOT_SITE_URL={SITE_URL or '(vazio!)'} "
+          f"BOT_API_SECRET={'definido' if API_SECRET else '(vazio!)'}")
     for guild in bot.guilds:
         await heartbeat(guild)
     if not heartbeat_loop.is_running():
         heartbeat_loop.start()
+    if not event_work_loop.is_running():
+        event_work_loop.start()
+    # Catch-up imediato pós-(re)conexão: se o bot esteve offline, eventos cujo
+    # horário chegou nesse meio ainda estão SCHEDULED no site. O pending-work faz
+    # a transição automática SCHEDULED->IN_PROGRESS — força esse poll agora em
+    # vez de esperar o primeiro tick do loop (~5s). Eventos que já estavam
+    # IN_PROGRESS também voltam pro mass-info no mesmo ciclo (o estado vive no
+    # site, não no bot). force=True: reedita o embed do mass-info AGORA, mesmo
+    # se o site não tiver nada de novo — um restart mata os botões antigos
+    # (View sem custom_id, ver MassinfoView) e só religa quando a mensagem é
+    # reeditada; sem force, isso ficava esperando o gate de staleness do site
+    # (podia deixar clique em "interaction failed" por dezenas de segundos).
+    # Best-effort: falhou aqui, o loop de 5s cobre depois (sem force).
+    # Antes de qualquer catch-up: garante que o backend subiu. start-all.cmd
+    # liga os dois em paralelo; sem esta espera, o catch-up one-shot abaixo
+    # dispara contra um backend ainda fora do ar e falha em silêncio.
+    await _wait_for_backend()
+    cog = bot.get_cog("Events")
+    if cog is not None:
+        # Marca TODAS as guildas pra rebind ANTES de tentar — o event_work_loop
+        # (startado acima) pode tickar durante este catch-up e precisa enxergar
+        # o rebind pendente. refresh_massinfo limpa o flag de cada guilda que
+        # conseguir reeditar com sucesso; as que falharem (site fora do ar)
+        # ficam pendentes pro loop reeditar no primeiro poll bom.
+        for guild in bot.guilds:
+            cog._rebind_pending.add(guild.id)
+        for guild in bot.guilds:
+            try:
+                await cog.refresh_massinfo(guild, force=True)
+            except Exception:
+                pass
+    # Mesmo catch-up pros embeds de evento (thread 📑 EVENTO #N em review/
+    # finalizado) — EventEmbedView tem o mesmo problema de botão morto pós-
+    # restart, e sem staleness-timer de fallback (ver EventEmbedView).
+    embeds_cog = bot.get_cog("EventEmbeds")
+    if embeds_cog is not None:
+        for guild in bot.guilds:
+            try:
+                await embeds_cog.sync_event_embeds(guild, force=True)
+            except Exception:
+                pass
+    # Mesmo catch-up pras threads de regear (🛠️ Regear — Evento #N) — de
+    # propósito SEM listener de on_ready próprio no cog (ver regear_threads.py):
+    # rodar antes do backend estar de pé sempre pegava config vazia (erro de
+    # rede) e não criava nada, silenciosamente. Fazendo aqui, depois de
+    # _wait_for_backend(), o catch-up imediato realmente funciona.
+    regear_cog = bot.get_cog("RegearThreads")
+    if regear_cog is not None:
+        for guild in bot.guilds:
+            try:
+                await regear_cog.sync_guild(guild)
+            except Exception:
+                pass
+    # Mesmo catch-up pras threads de lootlog (🪵 Log — Evento #N).
+    lootlog_cog = bot.get_cog("LootlogThreads")
+    if lootlog_cog is not None:
+        for guild in bot.guilds:
+            try:
+                await lootlog_cog.sync_guild(guild)
+            except Exception:
+                pass
+    # Canal de logs (feature sempre ativa, ver cogs/audit_log.py): garante o
+    # canal já na reconexão em vez de esperar o primeiro tick do loop (8s) —
+    # guildas sem logs_channel_id ainda ganham o canal admin-only assim que o
+    # bot sobe, sem depender de nenhuma mutação acontecer primeiro.
+    audit_cog = bot.get_cog("BotAuditLog")
+    if audit_cog is not None:
+        for guild in bot.guilds:
+            try:
+                await audit_cog.sync_guild(guild)
+            except Exception:
+                pass
     try:
         await bot.tree.set_translator(ZiggsTranslator())
         synced = await bot.tree.sync()
@@ -88,10 +253,26 @@ async def on_guild_remove(guild: discord.Guild) -> None:
 
 
 async def main() -> None:
+    # bot.run() configura logging sozinho; como usamos bot.start() direto
+    # (pra rodar dentro do nosso próprio asyncio.run), isso NUNCA acontece
+    # sem esta chamada — todo _log.error/warning interno do discord.py (ex.:
+    # exceção não tratada num callback de botão, via View.on_error) fica
+    # mudo, sem NENHUM handler configurado. Explica botão que parece "não
+    # responder": a exceção real nunca aparecia em lugar nenhum.
+    discord.utils.setup_logging()
     async with bot:
         await bot.load_extension("cogs.general")
         await bot.load_extension("cogs.registration")
         await bot.load_extension("cogs.economy")
+        await bot.load_extension("cogs.events")
+        await bot.load_extension("cogs.regears")
+        await bot.load_extension("cogs.regear_threads")
+        await bot.load_extension("cogs.lootlogs")
+        await bot.load_extension("cogs.lootlog_threads")
+        await bot.load_extension("cogs.nodes")
+        await bot.load_extension("cogs.voice_presence")
+        await bot.load_extension("cogs.event_embeds")
+        await bot.load_extension("cogs.audit_log")
         await bot.start(TOKEN)
 
 

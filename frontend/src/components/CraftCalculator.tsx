@@ -28,10 +28,13 @@ import {
   type CatalogVariation,
   type JournalBase,
 } from "../lib/craft/catalog";
+import { computeFocusEfficiency, craftTypeOf } from "../lib/craft/focusEff";
+import { specTreeFor, SPEC_EXTRA_FAMILIES, OWN_SPEC_NODE, RECIPE_ALIASES } from "../lib/craft/specTree";
 import type { PriceServer, PriceQuote } from "../lib/prices/types";
-import { fetchAdpPrices, fetchAdpDemand, fetchAdpPriceSeries } from "../lib/prices/adp";
+import { fetchAdpPrices, fetchAdpDemand, fetchAdpPriceSeries, fetchAdpGold } from "../lib/prices/adp";
 import { useLang, useT, type TKey } from "../i18n";
 import { silver, silverShort, decimal, percent } from "../lib/format";
+import { api, type Me } from "../api";
 
 const iconUrl = (id: string, size = 64, quality?: number) =>
   `/render/item/${encodeURIComponent(id)}?size=${size}${quality ? `&quality=${quality}` : ""}`;
@@ -157,7 +160,6 @@ interface PriceInfo {
 interface Settings {
   premium: boolean;
   stationFeePer100: number;
-  focusEfficiency: number;
 }
 
 interface Order {
@@ -169,6 +171,9 @@ interface Order {
   rr: number;
   placeLabel: string;
   journalId: string | null;
+  // Focus efficiency da família no momento do add — famílias diferentes têm
+  // valores diferentes, então o carrinho não pode usar o valor "atual".
+  focusEfficiency: number;
 }
 
 function placeLabel(loc: LocationConfig, t: (key: TKey) => string): string {
@@ -191,24 +196,24 @@ export default function CraftCalculator() {
   const [familyKey, setFamilyKey] = useState("MAIN_AXE");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [showSettings, setShowSettings] = useState(false);
 
   const [batchQty, setBatchQty] = useState(30);
   const useFocus = true;
 
   const [place, setPlace] = useState<CraftPlace>("city");
-  const [placeOpen, setPlaceOpen] = useState(false);
   const [eventBonus, setEventBonus] = useState(0);
-  const [bonusOpen, setBonusOpen] = useState(false);
   const [hoQuality, setHoQuality] = useState(6);
   const [hoLevel, setHoLevel] = useState(8);
 
   const [premium, setPremium] = useState(true);
   const [stationFeePer100, setStationFeePer100] = useState(1000);
   const [goldPrice, setGoldPrice] = useState(0);
-  const [uiScale, setUiScale] = useState(1);
-  const [ignoredJournalTiers, setIgnoredJournalTiers] = useState<Set<number>>(new Set([4]));
-  const [focusEfficiency, setFocusEfficiency] = useState(0);
+  const [ignoredJournalTiers, setIgnoredJournalTiers] = useState<Set<number>>(new Set([4, 5]));
+  // Focus efficiency é por arma (familyKey), não global — reflete a
+  // especialização real do jogo (cada arma tem a própria). Persistido no
+  // backend só quando logado (ver useEffect de "me" abaixo).
+  const [focusEfficiencyByFamily, setFocusEfficiencyByFamily] = useState<Record<string, number>>({});
+  const [me, setMe] = useState<Me | null>(null);
 
   // ponytail: server now comes from global context (topbar dropdown)
   const [sellCity, setSellCity] = useState("Black Market");
@@ -221,14 +226,11 @@ export default function CraftCalculator() {
   const [sellMeta, setSellMeta] = useState<Record<string, PriceInfo>>({});
   const [demand, setDemand] = useState<Record<string, number>>({});
   const [loadingPrices, setLoadingPrices] = useState(false);
-  const [lastFetch, setLastFetch] = useState<number | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   const [cart, setCart] = useState<Order[]>([]);
 
   const pickerRef = useRef<HTMLDivElement>(null);
-  const settingsRef = useRef<HTMLDivElement>(null);
-  const settingsBtnRef = useRef<HTMLButtonElement>(null);
   const matMetaRef = useRef(matMeta);
   const sellMetaRef = useRef(sellMeta);
   useEffect(() => {
@@ -253,16 +255,31 @@ export default function CraftCalculator() {
   }, []);
 
   useEffect(() => {
+    api.me().then((m) => {
+      setMe(m);
+      if (m) api.getCraftFocusEfficiency().then(setFocusEfficiencyByFamily);
+    });
+  }, []);
+
+  // ponytail: gold price auto-fetched from ADP (no manual input). Refreshes
+  // on server switch and on every market refresh.
+  useEffect(() => {
+    fetchAdpGold(server).then(setGoldPrice).catch(() => {});
+  }, [server]);
+
+  // Atualiza sempre (funciona sem login); só persiste no blur, e só se
+  // logado, pra não disparar um PUT por tecla digitada.
+  function setFocusEff(key: string, value: number) {
+    setFocusEfficiencyByFamily((prev) => ({ ...prev, [key]: value }));
+  }
+  function commitFocusEfficiency() {
+    if (me) api.setCraftFocusEfficiency(focusEfficiencyByFamily);
+  }
+
+  useEffect(() => {
     const onClick = (e: MouseEvent) => {
       const t = e.target as Node;
       if (pickerRef.current && !pickerRef.current.contains(t)) setPickerOpen(false);
-      if (
-        settingsRef.current &&
-        !settingsRef.current.contains(t) &&
-        settingsBtnRef.current &&
-        !settingsBtnRef.current.contains(t)
-      )
-        setShowSettings(false);
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
@@ -290,20 +307,63 @@ export default function CraftCalculator() {
   const journalIds = prof ? [...new Set(variations.map((v) => journalId(v.tier, prof)))] : [];
   const groups = [...new Set([...mats, ...journalIds].map(marketGroup))];
 
+  // "Árvore" de focus efficiency: base + variantes da mesma árvore do
+  // destiny board (specTree.ts), indexada por familyKey. Itens fora de qualquer
+  // árvore (ferramentas, bolsas de coletor, No Spec, Royal) não têm grupo —
+  // painel não aparece. Comida/poção usam a árvore Chef/Alchemist (o ownSpec
+  // vem de OWN_SPEC_NODE, que mapeia a família ao seu grupo).
+  const familyMap = useMemo(() => {
+    const m = new Map<string, CatalogFamily>();
+    for (const f of families ?? []) m.set(f.familyKey, f);
+    for (const f of SPEC_EXTRA_FAMILIES) m.set(f.familyKey, f);
+    return m;
+  }, [families]);
+  const siblings = useMemo(() => {
+    if (!family) return [];
+    const tree = specTreeFor(familyKey);
+    if (!tree) return [];
+    const ordered = tree.order.map((k) => familyMap.get(k)).filter(Boolean) as CatalogFamily[];
+    return ordered;
+  }, [family, familyMap, familyKey]);
+
+  const baseFamily = siblings[0];
+  const baseVar = baseFamily ? baseFamily.variations.find((v) => v.tier === 8 && v.enchant === 0) ?? null : null;
+
   const hasBonusCity = !!family?.bonusCity;
   const hideoutEligible = !!family && !isCityBonusKind(family);
   const autoSpecialized = place === "city" ? hasBonusCity : place === "hideout" ? hideoutEligible : false;
   const bonusBiome = hideoutEligible ? cityBiome(family?.bonusCity ?? undefined) : undefined;
-  const placeIcon = place === "city" ? "🏛️" : place === "island" ? "🏝️" : "🏠";
-  const placeName = place === "city" ? t("placeCity") : place === "island" ? t("placeIsland") : "Hideout";
   const location: LocationConfig = { place, specialized: autoSpecialized, eventBonus, hideoutQuality: hoQuality, hideoutLevel: hoLevel };
   useEffect(() => {
     if (place === "hideout" && family && !hideoutEligible) setPlace("city");
   }, [place, hideoutEligible, family]);
   const rrNoFocus = returnRateNoFocus(location);
   const rrFocus = returnRateFocus(location);
-  const focusMult = focusCostMultiplier(focusEfficiency);
-  const settings: Settings = { premium, stationFeePer100, focusEfficiency };
+  // ponytail: spec é 0..100 por arma; FCE real vem da árvore (irmãs + mastery)
+  // via focusEff.ts. mastery=0 porque o usuário só informa spec de armas.
+  const focusFce = useMemo(() => {
+    if (!family) return 0;
+    const type = craftTypeOf(family.variations[0].uniqueName);
+    // ponytail: ownSpecNode = o próprio familyKey (armas/armaduras/coleta) ou o
+    // grupo (CHEF_SOUP, ALCH_HEAL) quando o item é comida/poção. FCE usa o spec
+    // do nó, e exclui esse nó das irmãs.
+    const ownSpecNode = OWN_SPEC_NODE[familyKey] ?? familyKey;
+    const ownSpec = focusEfficiencyByFamily[ownSpecNode] ?? 0;
+    if (!type) return ownSpec * 100;
+    const familyIsArtifact = (f: CatalogFamily) =>
+      f.variations.some((v) => v.resources.some((r) => isArtifact(r.uniqueName)));
+    return computeFocusEfficiency({
+      type,
+      ownSpec,
+      ownIsArtifact: familyIsArtifact(family),
+      mastery: 0,
+      siblings: siblings
+        .filter((f) => f.familyKey !== ownSpecNode)
+        .map((f) => ({ spec: focusEfficiencyByFamily[f.familyKey] ?? 0, isArtifact: familyIsArtifact(f) })),
+    });
+  }, [family, familyKey, siblings, focusEfficiencyByFamily]);
+  const focusMult = focusCostMultiplier(focusFce);
+  const settings: Settings = { premium, stationFeePer100 };
   const PREMIUM_GOLD = 3750;
   const MONTHLY_FOCUS = 300_000;
   const minSpf = goldPrice > 0 ? (goldPrice * PREMIUM_GOLD) / MONTHLY_FOCUS : 0;
@@ -317,7 +377,7 @@ export default function CraftCalculator() {
       returnRateNoFocus: rrNoFocus,
       returnRateFocus: rrFocus,
       focusCostBase: v.focus,
-      focusEfficiency,
+      focusEfficiency: focusFce,
       itemValue: v.itemValue,
       stationFeePer100,
       salesTaxRate: premium ? 0.04 : 0.08,
@@ -327,8 +387,12 @@ export default function CraftCalculator() {
   const filteredFamilies = useMemo(() => {
     if (!families) return [];
     const q = search.trim().toLowerCase();
-    const list = q ? families.filter((f) => f.name.toLowerCase().includes(q) || f.familyKey.toLowerCase().includes(q)) : families;
-    return list.slice(0, 80);
+    if (!q) return families;
+    return families.filter((f) =>
+      f.name.toLowerCase().includes(q) ||
+      f.familyKey.toLowerCase().includes(q) ||
+      (RECIPE_ALIASES[f.familyKey] ?? []).some((a) => a.includes(q))
+    );
   }, [families, search]);
 
   function setMat(id: string, value: number | undefined) {
@@ -356,6 +420,7 @@ export default function CraftCalculator() {
         rr: useFocus ? rrFocus : rrNoFocus,
         placeLabel: placeLabel(location, t),
         journalId: prof ? journalId(v.tier, prof) : null,
+        focusEfficiency: focusFce,
       },
     ]);
   }
@@ -463,7 +528,7 @@ export default function CraftCalculator() {
       const demandData = await fetchAdpDemand(server, varIds, DEMAND_CITIES, ALL_QUALITIES);
       setDemand((prev) => ({ ...prev, ...demandData }));
 
-      setLastFetch(nowMs());
+      fetchAdpGold(server).then(setGoldPrice).catch(() => {});
     } catch (e) {
       setFetchError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -485,11 +550,11 @@ export default function CraftCalculator() {
       if (art) {
         rows.push(
           <tr key={`art-${v.tier}`} className="border-t border-zinc-700 bg-purple-900/10">
-            <td colSpan={9} className="px-3 py-2">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <ItemIcon id={art} size={30} city={cityForMat(art)} server={server} name={nameOf(art)} />
+            <td colSpan={9} className="px-2 py-1.5">
+              <div className="flex flex-nowrap items-center gap-2 text-xs">
+                <ItemIcon id={art} size={22} city={cityForMat(art)} server={server} name={nameOf(art)} />
                 <span className="font-semibold text-purple-300">{nameOf(art)}</span>
-                <PriceField value={matPrices[art]} meta={matMeta[art]} onChange={(val) => setMat(art, val)} />
+                <PriceField value={matPrices[art]} meta={matMeta[art]} onChange={(val) => setMat(art, val)} w="w-24" />
               </div>
             </td>
           </tr>,
@@ -503,28 +568,28 @@ export default function CraftCalculator() {
     const visibleMats = v.resources.filter((res) => !isArtifact(res.uniqueName));
     rows.push(
       <tr key={v.uniqueName} onDoubleClick={() => addOrder(v)} className="border-b border-zinc-900 hover:bg-zinc-800/40">
-        <td className="whitespace-nowrap px-3 py-2">
+        <td className="whitespace-nowrap px-2 py-1.5">
           <div className="flex items-center gap-2">
-            <ItemIcon id={v.uniqueName} size={36} city={sellCity} server={server} name={`${nameOf(v.uniqueName)} ${tierLabel(v)}`} />
+            <ItemIcon id={v.uniqueName} size={30} city={sellCity} server={server} name={`${nameOf(v.uniqueName)} ${tierLabel(v)}`} />
             <span className={`font-medium ${isProfit ? "text-emerald-400" : "text-zinc-200"}`}>{tierLabel(v)}</span>
             {v.outputPerCraft && v.outputPerCraft > 1 && <span className="rounded bg-zinc-800 px-1 text-[10px] text-zinc-400" title={t("itemsPerCraftTitle")}>×{v.outputPerCraft}</span>}
           </div>
         </td>
-        <td className="px-2 py-2">
-          <div className="flex flex-wrap gap-x-1.5 gap-y-1.5">
+        <td className="px-2 py-1.5">
+          <div className="flex flex-nowrap items-center gap-1.5">
             {visibleMats.map((res) => (
               <div key={res.uniqueName} className="flex items-center gap-1">
                 <span className="relative shrink-0">
-                  <ItemIcon id={res.uniqueName} size={28} city={cityForMat(res.uniqueName)} server={server} name={nameOf(res.uniqueName)} />
+                  <ItemIcon id={res.uniqueName} size={22} city={cityForMat(res.uniqueName)} server={server} name={nameOf(res.uniqueName)} />
                   <span className="absolute bottom-0.5 right-0 rounded bg-zinc-900/85 px-0.5 text-[9px] leading-tight tabular-nums text-zinc-300" title={t("qtyPerCraftTitle")}>{res.count}</span>
                 </span>
-                <PriceField value={matPrices[res.uniqueName]} meta={matMeta[res.uniqueName]} onChange={(val) => setMat(res.uniqueName, val)} w="w-20" />
+                <PriceField value={matPrices[res.uniqueName]} meta={matMeta[res.uniqueName]} onChange={(val) => setMat(res.uniqueName, val)} w="w-16" />
               </div>
             ))}
           </div>
         </td>
         <Td right muted>{silver(v.focus * focusMult)}</Td>
-        <td className="px-2 py-2">
+        <td className="px-2 py-1.5">
           <div className="flex justify-end">
             <PriceField value={sellPrices[v.uniqueName]} meta={sellMeta[v.uniqueName]} onChange={(val) => setSell(v.uniqueName, val)} w="w-24" />
           </div>
@@ -533,7 +598,7 @@ export default function CraftCalculator() {
         <Td right value={ok ? r.profitFocus : undefined} sub={ok ? percent(r.marginFocus) : undefined}>{ok ? silverShort(r.profitFocus) : "—"}</Td>
         <Td right value={ok ? r.silverPerFocus : undefined}>{ok ? decimal(r.silverPerFocus) : "—"}</Td>
         <Td right muted>{isConsumable ? "—" : decimal(journals)}</Td>
-        <td className="px-3 py-2 text-right">
+        <td className="px-2 py-1.5 text-right">
           {demand[v.uniqueName] != null ? <span className={demand[v.uniqueName] < 5 ? "text-red-400" : "text-zinc-300"}>{silver(demand[v.uniqueName])}</span> : <span className="text-zinc-600">—</span>}
         </td>
       </tr>,
@@ -541,26 +606,7 @@ export default function CraftCalculator() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-4 py-5" style={{ zoom: uiScale }}>
-      {/* Navbar */}
-      <nav className="mb-4 flex items-center gap-4 border-b border-zinc-800 pb-3">
-        <span className="text-lg font-bold text-amber-400">{t("craftCalcTitle")}</span>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="mr-1 hidden text-xs text-zinc-500 sm:inline">
-            {fetchError ? <span className="text-red-400">{t("priceFetchError")}</span> : loadingPrices ? t("pricesUpdating") : lastFetch ? `${timeAgo(lastFetch)} ${t("pricesAgoSuffix")}` : "—"}
-          </span>
-          <IconButton onClick={fetchMarket} disabled={loadingPrices || !family} title={t("updatePricesTitle")} spinning={loadingPrices}>⟳</IconButton>
-          <button
-            ref={settingsBtnRef}
-            onClick={() => setShowSettings((s) => !s)}
-            title={t("settingsTitle")}
-            className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-semibold ${showSettings ? "border-amber-500 text-amber-300" : "border-zinc-700 text-zinc-300 hover:border-zinc-600"}`}
-          >
-            <span className="text-base">⚙</span>
-          </button>
-        </div>
-      </nav>
-
+    <div className="mx-auto w-full max-w-[1800px] px-4 py-5">
       {/* Control bar */}
       <div className="mb-4 flex flex-wrap items-start gap-3">
         {/* Item dropdown */}
@@ -593,119 +639,32 @@ export default function CraftCalculator() {
           <InlineNum label={t("qtyLabel")} value={batchQty} onChange={setBatchQty} w="w-28" />
           <ToggleBtn active={premium} on="Premium" off="Premium" onClick={() => setPremium((p) => !p)} />
           <InlineNum label={t("feePerHundredLabel")} value={stationFeePer100} onChange={setStationFeePer100} w="w-32" />
-          {/* Daily/event bonus */}
-          <div className="flex h-9 w-[130px] shrink-0 gap-1">
-            {bonusOpen ? (
-              <>
-                <BonusBtn label={t("bonusNone")} active={eventBonus === 0} onClick={() => { setEventBonus(0); setBonusOpen(false); }} />
-                <BonusBtn label="+10%" active={eventBonus === 0.1} onClick={() => { setEventBonus(0.1); setBonusOpen(false); }} />
-                <BonusBtn label="+20%" active={eventBonus === 0.2} onClick={() => { setEventBonus(0.2); setBonusOpen(false); }} />
-              </>
-            ) : (
-              <button onClick={() => setBonusOpen(true)} title={t("bonusEventTitle")} className={`flex h-9 w-full items-center justify-center rounded-md border px-2 text-sm ${eventBonus !== 0 ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600"}`}>
-                {eventBonus === 0 ? t("bonusLabel") : `${t("bonusLabel")} +${Math.round(eventBonus * 100)}%`}
-              </button>
-            )}
+          <div className="flex h-[36px] items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5" title={t("goldPriceTooltip")}>
+            <span className="text-[11px] text-zinc-500">🪙</span>
+            <span className="text-sm tabular-nums text-zinc-100">{goldPrice ? silver(goldPrice) : "—"}</span>
           </div>
-        </div>
-
-        {/* Craft location */}
-        <div className="flex h-9 w-[184px] shrink-0 gap-1">
-          {placeOpen ? (
-            <>
-              <PlaceBtn icon="🏛️" label={t("placeCity")} active={place === "city"} onClick={() => { setPlace("city"); setPlaceOpen(false); }} />
-              <PlaceBtn icon="🏝️" label={t("placeIsland")} active={place === "island"} onClick={() => { setPlace("island"); setPlaceOpen(false); }} />
-              {hideoutEligible && <PlaceBtn icon="🏠" label="Hideout" active={place === "hideout"} onClick={() => { setPlace("hideout"); setPlaceOpen(false); }} />}
-            </>
-          ) : place === "hideout" && hideoutEligible ? (
-            <>
-              <button onClick={() => setPlaceOpen(true)} title={t("hideoutSwitchTitle")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-amber-500 bg-amber-500/15 text-base text-amber-300">🏠</button>
-              <select value={hoQuality} onChange={(e) => setHoQuality(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1 px-1`} title={t("hoZoneQualityTitle")}>{HIDEOUT_QUALITY.map((_, i) => <option key={i} value={i + 1}>{`Q${i + 1}`}</option>)}</select>
-              <select value={hoLevel} onChange={(e) => setHoLevel(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1 px-1`} title={t("hoPowerLevelTitle")}>{HIDEOUT_LEVEL.map((_, i) => <option key={i} value={i + 1}>{`Nv${i + 1}`}</option>)}</select>
-            </>
-          ) : (
-            <PlaceBtn icon={placeIcon} label={placeName} active expanded onClick={() => setPlaceOpen(true)} />
-          )}
+          <IconButton onClick={fetchMarket} disabled={loadingPrices || !family} title={fetchError ?? t("updatePricesTitle")} spinning={loadingPrices}>⟳</IconButton>
+          {fetchError && <span className="text-xs text-red-400" title={fetchError}>⚠</span>}
         </div>
       </div>
 
-      {/* Settings */}
-      {showSettings && (
-        <div ref={settingsRef} className="mb-4 grid gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 md:grid-cols-3">
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("marketHeader")}</h3>
-            <Field label={t("sellAtLabel")}>
-              <select value={sellCity} onChange={(e) => setSellCity(e.target.value)} className={selectCls}>
-                {CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </Field>
-            <Field label={
-              <span className="inline-flex items-center gap-1">
-                {t("goldPriceLabel")}
-                <span className="cursor-help text-zinc-600" title={t("goldPriceTooltip")}>ⓘ</span>
-              </span>
-            }>
-              <input type="number" value={goldPrice || ""} placeholder="—" onChange={(e) => setGoldPrice(e.target.value === "" ? 0 : +e.target.value)} className={`${selectCls} w-full placeholder:text-zinc-600`} />
-            </Field>
-            {minSpf > 0 && <p className="text-xs text-zinc-500">{t("minSpfLabel")} <b className="text-zinc-300">{decimal(minSpf)}</b> {t("minSpfSuffix")}</p>}
-          </div>
+      {/* Main grid: config | lista | carrinho */}
+      <div className="grid items-start gap-5 min-[1500px]:grid-cols-[300px_1fr_300px]">
+        <SettingsPanel
+          place={place} setPlace={setPlace} hideoutEligible={hideoutEligible}
+          hoQuality={hoQuality} setHoQuality={setHoQuality} hoLevel={hoLevel} setHoLevel={setHoLevel}
+          eventBonus={eventBonus} setEventBonus={setEventBonus}
+          sellCity={sellCity} setSellCity={setSellCity}
+          minSpf={minSpf}
+          groups={groups} groupLabel={groupLabel} cityForGroup={cityForGroup} setGroupMarket={setGroupMarket}
+          orderForGroup={orderForGroup} setGroupOrder={setGroupOrder}
+          baseVar={baseVar}
+          siblings={siblings}
+          focusEfficiencyByFamily={focusEfficiencyByFamily} setFocusEff={setFocusEff} commitFocusEfficiency={commitFocusEfficiency}
+          ignoredJournalTiers={ignoredJournalTiers} toggleJournalTier={toggleJournalTier}
+        />
 
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("marketByMaterialHeader")}</h3>
-            {groups.map((g) => (
-              <div key={g} className="flex items-end gap-2">
-                <Field label={groupLabel(g)}>
-                  <select value={cityForGroup(g)} onChange={(e) => setGroupMarket((m) => ({ ...m, [g]: e.target.value }))} className={`${selectCls} w-32`}>
-                    {CITIES.filter((c) => c !== "Black Market").map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </Field>
-                <select value={orderForGroup(g)} onChange={(e) => setGroupOrder((m) => ({ ...m, [g]: e.target.value as OrderMode }))} className={selectCls} title={t("orderTypeTitle")}>
-                  <option value="sell">{t("sellOrderOption")}</option>
-                  <option value="buy">{t("buyOrderOption")}</option>
-                </select>
-              </div>
-            ))}
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("craftHeader")}</h3>
-            <Field label={
-              <span className="inline-flex items-center gap-1">
-                {t("focusEfficiencyLabel")}
-                <span className="cursor-help text-zinc-600" title={t("focusEfficiencyTooltip")}>ⓘ</span>
-              </span>
-            }>
-              <input type="number" min={0} max={40000} value={focusEfficiency || ""} placeholder="0" onChange={(e) => setFocusEfficiency(e.target.value === "" ? 0 : Math.min(40000, Math.max(0, +e.target.value)))} className={`${selectCls} w-full`} />
-            </Field>
-            <div className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("ignoreJournalsHeader")}</h3>
-              <p className="text-xs text-zinc-500">{t("ignoreJournalsHint")}</p>
-              <div className="flex flex-wrap gap-1.5">
-                {TIERS.map((tier) => (
-                  <button key={tier} onClick={() => toggleJournalTier(tier)} className={`rounded-md border px-2 py-1 text-xs ${ignoredJournalTiers.has(tier) ? "border-red-500/60 bg-red-900/20 text-red-300" : "border-zinc-700 text-zinc-300"}`}>T{tier}</button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("interfaceHeader")}</h3>
-            <Field label={t("uiSizeLabel")}>
-              <select value={uiScale} onChange={(e) => setUiScale(+e.target.value)} className={selectCls}>
-                <option value={0.9}>{t("uiScaleCompact")}</option>
-                <option value={1}>{t("uiScaleDefault")}</option>
-                <option value={1.15}>{t("uiScaleLarge")}</option>
-                <option value={1.3}>{t("uiScaleLarger")}</option>
-                <option value={1.5}>{t("uiScaleMax")}</option>
-              </select>
-            </Field>
-          </div>
-        </div>
-      )}
-
-      {/* Main grid */}
-      <div className="grid items-start gap-5 min-[1500px]:grid-cols-[1fr_320px]">
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-zinc-800 text-left text-[11px] uppercase tracking-wide text-zinc-500">
@@ -732,6 +691,149 @@ export default function CraftCalculator() {
         <Cart cart={cart} matPrices={matPrices} sellPrices={sellPrices} weights={weights} journalBase={journalBase} fullJournalPrices={fullJournalPrices} settings={settings} ignoredTiers={ignoredJournalTiers} rrNoFocus={rrNoFocus} rrFocus={rrFocus} nameOf={nameOf} onRemove={(id) => setCart((c) => c.filter((o) => o.id !== id))} onClear={() => setCart([])} />
       </div>
     </div>
+  );
+}
+
+/* ---------------- SettingsPanel (coluna esquerda) ---------------- */
+
+function SettingsPanel({
+  place, setPlace, hideoutEligible,
+  hoQuality, setHoQuality, hoLevel, setHoLevel,
+  eventBonus, setEventBonus,
+  sellCity, setSellCity, minSpf,
+  groups, groupLabel, cityForGroup, setGroupMarket, orderForGroup, setGroupOrder,
+  baseVar,
+  siblings,
+  focusEfficiencyByFamily, setFocusEff, commitFocusEfficiency,
+  ignoredJournalTiers, toggleJournalTier,
+}: {
+  place: CraftPlace; setPlace: (p: CraftPlace) => void; hideoutEligible: boolean;
+  hoQuality: number; setHoQuality: (v: number) => void; hoLevel: number; setHoLevel: (v: number) => void;
+  eventBonus: number; setEventBonus: (v: number) => void;
+  sellCity: string; setSellCity: (v: string) => void; minSpf: number;
+  groups: string[]; groupLabel: (g: string) => string; cityForGroup: (g: string) => string;
+  setGroupMarket: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  orderForGroup: (g: string) => OrderMode; setGroupOrder: React.Dispatch<React.SetStateAction<Record<string, OrderMode>>>;
+  baseVar: CatalogVariation | null;
+  siblings: CatalogFamily[];
+  focusEfficiencyByFamily: Record<string, number>; setFocusEff: (key: string, value: number) => void; commitFocusEfficiency: () => void;
+  ignoredJournalTiers: Set<number>; toggleJournalTier: (t: number) => void;
+}) {
+  const t = useT();
+  const [marketOpen, setMarketOpen] = useState(false);
+  return (
+    <aside className="flex flex-col gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+      {/* Local & Bônus — mesma linha, design compacto em selects */}
+      <div className="space-y-1.5">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("craftLocationHeader")} & {t("bonusLabel")}</h3>
+        <div className="flex gap-1.5">
+          <select value={place} onChange={(e) => setPlace(e.target.value as CraftPlace)} className={`${selectCls} h-9 min-w-0 flex-1`}>
+            <option value="city">🏛️ {t("placeCity")}</option>
+            <option value="island">🏝️ {t("placeIsland")}</option>
+            {hideoutEligible && <option value="hideout">🏠 Hideout</option>}
+          </select>
+          <select value={eventBonus} onChange={(e) => setEventBonus(+e.target.value)} className={`${selectCls} h-9 w-28`} title={t("bonusEventTitle")}>
+            <option value={0}>0%</option>
+            <option value={0.1}>10%</option>
+            <option value={0.2}>20%</option>
+          </select>
+        </div>
+        {place === "hideout" && hideoutEligible && (
+          <div className="flex gap-1.5">
+            <select value={hoQuality} onChange={(e) => setHoQuality(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1`} title={t("hoZoneQualityTitle")}>{HIDEOUT_QUALITY.map((_, i) => <option key={i} value={i + 1}>{`Q${i + 1}`}</option>)}</select>
+            <select value={hoLevel} onChange={(e) => setHoLevel(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1`} title={t("hoPowerLevelTitle")}>{HIDEOUT_LEVEL.map((_, i) => <option key={i} value={i + 1}>{`Nv${i + 1}`}</option>)}</select>
+          </div>
+        )}
+      </div>
+
+      {/* Mercado (venda + por material, colapsável) */}
+      <div className="space-y-2 border-t border-zinc-800 pt-3">
+        <button onClick={() => setMarketOpen((o) => !o)} className="flex w-full items-center justify-between text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-300">
+          <span>{t("marketHeader")}</span>
+          <span className="text-zinc-400">{marketOpen ? "▾" : "▸"}</span>
+        </button>
+        {marketOpen && (
+          <>
+            <Field label={t("sellAtLabel")}>
+              <select value={sellCity} onChange={(e) => setSellCity(e.target.value)} className={`${selectCls} w-full`}>
+                {CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </Field>
+            {minSpf > 0 && <p className="text-xs text-zinc-500">{t("minSpfLabel")} <b className="text-zinc-300">{decimal(minSpf)}</b> {t("minSpfSuffix")}</p>}
+            {groups.map((g) => (
+              <div key={g} className="flex items-end gap-2">
+                <Field label={groupLabel(g)}>
+                  <select value={cityForGroup(g)} onChange={(e) => setGroupMarket((m) => ({ ...m, [g]: e.target.value }))} className={`${selectCls} w-full`}>
+                    {CITIES.filter((c) => c !== "Black Market").map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
+                <select value={orderForGroup(g)} onChange={(e) => setGroupOrder((m) => ({ ...m, [g]: e.target.value as OrderMode }))} className={selectCls} title={t("orderTypeTitle")}>
+                  <option value="sell">{t("sellOrderOption")}</option>
+                  <option value="buy">{t("buyOrderOption")}</option>
+                </select>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      {/* Focus efficiency */}
+      {siblings.length > 0 && (
+        <div className="space-y-2 border-t border-zinc-800 pt-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("focusEfficiencyLabel")}</h3>
+          <p className="text-xs text-zinc-500">{t("focusEffTreeHint")}</p>
+          {(() => {
+            const baseFam = siblings[0];
+            if (!baseFam) return null;
+            const baseKey = baseFam.familyKey;
+            return (
+              <div className="flex items-center gap-2 rounded-md border border-zinc-600 bg-zinc-800/40 px-2 py-1">
+                <img
+                  src={iconUrl(baseVar?.uniqueName ?? displayVariation(baseFam).uniqueName, 128, baseVar ? EXCELLENT : displayQuality(baseFam))}
+                  alt="" width={22} height={22} className="shrink-0"
+                />
+                <span className="flex-1 truncate text-xs font-semibold text-zinc-100">Base</span>
+                <input
+                  type="number" min={0} max={100}
+                  value={focusEfficiencyByFamily[baseKey] || ""}
+                  placeholder="0"
+                  onChange={(e) => setFocusEff(baseKey, e.target.value === "" ? 0 : Math.min(100, Math.max(0, +e.target.value)))}
+                  onBlur={commitFocusEfficiency}
+                  className={`${selectCls} w-20 shrink-0`}
+                />
+              </div>
+            );
+          })()}
+          <div className="space-y-1.5">
+            {siblings.slice(1).map((f) => (
+              <div key={f.familyKey} className="flex items-center gap-2 rounded-md border border-zinc-800 px-2 py-1">
+                <img src={iconUrl(displayVariation(f).uniqueName, 48, displayQuality(f))} alt="" width={22} height={22} className="shrink-0" />
+                <span className="flex-1 truncate text-xs text-zinc-300">{f.name}</span>
+                <input
+                  type="number" min={0} max={100}
+                  value={focusEfficiencyByFamily[f.familyKey] || ""}
+                  placeholder="0"
+                  onChange={(e) => setFocusEff(f.familyKey, e.target.value === "" ? 0 : Math.min(100, Math.max(0, +e.target.value)))}
+                  onBlur={commitFocusEfficiency}
+                  className={`${selectCls} w-20 shrink-0`}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Ignorar jornais */}
+      <div className="space-y-2 border-t border-zinc-800 pt-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("ignoreJournalsHeader")}</h3>
+        <p className="text-xs text-zinc-500">{t("ignoreJournalsHint")}</p>
+        <div className="flex flex-wrap gap-1.5">
+          {TIERS.map((tier) => (
+            <button key={tier} onClick={() => toggleJournalTier(tier)} className={`rounded-md border px-2 py-1 text-xs ${ignoredJournalTiers.has(tier) ? "border-red-500/60 bg-red-900/20 text-red-300" : "border-zinc-700 text-zinc-300"}`}>T{tier}</button>
+          ))}
+        </div>
+      </div>
+    </aside>
   );
 }
 
@@ -765,7 +867,7 @@ function Cart({
       returnRateNoFocus: o.rr,
       returnRateFocus: o.rr,
       focusCostBase: o.variation.focus,
-      focusEfficiency: settings.focusEfficiency,
+      focusEfficiency: o.focusEfficiency,
       itemValue: o.variation.itemValue,
       stationFeePer100: settings.stationFeePer100,
       salesTaxRate: settings.premium ? 0.04 : 0.08,
@@ -1033,23 +1135,6 @@ function ToggleBtn({ active, on, off, onClick }: { active: boolean; on: string; 
   );
 }
 
-function PlaceBtn({ icon, label, active, onClick, expanded }: { icon: string; label: string; active: boolean; onClick: () => void; expanded?: boolean }) {
-  return (
-    <button onClick={onClick} title={label} className={`flex h-9 flex-1 items-center justify-center gap-1.5 rounded-md border px-2 text-sm ${active ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600"}`}>
-      <span className="text-base">{icon}</span>
-      {expanded && <span>{label}</span>}
-    </button>
-  );
-}
-
-function BonusBtn({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className={`flex h-9 flex-1 items-center justify-center rounded-md border px-1 text-xs ${active ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600"}`}>
-      {label}
-    </button>
-  );
-}
-
 function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <label className="block">
@@ -1060,13 +1145,13 @@ function Field({ label, children }: { label: React.ReactNode; children: React.Re
 }
 
 function Th({ children, right }: { children?: React.ReactNode; right?: boolean }) {
-  return <th className={`sticky top-0 z-20 bg-zinc-900 px-3 py-2 font-medium ${right ? "text-right" : ""}`}>{children}</th>;
+  return <th className={`sticky top-0 z-20 bg-zinc-900 px-2 py-1.5 font-medium ${right ? "text-right" : ""}`}>{children}</th>;
 }
 
 function Td({ children, right, muted, value, sub }: { children: React.ReactNode; right?: boolean; muted?: boolean; value?: number; sub?: React.ReactNode }) {
   const color = value === undefined ? "" : value > 0 ? "text-emerald-400" : value < 0 ? "text-red-400" : "";
   return (
-    <td className={`whitespace-nowrap px-2 py-2 ${right ? "text-right" : ""} ${muted ? "text-zinc-500" : ""} ${color}`}>
+    <td className={`whitespace-nowrap px-2 py-1.5 ${right ? "text-right" : ""} ${muted ? "text-zinc-500" : ""} ${color}`}>
       {sub != null ? (
         <div className={`flex flex-col leading-tight ${right ? "items-end" : ""}`}>
           <span>{children}</span>

@@ -434,7 +434,15 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
   const [membersLoading, setMembersLoading] = useState(false);
   const [entityDeleted, setEntityDeleted] = useState(false);
 
+  // Guarda de resposta obsoleta (mesmo padrão de GuildConfig.tsx): ao trocar
+  // de mode/albionId (ex.: clicar na aliança a partir do perfil da guilda),
+  // um fetch da entidade ANTERIOR pode ainda estar em voo — sem isso, se ele
+  // resolver DEPOIS do fetch da entidade nova (comum sob contenção/lentidão
+  // do backend, onde a ordem de chegada não é garantida), ele sobrescreve os
+  // dados certos com os da entidade antiga (era o bug relatado: trocar pra
+  // aliança e continuar vendo os jogadores da guilda anterior).
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
     setData(null);
@@ -448,8 +456,10 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     const endpoint = mode === "guild" ? "guilds" : "alliances";
     const TRANSIENT = new Set([502, 503, 504]);
     const attempt = (delay: number) => {
+      if (cancelled) return;
       fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}`)
         .then(async r => {
+          if (cancelled) return null;
           if (TRANSIENT.has(r.status)) {
             setTimeout(() => attempt(Math.min(delay * 2, 30_000)), delay);
             return null;
@@ -457,17 +467,19 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
           if (!r.ok) throw new Error(`${r.status}`);
           return r.json();
         })
-        .then(d => { if (d !== null) { setData(d); setLoading(false); } })
-        .catch(e => { setError(e.message); setLoading(false); });
+        .then(d => { if (!cancelled && d !== null) { setData(d); setLoading(false); } })
+        .catch(e => { if (!cancelled) { setError(e.message); setLoading(false); } });
     };
     attempt(3_000);
     fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}/check`)
       .then(r => r.json())
-      .then(d => setEntityDeleted(d.exists === false))
+      .then(d => { if (!cancelled) setEntityDeleted(d.exists === false); })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, [mode, albionId]);
   useEffect(() => {
     if (tab !== "battles") return;
+    let cancelled = false;
     setBattlesLoading(true);
     const endpoint = mode === "guild" ? "guilds" : "alliances";
     const params = new URLSearchParams({
@@ -477,19 +489,22 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     });
     fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}/battles?${params}`)
       .then(r => r.json())
-      .then(setBattlesPage)
-      .finally(() => setBattlesLoading(false));
+      .then(d => { if (!cancelled) setBattlesPage(d); })
+      .finally(() => { if (!cancelled) setBattlesLoading(false); });
+    return () => { cancelled = true; };
   }, [tab, albionId, mode, battlesCurPage, minPlayers, minKills]);
   useEffect(() => {
+    let cancelled = false;
     setMembersLoading(true);
     setFilteredMembers([]);
     const endpoint = mode === "guild" ? "guilds" : "alliances";
     const params = new URLSearchParams({ min_players: minPlayers || "0", min_kills: minKills || "0" });
     fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}/members?${params}`)
       .then(r => r.json())
-      .then(setFilteredMembers)
-      .catch(() => setFilteredMembers([]))
-      .finally(() => setMembersLoading(false));
+      .then(d => { if (!cancelled) setFilteredMembers(d); })
+      .catch(() => { if (!cancelled) setFilteredMembers([]); })
+      .finally(() => { if (!cancelled) setMembersLoading(false); });
+    return () => { cancelled = true; };
   }, [albionId, mode, minPlayers, minKills]);
 
   if (loading) {

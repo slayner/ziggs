@@ -13,6 +13,7 @@ from app.api.routes.battles import _as_builds, _classify_role, _factions_summary
 from app.models.battles import Battle, BattleGuild, BattleParticipant, BattleSide
 from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent
 from app.services import battle_groups
+from app.services.search_norm import match as search_match, norm_sql, normalize as norm_name
 
 router = APIRouter(prefix="/public", tags=["profiles"])
 
@@ -572,7 +573,8 @@ def _battles_alliance(db: Session, alliance_id: str, page: int = 0, min_players:
 # ---------------------------------------------------------------------------
 
 def _search(db: Session, q: str) -> dict:
-    pat = f"%{q}%"
+    nq = norm_name(q)
+    pat = f"%{nq}%"
 
     # Jogadores — agrupa por player_id para evitar duplicatas de troca de guilda
     p_rows = db.execute(
@@ -584,7 +586,7 @@ def _search(db: Session, q: str) -> dict:
             func.max(Battle.region).label("region"),
         )
         .join(Battle, Battle.id == BattleParticipant.battle_id)
-        .where(BattleParticipant.name.ilike(pat))
+        .where(norm_sql(BattleParticipant.name).like(pat))
         .group_by(BattleParticipant.albion_player_id, BattleParticipant.name)
         .order_by(func.count(BattleParticipant.id).desc())
         .limit(6)
@@ -630,7 +632,7 @@ def _search(db: Session, q: str) -> dict:
             BattleGuild.alliance_name,
             func.count(func.distinct(BattleGuild.battle_id)).label("battles"),
         )
-        .where(BattleGuild.guild_name.ilike(pat))
+        .where(norm_sql(BattleGuild.guild_name).like(pat))
         .group_by(BattleGuild.albion_guild_id, BattleGuild.guild_name, BattleGuild.alliance_name)
         .order_by(func.count(func.distinct(BattleGuild.battle_id)).desc())
         .limit(12)
@@ -649,6 +651,40 @@ def _search(db: Session, q: str) -> dict:
         if len(guilds) == 6:
             break
 
+    # Fuzzy — variantes com 1 letra trocada (ex: "pivas" → PLVAS). O fast-path
+    # SQL (substring normalizado) não pega; varre candidatos de comprimento
+    # parecido e aplica match() (normalize + levenshtein ≤ 1). Só pra queries
+    # de entidade ≥ 4 chars (queries curtas geram muitos falsos positivos).
+    # ponytail: length-filter no SQL limita a varredura; limit 300 + Python.
+    if len(guilds) < 6 and len(nq) >= 4:
+        ln = len(nq)
+        g_where = [sa.func.length(sa.func.replace(BattleGuild.guild_name, " ", "")).between(ln - 1, ln + 1)]
+        if seen_g:
+            g_where.append(BattleGuild.albion_guild_id.notin_(seen_g))
+        fuzz_g = db.execute(
+            select(
+                BattleGuild.albion_guild_id,
+                BattleGuild.guild_name,
+                BattleGuild.alliance_name,
+                func.count(func.distinct(BattleGuild.battle_id)).label("battles"),
+            )
+            .where(*g_where)
+            .group_by(BattleGuild.albion_guild_id, BattleGuild.guild_name, BattleGuild.alliance_name)
+            .order_by(func.count(func.distinct(BattleGuild.battle_id)).desc())
+            .limit(300)
+        ).mappings().all()
+        for r in fuzz_g:
+            if len(guilds) == 6:
+                break
+            if search_match(q, r["guild_name"]):
+                seen_g.add(r["albion_guild_id"])
+                guilds.append({
+                    "albion_id": r["albion_guild_id"],
+                    "name": r["guild_name"],
+                    "alliance_name": r["alliance_name"],
+                    "battles": r["battles"],
+                })
+
     # Alianças
     a_rows = db.execute(
         select(
@@ -657,32 +693,70 @@ def _search(db: Session, q: str) -> dict:
             func.count(func.distinct(BattleGuild.albion_guild_id)).label("guild_count"),
             func.count(func.distinct(BattleGuild.battle_id)).label("battles"),
         )
-        .where(BattleGuild.alliance_name.ilike(pat), BattleGuild.alliance_id.isnot(None))
+        .where(norm_sql(BattleGuild.alliance_name).like(pat), BattleGuild.alliance_id.isnot(None))
         .group_by(BattleGuild.alliance_id, BattleGuild.alliance_name)
         .order_by(func.count(func.distinct(BattleGuild.battle_id)).desc())
         .limit(6)
     ).mappings().all()
-    alliances = [
-        {
+    seen_a: set[str] = set()
+    alliances = []
+    for r in a_rows:
+        if r["alliance_id"] in seen_a:
+            continue
+        seen_a.add(r["alliance_id"])
+        alliances.append({
             "albion_id": r["alliance_id"],
             "name": r["alliance_name"],
             "guild_count": r["guild_count"],
             "battles": r["battles"],
-        }
-        for r in a_rows
-    ]
+        })
+        if len(alliances) == 6:
+            break
+
+    # Fuzzy de alianças — mesmo motivo/shape do fuzzy de guildas acima.
+    if len(alliances) < 6 and len(nq) >= 4:
+        ln = len(nq)
+        a_where = [
+            sa.func.length(sa.func.replace(BattleGuild.alliance_name, " ", "")).between(ln - 1, ln + 1),
+            BattleGuild.alliance_id.isnot(None),
+        ]
+        if seen_a:
+            a_where.append(BattleGuild.alliance_id.notin_(seen_a))
+        fuzz_a = db.execute(
+            select(
+                BattleGuild.alliance_id,
+                BattleGuild.alliance_name,
+                func.count(func.distinct(BattleGuild.albion_guild_id)).label("guild_count"),
+                func.count(func.distinct(BattleGuild.battle_id)).label("battles"),
+            )
+            .where(*a_where)
+            .group_by(BattleGuild.alliance_id, BattleGuild.alliance_name)
+            .order_by(func.count(func.distinct(BattleGuild.battle_id)).desc())
+            .limit(300)
+        ).mappings().all()
+        for r in fuzz_a:
+            if len(alliances) == 6:
+                break
+            if search_match(q, r["alliance_name"]):
+                seen_a.add(r["alliance_id"])
+                alliances.append({
+                    "albion_id": r["alliance_id"],
+                    "name": r["alliance_name"],
+                    "guild_count": r["guild_count"],
+                    "battles": r["battles"],
+                })
 
     # Batalhas — une player hits + guild hits, pega as 6 mais recentes
     p_bids = set(db.scalars(
         select(Battle.id)
         .join(BattleParticipant, BattleParticipant.battle_id == Battle.id)
-        .where(BattleParticipant.name.ilike(pat))
+        .where(norm_sql(BattleParticipant.name).like(pat))
         .order_by(Battle.start_time.desc()).limit(30)
     ).all())
     g_bids = set(db.scalars(
         select(Battle.id)
         .join(BattleGuild, BattleGuild.battle_id == Battle.id)
-        .where(BattleGuild.guild_name.ilike(pat) | BattleGuild.alliance_name.ilike(pat))
+        .where(norm_sql(BattleGuild.guild_name).like(pat) | norm_sql(BattleGuild.alliance_name).like(pat))
         .order_by(Battle.start_time.desc()).limit(30)
     ).all())
     all_bids = list(p_bids | g_bids)
@@ -794,22 +868,25 @@ async def _check_albion_entity(entity_type: str, albion_id: str, path: str, db: 
     os 3 confirmarem 404 — qualquer timeout/erro no meio vira "unknown",
     nunca deletado."""
     import httpx
+    from app.services.albion_gate import PROFILE, albion_scope, slot
     from app.services.player_tracker import HOSTS, make_client
 
     found = False
     inconclusive = False
     async with make_client() as c:
-        for host in HOSTS.values():
-            try:
-                resp = await c.get(f"https://{host}/api/gameinfo/{path}/{albion_id}", timeout=8.0)
-            except (httpx.TimeoutException, httpx.NetworkError):
-                inconclusive = True
-                continue
-            if resp.status_code == 200:
-                found = True
-                break
-            if resp.status_code != 404:
-                inconclusive = True
+        async with albion_scope(PROFILE):
+            for host in HOSTS.values():
+                try:
+                    async with slot():
+                        resp = await c.get(f"https://{host}/api/gameinfo/{path}/{albion_id}", timeout=8.0)
+                except (httpx.TimeoutException, httpx.NetworkError):
+                    inconclusive = True
+                    continue
+                if resp.status_code == 200:
+                    found = True
+                    break
+                if resp.status_code != 404:
+                    inconclusive = True
 
     row = db.scalar(select(DeletedProfile).where(
         DeletedProfile.entity_type == entity_type, DeletedProfile.albion_id == albion_id

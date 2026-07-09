@@ -78,3 +78,40 @@ export function parsePlayerRoute(loc: string): PlayerRoute | null {
   if (!m) return null;
   return { region: PLAYER_PREFIXES[m[1]], name: decodeURIComponent(m[2]) };
 }
+
+// Página de escalação de um evento (deep link): /events/{guildId}/{eventId}[/escalation].
+// URLs são sempre em inglês. Aceita também os caminhos antigos em PT
+// (/eventos/.../escalacao) pra não quebrar embeds já enviados no Discord.
+// guildId/eventId vêm na URL (não da guilda corrente) pra funcionar pra quem acabou
+// de logar via OAuth e ainda não selecionou a guilda no site.
+// ponytail: guildId vira string, NÃO Number — snowflake do Discord (> 2^53)
+// perde precisão em float64 e manda id truncado na URL (causa 403/404 na escalação).
+export interface EventRoute { guildId: string; eventId: number }
+const EVENT_RE = /^\/(?:eventos|events)\/(\d+)\/(\d+)(?:\/(?:escalacao|escalation))?$/;
+export function parseEventRoute(loc: string): EventRoute | null {
+  const [path] = loc.split("?");
+  const m = path.match(EVENT_RE);
+  if (!m) return null;
+  return { guildId: m[1], eventId: Number(m[2]) };
+}
+
+// Filtro de regears por evento (deep link do review): /regears?event={eventId}.
+// Sem guildId na URL — usa a guilda corrente do cookie. Retorna só o eventId.
+export function parseRegearEventFilter(loc: string): number | null {
+  const [path, search] = loc.split("?");
+  if (path !== "/regears" && path !== "/regear") return null;
+  const ev = new URLSearchParams(search ?? "").get("event");
+  const n = ev ? Number(ev) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// Deep link do bot-v2 pra um pedido de regear: /regear/{guildId}/{requestId}.
+// guildId vira string (snowflake do Discord, > 2^53 — ver EventRoute).
+export interface RegearRoute { guildId: string; requestId: number }
+const REGEAR_RE = /^\/regears?\/(\d+)\/(\d+)$/;
+export function parseRegearRoute(loc: string): RegearRoute | null {
+  const [path] = loc.split("?");
+  const m = path.match(REGEAR_RE);
+  if (!m) return null;
+  return { guildId: m[1], requestId: Number(m[2]) };
+}

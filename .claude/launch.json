@@ -18,6 +18,16 @@
         "/c",
         "cd /d C:\\Users\\Gabriel\\Documents\\Code\\ziggs\\bot-v2 && venv\\Scripts\\python.exe -u main.py"
       ]
+    },
+    {
+      "name": "hideout-backend",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd /d C:\\Users\\Gabriel\\Documents\\Code\\ziggs\\backend && scripts\\uvicorn.exe app.main:app"
+      ],
+      "port": 8000,
+      "autoPort": false
     }
   ]
 }

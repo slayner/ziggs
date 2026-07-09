@@ -30,6 +30,27 @@ class Settings(BaseSettings):
     environment: str = "development"
     bot_api_secret: str = "dev-bot-secret-change-me"
 
+    # Kill-switch dos fetchers de background (battle/player/price trackers,
+    # profile_warmer, claim/registration checker, weapon_stats, snapshots…).
+    # True = NÃO inicia nenhuma task de polling no lifespan — serve pra rodar
+    # o servidor em dado móvel limitado sem que os trackers suguem a rede.
+    # Rotas sob demanda (UI) continuam funcionando, só disparam request externo
+    # quando você clica. Setar no .env: DISABLE_BACKGROUND_FETCHERS=true
+    disable_background_fetchers: bool = False
+
+    def model_post_init(self, __context) -> None:
+        # Trava de segurança: fora de development, subir com os secrets de
+        # exemplo tornaria o cookie de sessão FORJÁVEL (os defaults estão
+        # públicos no repo) e o /bot/* aberto pra qualquer um. Falha no boot
+        # em vez de rodar silenciosamente inseguro.
+        if self.environment != "development":
+            weak = {"dev-only-change-me", "dev-bot-secret-change-me", ""}
+            if self.secret_key in weak or self.bot_api_secret in weak:
+                raise RuntimeError(
+                    "SECRET_KEY/BOT_API_SECRET com valor default de dev em ambiente "
+                    f"{self.environment!r} — defina secrets reais no .env antes de subir."
+                )
+
 
 @lru_cache
 def get_settings() -> Settings:

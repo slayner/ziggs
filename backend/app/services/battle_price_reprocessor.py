@@ -22,6 +22,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import OperationalError
 
 from app.db import SessionLocal
 from app.models.prices import ItemPriceLatest
@@ -49,11 +50,25 @@ async def _reprocess_batch(db) -> int:
     ).all()
     if not item_ids:
         return 0
-    db.execute(delete(ItemPriceLatest).where(
-        ItemPriceLatest.city == _BATTLE_SENTINEL,
-        ItemPriceLatest.item_id.in_(item_ids),
-    ))
-    db.commit()
+    # Contenção passageira com outro serviço de fundo escrevendo no mesmo
+    # instante (mesma classe de "database is locked" já tratada em
+    # battle_groups.py) — 2 tentativas curtas em vez de perder o lote
+    # inteiro e cair pro IDLE_INTERVAL (5min) mesmo com a migração longe de
+    # terminar. asyncio.sleep (não time.sleep): isto roda no loop de
+    # eventos, um sleep bloqueante travaria toda a API junto.
+    for attempt in range(2):
+        try:
+            db.execute(delete(ItemPriceLatest).where(
+                ItemPriceLatest.city == _BATTLE_SENTINEL,
+                ItemPriceLatest.item_id.in_(item_ids),
+            ))
+            db.commit()
+            break
+        except OperationalError:
+            db.rollback()
+            if attempt == 1:
+                raise
+            await asyncio.sleep(1.0)
     await get_battle_prices(db, item_ids)  # refaz + re-cacheia (mediana, ver prices.py)
     return len(item_ids)
 

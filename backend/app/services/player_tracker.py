@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerSnapshot
+from app.services.albion_gate import NEW_ELIGIBLE, albion_scope, slot
 
 log = logging.getLogger(__name__)
 
@@ -203,10 +204,11 @@ async def sync_player_kills(client: httpx.AsyncClient, db: Session, host: str, r
         events = None
         for attempt in range(2):  # ponytail: 1 retry, API do Albion dá ReadTimeout transiente com frequência
             try:
-                resp = await client.get(
-                    f"https://{host}/api/gameinfo/players/{albion_id}/{kind}",
-                    params={"limit": PLAYER_SYNC_LIMIT, "offset": 0},
-                )
+                async with slot():
+                    resp = await client.get(
+                        f"https://{host}/api/gameinfo/players/{albion_id}/{kind}",
+                        params={"limit": PLAYER_SYNC_LIMIT, "offset": 0},
+                    )
                 resp.raise_for_status()
                 events = resp.json()
                 break
@@ -235,7 +237,9 @@ async def poll_once() -> int:
         async with make_client() as c:
             for region, host in HOSTS.items():
                 try:
-                    resp = await c.get(f"https://{host}/api/gameinfo/events", params={"limit": 51})
+                    async with albion_scope(NEW_ELIGIBLE):
+                        async with slot():
+                            resp = await c.get(f"https://{host}/api/gameinfo/events", params={"limit": 51})
                     resp.raise_for_status()
                     events = resp.json()
                 except Exception as e:

@@ -4,6 +4,7 @@ import { imgRetry } from "../api";
 import { navigate, navigateReplace } from "../router";
 import { EquipGrid, PriceHistoryChart, is2H, type DraftEquip } from "./CompBuilder";
 import { useT, type TKey } from "../i18n";
+import { searchIncludes } from "../lib/search";
 
 const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 
@@ -214,8 +215,14 @@ function matchesGuildFilter(p: Participant, filter: string): boolean {
 // dropdown próprio em vez de <select>+<optgroup> — o label de um <optgroup>
 // nativo NUNCA é clicável (restrição do HTML, não tem como contornar com
 // CSS), então a aliança ficava com cara de selecionável mas nunca selecionava.
-function GuildFilterSelect({ participants, value, onChange }: {
+function GuildFilterSelect({ participants, value, onChange, align = "right" }: {
   participants: Participant[]; value: string; onChange: (v: string) => void;
+  // De que lado do botão o menu abre. "right" (default) ancora a borda direita
+  // do menu na borda direita do botão — certo quando o botão fica perto da
+  // direita do container. Quando o botão fica perto da ESQUERDA (ex.: primeiro
+  // controle de uma toolbar), usar align="left" — senão o menu abre pra fora
+  // da tela/container em vez de pro lado que tem espaço.
+  align?: "left" | "right";
 }) {
   const t = useT();
   const groups = useMemo(() => computeGuildGroups(participants), [participants]);
@@ -249,7 +256,7 @@ function GuildFilterSelect({ participants, value, onChange }: {
         {currentLabel}
       </button>
       {open && (
-        <div className="absolute right-0 z-20 mt-1 max-h-72 w-56 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-xs shadow-lg">
+        <div className={`absolute z-20 mt-1 max-h-72 w-56 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-xs shadow-lg ${align === "left" ? "left-0" : "right-0"}`}>
           <button onClick={() => pick("")} className={rowCls(!value)}>{t("allGuildsOption")}</button>
           {groups.alliances.map(([alliance, guilds]) => (
             <div key={alliance} className="mt-1 border-t border-zinc-800 pt-1">
@@ -422,7 +429,7 @@ function ParticipantTable({ participants, region }: { participants: Participant[
   const filtered = useMemo(
     () => participants.filter(p =>
       matchesGuildFilter(p, guildFilter) &&
-      (!search || (haystacks.get(p.albion_player_id) ?? "").includes(search.toLowerCase()))
+      (!search || searchIncludes(search, haystacks.get(p.albion_player_id) ?? ""))
     ),
     [participants, guildFilter, search, haystacks],
   );
@@ -452,7 +459,7 @@ function ParticipantTable({ participants, region }: { participants: Participant[
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
       <div className="border-b border-zinc-800 px-4 py-2.5 flex flex-wrap items-center gap-2">
-        <GuildFilterSelect participants={participants} value={guildFilter} onChange={v => { setGuildFilter(v); setPage(1); }} />
+        <GuildFilterSelect participants={participants} value={guildFilter} onChange={v => { setGuildFilter(v); setPage(1); }} align="left" />
         <input
           value={search}
           onChange={e => { setSearch(e.target.value); setPage(1); }}

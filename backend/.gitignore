@@ -12,6 +12,10 @@ scripts/__pycache__/
 *.db
 *.db-shm
 *.db-wal
+*.db.bak
 
 # dump de dados do jogo (broderickhyman/ao-bin-dumps) — referência local, não versionar
 data/ao-bin-dump/
+
+# screenshots de regear enviadas pelo Discord (ver services/regear.py _IMAGES_DIR)
+_regear_images/

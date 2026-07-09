@@ -81,6 +81,61 @@ class ReconcileResult(BaseModel):
     has_chest_log: bool = False
 
 
+# ── Reconciliação própria (lootlog + baú + mortes) ───────────────────────────
+
+class LootReconcileEventOut(BaseModel):
+    item_id: str
+    item_name: str
+    quantity: int
+    looted_by: str
+    looted_from: str | None
+
+
+class NotDepositedLooter(BaseModel):
+    looted_by: str
+    qty: int
+
+
+class NotDepositedOut(BaseModel):
+    item_id: str
+    item_name: str
+    missing_qty: int
+    looted_qty: int
+    chest_qty: int
+    silver_value: int       # unitário
+    missing_value: int      # missing_qty * silver_value
+    looters: list[NotDepositedLooter]
+
+
+class RecoveredItem(BaseModel):
+    item_id: str | None
+    item_name: str | None
+    quantity: int
+    looted_by: str | None
+
+
+class DeathLossOut(BaseModel):
+    user_id: int | None
+    display_name: str
+    silver_value: int          # regear aprovado (gear perdida)
+    notes: str | None
+    recovered_items: list[RecoveredItem]  # itens saídos do cadáver (lootlog)
+
+
+class LootReconcileOut(BaseModel):
+    has_loot_log: bool
+    has_chest_log: bool
+    has_deaths: bool
+    deposited: list[ChestEntryOut] = Field(default_factory=list)
+    not_deposited: list[NotDepositedOut] = Field(default_factory=list)
+    died_with: list[DeathLossOut] = Field(default_factory=list)
+    loot_events: list[LootReconcileEventOut] = Field(default_factory=list)
+    total_looted_value: int = 0
+    total_chest_value: int = 0
+    missing_value: int = 0
+    total_regear_value: int = 0
+
+
 # ── Preços ───────────────────────────────────────────────────────────────────
 
 class ItemPriceOut(BaseModel):

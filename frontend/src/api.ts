@@ -4,7 +4,7 @@
 
 let _guild = "";
 export const setGuild = (id: string) => { _guild = id; };
-const g = () => _guild;
+export const g = () => _guild;
 
 export interface ApiRole {
   id: number;
@@ -120,6 +120,75 @@ export interface RegearEstimate {
   calculated_at: string;
 }
 
+// ── Regear por screenshot (fila standalone) ─────────────────────────────────
+export interface RegearChannelCfg {
+  channel_id: string;
+  coverage_pct: number;
+}
+export interface RegearSettings {
+  enabled: boolean;
+  channels: RegearChannelCfg[];
+  enabled_categories: string[];
+  disabled_items: string[];
+  require_approval: boolean;
+  approver_role_ids: number[];
+}
+export interface RegearQueueItem {
+  item_id: string;
+  name: string;
+  quality: number;
+  slot: string;
+  category: string | null;
+  eligible: boolean;
+  unit_price: number;
+  total_price: number;
+}
+export interface RegearRequest {
+  id: number;
+  guild_id: number;
+  event_id: number | null;
+  event_title: string | null;
+  requester_user_id: number | null;
+  requester_name: string | null;
+  screenshot_url: string;
+  ocr_name: string | null;
+  albion_event_id: string | null;
+  death_timestamp: string | null;
+  detected_items: RegearQueueItem[];
+  base_total: number;
+  suggested_total: number;
+  final_total: number | null;
+  coverage_pct: number;
+  price_basis: string;
+  status: string;            // pending | paid | denied | removed
+  handled_by_user_id: number | null;
+  handled_at: string | null;
+  notes: string | null;
+  created_at: string;
+  recognition_status: string; // recognized | manual | error
+}
+export interface RegearList { requests: RegearRequest[] }
+export interface RegearUpdatePayload {
+  final_total?: number | null;
+  status?: string;
+  notes?: string | null;
+  detected_items?: RegearQueueItem[];
+}
+
+// ── Lootlog anônimo (área só-admin) ─────────────────────────────────────────
+export interface LootLogSubmission {
+  id: number;
+  event_id: number;
+  submitter_user_id: number | null;
+  submitter_name: string | null;
+  file_name: string;
+  raw_text: string | null;
+  created_at: string;
+}
+export interface LootLogList { submissions: LootLogSubmission[] }
+export interface LootLogSettings { logger_percent: number; enabled: boolean }
+export interface LootLogIngestResult { id: number; row_count: number; silver_total: number; is_update: boolean }
+
 export interface BuildFieldSuggestion {
   value: string;
   votes: number;
@@ -150,6 +219,16 @@ export interface Me {
   guild_id: string | null;
 }
 
+// ── Perfil customizado (tema/avatar/banner do personagem verificado) ────────
+export const PROFILE_THEMES = ["gold", "blue", "green", "red", "purple", "teal"] as const;
+export type ProfileTheme = typeof PROFILE_THEMES[number];
+export interface MyProfile {
+  verified: boolean;
+  theme: ProfileTheme;
+  avatar_url: string | null;
+  banner_url: string | null;
+}
+
 export interface DiscordGuild {
   id: string;
   name: string;
@@ -165,13 +244,17 @@ export interface Permissions {
   "comps.view": boolean;
   "comps.create": boolean;
   "comps.manage": boolean;
+  "nodes.view": boolean;
+  "nodes.manage": boolean;
   "guild.admin": boolean;
+  "escalacao.manage": boolean;
 }
 
 export const NO_PERMS: Permissions = {
   "events.view": false, "events.create": false, "events.manage": false,
   "comps.view": false,  "comps.create": false,  "comps.manage": false,
-  "guild.admin": false,
+  "nodes.view": false,  "nodes.manage": false,
+  "guild.admin": false, "escalacao.manage": false,
 };
 
 export interface DiscordRole {
@@ -191,11 +274,15 @@ export interface SiteGuild {
 export interface EventSummary {
   id: number;
   state: string;
-  type: string | null;
   title: string | null;
   caller_name: string | null;
   scheduled_at: string | null;
   created_at: string;
+  started_at: string | null;
+  ended_at: string | null;
+  comp_id: number | null;
+  seriousness: string;
+  participation_mode: string;
 }
 export interface VerificationStep {
   step: string;
@@ -211,8 +298,16 @@ export interface Participant {
   base_percent: number;
   is_trial: boolean;
   silver_received: number;
+  snapshots_present?: number;
   game_role_id: number | null;
   game_role_name: string | null;
+  // Válido (entra no split ao finalizar) vs irregular (presença sem inscrição,
+  // ou inscrição sem presença) — usado no cálculo de payout. Editar percent
+  // já implica válido (ver ParticipantsSection).
+  is_valid: boolean;
+  // Origem da presença além da escalação. null = escalado (sem marcador).
+  // Demais: "battle_no_call" | "call_no_signup" | "call_signup" | "manual".
+  origin?: string | null;
 }
 
 export interface Death {
@@ -230,14 +325,32 @@ export interface PayoutRow {
   percent: number;
   lootsplit: number;
   regear: number;
+  scout: number;
   total: number;
 }
 
 export interface PayoutPreview {
   tab_value: number;
+  // Setting da guilda usado neste cálculo —
+  // "none" | "leftover" | "full" | "guild_backed".
+  // Regear em si não tem mais tipo (sempre calculado); isto só decide se/como
+  // a tab virou lootsplit, pra UI escolher o que mostrar.
+  lootsplit_mode: string;
   payouts: PayoutRow[];
   total_lootsplit: number;
   total_regear: number;
+  // Scout: pool SEPARADO financiado pelo valor vendido de cada node capturado
+  // (NodeDef.weight × sold_value). Não reduz o que participantes recebem.
+  total_scout: number;
+  scout_payouts: PayoutRow[];
+  rounding_loss?: number;
+  // Fatia dos loggers (lootlog anônimo) — só p/ CTA com submissões.
+  logger_pool?: number;
+  logger_payouts?: PayoutRow[];
+  // Só preenchido em modo "guild_backed" quando o regear come mais que a tab:
+  // rombo a descontar igualmente do saldo (EconomyBalance) de cada membro.
+  guild_deficit_total?: number;
+  guild_deficit_member_count?: number;
 }
 
 export interface LootEntry {
@@ -282,10 +395,77 @@ export interface LootReconcile {
   has_chest_log: boolean;
 }
 
+// Reconciliação própria: lootlog + baú + mortes.
+export interface ChestUploadEntry {
+  item_type: string;
+  item_name: string;
+  quantity: number;
+  silver_value?: number;
+  deposited_by_name?: string | null;
+}
+export interface NotDepositedLooter { looted_by: string; qty: number }
+export interface NotDepositedItem {
+  item_id: string;
+  item_name: string;
+  missing_qty: number;
+  looted_qty: number;
+  chest_qty: number;
+  silver_value: number;
+  missing_value: number;
+  looters: NotDepositedLooter[];
+}
+export interface RecoveredItem {
+  item_id: string | null;
+  item_name: string | null;
+  quantity: number;
+  looted_by: string | null;
+}
+export interface DeathLoss {
+  user_id: number | null;
+  display_name: string;
+  silver_value: number;
+  notes: string | null;
+  recovered_items: RecoveredItem[];
+}
+export interface LootReconcileEvent {
+  item_id: string;
+  item_name: string;
+  quantity: number;
+  looted_by: string;
+  looted_from: string | null;
+}
+export interface UnifiedReconcile {
+  has_loot_log: boolean;
+  has_chest_log: boolean;
+  has_deaths: boolean;
+  deposited: ChestEntry[];
+  not_deposited: NotDepositedItem[];
+  died_with: DeathLoss[];
+  loot_events: LootReconcileEvent[];
+  total_looted_value: number;
+  total_chest_value: number;
+  missing_value: number;
+  total_regear_value: number;
+}
+
+export interface EventSignup {
+  id: number;
+  user_id: number;
+  user_name: string | null;
+  functions: string[];
+  created_at: string;
+}
+
+// Registrado (/register) visto numa batalha real da guilda na janela do
+// evento, mas sem nenhum EventParticipant — nem call, nem inscrição.
+export interface BattleAbsentee {
+  user_id: number;
+  user_name: string | null;
+}
+
 export interface EventDetail {
   id: number;
   state: string;
-  type: string | null;
   title: string | null;
   message: string | null;
   comp_id: number | null;
@@ -296,11 +476,129 @@ export interface EventDetail {
   is_loss: boolean;
   tab_value: number;
   tab_image_url: string | null;
+  battleboard_url: string | null;
+  seriousness: string;
+  participation_mode: string;
+  functions_released: boolean;
+  total_snapshots: number;
+  // Pontos de attendance — UM valor por evento, igual pra todo participante
+  // independente do percent do split. Aceita fração (ex.: 0.5, 1.5).
+  attendance: number;
   allowed_transitions: string[];
   verification: VerificationStep[];
   participants: Participant[];
   deaths: Death[];
+  signups: EventSignup[];
+  battle_absentees: BattleAbsentee[];
   payout: PayoutPreview | null;
+  regear_summary: RegearSummary | null;
+}
+
+export interface RegearSummary {
+  pending: number;
+  approved: number;
+  denied: number;
+  approved_total: number;
+}
+
+// ── Nodes (calendário de nodes) ──────────────────────────────────────────────
+
+export interface NodeDef {
+  id: number;
+  name: string;
+  emoji: string | null;
+  weight: number;
+  sort: number;
+}
+
+export interface NodeEventLog {
+  id: number;
+  node_type: string;
+  map_name: string;
+  spawn_at: string;
+  scout_id: number | null;
+  scout_name: string | null;
+  logged_at: string;
+  // Captura em review: node vinculado a este evento + valor vendido (scout payout).
+  captured: boolean;
+  sold_value: number;
+  event_id: number | null;
+}
+
+export interface NearNodesOut {
+  ts: string;
+  window_seconds: number;
+  nodes: NodeEventLog[];
+}
+
+export interface NodeMaps {
+  extras: string[];
+  exclusions: string[];
+  builtin: string[];
+}
+
+// ── Escalação (assentamento de inscritos nos slots da comp) ───────────────────
+
+export interface EscalationRole {
+  id: number;
+  name: string;
+  invisible_function: string | null;
+  weapon_name: string | null;
+  offhand: string | null;
+  helmet: string | null;
+  armor: string | null;
+  boots: string | null;
+  cape: string | null;
+  food: string | null;
+  play_style: string | null;
+  obs: string | null;
+  build_items: RegearItem[];
+  color: string | null;
+  q_spell: string | null;
+  w_spell: string | null;
+  passive_spell: string | null;
+  gear_spells: Record<string, string | null>;
+}
+export interface EscalationSlot {
+  id: number;
+  position: number;
+  label: string | null;
+  fn: string | null;
+  notes: string | null;
+  roles: EscalationRole[];
+}
+export interface EscalationParty {
+  id: number;
+  position: number;
+  name: string | null;
+  slots: EscalationSlot[];
+}
+export interface Assignment {
+  slot_id: number | null;
+  user_id: number;
+  user_name: string | null;
+  game_role_id: number | null;
+}
+export interface EscalationSignup {
+  user_id: number;
+  user_name: string | null;
+  functions: string[];
+}
+export interface EscalationOut {
+  event: {
+    id: number;
+    title: string | null;
+    scheduled_at: string | null;
+    seriousness: string;
+    state: string;
+    comp_id: number | null;
+    comp_name: string | null;
+    functions_released: boolean;
+  };
+  parties: EscalationParty[];
+  assignments: Assignment[];
+  enlisted: EscalationSignup[];
+  can_manage: boolean;
 }
 
 export function imgRetry(onFail?: (img: HTMLImageElement) => void) {
@@ -326,9 +624,11 @@ export async function fetchRetry(input: RequestInfo, retries = 3): Promise<Respo
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  // FormData: deixa o fetch definir o Content-Type (multipart + boundary).
+  const isForm = init?.body instanceof FormData;
   const res = await fetch(path, {
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    ...(isForm ? {} : { headers: { "Content-Type": "application/json" } }),
     ...init,
   });
   if (!res.ok) {
@@ -347,6 +647,11 @@ export const BOT_INVITE = `https://discord.com/oauth2/authorize?client_id=151827
 
 export const api = {
   me: () => req<Me | null>("/auth/me").catch(() => null),
+  // Preferência pessoal (não-por-guilda) da calculadora de craft — vazio se
+  // deslogado; PUT exige login (401 caso contrário, ver deps.require_user).
+  getCraftFocusEfficiency: () => req<Record<string, number>>("/craft/focus-efficiency"),
+  setCraftFocusEfficiency: (values: Record<string, number>) =>
+    req<Record<string, number>>("/craft/focus-efficiency", { method: "PUT", body: JSON.stringify({ values }) }),
   myDiscordGuilds: () => req<DiscordGuild[]>("/auth/guilds"),
   selectGuild: (guild_id: string, guild_name: string, icon: string | null, is_admin = false) =>
     req<{ guild_id: string; bot_present: boolean }>("/auth/select-guild", {
@@ -360,13 +665,58 @@ export const api = {
   updateGuildSettings: (guild_id: string, payload: {
     albion_guild_name?: string | null; albion_guild_region?: string | null; register_role_id?: string | null;
     ally_role_id?: string | null; ally_allowed_guilds?: string[] | null; bot_language?: string | null;
+    events_channel_id?: string | null; event_review_channel_id?: string | null; event_role_gates?: Record<string, string[]> | null;
+    signup_min_builds?: number | null; signup_max_builds?: number | null;
+    nodes_calendar_channel_id?: string | null;
+    voice_cta_channel_id?: string | null; trial_percent?: number | null;
+    trial_role_id?: string | null;
+    // "none" | "leftover" | "full" | "guild_backed" — regear é sempre
+    // calculado; isto só decide como a tab vira lootsplit (ver
+    // events.get_lootsplit_mode no backend).
+    lootsplit_mode?: string | null;
+    // Subconjunto de ["created","t10min","in_progress","review"] — momentos em
+    // que o mass-info do bot deleta a embed e reenvia com @everyone. Default
+    // (chave ausente) = os 3 primeiros; [] = tudo off. Ver event_signups.py.
+    events_ping_triggers?: string[] | null;
+    // null = bot cria/mantém o canal próprio "logs-bot" (admin-only); setar um
+    // canal faz o bot usar esse. Ver cogs/audit_log.py ensure_logs_channel.
+    logs_channel_id?: string | null;
+    // Canal dedicado onde o bot cria uma thread de regear por evento ao entrar
+    // em IN_PROGRESS. Ver cogs/regear_threads.py.
+    regear_thread_channel_id?: string | null;
+    // Canal dedicado onde o bot cria uma thread de lootlog por evento ao entrar
+    // em IN_PROGRESS. .csv do lootlogger postado na thread vira LootLogSubmission
+    // atrelado ao evento. Ver cogs/lootlog_threads.py.
+    lootlog_thread_channel_id?: string | null;
+    // Default (chave ausente) = true — desligar faz o bot parar de criar/manter
+    // o canal de logs e de postar. Ver cogs/audit_log.py.
+    bot_logs_enabled?: boolean | null;
   }) =>
     req<{ ok: boolean; albion_guild_resolved: boolean }>(`/auth/guild-settings/${guild_id}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
   myPermissions: () => req<Permissions>("/auth/my-permissions"),
+
+  // ── Perfil customizado ────────────────────────────────────────────────────
+  getMyProfile: () => req<MyProfile>("/profile/me"),
+  setProfileTheme: (theme: ProfileTheme) =>
+    req<MyProfile>("/profile/theme", { method: "PUT", body: JSON.stringify({ theme }) }),
+  uploadProfileAvatar: (file: File) => {
+    const form = new FormData(); form.append("file", file);
+    return req<MyProfile>("/profile/avatar", { method: "POST", body: form });
+  },
+  removeProfileAvatar: () => req<MyProfile>("/profile/avatar", { method: "DELETE" }),
+  uploadProfileBanner: (file: File) => {
+    const form = new FormData(); form.append("file", file);
+    return req<MyProfile>("/profile/banner", { method: "POST", body: form });
+  },
+  removeProfileBanner: () => req<MyProfile>("/profile/banner", { method: "DELETE" }),
   guildDiscordRoles: (guild_id: string) => req<DiscordRole[]>(`/auth/guild-discord-roles/${guild_id}`),
+  guildDiscordChannels: (guild_id: string, voice = false) =>
+    req<{ id: string; name: string; position: number }[]>(
+      `/auth/guild-discord-channels/${guild_id}${voice ? "?voice=true" : ""}`,
+    ),
   guildAllies: (guild_id: string) => req<{ id: string; name: string }[]>(`/auth/guild-allies/${guild_id}`),
   updateRolePermissions: (guild_id: string, role_id: string, role_name: string, permissions: Partial<Permissions>) =>
     req<{ ok: boolean }>(`/auth/guild-discord-roles/${guild_id}/${role_id}`, {
@@ -425,33 +775,70 @@ export const api = {
     }),
 
   listEvents: () => req<EventSummary[]>(`/guilds/${g()}/events`),
-  createEvent: (title: string) =>
+  // Sem tipo — todo evento sempre calcula regear + lootsplit (o
+  // lootsplit_mode é setting da guilda, não do evento).
+  createEvent: (payload: {
+    title?: string | null; scheduled_at?: string | null; comp_id?: number | null;
+    message?: string | null;
+  }) =>
     req<EventDetail>(`/guilds/${g()}/events`, {
       method: "POST",
-      body: JSON.stringify({ title }),
+      body: JSON.stringify(payload),
     }),
+  // guildId opcional (default = guilda corrente via g()) — a página de
+  // escalação é deep-link e passa a guilda explícita, já que pode não ter
+  // sido selecionada como "corrente" nesta sessão do site.
+  releaseFunctions: (id: number, released: boolean, guildId?: string) =>
+    req<EventDetail>(`/guilds/${guildId ?? g()}/events/${id}/release-functions`, {
+      method: "POST",
+      body: JSON.stringify({ released }),
+    }),
+  setEventAttendance: (id: number, value: number) =>
+    req<EventDetail>(`/guilds/${g()}/events/${id}/attendance`, {
+      method: "POST",
+      body: JSON.stringify({ value }),
+    }),
+  listSignups: (id: number) => req<EventSignup[]>(`/guilds/${g()}/events/${id}/signups`),
   getEvent: (id: number) => req<EventDetail>(`/guilds/${g()}/events/${id}`),
+  // Escalação: guildId explícito (página é deep-link, não depende da guilda corrente).
+  // ponytail: guildId é string — snowflake do Discord > 2^53 perde em number.
+  escalacao: (guildId: string, eventId: number) =>
+    req<EscalationOut>(`/guilds/${guildId}/events/${eventId}/escalacao`),
+  assignEscalacao: (guildId: string, eventId: number, payload: {
+    slot_id: number; user_id: number; user_name?: string | null; game_role_id: number;
+  }) =>
+    req<Assignment>(`/guilds/${guildId}/events/${eventId}/escalacao/assign`, {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+  unassignSlot: (guildId: string, eventId: number, slotId: number) =>
+    req<{ ok: boolean }>(`/guilds/${guildId}/events/${eventId}/escalacao/slot/${slotId}`, { method: "DELETE" }),
+  unassignUser: (guildId: string, eventId: number, userId: number) =>
+    req<{ ok: boolean }>(`/guilds/${guildId}/events/${eventId}/escalacao/user/${userId}`, { method: "DELETE" }),
+  escalacaoPrices: (guildId: string, eventId: number) =>
+    req<{ prices: Record<string, number> }>(`/guilds/${guildId}/events/${eventId}/escalacao/prices`),
   transition: (id: number, to: string) =>
     req<EventDetail>(`/guilds/${g()}/events/${id}/transition`, {
       method: "POST",
       body: JSON.stringify({ to }),
-    }),
-  setType: (id: number, type: string) =>
-    req<EventDetail>(`/guilds/${g()}/events/${id}/type`, {
-      method: "POST",
-      body: JSON.stringify({ type }),
     }),
   setStep: (id: number, step: string, completed: boolean, data?: Record<string, unknown>) =>
     req<EventDetail>(`/guilds/${g()}/events/${id}/verification/${step}`, {
       method: "POST",
       body: JSON.stringify({ completed, data: data ?? null }),
     }),
-  addParticipant: (id: number, payload: { user_id: number; user_name?: string; percent?: number }) =>
+  // Captura de node em review: marca se pegamos o node + valor vendido. O scout
+  // (quem adicionou) recebe NodeDef.weight × sold_value — pool separado da tab.
+  claimNode: (id: number, nodeLogId: number, payload: { captured: boolean; sold_value: number }) =>
+    req<EventDetail>(`/guilds/${g()}/events/${id}/nodes/${nodeLogId}/claim`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  addParticipant: (id: number, payload: { user_id: number; user_name?: string; percent?: number; is_valid?: boolean }) =>
     req<EventDetail>(`/guilds/${g()}/events/${id}/participants`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  updateParticipant: (id: number, participantId: number, payload: { game_role_id?: number | null; percent?: number; is_trial?: boolean }) =>
+  updateParticipant: (id: number, participantId: number, payload: { game_role_id?: number | null; percent?: number; is_trial?: boolean; is_valid?: boolean }) =>
     req<EventDetail>(`/guilds/${g()}/events/${id}/participants/${participantId}`, {
       method: "PATCH", body: JSON.stringify(payload),
     }),
@@ -474,4 +861,61 @@ export const api = {
 
   getLoot: (id: number) =>
     req<LootReconcile>(`/guilds/${g()}/events/${id}/loots`),
+
+  // Reconciliação própria (lootlog + baú + mortes).
+  getReconcile: (eventId: number) =>
+    req<UnifiedReconcile>(`/guilds/${g()}/events/${eventId}/reconcile`),
+  uploadChest: (eventId: number, entries: ChestUploadEntry[], replace = true) =>
+    req<LootReconcile>(`/guilds/${g()}/events/${eventId}/chest`, {
+      method: "POST",
+      body: JSON.stringify({ snapshot_at: new Date().toISOString(), entries, replace }),
+    }),
+
+  // ── Regear por screenshot ──────────────────────────────────────────────────
+  listRegear: (status?: string, eventId?: number) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (eventId != null) params.set("event_id", String(eventId));
+    const qs = params.toString();
+    return req<RegearList>(`/guilds/${g()}/regear${qs ? `?${qs}` : ""}`);
+  },
+  eventRegears: (eventId: number) =>
+    req<RegearList>(`/guilds/${g()}/events/${eventId}/regears`),
+  getRegear: (id: number) => req<RegearRequest>(`/guilds/${g()}/regear/${id}`),
+  updateRegear: (id: number, payload: RegearUpdatePayload) =>
+    req<RegearRequest>(`/guilds/${g()}/regear/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  removeRegear: (id: number) =>
+    req<{ ok: boolean }>(`/guilds/${g()}/regear/${id}`, { method: "DELETE" }),
+  getRegearSettings: () => req<RegearSettings>(`/guilds/${g()}/regear/settings`),
+  setRegearSettings: (payload: Partial<RegearSettings>) =>
+    req<RegearSettings>(`/guilds/${g()}/regear/settings`, { method: "PUT", body: JSON.stringify(payload) }),
+  regearScreenshotUrl: (id: number) => `/guilds/${g()}/regear/${id}/screenshot`,
+
+  // ── Lootlog anônimo ─────────────────────────────────────────────────────────
+  // Submit só pelo Discord (botão → modal). O site só lista/envios e remove.
+  listLootLog: (eventId: number) =>
+    req<LootLogList>(`/guilds/${g()}/lootlog?event_id=${eventId}`),
+  removeLootLog: (submissionId: number) =>
+    req<{ ok: boolean }>(`/guilds/${g()}/lootlog/${submissionId}`, { method: "DELETE" }),
+  getLootLogSettings: () => req<LootLogSettings>(`/guilds/${g()}/lootlog/settings`),
+  setLootLogSettings: (payload: Partial<LootLogSettings>) =>
+    req<LootLogSettings>(`/guilds/${g()}/lootlog/settings`, { method: "PUT", body: JSON.stringify(payload) }),
+
+  // ── Nodes (tipos de node + mapas; adicionar node em si é pelo Discord) ─────
+  listNodeDefs: () => req<NodeDef[]>(`/guilds/${g()}/nodes/defs`),
+  upsertNodeDef: (payload: { name: string; emoji: string | null; weight: number; sort: number }) =>
+    req<NodeDef>(`/guilds/${g()}/nodes/defs`, { method: "POST", body: JSON.stringify(payload) }),
+  updateNodeDef: (defId: number, payload: { name?: string | null; emoji?: string | null; weight?: number | null }) =>
+    req<NodeDef>(`/guilds/${g()}/nodes/defs/${defId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  removeNodeDef: (name: string) =>
+    req<void>(`/guilds/${g()}/nodes/defs/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  listNodeMaps: () => req<NodeMaps>(`/guilds/${g()}/nodes/maps`),
+  addNodeMap: (map_name: string) =>
+    req<NodeMaps>(`/guilds/${g()}/nodes/maps`, { method: "POST", body: JSON.stringify({ map_name }) }),
+  removeNodeMap: (map_name: string) =>
+    req<NodeMaps>(`/guilds/${g()}/nodes/maps/${encodeURIComponent(map_name)}`, { method: "DELETE" }),
+  // Nodes próximos de um timestamp (default = agora) — usado pela revisão de
+  // evento pra perguntar se capturamos cada node e o valor vendido.
+  nearNodes: (ts?: string) =>
+    req<NearNodesOut>(`/guilds/${g()}/nodes/near${ts ? `?ts=${encodeURIComponent(ts)}` : ""}`),
 };

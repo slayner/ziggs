@@ -3,6 +3,7 @@ import { useLang, useT, REGION_LABELS, SERVER_LABELS, type GameServer } from "..
 import { silver, silverShort, dateUTC } from "../lib/format";
 import { navigate } from "../router";
 import GlobalSearch, { RecentBattleRow, type RecentBattle } from "./GlobalSearch";
+import AdBanner from "./AdBanner";
 
 // ── Patch notes (Steam News, ver app/api/routes/meta.py pro porquê) ────────
 interface PatchNote { title: string; url: string; date: number }
@@ -813,6 +814,9 @@ export default function Dashboard({ onOpenBattles, onOpenHighscores }: {
       </div>
       <div className="mt-4">
         <BattlesCard onSeeAll={onOpenBattles} />
+      </div>
+      <div className="mt-4 flex justify-center">
+        <AdBanner size="rectangle" />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ServerHighlightsCard onSeeAll={onOpenHighscores} />

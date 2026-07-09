@@ -503,20 +503,57 @@ export function PriceHistoryChart({ items, potionQty, foodQty, onTotal, focusedI
   );
 }
 
-function RoleViewBlock({ r, spells, onTotal, label }: {
+// ── BuildTabs — barra de abas de builds de um slot flex ─────
+// O elemento central do redesign: em vez de empilhar as builds com um "ou"
+// tímido, cada build vira uma aba (ícone da arma + nome). Usada no view
+// (troca a build exibida) e na edição (troca a build editada + aba "+").
+function BuildTabs({ roles, active, onSelect, onAdd, addOpen }: {
+  roles: DraftRole[];
+  active: number;
+  onSelect: (i: number) => void;
+  onAdd?: () => void;
+  addOpen?: boolean;
+}) {
+  const t = useT();
+  return (
+    <div className="build-tabs" role="tablist">
+      {roles.map((r, i) => (
+        <button key={i} type="button" role="tab" aria-selected={active === i}
+          className={"build-tab" + (active === i ? " act" : "")}
+          onClick={e => { e.stopPropagation(); onSelect(i); }}
+          title={i === 0 ? t("mainTabLabel") : (r.flex_of ? `${t("flexOfPrefix")} ${r.flex_of}` : "Flex")}>
+          {r.equip.weapon?.id
+            ? <img src={itemUrl(r.equip.weapon.id)} alt=""
+                onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
+            : <i className="ti ti-swords" aria-hidden style={{ opacity: 0.4, fontSize: 13 }} />}
+          <span className="build-tab-name">{r.name || (i === 0 ? t("mainTabLabel") : `Flex ${i}`)}</span>
+          {i === 0
+            ? <i className="ti ti-star-filled build-tab-main-star" aria-hidden />
+            : <span className="build-tab-flex-pill">flex</span>}
+        </button>
+      ))}
+      {onAdd && (
+        <button type="button" className={"build-tab build-tab-add" + (addOpen ? " act" : "")}
+          onClick={e => { e.stopPropagation(); onAdd(); }}
+          title={t("cbAddBuildTab")}>
+          <i className="ti ti-plus" aria-hidden />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function RoleViewBlock({ r, spells, onTotal }: {
   r: DraftRole & { equip_loaded: true };
   spells?: WeaponSpell[];
   onTotal?: (v: number) => void;
-  label?: string;
 }) {
   const t = useT();
   const EQUIP_SLOTS = useEquipSlots();
   const [focusedId, setFocusedId] = useState<string | undefined>(undefined);
-  const [localTotal, setLocalTotal] = useState(0);
   const [swapMap, setSwapMap] = useState<Record<string, number>>({});
   const hasEquip = EQUIP_SLOTS.some(s => r.equip[s.key]);
-  const isFlex = !onTotal;
-  const handleTotal = onTotal ?? setLocalTotal;
+  const handleTotal = onTotal ?? (() => {});
 
   const eq = r.equip as Record<string, unknown>;
   const totalAlts = (["offhand","helmet","armor","boots","cape"] as const)
@@ -584,12 +621,6 @@ function RoleViewBlock({ r, spells, onTotal, label }: {
         </div>
         {hasEquip && (
           <div style={{ flex: 1, minWidth: 0, position: "relative", aspectRatio: "2 / 1" }}>
-            {isFlex && (label || localTotal > 0) && (
-              <div style={{ position: "absolute", top: 2, right: 0, zIndex: 1, textAlign: "right", lineHeight: 1.3 }}>
-                {label && <div style={{ fontSize: 10, color: "var(--hint)" }}>{label}</div>}
-                {localTotal > 0 && <div style={{ fontSize: 11, color: "var(--muted)" }}>{silverShort(localTotal)}</div>}
-              </div>
-            )}
             <PriceHistoryChart
               items={chartItems}
               potionQty={r.potion_qty ?? 10}
@@ -867,6 +898,8 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
   const [flexMenu,         setFlexMenu]         = useState<[number, number] | null>(null);
   const [addSlotMenu,      setAddSlotMenu]      = useState<number | null>(null);
   const [editRi,           setEditRi]           = useState(0);
+  // Build ativa no modo view do card aberto (abas de build de um slot flex).
+  const [viewRi,           setViewRi]           = useState(0);
 
   // ── Initial load ──────────────────────────────────────────
   useEffect(() => {
@@ -1020,9 +1053,9 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
   // ── Open / close card + lazy equip load ───────────────────
   async function toggleCard(pi: number, si: number) {
     if (openCard?.[0] === pi && openCard?.[1] === si) {
-      setOpenCard(null); setHistTotal(0); setFlexMenu(null); return;
+      setOpenCard(null); setHistTotal(0); setFlexMenu(null); setViewRi(0); return;
     }
-    setOpenCard([pi, si]); setHistTotal(0); setFlexMenu(null); setEditRi(0);
+    setOpenCard([pi, si]); setHistTotal(0); setFlexMenu(null); setEditRi(0); setViewRi(0);
     if (!draft) return;
     const roles = draft.parties[pi]?.slots[si]?.roles ?? [];
     for (let ri = 0; ri < roles.length; ri++) {
@@ -1456,11 +1489,18 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                           <div className="rc-head">
                             {role ? (
                               <>
-                                {/* Weapon icon */}
+                                {/* Weapon icon — vira "pilha" quando o slot tem builds flex */}
                                 {role.equip.weapon?.id && (
-                                  <img className="rc-weapon-icon"
-                                    src={itemUrl(role.equip.weapon.id)} alt=""
-                                    onError={imgRetry(img => { img.style.opacity = "0.15"; })} />
+                                  <span className={"rc-weapon-stack" + (slot.roles.length > 1 && slot.roles[1]?.equip.weapon?.id ? " has-alt" : "")}>
+                                    {slot.roles.length > 1 && slot.roles[1]?.equip.weapon?.id && (
+                                      <img className="rc-weapon-icon rc-weapon-behind"
+                                        src={itemUrl(slot.roles[1].equip.weapon!.id)} alt=""
+                                        onError={imgRetry(img => { img.style.opacity = "0"; })} />
+                                    )}
+                                    <img className="rc-weapon-icon"
+                                      src={itemUrl(role.equip.weapon.id)} alt=""
+                                      onError={imgRetry(img => { img.style.opacity = "0.15"; })} />
+                                  </span>
                                 )}
                                 {editing && isOpen ? (
                                   <input className="input"
@@ -1472,6 +1512,17 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                     onChange={e => updRoleQuiet(pi, si, editRi, r => ({ ...r, name: e.target.value }))} />
                                 ) : (
                                   <span className="rc-name">{role.name || t("noNamePlaceholder")}</span>
+                                )}
+                                {/* Badge de builds flex (colapsado) */}
+                                {!isOpen && slot.roles.length > 1 && (
+                                  <span className="rc-flex-badge"
+                                    style={{
+                                      color: chipColor ?? "var(--muted)",
+                                      borderColor: (chipColor ?? "#888888") + "55",
+                                    }}
+                                    title={`${t("cbBuildsCountTitle")}: ${slot.roles.map(r => r.name || "—").join(" · ")}`}>
+                                    <i className="ti ti-stack-2" aria-hidden /> {slot.roles.length}
+                                  </span>
                                 )}
                                 {/* Build total price */}
                                 {isOpen && histTotal > 0 && (
@@ -1527,18 +1578,6 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                             )}
                           </div>
 
-                          {/* Flex alternatives (colapsado) — fora do rc-head para não afetar alinhamento do strip primário */}
-                          {!isOpen && slot.roles.slice(1).some(fr => fr.equip_loaded) && (
-                            <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "0 10px 6px", alignItems: "flex-start" }} onClick={e => e.stopPropagation()}>
-                              {slot.roles.slice(1).map((fr, fri) => fr.equip_loaded ? (
-                                <div key={fri} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                                  <span style={{ fontSize: 8, color: "var(--muted)", flexShrink: 0 }}>{t("orWord")}</span>
-                                  <EquipStrip equip={fr.equip} weaponIs2H={is2H(fr.equip.weapon?.id)} />
-                                </div>
-                              ) : null)}
-                            </div>
-                          )}
-
                           {/* Card body (expanded) */}
                           {isOpen && (
                             <div className="rc-body" onClick={e => e.stopPropagation()}>
@@ -1585,20 +1624,66 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
 
                                 /* ── Edit form ─────────────────────────── */
                                 <>
-                                  {/* Tabs de flex */}
-                                  {slot.roles.length > 1 && (
-                                    <div className="flex-role-tabs">
-                                      {slot.roles.map((r, ri) => (
-                                        <button key={ri}
-                                          className={`flex-role-tab${editRi === ri ? " act" : ""}`}
-                                          onClick={() => setEditRi(ri)}>
-                                          {ri === 0 ? t("mainTabLabel") : (r.name
-                                            ? (r.flex_of ? `${r.name} (${t("flexOfPrefix")} ${r.flex_of})` : r.name)
-                                            : `Flex ${ri}`)}
+                                  {/* Abas de build — sempre visíveis na edição: a aba "+"
+                                      é a porta de entrada do flex (antes era um botão
+                                      enterrado no fim do formulário) */}
+                                  <BuildTabs roles={slot.roles}
+                                    active={editRi}
+                                    onSelect={setEditRi}
+                                    onAdd={() => setFlexMenu(prev =>
+                                      prev?.[0] === pi && prev?.[1] === si ? null : [pi, si]
+                                    )}
+                                    addOpen={flexMenu?.[0] === pi && flexMenu?.[1] === si} />
+
+                                  {/* Flex picker — ancorado logo abaixo das abas */}
+                                  {flexMenu?.[0] === pi && flexMenu?.[1] === si && (() => {
+                                    const pickable = getPickableRoles(pi, si);
+                                    return (
+                                      <div className="flex-picker-menu">
+                                        <button className="flex-picker-item flex-picker-new"
+                                          onClick={() => {
+                                            const newRi = slot.roles.length;
+                                            updSlot(pi, si, s => ({ ...s, roles: [...s.roles, emptyRole()] }));
+                                            setEditRi(newRi);
+                                            setFlexMenu(null);
+                                          }}>
+                                          <i className="ti ti-plus" aria-hidden /> {t("newBuildBtn")}
                                         </button>
-                                      ))}
-                                    </div>
-                                  )}
+                                        {pickable.map((r, idx) => (
+                                          <button key={idx} className="flex-picker-item"
+                                            onClick={() => {
+                                              const newRi = slot.roles.length;
+                                              const copy = JSON.parse(JSON.stringify(r));
+                                              copy.catalog_id = null;
+                                              copy.flex_of = r.name || r.flex_of;
+                                              copy.name = r.name ? `${r.name} (flex)` : "";
+                                              updSlot(pi, si, s => ({ ...s, roles: [...s.roles, copy] }));
+                                              setEditRi(newRi);
+                                              setFlexMenu(null);
+                                            }}>
+                                            {r.equip.weapon?.id
+                                              ? <img src={itemUrl(r.equip.weapon.id)} alt=""
+                                                  style={{ width: 20, height: 20, flexShrink: 0 }}
+                                                  onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
+                                              : <span style={{ width: 20, flexShrink: 0 }} />}
+                                            <span className="flex-picker-name">
+                                              {r.name || t("noNamePlaceholder")}
+                                              {r.flex_of && <span style={{ color: "var(--muted)", fontSize: 10 }}> ({t("flexOfPrefix")} {r.flex_of})</span>}
+                                            </span>
+                                            {r.fn && (() => { const ft = getFnDef(r.fn, fnTypes); return ft ? (
+                                              <span className="rc-fn-badge" style={{
+                                                background: ft.color + "25", color: ft.color, flexShrink: 0,
+                                              }}>{fnLabel(ft)}</span>
+                                            ) : null; })()}
+                                            {r.equip_loaded && <EquipStrip equip={r.equip} />}
+                                          </button>
+                                        ))}
+                                        {!pickable.length && (
+                                          <span className="flex-picker-empty">{t("noOtherBuildInComp")}</span>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
 
                                   {/* Weapon */}
                                   <div className="equip-field">
@@ -1779,12 +1864,6 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
 
                                   {/* Actions */}
                                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                                    <button className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
-                                      onClick={() => setFlexMenu(prev =>
-                                        prev?.[0] === pi && prev?.[1] === si ? null : [pi, si]
-                                      )}>
-                                      <i className="ti ti-stack-2" aria-hidden /> Flex
-                                    </button>
                                     {editRi === 0 && role?.catalog_id !== null && role?.catalog_id !== undefined && (
                                       delConfirm === role.catalog_id ? (
                                         <>
@@ -1819,88 +1898,6 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                     )}
                                   </div>
 
-                                  {/* Flex picker menu */}
-                                  {flexMenu?.[0] === pi && flexMenu?.[1] === si && (() => {
-                                    const pickable = getPickableRoles(pi, si);
-                                    return (
-                                      <div className="flex-picker-menu">
-                                        <button className="flex-picker-item flex-picker-new"
-                                          onClick={() => {
-                                            const newRi = slot.roles.length;
-                                            updSlot(pi, si, s => ({ ...s, roles: [...s.roles, emptyRole()] }));
-                                            setEditRi(newRi);
-                                            setFlexMenu(null);
-                                          }}>
-                                          <i className="ti ti-plus" aria-hidden /> {t("newBuildBtn")}
-                                        </button>
-                                        {pickable.map((r, idx) => (
-                                          <button key={idx} className="flex-picker-item"
-                                            onClick={() => {
-                                              const newRi = slot.roles.length;
-                                              const copy = JSON.parse(JSON.stringify(r));
-                                              copy.catalog_id = null;
-                                              copy.flex_of = r.name || r.flex_of;
-                                              copy.name = r.name ? `${r.name} (flex)` : "";
-                                              updSlot(pi, si, s => ({ ...s, roles: [...s.roles, copy] }));
-                                              setEditRi(newRi);
-                                              setFlexMenu(null);
-                                            }}>
-                                            {r.equip.weapon?.id
-                                              ? <img src={itemUrl(r.equip.weapon.id)} alt=""
-                                                  style={{ width: 20, height: 20, flexShrink: 0 }}
-                                                  onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
-                                              : <span style={{ width: 20, flexShrink: 0 }} />}
-                                            <span className="flex-picker-name">
-                                              {r.name || t("noNamePlaceholder")}
-                                              {r.flex_of && <span style={{ color: "var(--muted)", fontSize: 10 }}> ({t("flexOfPrefix")} {r.flex_of})</span>}
-                                            </span>
-                                            {r.fn && (() => { const ft = getFnDef(r.fn, fnTypes); return ft ? (
-                                              <span className="rc-fn-badge" style={{
-                                                background: ft.color + "25", color: ft.color, flexShrink: 0,
-                                              }}>{fnLabel(ft)}</span>
-                                            ) : null; })()}
-                                            {r.equip_loaded && <EquipStrip equip={r.equip} />}
-                                          </button>
-                                        ))}
-                                        {!pickable.length && (
-                                          <span className="flex-picker-empty">{t("noOtherBuildInComp")}</span>
-                                        )}
-                                      </div>
-                                    );
-                                  })()}
-
-                                  {/* Flex alternatives */}
-                                  {slot.roles.length > 1 && (
-                                    <div style={{
-                                      display: "flex", flexDirection: "column", gap: 4,
-                                      paddingTop: 6, borderTop: "1px solid var(--border)",
-                                    }}>
-                                      <span className="equip-field-label">{t("flexAlternativesLabel")}</span>
-                                      {slot.roles.slice(1).map((fr, fri) => (
-                                        <div key={fri}
-                                          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-                                          {fr.equip.weapon?.id && (
-                                            <img src={itemUrl(fr.equip.weapon.id)} alt=""
-                                              style={{ width: 18, height: 18, flexShrink: 0 }}
-                                              onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
-                                          )}
-                                          {fr.fn && (() => { const ft = getFnDef(fr.fn, fnTypes); return ft ? (
-                                            <span className="rc-fn-badge" style={{ background: ft.color + "25", color: ft.color }}>
-                                              {fnLabel(ft)}
-                                            </span>
-                                          ) : null; })()}
-                                          <span style={{ flex: 1 }}>{fr.name || "—"}</span>
-                                          {fr.equip_loaded && <EquipStrip equip={fr.equip} />}
-                                          <button className="cs-xbtn"
-                                            onClick={() => updSlot(pi, si, s => ({
-                                              ...s, roles: s.roles.filter((_, i) => i !== fri + 1),
-                                            }))}>
-                                            <i className="ti ti-x" aria-hidden />
-                                          </button>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
                                 </>
 
                               ) : (
@@ -1911,20 +1908,27 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                     <p className="hint" style={{ fontSize: 12 }}>{t("loading")}</p>
                                   )}
 
-                                  {slot.roles.map((r, ri) => {
-                                    if (!r.equip_loaded) return null;
+                                  {slot.roles.length > 1 && (
+                                    <BuildTabs roles={slot.roles}
+                                      active={Math.min(viewRi, slot.roles.length - 1)}
+                                      onSelect={setViewRi} />
+                                  )}
+
+                                  {(() => {
+                                    const ri = Math.min(viewRi, slot.roles.length - 1);
+                                    const r = slot.roles[ri];
+                                    if (!r?.equip_loaded) return null;
                                     const rWeapBase = r.equip.weapon?.id ? wBase(r.equip.weapon.id) : null;
                                     const rSpells = rWeapBase ? spellCache[rWeapBase] : undefined;
                                     const hasEquip = EQUIP_SLOTS.some(s => r.equip[s.key]);
                                     return (
-                                      <Fragment key={ri}>
-                                        {ri > 0 && (
-                                          <div className="rc-ou-divider"><span>{t("orWord")}</span></div>
-                                        )}
-                                        <div>
-                                          <RoleViewBlock r={r as DraftRole & { equip_loaded: true }} spells={rSpells} onTotal={ri === 0 ? setHistTotal : undefined} label={ri > 0 ? r.name : undefined} />
+                                      <Fragment>
+                                        {/* key força remount ao trocar de aba — swapMap/focused
+                                            de uma build não vazam pra outra */}
+                                        <div key={ri}>
+                                          <RoleViewBlock r={r as DraftRole & { equip_loaded: true }} spells={rSpells} onTotal={setHistTotal} />
                                         </div>
-                                        {ri === 0 && !hasEquip && !r.play_style && !r.obs && (
+                                        {!hasEquip && !r.play_style && !r.obs && (
                                           <p className="hint" style={{ fontSize: 12 }}>
                                             {t("noDetailDefined")}{" "}
                                             {perms["comps.manage"] && (
@@ -1938,7 +1942,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                         )}
                                       </Fragment>
                                     );
-                                  })}
+                                  })()}
                                 </>
                               )}
                             </div>

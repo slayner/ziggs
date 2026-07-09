@@ -16,14 +16,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import case, select
 
 from app.db import SessionLocal
 from app.models.battles import Battle
+from app.services.albion_gate import NEW_ELIGIBLE, battle_priority
 from app.services.battle_tracker import (
-    REPROCESS_REASON_EMPTY, REPROCESS_REASON_FAILED, _backfill_deep_fetch_all, _reprocess_urgent_sem,
-    _write_deep_data,
+    REPROCESS_REASON_EMPTY, REPROCESS_REASON_FAILED, _backfill_deep_fetch_all,
+    _is_frozen, _write_deep_data,
 )
 from app.services.player_tracker import HOSTS, make_client
 
@@ -54,6 +56,7 @@ async def _reprocess_batch(client, db) -> int:
     for b in battles:
         by_region.setdefault(b.region, []).append(b)
 
+    now = datetime.now(timezone.utc)
     processed = 0
     for region, region_battles in by_region.items():
         host = HOSTS.get(region)
@@ -62,13 +65,14 @@ async def _reprocess_batch(client, db) -> int:
                 b.reprocess_reason = None
             db.commit()
             continue
-        # Se o grupo inteiro é urgente (batalha nova, ver _URGENT_REASONS),
-        # usa o pool DEDICADO em vez do padrão compartilhado com o backfill
-        # histórico perpétuo — ver battle_tracker.py pro porquê. Grupo misto
-        # (raro: acontece só na transição em que a fila urgente esvazia no
-        # meio de um ciclo) cai no padrão, sem prejuízo real.
-        sem = _reprocess_urgent_sem if all(b.reprocess_reason in _URGENT_REASONS for b in region_battles) else None
-        for result in await _backfill_deep_fetch_all(client, host, region_battles, sem=sem):
+        # Grupo inteiro urgente (batalha nova, ver _URGENT_REASONS) → NEW_ELIGIBLE
+        # (topo do bg pool, atrás só de perfil/claim/regear que usam reserved).
+        # Grupo misto/não-urgente → OLD_* pelo frozen (campanha histórica de fundo).
+        if all(b.reprocess_reason in _URGENT_REASONS for b in region_battles):
+            priority_fn = lambda _b: NEW_ELIGIBLE
+        else:
+            priority_fn = lambda b: battle_priority(b, is_new=not _is_frozen(b, now))
+        for result in await _backfill_deep_fetch_all(client, host, region_battles, priority_fn=priority_fn):
             battle = result[0]
             if isinstance(result[1], Exception):
                 log.warning("battle_reprocessor: falha ao buscar %s (%s): %r", battle.albion_id, region, result[1])

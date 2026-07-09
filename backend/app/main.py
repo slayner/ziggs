@@ -8,30 +8,39 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.rate_limit import RateLimitMiddleware
-from app.api.routes import auth, battles, catalog, claims, comps, events, highscores, loot, meta, players, profiles, render
+from app.api.routes import auth, battles, catalog, claims, comps, craft, events, highscores, loot, lootlog, meta, nodes, players, profiles, regear, render, user_profile
+from app.config import get_settings
 from app.domain.states import EventState, allowed_targets
 from app.services import (
-    battle_price_reprocessor, battle_reprocessor, battle_tracker, claim_checker, player_count_snapshot,
-    player_tracker, profile_warmer, registration_checker, small_battle_discovery, weapon_stats,
+    battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, player_count_snapshot,
+    player_tracker, profile_warmer, registration_checker, regear_retry, small_battle_discovery, weapon_stats,
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    tasks = [
-        asyncio.create_task(player_tracker.run_forever()),
-        asyncio.create_task(battle_tracker.run_forever()),
-        asyncio.create_task(battle_tracker.run_backfill_forever()),
-        asyncio.create_task(battle_tracker.run_retry_stuck_forever()),
-        asyncio.create_task(profile_warmer.run_forever()),
-        asyncio.create_task(claim_checker.run_forever()),
-        asyncio.create_task(registration_checker.run_forever()),
-        asyncio.create_task(weapon_stats.run_forever()),
-        asyncio.create_task(battle_reprocessor.run_forever()),
-        asyncio.create_task(small_battle_discovery.run_forever()),
-        asyncio.create_task(player_count_snapshot.run_forever()),
-        asyncio.create_task(battle_price_reprocessor.run_forever()),
-    ]
+    if get_settings().disable_background_fetchers:
+        # Modo dado móvel: nenhum tracker/fetcher de polling sobe. As rotas da
+        # UI continuam disponíveis (só fazem request externo sob demanda).
+        print("⚠️  DISABLE_BACKGROUND_FETCHERS=true — fetchers de background desligados.")
+        tasks: list[asyncio.Task] = []
+    else:
+        tasks = [
+            asyncio.create_task(player_tracker.run_forever()),
+            asyncio.create_task(battle_tracker.run_forever()),
+            asyncio.create_task(battle_tracker.run_backfill_forever()),
+            asyncio.create_task(battle_tracker.run_retry_stuck_forever()),
+            asyncio.create_task(profile_warmer.run_forever()),
+            asyncio.create_task(claim_checker.run_forever()),
+            asyncio.create_task(registration_checker.run_forever()),
+            asyncio.create_task(weapon_stats.run_forever()),
+            asyncio.create_task(battle_reprocessor.run_forever()),
+            asyncio.create_task(battle_sweeper.run_forever()),
+            asyncio.create_task(small_battle_discovery.run_forever()),
+            asyncio.create_task(player_count_snapshot.run_forever()),
+            asyncio.create_task(battle_price_reprocessor.run_forever()),
+            asyncio.create_task(regear_retry.run_forever()),
+        ]
     yield
     for t in tasks:
         t.cancel()
@@ -41,11 +50,28 @@ app = FastAPI(title="Ziggs API", lifespan=lifespan)
 
 # Login/callback do Discord: bem mais restrito, é a rota mais sensível (a "passagem").
 app.add_middleware(RateLimitMiddleware, limit=10, window=60, prefix="/auth/discord")
-# Limite geral por IP — spam genérico, sem incomodar uso normal da UI.
+# Limite geral por IP — split leitura/escrita em vez de um balde único pros
+# dois. A SPA é read-heavy por natureza: várias páginas ficam montadas em
+# keep-alive (ManagementPage/GuildConfig/EventsPage/EscalacaoPage/RegearPage,
+# ver App.tsx) fazendo polling PARALELO (8s a 15s cada) mesmo fora de uso ativo
+# só pra não perder atualização ao vivo, e trocar de sub-aba ainda dispara uma
+# rajada de fetches simultâneos — um balde de 120/min pro site inteiro (leitura
+# E escrita juntas) estourava com uso normal, sem ninguém abusando. Escrita
+# (POST/PUT/PATCH/DELETE) é onde abuso de verdade concentra (spam de forms,
+# script batendo em endpoint de mutação) — fica num teto bem mais apertado.
 # /render/item é excluído: uma única página pode legitimamente disparar dezenas
 # de ícones de uma vez (cache hit ou miss), isso não é abuso. Proteção própria
 # dele é o semáforo de concorrência em render.py.
-app.add_middleware(RateLimitMiddleware, limit=120, window=60, exclude_prefix="/render/item")
+# /bot/ é excluído: já é protegido por _require_bot_secret (token, não IP), e o
+# bot-v2 tem ~7 loops de polling concorrentes (5s a 5min) batendo do MESMO IP —
+# sem essa exclusão, o bucket geral estourava e engolia respostas do bot em
+# silêncio (_get/_post tratam não-200 como no-op), fazendo threads de regear e
+# detecção de presença na call parecerem quebradas (só "funcionavam" logo após
+# reiniciar o bot, quando o bucket ainda estava zerado).
+app.add_middleware(RateLimitMiddleware, limit=600, window=60, methods=("GET", "HEAD"),
+                    exclude_prefix=("/render/item", "/bot/"))
+app.add_middleware(RateLimitMiddleware, limit=90, window=60, methods=("POST", "PUT", "PATCH", "DELETE"),
+                    exclude_prefix=("/render/item", "/bot/"))
 
 # Permite que o Vite dev server (localhost:5173) chame a API diretamente.
 # Em produção o frontend e o backend ficam na mesma origem — este middleware é inofensivo.
@@ -63,18 +89,26 @@ app.include_router(battles.router)
 app.include_router(claims.router)
 app.include_router(catalog.router)
 app.include_router(comps.router)
+app.include_router(craft.router)
 app.include_router(events.router)
 app.include_router(highscores.router)
 app.include_router(loot.router)
+app.include_router(lootlog.router)
 app.include_router(meta.router)
+app.include_router(nodes.router)
 app.include_router(players.router)
 app.include_router(profiles.router)
+app.include_router(regear.router)
 app.include_router(render.router)
+app.include_router(user_profile.router)
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "background_fetchers_disabled": get_settings().disable_background_fetchers,
+    }
 
 
 @app.get("/meta/event-states")

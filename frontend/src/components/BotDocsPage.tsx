@@ -59,7 +59,7 @@ export default function BotDocsPage() {
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
           <div className="flex items-center gap-3 mb-3">
             <i className="ti ti-photo text-amber-400 text-xl" aria-hidden="true" />
-            <h2 className="text-sm font-mono font-semibold text-zinc-100">/avatar e /banner</h2>
+            <h2 className="text-sm font-mono font-semibold text-zinc-100">/avatar · /banner</h2>
           </div>
           <p className="text-xs text-zinc-500 leading-relaxed">{t("docsAvatarBannerDesc")}</p>
         </div>

@@ -111,10 +111,22 @@ a { color: var(--info); text-decoration: none; }
 }
 .comp-name-input:focus { outline: none; background: var(--surface-2); }
 
-.sheet-wrap { overflow-x: auto; margin: 0 -18px; }
+.sheet-wrap { overflow: visible; margin: 0; }
 .comp-sheet {
-  border-collapse: collapse; font-size: 13px; width: 100%;
+  border-collapse: collapse; font-size: 13px; width: auto;
 }
+/* Colapso responsivo: hide-style(5) / hide-obs(6) / hide-price(7) escondem a
+   col + o th/td daquela posição. Linhas colSpan=7 (cabeçalho de party e detalhe
+   do meu slot) são nth-child(1), então não são afetadas. */
+.comp-sheet.hide-style col:nth-child(5),
+.comp-sheet.hide-style th:nth-child(5),
+.comp-sheet.hide-style td:nth-child(5),
+.comp-sheet.hide-obs col:nth-child(6),
+.comp-sheet.hide-obs th:nth-child(6),
+.comp-sheet.hide-obs td:nth-child(6),
+.comp-sheet.hide-price col:nth-child(7),
+.comp-sheet.hide-price th:nth-child(7),
+.comp-sheet.hide-price td:nth-child(7) { display: none !important; }
 .comp-sheet th, .comp-sheet td {
   border: 1px solid var(--border); vertical-align: middle; white-space: nowrap;
 }
@@ -298,6 +310,170 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   gap: 8px; padding: 32px 16px; text-align: center;
   border: 1px dashed var(--border); border-radius: var(--radius); min-height: 120px;
 }
+
+/* ── Escalação: painel direito (título do evento + inscritos) ──────────── */
+/* esc-layout estica o painel direito pra acompanhar a altura da planilha,
+   sem afetar o CompBuilder (que reusa .comp-layout com align-items flex-start).
+   O painel imita a planilha: bordas retas (sem radius), cabeçalhos com
+   --surface-2, linhas com borda inferior — pra se enturmar com a tabela. */
+.esc-layout { align-items: stretch; justify-content: center; gap: 0; position: relative; overflow-x: auto; }
+/* WIDE: [planilha | painel] em fluxo, centrado, painel colado à direita de price
+   (gap 0, sem cobertura). */
+.esc-layout .comp-left { flex: 0 0 auto; min-width: 0; }
+.esc-layout .comp-right {
+  flex: 0 0 320px;
+  box-shadow: -8px 0 16px -8px rgba(0,0,0,.55);
+}
+/* NARROW: o bloco não cabe → o painel vira overlay cobrindo as colunas da
+   direita. A planilha fica alinhada à esquerda (role/player/build visíveis); o
+   painel é posicionado via JS (left) e nunca passa da direita de build (parede).
+   Se ainda assim não couber, .esc-layout rola horizontal — build nunca é escondida. */
+.esc-layout.esc-narrow .comp-left { flex: 1 1 auto; }
+.esc-layout.esc-narrow .comp-right {
+  position: absolute; top: 0; bottom: 0; width: 320px;
+}
+.esc-panel {
+  display: flex; flex-direction: column; width: 100%; height: 100%;
+  padding: 0; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 0;
+}
+.esc-header {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--surface-2);
+}
+.esc-header-icon { font-size: 18px; color: var(--gold); margin-top: 1px; }
+.esc-header-text { flex: 1; min-width: 0; }
+.esc-title { font-size: 13px; font-weight: 600; line-height: 1.25; word-break: break-word; }
+.esc-readonly { margin-left: auto; flex-shrink: 0; }
+.esc-enlisted-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface-2);
+  font-weight: 600; font-size: 12px; color: var(--text);
+}
+.esc-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--gold-soft); color: var(--gold); font-size: 11px; font-weight: 700;
+}
+.esc-autofill {
+  margin-left: auto; padding: 2px 8px; font-size: 11px; font-weight: 600;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.esc-autofill:hover { border-color: var(--gold); color: var(--gold); }
+.esc-autofill-on {
+  background: var(--gold); border-color: var(--gold); color: #1a1303;
+  box-shadow: 0 0 0 2px rgba(212,163,56, .2);
+}
+.esc-autofill-on:hover { background: var(--gold); color: #1a1303; opacity: .9; }
+.esc-gatelock {
+  margin-left: 6px; padding: 2px 8px; font-size: 11px; font-weight: 600;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.esc-gatelock:hover { border-color: var(--gold); color: var(--gold); }
+.esc-gatelock-on {
+  background: var(--gold); border-color: var(--gold); color: #1a1303;
+}
+.esc-gatelock-on:hover { opacity: .9; }
+.esc-enlisted-list {
+  display: flex; flex-direction: column; overflow-y: auto; flex: 1; min-height: 0;
+}
+.esc-empty { margin: auto; text-align: center; }
+.esc-signup {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-left: 3px solid var(--border); border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  transition: background .12s, border-color .12s, box-shadow .12s; cursor: default;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.esc-signup[draggable="true"] { cursor: grab; }
+.esc-signup[draggable="true"]:hover {
+  border-left-color: var(--gold); background: var(--surface-2);
+  box-shadow: 0 1px 3px rgba(0,0,0,.18);
+}
+.esc-signup[draggable="true"]:active { cursor: grabbing; }
+.esc-signup-grip {
+  font-size: 12px; color: var(--muted); flex-shrink: 0; opacity: .5;
+  transition: opacity .12s;
+}
+.esc-signup[draggable="true"]:hover .esc-signup-grip { opacity: 1; color: var(--hint); }
+.esc-signup-name {
+  font-size: 13px; font-weight: 600; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.esc-signup-fns { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.esc-signup-check { color: var(--green); font-size: 12px; margin-left: auto; }
+/* Amarelo: escalado mas ainda pode preencher outro role vazio (arrastável) */
+.esc-signup-flexible {
+  border-left-color: var(--gold); background: var(--gold-soft);
+}
+.esc-signup-flexible:hover { background: var(--gold-soft); border-left-color: var(--gold); }
+.esc-signup-flexible .esc-signup-check { color: var(--gold); }
+/* Verde: escalado e não pode preencher mais nada (não arrastável da lista) */
+.esc-signup-complete {
+  border-left-color: var(--green); background: rgba(34,197,94,.08);
+}
+.esc-signup-complete:hover { background: rgba(34,197,94,.08); border-left-color: var(--green); }
+/* Cinza: escalado mas removeu o signup (assignment órfão) — libera o slot */
+.esc-signup-withdrawn {
+  border-left-color: var(--muted); background: var(--surface-2); opacity: .7;
+}
+.esc-signup-withdrawn:hover { background: var(--surface-2); border-left-color: var(--muted); }
+.esc-signup-withdrawn .esc-signup-check { color: var(--muted); }
+.esc-signup-wbadge { background: var(--surface); color: var(--muted); font-size: 9px; padding: 1px 6px; }
+
+/* Jogador arrastável de dentro do slot da tabela */
+.cs-player-drag {
+  cursor: grab; transition: background .12s, border-color .12s;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-radius: var(--radius-sm);
+  background: transparent; border: 1px solid rgba(91,141,239,.28);
+  font-size: 12px; line-height: 1; white-space: nowrap;
+}
+.cs-player-drag:hover { border-color: var(--gold); color: var(--gold); }
+.cs-player-drag:active { cursor: grabbing; }
+.cs-player-drag .cs-player-name { font-weight: 600; }
+.cs-player-drag .cs-xbtn { margin: 0 -4px 0 0; }
+
+/* Linha do próprio usuário (sua escalação) — destaque + expansão de build/skills */
+.cs-myrow { box-shadow: inset 3px 0 0 var(--gold); }
+.cs-myrow-detail td { background: var(--gold-soft) !important; padding: 10px 12px; border-top: 1px solid rgba(212,163,56,.25); }
+.cs-detail-inner { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+.cs-detail-section { display: flex; flex-direction: column; gap: 5px; }
+.cs-detail-label { font-size: 10px; font-weight: 700; color: var(--gold); text-transform: uppercase; letter-spacing: .05em; }
+.cs-detail-skill-group { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
+.cs-detail-skill-sub { font-size: 11px; font-weight: 600; color: var(--muted); }
+.esc-skills-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.esc-spell-img { width: 32px; height: 32px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); }
+
+/* ── Escalação: coluna Build (renders de itens) ────────────────────────── */
+.cs-role-cell { white-space: nowrap; }
+/* Build fica numa linha só — a célula cresce pra caber os tiles sem clipar
+   (herda max-width/overflow do .cs-cell; a planilha rola horizontal se precisar). */
+.cs-build-cell { max-width: none; overflow: visible; white-space: nowrap; }
+.cs-role-weapon {
+  display: inline-block; vertical-align: middle; width: 36px; height: 36px;
+  object-fit: contain; margin-right: 6px; border-radius: 4px;
+}
+.cs-build { display: flex; align-items: center; gap: 4px; }
+.cs-build-group { display: inline-flex; align-items: center; gap: 2px; }
+.cs-build-img {
+  width: 40px; height: 40px; object-fit: contain; border-radius: 4px;
+  background: var(--surface-2);
+}
+.cs-build-img.alt { width: 32px; height: 32px; opacity: .85; }
+.cs-build-sep { width: 1px; height: 34px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+
+/* Pilha de builds de um slot flex sem ninguém escalado — cada build numa linha,
+   separadas por um divisor "OU" (linha contínua atravessando a palavra). */
+.cs-build-stack { display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 2px 0; }
+.cs-build-or { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.cs-build-or-line { flex: 1; height: 1px; background: var(--border); }
+.cs-build-or-label {
+  font-size: 9px; font-weight: 700; letter-spacing: .08em; color: var(--muted);
+  text-transform: uppercase; flex-shrink: 0;
+}
+/* Modal flex: cada botão vira coluna (nome em cima, build embaixo). */
+.flexpick-btn .cs-build { flex-wrap: wrap; }
 
 /* ── Party card (ocupa largura total, empilhado verticalmente) */
 .party-card {
@@ -485,26 +661,56 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .flex-picker-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flex-picker-empty { font-size: 11px; color: var(--muted); padding: 6px 10px; }
 
-/* ── Flex role tabs ──────────────────────────────────────── */
-.flex-role-tabs {
-  display: flex; gap: 4px; flex-wrap: wrap;
-  padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px;
+/* ── Build tabs (abas de builds de um slot flex) ─────────── */
+.build-tabs {
+  display: flex; gap: 2px; flex-wrap: wrap; align-items: stretch;
+  border-bottom: 1px solid var(--border); margin-bottom: 6px;
 }
-.flex-role-tab {
-  background: none; border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm); color: var(--muted);
-  font-size: 11px; padding: 3px 10px; cursor: pointer;
+.build-tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px 6px; max-width: 200px;
+  background: none; border: none; border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--muted); font-size: 12px; cursor: pointer;
+  transition: background 0.1s, color 0.1s;
 }
-.flex-role-tab:hover { color: var(--text); }
-.flex-role-tab.act { background: var(--border-strong); color: var(--text); font-weight: 600; }
+.build-tab img { width: 20px; height: 20px; object-fit: contain; flex-shrink: 0; }
+.build-tab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+.build-tab:focus-visible { outline: 1px solid var(--info); outline-offset: -1px; }
+.build-tab.act {
+  color: var(--text); font-weight: 600;
+  background: var(--surface-2);
+  border-bottom-color: var(--chip-color, var(--gold));
+}
+.build-tab-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.build-tab-main-star { font-size: 9px; color: var(--gold); flex-shrink: 0; }
+.build-tab-flex-pill {
+  font-size: 9px; padding: 0 5px; border: 1px solid var(--border-strong);
+  border-radius: 999px; color: var(--hint); flex-shrink: 0;
+  text-transform: uppercase; letter-spacing: 0.04em; line-height: 1.5;
+}
+.build-tab.act .build-tab-flex-pill { color: var(--muted); border-color: var(--chip-color, var(--border-strong)); }
+.build-tab-add { padding: 5px 9px 6px; color: var(--hint); }
+.build-tab-add:hover { color: var(--info); }
+.build-tab-add.act { color: var(--info); border-bottom-color: var(--info); }
 
-/* ── OU divider (expanded flex view) ────────────────────── */
-.rc-ou-divider {
-  display: flex; align-items: center; gap: 8px;
-  margin: 14px 0; color: var(--muted); font-size: 11px; font-weight: 600;
+/* Badge de builds flex no card colapsado */
+.rc-flex-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10px; font-weight: 600; padding: 1px 7px;
+  border: 1px solid; border-radius: 999px; flex-shrink: 0;
+  background: rgba(255,255,255,0.03); white-space: nowrap;
 }
-.rc-ou-divider::before, .rc-ou-divider::after {
-  content: ""; flex: 1; height: 1px; background: var(--border-strong);
+.rc-flex-badge .ti { font-size: 10px; }
+
+/* Pilha de ícones de arma (principal + flex atrás) no card colapsado */
+.rc-weapon-stack { position: relative; display: inline-flex; flex-shrink: 0; }
+.rc-weapon-stack.has-alt { margin-right: 5px; }
+.rc-weapon-stack .rc-weapon-behind {
+  position: absolute; left: 5px; top: -2px;
+  opacity: 0.45; filter: saturate(0.6);
 }
 
 /* ── ItemPicker ──────────────────────────────────────────── */
@@ -977,3 +1183,119 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .rc-equip-spell-dot img { width: 100%; height: 100%; object-fit: contain; }
 .rc-equip-spell-dot-empty { opacity: 0.2; }
+
+/* ── Regear (fila por screenshot) ──────────────────────────────────────────── */
+.badge-green { background: rgba(74,222,128,0.15); color: var(--green); }
+.badge-red   { background: rgba(248,113,113,0.15); color: var(--red); }
+.badge-muted { background: var(--surface-2); color: var(--muted); }
+.btn-green { background: rgba(74,222,128,0.15); color: var(--green); border-color: rgba(74,222,128,0.4); }
+.btn-green:hover { background: rgba(74,222,128,0.25); }
+.btn-ghost { background: transparent; border-color: var(--border); color: var(--muted); padding: 5px 9px; font-size: 13px; }
+.btn-ghost:hover { color: var(--text); border-color: var(--border-strong); }
+.btn.danger { color: var(--red); border-color: rgba(248,113,113,0.3); }
+.btn.danger:hover { background: rgba(248,113,113,0.1); }
+
+.regear-page { max-width: 980px; margin: 0 auto; padding: 20px 16px 60px; }
+.regear-head { display: flex; align-items: center; gap: 14px; }
+.regear-head h2 { margin: 0; font-size: 20px; display: flex; align-items: center; gap: 8px; }
+.regear-cov-hint { font-size: 13px; color: var(--gold); background: var(--gold-soft); padding: 3px 10px; border-radius: 999px; }
+.regear-channel-hint { font-size: 13px; color: var(--muted); margin: 8px 0 16px; display: flex; align-items: center; gap: 6px; }
+.regear-filters { display: flex; gap: 6px; margin-bottom: 16px; }
+.regear-filters button { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 6px 14px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; }
+.regear-filters button.active { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+.regear-event-tag { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; margin-bottom: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; color: var(--gold); }
+.regear-event-link { background: none; border: none; color: var(--gold); cursor: pointer; font-size: 12px; padding: 0; display: inline-flex; align-items: center; gap: 4px; }
+.regear-event-link:hover { text-decoration: underline; }
+.regear-error { color: var(--red); margin-bottom: 12px; }
+
+.regear-list { display: flex; flex-direction: column; gap: 14px; }
+.regear-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+.regear-card.regear-paid { border-color: rgba(74,222,128,0.35); }
+.regear-card.regear-denied { opacity: 0.65; }
+.regear-card.regear-removed { opacity: 0.4; }
+.regear-card-top { display: flex; gap: 14px; margin-bottom: 12px; }
+.regear-shot { width: 200px; flex-shrink: 0; cursor: zoom-in; }
+.regear-shot img { width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border); display: block; }
+.regear-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.regear-meta-row { display: flex; align-items: center; gap: 8px; }
+.regear-recog { font-size: 13px; color: var(--muted); }
+.regear-meta-line { color: var(--text); }
+.regear-kb { font-size: 13px; color: var(--info); display: inline-flex; align-items: center; gap: 4px; }
+
+.regear-items { width: 100%; border-collapse: collapse; font-size: 14px; margin: 8px 0; }
+.regear-items th, .regear-items td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.regear-items th.num, .regear-items td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.regear-items tr.regear-not-covered td { opacity: 0.45; }
+.regear-item-cell { display: flex; align-items: center; gap: 8px; }
+.regear-item-cell img { width: 32px; height: 32px; object-fit: contain; }
+.regear-exclude button { padding: 2px 7px; }
+
+.regear-totals { display: flex; gap: 22px; font-size: 14px; padding: 8px 0; border-top: 1px dashed var(--border); margin-top: 8px; }
+.regear-edited { color: var(--gold); font-weight: 600; }
+.regear-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.regear-final { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; }
+.regear-final input { width: 130px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: var(--radius-sm); font-size: 14px; }
+.regear-notes { flex: 1; min-width: 160px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; border-radius: var(--radius-sm); font-size: 13px; resize: vertical; }
+.regear-handled { font-size: 12px; margin-top: 6px; }
+
+.regear-zoom { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; z-index: 1000; cursor: zoom-out; padding: 20px; }
+.regear-zoom img { max-width: 95vw; max-height: 90vh; border-radius: var(--radius); }
+.regear-zoom-close { color: #fff; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+
+/* Lootlog anônimo (área só-admin) */
+.lootlog-page { max-width: 980px; margin: 0 auto; padding: 20px 16px 60px; }
+.lootlog-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+.lootlog-list { display: flex; flex-direction: column; gap: 0; }
+.lootlog-card table th { font-weight: 600; }
+
+/* Temas de perfil de jogador (PlayerProfilePage) — sobrescreve os acentos
+   Tailwind "amber"/"yellow" fixos quando o dono verificado do personagem
+   escolheu um tema (ClaimsPanel → Personalizar perfil, api.ts PROFILE_THEMES).
+   "gold" é o padrão (já é amber) e não precisa de regra própria. */
+[data-profile-theme="blue"] .text-amber-300, [data-profile-theme="blue"] .text-amber-400, [data-profile-theme="blue"] .text-yellow-300 { color: rgb(96 165 250); }
+[data-profile-theme="blue"] .text-amber-400\/80 { color: rgb(96 165 250 / 0.8); }
+[data-profile-theme="blue"] .border-amber-500 { border-color: rgb(59 130 246); }
+[data-profile-theme="blue"] .bg-amber-500\/10 { background-color: rgb(59 130 246 / 0.1); }
+
+[data-profile-theme="green"] .text-amber-300, [data-profile-theme="green"] .text-amber-400, [data-profile-theme="green"] .text-yellow-300 { color: rgb(74 222 128); }
+[data-profile-theme="green"] .text-amber-400\/80 { color: rgb(74 222 128 / 0.8); }
+[data-profile-theme="green"] .border-amber-500 { border-color: rgb(34 197 94); }
+[data-profile-theme="green"] .bg-amber-500\/10 { background-color: rgb(34 197 94 / 0.1); }
+
+[data-profile-theme="red"] .text-amber-300, [data-profile-theme="red"] .text-amber-400, [data-profile-theme="red"] .text-yellow-300 { color: rgb(248 113 113); }
+[data-profile-theme="red"] .text-amber-400\/80 { color: rgb(248 113 113 / 0.8); }
+[data-profile-theme="red"] .border-amber-500 { border-color: rgb(239 68 68); }
+[data-profile-theme="red"] .bg-amber-500\/10 { background-color: rgb(239 68 68 / 0.1); }
+
+[data-profile-theme="purple"] .text-amber-300, [data-profile-theme="purple"] .text-amber-400, [data-profile-theme="purple"] .text-yellow-300 { color: rgb(192 132 252); }
+[data-profile-theme="purple"] .text-amber-400\/80 { color: rgb(192 132 252 / 0.8); }
+[data-profile-theme="purple"] .border-amber-500 { border-color: rgb(168 85 247); }
+[data-profile-theme="purple"] .bg-amber-500\/10 { background-color: rgb(168 85 247 / 0.1); }
+
+[data-profile-theme="teal"] .text-amber-300, [data-profile-theme="teal"] .text-amber-400, [data-profile-theme="teal"] .text-yellow-300 { color: rgb(45 212 191); }
+[data-profile-theme="teal"] .text-amber-400\/80 { color: rgb(45 212 191 / 0.8); }
+[data-profile-theme="teal"] .border-amber-500 { border-color: rgb(20 184 166); }
+[data-profile-theme="teal"] .bg-amber-500\/10 { background-color: rgb(20 184 166 / 0.1); }
+
+/* AdBanner (ver components/AdBanner.tsx) — slot de anúncio + fallback anti-adblock. */
+.ad-slot { width: 100%; margin: 0 auto; display: flex; align-items: center; justify-content: center; }
+.ad-slot-placeholder, .ad-slot-blocked {
+  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  gap: 8px; text-align: center; border: 1px dashed var(--border); border-radius: var(--radius-sm);
+  color: var(--hint); font-size: 12px; padding: 8px 16px;
+}
+.ad-slot-blocked { color: var(--gold); border-color: var(--gold-soft); background: var(--gold-soft); }
+.ad-slot-blocked i { font-size: 16px; }
+
+/* EventsPage — lista única de participantes (ver components/EventsPage.tsx).
+   Nome/%/remover são cruciais e sempre aparecem; o resto (trial, % na call,
+   função, prata, calculadora de regear) só quando há espaço na bracket. */
+.ev-participants-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.ev-participant-extra { display: flex; align-items: center; gap: 6px; }
+/* Input de % de participação: sufixo % colado à direita do campo. */
+.ev-pct-input { display: inline-flex; align-items: center; gap: 2px; }
+.ev-pct-input input:focus { outline: none; border-color: var(--info); }
+.ev-pct-suffix { font-size: 11px; color: var(--hint); }
+@media (max-width: 900px) {
+  .ev-participant-extra { display: none; }
+}

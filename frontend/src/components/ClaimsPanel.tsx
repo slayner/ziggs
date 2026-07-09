@@ -3,7 +3,13 @@ import { navigate } from "../router";
 import { useLang, useT, type Lang } from "../i18n";
 import { CHALLENGE_ITEM_NAMES } from "../data/challenge-items";
 import { itemRenderUrl } from "../data/albion-items";
-import { imgRetry } from "../api";
+import { api, imgRetry, PROFILE_THEMES, type MyProfile, type ProfileTheme } from "../api";
+import { normSearch } from "../lib/search";
+
+const THEME_COLORS: Record<ProfileTheme, string> = {
+  gold: "#f5b942", blue: "#3b82f6", green: "#22c55e",
+  red: "#ef4444", purple: "#a855f7", teal: "#14b8a6",
+};
 
 const REGION_PREFIX: Record<string, string> = { americas: "am", europe: "eu", asia: "as" };
 const REGION_LABEL: Record<string, string> = { americas: "AM", europe: "EU", asia: "AS" };
@@ -80,10 +86,85 @@ function ChallengeItem({ item, lang, spoiler = false }: { item: ChallItem; lang:
   );
 }
 
+// Só desbloqueado com personagem verificado (RegisteredCharacter) — o
+// /register do bot não conta, é só filiação de guilda sem prova de posse.
+function ProfileCustomize({ onBack }: { onBack: () => void }) {
+  const t = useT();
+  const [profile, setProfile] = useState<MyProfile | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => { api.getMyProfile().then(setProfile).catch(() => {}); }, []);
+
+  async function apply(action: () => Promise<MyProfile>) {
+    setBusy(true); setErr("");
+    try { setProfile(await action()); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <>
+      <button className="user-menu-back" onClick={onBack}>
+        <i className="ti ti-arrow-left" /> {t("customizeProfile")}
+      </button>
+      <div className="user-menu-divider" />
+      {!profile ? (
+        <div className="px-3 py-4 text-center text-xs text-zinc-600">{t("loading")}</div>
+      ) : (
+        <div className="px-3 py-2 space-y-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-zinc-600 mb-1.5">{t("profileTheme")}</p>
+            <div className="flex gap-2">
+              {PROFILE_THEMES.map(th => (
+                <button key={th} disabled={busy} title={th} onClick={() => apply(() => api.setProfileTheme(th))}
+                  className={`h-6 w-6 rounded-full border-2 ${profile.theme === th ? "border-zinc-200" : "border-transparent"}`}
+                  style={{ background: THEME_COLORS[th] }} />
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-zinc-600 mb-1.5">{t("profileAvatar")}</p>
+            <div className="flex items-center gap-2">
+              {profile.avatar_url && <img src={profile.avatar_url} alt="" className="h-10 w-10 rounded-full object-cover" />}
+              <label className="flex-1 cursor-pointer rounded-lg bg-zinc-800 px-3 py-1.5 text-center text-xs text-zinc-300 hover:bg-zinc-700">
+                {t("uploadImage")}
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={busy}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) apply(() => api.uploadProfileAvatar(f)); }} />
+              </label>
+              {profile.avatar_url && (
+                <button disabled={busy} onClick={() => apply(api.removeProfileAvatar)} className="text-zinc-600 hover:text-red-400 text-xs">✕</button>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-zinc-600 mb-1.5">{t("profileBanner")}</p>
+            {profile.banner_url && <img src={profile.banner_url} alt="" className="mb-1.5 h-12 w-full rounded object-cover" />}
+            <div className="flex items-center gap-2">
+              <label className="flex-1 cursor-pointer rounded-lg bg-zinc-800 px-3 py-1.5 text-center text-xs text-zinc-300 hover:bg-zinc-700">
+                {t("uploadImage")}
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={busy}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) apply(() => api.uploadProfileBanner(f)); }} />
+              </label>
+              {profile.banner_url && (
+                <button disabled={busy} onClick={() => apply(api.removeProfileBanner)} className="text-zinc-600 hover:text-red-400 text-xs">✕</button>
+              )}
+            </div>
+          </div>
+
+          {err && <p className="text-[10px] text-red-400">{err}</p>}
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function ClaimsPanel({ onBack }: { onBack: () => void }) {
   const { lang } = useLang();
   const t = useT();
-  const [view, setView] = useState<"list" | "new">("list");
+  const [view, setView] = useState<"list" | "new" | "customize">("list");
   const [claims, setClaims] = useState<Claim[]>([]);
   const [registered, setRegistered] = useState<Registered[]>([]);
   const [loading, setLoading] = useState(true);
@@ -120,8 +201,11 @@ export default function ClaimsPanel({ onBack }: { onBack: () => void }) {
       const r = await fetch(`${API}/players/search?q=${encodeURIComponent(name.trim())}&region=${region}`);
       if (!r.ok) throw new Error("Erro na busca");
       const d = await r.json();
+      // ponytail: só normalização (espaços + leet), SEM edit-distance — claim
+      // é num personagem específico, fuzzy casaria o personagem errado.
+      const nq = normSearch(name.trim());
       const match = (d.players ?? []).find((p: { Name: string; Id: string }) =>
-        p.Name.toLowerCase() === name.trim().toLowerCase()
+        normSearch(p.Name) === nq
       );
       if (match) setFound({ id: match.Id, name: match.Name });
       else setSearchErr(t("charSearchError"));
@@ -155,6 +239,10 @@ export default function ClaimsPanel({ onBack }: { onBack: () => void }) {
   const pendingClaims = claims.filter(c => c.status === "pending");
   const verifiedClaims = claims.filter(c => c.status === "verified");
   const expiredClaims = claims.filter(c => c.status === "expired" && cooldownUntil(c.created_at).getTime() > Date.now());
+
+  if (view === "customize") {
+    return <ProfileCustomize onBack={() => setView("list")} />;
+  }
 
   if (view === "new") {
     return (
@@ -250,6 +338,10 @@ export default function ClaimsPanel({ onBack }: { onBack: () => void }) {
                   <span className="text-[10px] text-zinc-600">{REGION_LABEL[r.region] ?? r.region}</span>
                 </button>
               ))}
+              <button className="topbar-dropdown-item" onClick={() => setView("customize")}>
+                <i className="ti ti-palette" style={{ fontSize: 14 }} />
+                {t("customizeProfile")}
+              </button>
             </div>
           )}
 

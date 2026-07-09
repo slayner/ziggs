@@ -85,6 +85,15 @@ class User(Base, TimestampMixin):
     avatar: Mapped[str | None] = mapped_column(String(255))
     discord_access_token: Mapped[str | None] = mapped_column(String(512))
     current_guild_id: Mapped[int | None] = mapped_column(Snowflake, nullable=True)
+    # Preferências pessoais globais (não-por-guilda), ex.: {"focus_efficiency":
+    # {familyKey: valor}} da calculadora de craft. Ver app/api/routes/craft.py.
+    craft_settings: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
+    # Perfil customizado (ver app/services/user_profile.py) — desbloqueado só
+    # depois de verificar um personagem via /claims (RegisteredCharacter).
+    # Aplicado ao perfil de jogador de CADA personagem verificado desse user.
+    profile_theme: Mapped[str | None] = mapped_column(String(16))
+    profile_avatar_path: Mapped[str | None] = mapped_column(String(255))
+    profile_banner_path: Mapped[str | None] = mapped_column(String(255))
 
 
 class GuildMember(Base, TimestampMixin):

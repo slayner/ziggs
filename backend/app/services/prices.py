@@ -26,6 +26,8 @@ from sqlalchemy.orm import Session
 from app.models.catalog import GameRole
 from app.models.prices import ItemPrice, ItemPriceLatest
 
+from .awakened import awakened_value
+
 # ── constantes ────────────────────────────────────────────────────────────────
 
 _BASE_URL = "https://west.albion-online-data.com/api/v2/stats/prices"
@@ -46,6 +48,12 @@ VALID_SLOTS = ("offhand", "helmet", "armor", "boots", "cape", "food")
 
 def _parse_dt(value: str) -> datetime:
     dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _aware(dt: datetime) -> datetime:
+    """SQLite não preserva tzinfo na leitura mesmo com DateTime(timezone=True)
+    — mesmo problema tratado em claim_checker/battle_tracker/etc."""
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
@@ -117,7 +125,7 @@ async def sync_prices(
                 ItemPriceLatest.quality == quality,
             )
         ).all()
-        fresh = {r.item_id for r in rows if r.recorded_at >= stale_before}
+        fresh = {r.item_id for r in rows if _aware(r.recorded_at) >= stale_before}
         to_fetch = [i for i in item_ids if i not in fresh]
     else:
         to_fetch = list(item_ids)
@@ -169,12 +177,34 @@ async def _fetch_history(item_ids: list[str]) -> list[dict]:
         return resp.json()
 
 
+def _iqr_trim(vals: list[int]) -> list[int]:
+    """Descarta outliers além de [Q1-1.5·IQR, Q3+1.5·IQR].
+
+    # ponytail: IQR sobre as ~5 médias por cidade — capto a "cidade troll"
+    # (1 listing absurdo num mercado fino) sem cortar variação real. Com 5
+    # pontos IQR é grosso; upgrade path = IQR cruzando dia×cidade (~35 pts)
+    # se trolls persistentes num mesmo mercado viesarem além disso.
+    Se todos caem fora (caso patológico) devolve o conjunto original."""
+    if len(vals) < 4:
+        return vals
+    s = sorted(vals)
+    q1 = s[len(s) // 4]
+    q3 = s[(len(s) * 3) // 4]
+    iqr = q3 - q1
+    if iqr == 0:
+        return vals
+    lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    trimmed = [v for v in vals if lo <= v <= hi]
+    return trimmed or vals
+
+
 def _compute_5city_avg(history_data: list[dict]) -> dict[tuple[str, int], int]:
     """
     Calcula a média de preço por (item_id, quality) a partir do histórico das 5 cidades.
 
     Por cidade: média ponderada de avg_price pelos últimos HISTORY_DAYS dias.
-    Entre cidades: média simples (cada cidade tem peso igual).
+    Entre cidades: média simples sobre as cidades com dados, **após IQR-trim**
+    descartar a "cidade troll" (mercado fino com 1 listing absurdo).
     Cidades sem dados no período são ignoradas.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=HISTORY_DAYS)
@@ -201,9 +231,10 @@ def _compute_5city_avg(history_data: list[dict]) -> dict[tuple[str, int], int]:
         city_values.setdefault((iid, q), []).append(int(weighted_avg))
 
     return {
-        key: int(sum(vals) / len(vals))
+        key: int(sum(trimmed) / len(trimmed))
         for key, vals in city_values.items()
         if vals
+        for trimmed in (_iqr_trim(vals),)
     }
 
 
@@ -248,7 +279,7 @@ async def sync_5city_prices(
                 ItemPriceLatest.quality == 1,
             )
         ).all()
-        fresh = {r.item_id for r in rows if r.recorded_at >= stale_before}
+        fresh = {r.item_id for r in rows if _aware(r.recorded_at) >= stale_before}
         to_fetch = [i for i in item_ids if i not in fresh]
     else:
         to_fetch = list(item_ids)
@@ -304,14 +335,23 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
     unique = list(dict.fromkeys(item_ids))
     if not unique:
         return {}
+    # Awakened (@4) não tem preço de marketplace (item intradeável) — a API
+    # externa devolveria nada e o cache gravaria 0 pra sempre. Valorizamos por
+    # heurística de tier aqui mesmo, sem bater na API e sem persistir no cache
+    # (computação local O(1), não dado externo). Override também de qualquer
+    # @4 que já esteja no cache como 0 de antes desta mudança.
+    awake = {iid: v for iid in unique if (v := awakened_value(iid))}
+    market_ids = [iid for iid in unique if iid not in awake]
+    if not market_ids:
+        return awake
     rows = db.scalars(
         select(ItemPriceLatest).where(
-            ItemPriceLatest.item_id.in_(unique),
+            ItemPriceLatest.item_id.in_(market_ids),
             ItemPriceLatest.city == _BATTLE_SENTINEL,
         )
     ).all()
     cached = {r.item_id: r.sell_price_min for r in rows}
-    missing = [i for i in unique if i not in cached]
+    missing = [i for i in market_ids if i not in cached]
     if missing:
         now = datetime.now(timezone.utc)
         tasks = [_fetch_spot_prices(missing[i:i + _BATCH_SIZE]) for i in range(0, len(missing), _BATCH_SIZE)]
@@ -330,7 +370,7 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
             # Mediana, não média — item ilíquido pode ter só 1-2 listagens
             # reais entre as ~28 combinações (cidade × qualidade) e o resto
             # zero/ausente; uma única listagem "troll" (vendedor sem
-            # concorrência pedindo um preço absurdo) já bastava pra puxar a
+            # concorrência pedendo um preço absurdo) já bastava pra puxar a
             # MÉDIA pra um valor completamente fora da realidade — e como
             # esse cache é permanente (nunca reconsultado), ficava errado
             # pra sempre. Mediana ignora esse tipo de outlier isolado.
@@ -341,6 +381,7 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
         if rows:
             db.execute(_sqlite_insert(ItemPriceLatest).on_conflict_do_nothing(), rows)
             db.commit()
+    cached.update(awake)
     return cached
 
 
@@ -470,3 +511,143 @@ async def estimate_regear(
     base.items = results
     base.total = sum(i.total_price for i in results)
     return base
+
+
+# ── regear por screenshot: sugestão de preço anti-troll ───────────────────────
+
+import re as _re
+
+_BASE_RE = _re.compile(r"^T\d+_")
+_ENCH_RE = _re.compile(r"@\d+$")
+
+# Slot da API de eventos do Albion (Victim.Equipment) e slot do catálogo (build_items)
+# → categoria canônica usada na config de eligibilidade de regear da guilda.
+SLOT_TO_CATEGORY = {
+    "MainHand": "weapon", "weapon": "weapon",
+    "OffHand": "offhand", "offhand": "offhand",
+    "Head": "helmet", "helmet": "helmet",
+    "Armor": "armor", "armor": "armor",
+    "Shoes": "boots", "boots": "boots",
+    "Cape": "cape", "cape": "cape",
+    "Mount": "mount", "mount": "mount",
+    "Bag": "bag", "bag": "bag",
+    "Potion": "potion", "potion": "potion",
+    "Food": "food", "food": "food",
+}
+REGEAR_CATEGORIES = (
+    "weapon", "offhand", "helmet", "armor", "boots", "cape", "mount", "bag", "food", "potion",
+)
+
+
+def item_base_id(item_id: str) -> str:
+    """T5_HEAD_PLATE_SET1@2 → HEAD_PLATE_SET1 (sem tier, sem enchant)."""
+    return _ENCH_RE.sub("", _BASE_RE.sub("", item_id or ""))
+
+
+def slot_category(slot: str) -> str | None:
+    return SLOT_TO_CATEGORY.get(slot) if slot else None
+
+
+async def suggest_regear_price(
+    db: Session,
+    items: list[dict],
+    coverage_pct: int,
+    enabled_categories: set[str] | None = None,
+    disabled_item_bases: set[str] | None = None,
+) -> dict:
+    """Sugere preço de regear para uma lista de itens detectados na screenshot.
+
+    `items`: [{"item_id","quality","slot"}] (slot = MainHand|Head|... ou helmet|armor|...).
+    `coverage_pct`: 0-100 — % do valor médio que a guilda paga (ex.: 50).
+    `enabled_categories`: categorias ligadas na config; None = todas.
+    `disabled_item_bases`: override por item-base desligado.
+
+    Preço: média 5 cidades (IQR-trim, 7d). Itens @enchant que o histórico não
+    resolve caem no pipeline de spot mediano (get_battle_prices). Filtra itens
+    não-elegíveis (categoria desligada ou override) — aparecem marcados mas
+    não somam. suggested_total = round(base_total * coverage_pct/100).
+    """
+    enabled_categories = enabled_categories or set(REGEAR_CATEGORIES)
+    disabled_item_bases = disabled_item_bases or set()
+    pct = max(0, min(100, int(coverage_pct)))
+
+    out_items: list[dict] = []
+    eligible_ids: list[str] = []
+    for it in items:
+        iid = it.get("item_id") or ""
+        slot = it.get("slot") or ""
+        cat = slot_category(slot)
+        eligible = bool(cat and cat in enabled_categories and item_base_id(iid) not in disabled_item_bases)
+        rec = {
+            "item_id": iid, "name": iid, "quality": int(it.get("quality", 1) or 1),
+            "slot": slot, "category": cat, "eligible": eligible, "unit_price": 0, "total_price": 0,
+        }
+        out_items.append(rec)
+        if eligible and iid:
+            eligible_ids.append(iid)
+
+    # 5 cidades (history) primeiro — @enchant volta 0, resolve depois no spot.
+    if eligible_ids:
+        await sync_5city_prices(db, list(dict.fromkeys(eligible_ids)))
+
+    # Lê cache _AVG_SENTINEL; coleta os que falharam (enchanted) pro spot mediano.
+    need_spot: list[str] = []
+    for rec in out_items:
+        if not rec["eligible"] or not rec["item_id"]:
+            continue
+        row = db.scalar(
+            select(ItemPriceLatest).where(
+                ItemPriceLatest.item_id == rec["item_id"],
+                ItemPriceLatest.city == _AVG_SENTINEL,
+                ItemPriceLatest.quality == rec["quality"],
+            )
+        )
+        price = row.sell_price_min if row else 0
+        if price > 0:
+            rec["unit_price"] = price
+            rec["total_price"] = price
+        else:
+            need_spot.append(rec["item_id"])
+
+    if need_spot:
+        spot = await get_battle_prices(db, list(dict.fromkeys(need_spot)))
+        for rec in out_items:
+            if rec["eligible"] and rec["unit_price"] == 0 and rec["item_id"] in spot:
+                p = spot[rec["item_id"]]
+                rec["unit_price"] = p
+                rec["total_price"] = p
+
+    base_total = sum(r["total_price"] for r in out_items if r["eligible"])
+    suggested_total = round(base_total * pct / 100)
+    return {
+        "items": out_items,
+        "base_total": base_total,
+        "suggested_total": suggested_total,
+        "coverage_pct": pct,
+        "price_basis": f"Média 5 cidades IQR-trim ({HISTORY_DAYS}d) × {pct}% cobertura",
+    }
+
+
+# ── self-check ────────────────────────────────────────────────────────────────
+
+def _demo_iqr() -> None:
+    """Afirma que IQR-trim difere da média crua quando há um outlier troll."""
+    # 4 cidades ~1000 + 1 cidade troll 50000 → média crua viesa, trim remove.
+    vals = [980, 1000, 1020, 1010, 50000]
+    trimmed = _iqr_trim(vals)
+    mean_raw = sum(vals) / len(vals)
+    mean_trim = sum(trimmed) / len(trimmed)
+    assert 50000 not in trimmed, "troll não foi removido"
+    assert abs(mean_trim - 1002.5) < 5, f"trim {mean_trim} longe do esperado"
+    assert mean_raw > 10000, "média crua deveria estar viesada pelo troll"
+    print(f"iqr ok: raw={mean_raw:.0f} trim={mean_trim:.0f} kept={trimmed}")
+
+
+if __name__ == "__main__":
+    _demo_iqr()
+    # item_base_id sanity
+    assert item_base_id("T5_HEAD_PLATE_SET1@2") == "HEAD_PLATE_SET1"
+    assert item_base_id("T8_MOUNT_OX") == "MOUNT_OX"
+    assert slot_category("MainHand") == "weapon"
+    assert slot_category("Head") == "helmet"
+    print("prices self-check OK")

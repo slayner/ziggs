@@ -15,7 +15,8 @@ from app.api.routes.battles import (
 )
 from app.models.battles import Battle, BattleParticipant
 from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, PlayerSnapshot, PlayerWeaponStat
-from app.services import battle_groups, prices
+from app.services import battle_groups, prices, user_profile
+from app.services.albion_gate import PROFILE, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client, sync_player_kills, upsert_player
 
 router = APIRouter(prefix="/players", tags=["players"])
@@ -27,7 +28,8 @@ def _aware(dt: datetime) -> datetime:
 
 
 async def _fetch_player_raw(client: httpx.AsyncClient, host: str, albion_id: str) -> dict | None:
-    resp = await client.get(f"https://{host}/api/gameinfo/players/{albion_id}")
+    async with slot():
+        resp = await client.get(f"https://{host}/api/gameinfo/players/{albion_id}")
     if resp.status_code != 200:
         return None
     data = resp.json()
@@ -365,6 +367,7 @@ async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -
     return {
         **raw,
         "_is_deleted": player.is_deleted,
+        "custom_profile": user_profile.get_public_customization(db, player.albion_id),
         "_ziggs": {
             "region": player.region,
             "first_seen_at": _aware(player.first_seen_at).isoformat(),
@@ -388,13 +391,15 @@ async def search_players(q: str = Query(min_length=2), region: str = "americas",
     if host is None:
         raise HTTPException(400, "Região inválida")
     async with make_client() as c:
-        try:
-            resp = await c.get(f"https://{host}/api/gameinfo/search", params={"q": q})
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=502, detail=f"Albion API: {e.response.status_code}")
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"Erro de conexão: {e}")
+        async with albion_scope(PROFILE):
+            try:
+                async with slot():
+                    resp = await c.get(f"https://{host}/api/gameinfo/search", params={"q": q})
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(status_code=502, detail=f"Albion API: {e.response.status_code}")
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"Erro de conexão: {e}")
     players = resp.json().get("players", [])
 
     # Sobrescreve guild/aliança com dados do nosso tracker quando disponíveis —
@@ -429,27 +434,29 @@ async def get_player_by_name(region: str, name: str, db: Session = Depends(deps.
         raise HTTPException(400, "Região inválida")
 
     async with make_client() as c:
-        try:
-            resp = await c.get(f"https://{host}/api/gameinfo/search", params={"q": name})
-            resp.raise_for_status()
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"Erro de conexão: {e}")
-        candidates = resp.json().get("players", [])
-        # Nomes da Albion diferenciam maiúsculas/minúsculas — "Moskka" e
-        # "MosKKa" são DUAS contas distintas. Prioriza match exato; só cai
-        # pra case-insensitive se não achar nenhum (ex: erro de digitação na
-        # URL) — nunca o contrário, senão pode resolver pra conta errada.
-        match = next((p for p in candidates if p.get("Name") == name), None)
-        if match is None:
-            match = next((p for p in candidates if p.get("Name", "").lower() == name.lower()), None)
-        if match is None:
-            raise HTTPException(404, "Jogador não encontrado nessa região")
-        raw = await _fetch_player_raw(c, host, match["Id"])
-        if raw is None:
-            raise HTTPException(404, "Jogador não encontrado")
-        # Não depende só do feed global ter visto a luta desse jogador
-        # específico — busca direto nos endpoints de kills/deaths dele.
-        await sync_player_kills(c, db, host, region, raw["Id"])
+        async with albion_scope(PROFILE):
+            try:
+                async with slot():
+                    resp = await c.get(f"https://{host}/api/gameinfo/search", params={"q": name})
+                resp.raise_for_status()
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"Erro de conexão: {e}")
+            candidates = resp.json().get("players", [])
+            # Nomes da Albion diferenciam maiúsculas/minúsculas — "Moskka" e
+            # "MosKKa" são DUAS contas distintas. Prioriza match exato; só cai
+            # pra case-insensitive se não achar nenhum (ex: erro de digitação na
+            # URL) — nunca o contrário, senão pode resolver pra conta errada.
+            match = next((p for p in candidates if p.get("Name") == name), None)
+            if match is None:
+                match = next((p for p in candidates if p.get("Name", "").lower() == name.lower()), None)
+            if match is None:
+                raise HTTPException(404, "Jogador não encontrado nessa região")
+            raw = await _fetch_player_raw(c, host, match["Id"])
+            if raw is None:
+                raise HTTPException(404, "Jogador não encontrado")
+            # Não depende só do feed global ter visto a luta desse jogador
+            # específico — busca direto nos endpoints de kills/deaths dele.
+            await sync_player_kills(c, db, host, region, raw["Id"])
 
     player = upsert_player(db, raw, region)
     return await _build_profile_payload(db, player, raw)
@@ -461,26 +468,27 @@ async def get_player(albion_id: str, region: str | None = None, db: Session = De
     informado, tenta os 3 hosts em sequência — um ID só responde 200 numa
     região (mesmo padrão de battle_tracker.resolve_by_albion_id)."""
     async with make_client() as c:
-        raw = None
-        resolved_region = region
-        resolved_host = HOSTS.get(region) if region else None
-        if resolved_host:
-            raw = await _fetch_player_raw(c, resolved_host, albion_id)
-        else:
-            for r, host in HOSTS.items():
-                raw = await _fetch_player_raw(c, host, albion_id)
-                if raw is not None:
-                    resolved_region, resolved_host = r, host
-                    break
+        async with albion_scope(PROFILE):
+            raw = None
+            resolved_region = region
+            resolved_host = HOSTS.get(region) if region else None
+            if resolved_host:
+                raw = await _fetch_player_raw(c, resolved_host, albion_id)
+            else:
+                for r, host in HOSTS.items():
+                    raw = await _fetch_player_raw(c, host, albion_id)
+                    if raw is not None:
+                        resolved_region, resolved_host = r, host
+                        break
 
-        if raw is None:
-            # Marca como excluído se já estava no nosso banco
-            existing = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
-            if existing and not existing.is_deleted:
-                existing.is_deleted = True
-                db.commit()
-            raise HTTPException(404, "Jogador não encontrado")
-        await sync_player_kills(c, db, resolved_host, resolved_region, raw["Id"])
+            if raw is None:
+                # Marca como excluído se já estava no nosso banco
+                existing = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
+                if existing and not existing.is_deleted:
+                    existing.is_deleted = True
+                    db.commit()
+                raise HTTPException(404, "Jogador não encontrado")
+            await sync_player_kills(c, db, resolved_host, resolved_region, raw["Id"])
 
     player = upsert_player(db, raw, resolved_region)
     return await _build_profile_payload(db, player, raw)
@@ -491,26 +499,30 @@ async def get_player_kills(albion_id: str, offset: int = 0, limit: int = 10):
     """Proxy direto do Albion — complementa o ledger próprio (PlayerKillEvent)
     com histórico de antes do ledger existir."""
     async with make_client() as c:
-        try:
-            resp = await c.get(
-                f"https://gameinfo.albiononline.com/api/gameinfo/players/{albion_id}/kills",
-                params={"offset": offset, "limit": limit},
-            )
-            resp.raise_for_status()
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=str(e))
+        async with albion_scope(PROFILE):
+            try:
+                async with slot():
+                    resp = await c.get(
+                        f"https://gameinfo.albiononline.com/api/gameinfo/players/{albion_id}/kills",
+                        params={"offset": offset, "limit": limit},
+                    )
+                resp.raise_for_status()
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=str(e))
     return resp.json()
 
 
 @router.get("/{albion_id}/deaths")
 async def get_player_deaths(albion_id: str, offset: int = 0, limit: int = 10):
     async with make_client() as c:
-        try:
-            resp = await c.get(
-                f"https://gameinfo.albiononline.com/api/gameinfo/players/{albion_id}/deaths",
-                params={"offset": offset, "limit": limit},
-            )
-            resp.raise_for_status()
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=str(e))
+        async with albion_scope(PROFILE):
+            try:
+                async with slot():
+                    resp = await c.get(
+                        f"https://gameinfo.albiononline.com/api/gameinfo/players/{albion_id}/deaths",
+                        params={"offset": offset, "limit": limit},
+                    )
+                resp.raise_for_status()
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=str(e))
     return resp.json()

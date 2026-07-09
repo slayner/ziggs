@@ -1,96 +1,298 @@
-import { useEffect, useState } from "react";
-import { api, type CatalogRole, type Death, type EventDetail, type EventSummary, type LootReconcile, type MissingItem, type Participant, type PayoutPreview, type Permissions, type RegearEstimate, type RegearItemEstimate, type VerificationStep } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, g, type CatalogRole, type EventDetail, type EventSummary, type NodeEventLog, type Participant, type Permissions, type RegearEstimate, type RegearItemEstimate, type RegearRequest, type VerificationStep } from "../api";
 import { useT, type TKey } from "../i18n";
+import { navigate } from "../router";
+import { RoleIcon } from "./RoleIcons";
 
-const PIPELINE = ["scheduled", "in_progress", "definition", "verification", "waiting", "finalized"];
-const TYPE_LABELS: Record<string, string> = {
-  lootsplit: "Lootsplit", regear: "Regear", lootsplit_regear: "Lootsplit + Regear",
-};
+// Fluxo de 4 estados: agendado → andamento → revisão → concluido.
+const PIPELINE = ["scheduled", "in_progress", "review", "finalized"];
+// Eventos "vivos" ficam expandidos por padrão na lista; finalizado/cancelado/
+// excluído entram colapsados (só a linha resumo) — não pedem mais atenção.
+const ACTIVE_STATES = new Set(["scheduled", "in_progress", "review"]);
 const STATE_KEYS: Record<string, TKey> = {
-  scheduled: "stateScheduled", in_progress: "stateInProgress", definition: "stateDefinition",
-  verification: "stateVerification", waiting: "stateWaiting", finalized: "stateFinalized",
-  cancelled: "stateCancelled", deleted: "stateDeleted",
+  scheduled: "stateScheduled", in_progress: "stateInProgress", review: "stateReview",
+  finalized: "stateFinalized", cancelled: "stateCancelled", deleted: "stateDeleted",
 };
+// review usa só 2 marcadores opcionais (tab_value + nodes).
 const STEP_KEYS: Record<string, TKey> = {
-  participation: "stepParticipation", missing_loots: "stepMissingLoots",
-  tab_value: "stepTabValue", tab_image: "stepTabImage",
-  battles: "stepBattles", nodes: "stepNodes",
+  tab_value: "stepTabValue", nodes: "stepNodes",
 };
 
 function fmt(n: number): string {
   return n.toLocaleString("pt-BR");
 }
 
-export default function EventsPage({ perms }: { perms: Permissions }) {
+// Indicador de origem além da escalação — sempre visível ao lado do nome (não
+// some na bracket mínima). Um ícone+cor por caso, com tooltip explicativo.
+const ORIGIN_META: Record<string, { icon: string; color: string; key: TKey }> = {
+  battle_no_call: { icon: "ti-swords", color: "#e06565", key: "originBattleNoCall" },
+  signup_no_call: { icon: "ti-notebook-off", color: "var(--gold)", key: "originSignupNoCall" },
+  call_outsider: { icon: "ti-eye", color: "var(--hint)", key: "originCallOutsider" },
+  call_no_signup: { icon: "ti-phone", color: "var(--info)", key: "originCallNoSignup" },
+  call_signup: { icon: "ti-notebook", color: "#6bbf73", key: "originCallSignup" },
+  manual: { icon: "ti-user-plus", color: "var(--gold)", key: "originManual" },
+};
+function OriginBadge({ origin }: { origin: string }) {
+  const t = useT();
+  const meta = ORIGIN_META[origin];
+  if (!meta) return null;
+  return (
+    <i className={"ti " + meta.icon} aria-hidden
+      title={t(meta.key)}
+      style={{ color: meta.color, fontSize: 11, flexShrink: 0, marginLeft: 4 }} />
+  );
+}
+
+export default function EventsPage({ perms, active = true }: { perms: Permissions; active?: boolean }) {
   const t = useT();
   const [events, setEvents] = useState<EventSummary[]>([]);
-  const [sel, setSel] = useState<number | null>(null);
-  const [detail, setDetail] = useState<EventDetail | null>(null);
-  const [title, setTitle] = useState("");
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  // undefined = ainda não buscado, null = falhou, EventDetail = carregado.
+  const [details, setDetails] = useState<Record<number, EventDetail | null | undefined>>({});
   const [error, setError] = useState<string | null>(null);
+  // IDs já vistos ao menos uma vez — evita reabrir à força um card que o
+  // usuário fechou manualmente num refresh seguinte (só o 1º avistamento
+  // decide o estado inicial de expandido/colapsado).
+  const seenIds = useRef<Set<number>>(new Set());
+  const fetchStarted = useRef<Set<number>>(new Set());
+  // Refs espelhando estado pro poll ler valor fresco dentro do interval
+  // (sem precisar reiniciar o timer a cada toggle de expansão).
+  const expandedRef = useRef(expanded); expandedRef.current = expanded;
+  const detailsRef = useRef(details); detailsRef.current = details;
 
   function refreshList() {
     api.listEvents().then(setEvents).catch((e) => setError(String(e.message)));
   }
   useEffect(refreshList, []);
-  useEffect(() => {
-    if (sel != null) api.getEvent(sel).then(setDetail).catch(() => setDetail(null));
-    else setDetail(null);
-  }, [sel]);
 
-  async function create() {
-    if (!title.trim()) return;
-    const ev = await api.createEvent(title.trim());
-    setTitle("");
-    refreshList();
-    setSel(ev.id);
+  // ponytail: poll live — a cada 10s refaz a lista (novos eventos / transições
+  // de estado aparecem sozinhos) e os detalhes dos eventos abertos que ainda
+  // estão ativos (inscritos/participantes chegando ao vivo). Terminais
+  // (finalizado/cancelado/excluído) não são re-buscados: não mudam mais. `active`
+  // pausa o poll quando a aba tá escondida (keep-alive no ManagementPage).
+  useEffect(() => {
+    if (!active) return;
+    const iv = setInterval(() => {
+      api.listEvents().then(setEvents).catch(() => {});
+      for (const id of expandedRef.current) {
+        const d = detailsRef.current[id];
+        if (d && !ACTIVE_STATES.has(d.state)) continue;
+        api.getEvent(id)
+          .then((dd) => setDetails((prev) => ({ ...prev, [id]: dd })))
+          .catch(() => {});
+      }
+    }, 10000);
+    return () => clearInterval(iv);
+  }, [active]);
+
+  function ensureDetail(id: number) {
+    if (fetchStarted.current.has(id)) return;
+    fetchStarted.current.add(id);
+    api.getEvent(id)
+      .then((d) => setDetails((prev) => ({ ...prev, [id]: d })))
+      .catch(() => setDetails((prev) => ({ ...prev, [id]: null })));
   }
 
-  function act(p: Promise<EventDetail>) {
+  // Ao chegar uma lista nova, expande (e carrega) todo evento "vivo" ainda
+  // não visto — finalizado/cancelado/excluído entra colapsado, sem fetch.
+  useEffect(() => {
+    const newlyActive: number[] = [];
+    for (const e of events) {
+      if (seenIds.current.has(e.id)) continue;
+      seenIds.current.add(e.id);
+      if (ACTIVE_STATES.has(e.state)) newlyActive.push(e.id);
+    }
+    if (newlyActive.length) {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        newlyActive.forEach((id) => next.add(id));
+        return next;
+      });
+      newlyActive.forEach(ensureDetail);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events]);
+
+  function toggle(id: number) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else { next.add(id); ensureDetail(id); }
+      return next;
+    });
+  }
+
+  function actFor(eventId: number, p: Promise<EventDetail>) {
     setError(null);
-    p.then((d) => { setDetail(d); refreshList(); }).catch((e) => setError(String(e.message)));
+    p.then((d) => {
+      setDetails((prev) => ({ ...prev, [eventId]: d }));
+      refreshList();
+    }).catch((e) => setError(String(e.message)));
   }
 
   return (
     <div className="container">
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
-        {/* Lista de eventos */}
-        <div style={{ flex: "1 1 280px" }}>
-          <div className="card">
-            {perms["events.create"] && (
-              <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                <input
-                  className="input" style={{ flex: 1 }} placeholder={t("evCtaNamePlaceholder")}
-                  value={title} onChange={(e) => setTitle(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && create()}
-                />
-                <button className="btn primary" onClick={create}>
-                  <i className="ti ti-plus" aria-hidden /> {t("createBtn")}
-                </button>
+      {perms["events.create"] && (
+        <div className="card" style={{ marginBottom: 10 }}>
+          <CreateEventForm onCreated={(ev) => {
+            refreshList();
+            seenIds.current.add(ev.id);
+            fetchStarted.current.add(ev.id);
+            setExpanded((prev) => new Set(prev).add(ev.id));
+            setDetails((prev) => ({ ...prev, [ev.id]: ev }));
+          }} />
+        </div>
+      )}
+
+      {error && <p style={{ color: "#e07a7a", fontSize: 13, marginBottom: 10 }}>{error}</p>}
+      {events.length === 0 && <div className="card"><p className="muted">{t("noEventsYet")}</p></div>}
+
+      {events.map((e) => {
+        const isExpanded = expanded.has(e.id);
+        const det = details[e.id];
+        return (
+          <div key={e.id} className="card" style={{ marginBottom: 10, padding: 0, overflow: "hidden" }}>
+            <button
+              className="event-row"
+              style={{ border: "none", marginBottom: 0, borderRadius: 0 }}
+              onClick={() => toggle(e.id)}
+            >
+              <i className="ti ti-calendar-event" style={{ color: "var(--muted)" }} aria-hidden />
+              <span style={{ flex: 1 }}>{e.title || `Event #${e.id}`}</span>
+              {e.seriousness === "serious" && (
+                <i className="ti ti-alert-triangle" style={{ color: "var(--gold)" }} title={t("evSeriousnessSerious")} aria-hidden />
+              )}
+              <StatePill state={e.state} />
+              <i className={"ti " + (isExpanded ? "ti-chevron-up" : "ti-chevron-down")} style={{ color: "var(--hint)" }} aria-hidden />
+            </button>
+            {isExpanded && (
+              <div style={{ padding: "0 14px 14px", borderTop: "1px solid var(--border)" }}>
+                {det === undefined && <p className="muted" style={{ marginTop: 12 }}>{t("loading")}</p>}
+                {det === null && <p style={{ color: "#e07a7a", marginTop: 12 }}>{t("evLoadError")}</p>}
+                {det && (
+                  <EventDetailCard detail={det} act={(p) => actFor(e.id, p)} canManage={perms["events.manage"]} />
+                )}
               </div>
             )}
-
-            {error && <p style={{ color: "#e07a7a", fontSize: 13, marginBottom: 10 }}>{error}</p>}
-            {events.length === 0 && <p className="muted">{t("noEventsYet")}</p>}
-            {events.map((e) => (
-              <button key={e.id} className={"event-row" + (sel === e.id ? " sel" : "")} onClick={() => setSel(e.id)}>
-                <i className="ti ti-calendar-event" style={{ color: "var(--muted)" }} aria-hidden />
-                <span style={{ flex: 1 }}>{e.title || `CTA #${e.id}`}</span>
-                {e.type && <span className="hint">{TYPE_LABELS[e.type] ?? e.type}</span>}
-                <StatePill state={e.state} />
-              </button>
-            ))}
           </div>
-        </div>
+        );
+      })}
+    </div>
+  );
+}
 
-        {/* Detalhe do evento */}
-        <div style={{ flex: "2 1 360px" }}>
-          {detail ? (
-            <EventDetailCard detail={detail} act={act} canManage={perms["events.manage"]} />
-          ) : (
-            <div className="card"><p className="muted">{t("selectEventHint")}</p></div>
-          )}
-        </div>
+// ── Formulário de criação (avançado) ─────────────────────────────────────
+
+// Horários sempre em UTC: lista slots de 15 em 15 min das próximas 48h a partir
+// do próximo múltiplo de 15min. Hoje (UTC) mostra só "HH:MM"; dias seguintes
+// mostram "HH:MM · dd/MM" — a data só aparece pra horário do próximo dia.
+const SLOT_MS = 15 * 60 * 1000;
+const SLOT_HORIZON_MS = 48 * 60 * 60 * 1000;
+function buildTimeSlots(): { value: string; label: string }[] {
+  const now = new Date();
+  const start = new Date(Math.ceil(now.getTime() / SLOT_MS) * SLOT_MS);
+  const todayStr = now.toISOString().slice(0, 10);
+  const out: { value: string; label: string }[] = [];
+  for (let t = start.getTime(); t <= start.getTime() + SLOT_HORIZON_MS; t += SLOT_MS) {
+    const iso = new Date(t).toISOString();
+    const day = iso.slice(0, 10);
+    const hhmm = iso.slice(11, 16);
+    const label = day === todayStr ? hhmm : `${hhmm} · ${day.slice(8, 10)}/${day.slice(5, 7)}`;
+    out.push({ value: iso, label });
+  }
+  return out;
+}
+
+function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [when, setWhen] = useState("");
+  const [comps, setComps] = useState<{ id: number; name: string }[]>([]);
+  const [compId, setCompId] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) api.listComps().then(setComps).catch(() => {});
+  }, [open]);
+  // Regenera os slots quando o form abre pra começar do "agora".
+  const slots = useMemo(() => open ? buildTimeSlots() : [], [open]);
+
+  async function submit() {
+    setBusy(true); setError(null);
+    try {
+      const ev = await api.createEvent({
+        title: title.trim() || null,
+        // `when` já é ISO UTC (slot do select) — envia direto.
+        scheduled_at: when || null,
+        comp_id: compId ? Number(compId) : null,
+        message: msg.trim() || null,
+      });
+      setTitle(""); setWhen(""); setCompId(""); setMsg("");
+      setOpen(false);
+      onCreated(ev);
+    } catch (e) {
+      setError(String((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button className="btn primary" style={{ width: "100%", marginBottom: 14 }} onClick={() => setOpen(true)}>
+        <i className="ti ti-plus" aria-hidden /> {t("evNewEventBtn")}
+      </button>
+    );
+  }
+
+  const field = { marginBottom: 10 } as const;
+  const label = { display: "block", marginBottom: 4 } as const;
+
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 12, marginBottom: 14 }}>
+      <div style={field}>
+        <input
+          className="input" style={{ width: "100%" }} placeholder={t("evCtaNamePlaceholder")}
+          value={title} onChange={(e) => setTitle(e.target.value)} autoFocus
+        />
+      </div>
+      <div style={field}>
+        <span className="hint" style={label}>{t("evScheduledAtLabel")}</span>
+        <select
+          className="cs-select" style={{ width: "100%" }} value={when}
+          onChange={(e) => setWhen(e.target.value)}
+        >
+          <option value="">{t("evSelectTime")}</option>
+          {slots.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+        <p className="hint" style={{ marginTop: 4, fontSize: 11 }}>
+          <i className="ti ti-info-circle" aria-hidden /> {t("evTimeUtcHint")}
+        </p>
+      </div>
+      <div style={field}>
+        <span className="hint" style={label}>{t("evCompLabel")}</span>
+        <select className="cs-select" style={{ width: "100%" }} value={compId} onChange={(e) => setCompId(e.target.value)}>
+          <option value="">{t("evNoComp")}</option>
+          {comps.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
+      <div style={field}>
+        <span className="hint" style={label}>{t("evMessageLabel")}</span>
+        <textarea
+          className="input" style={{ width: "100%", minHeight: 52, resize: "vertical" }}
+          placeholder={t("evMessagePlaceholder")}
+          value={msg} onChange={(e) => setMsg(e.target.value)}
+        />
+      </div>
+      {error && <p style={{ color: "#e07a7a", fontSize: 13, marginBottom: 8 }}>{error}</p>}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="btn primary" style={{ flex: 1 }} onClick={submit} disabled={busy}>
+          <i className="ti ti-plus" aria-hidden /> {t("createBtn")}
+        </button>
+        <button className="btn" onClick={() => setOpen(false)} disabled={busy}>{t("closeBtn")}</button>
       </div>
     </div>
   );
@@ -107,135 +309,139 @@ function StatePill({ state }: { state: string }) {
 function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act: (p: Promise<EventDetail>) => void; canManage: boolean }) {
   const t = useT();
   const curIdx = PIPELINE.indexOf(detail.state);
-  const [pName, setPName] = useState("");
-  const [pPct, setPPct] = useState("");
 
-  function addParticipant() {
-    if (!pName.trim()) return;
-    const uid = Date.now();
-    act(api.addParticipant(detail.id, { user_id: uid, user_name: pName.trim(), percent: Number(pPct) || 0 }));
-    setPName(""); setPPct("");
-  }
+  // X = excluir. Cancelado/excluído são a mesma coisa na prática pro usuário
+  // (dois jeitos de matar o evento) — a UI oferece só o excluir, que o backend
+  // aceita de QUALQUER estado (de finalizado, estorna pagamentos — daí o confirm).
+  const canDelete = canManage && detail.allowed_transitions.includes("deleted");
+  // Um único botão primário por estado: a próxima etapa do pipeline.
+  const forward = curIdx >= 0 ? PIPELINE[curIdx + 1] : undefined;
+  const canForward = !!(canManage && forward && detail.allowed_transitions.includes(forward));
+  const forwardLabel = forward === "review" ? t("endEventBtn")
+    : forward === "finalized" ? t("finalizeBtn")
+    : t("startEventBtn");
 
   return (
-    <div className="card">
-      {/* Cabeçalho */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <span style={{ fontWeight: 600 }}>{detail.title || `CTA #${detail.id}`}</span>
-        <StatePill state={detail.state} />
-        {detail.type && <span className="hint">· {TYPE_LABELS[detail.type] ?? detail.type}</span>}
-      </div>
-
-      {/* Pipeline */}
-      <div className="pipe">
-        {PIPELINE.map((s, i) => (
-          <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span className={"state-pill " + (i === curIdx ? "cur" : curIdx >= 0 && i < curIdx ? "done" : "")}>
-              {t(STATE_KEYS[s])}
+    <>
+      {/* Título/estado/tipo já aparecem na linha de cabeçalho da lista (fora
+          deste componente) — aqui só o que é específico do detalhe.
+          Pipeline à esquerda, X de excluir no canto superior direito. */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginTop: 12 }}>
+        <div className="pipe" style={{ flex: 1, margin: "0 0 16px" }}>
+          {PIPELINE.map((s, i) => (
+            <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span className={"state-pill " + (i === curIdx ? "cur" : curIdx >= 0 && i < curIdx ? "done" : "")}>
+                {t(STATE_KEYS[s])}
+              </span>
+              {i < PIPELINE.length - 1 && <i className="ti ti-chevron-right arrow" aria-hidden />}
             </span>
-            {i < PIPELINE.length - 1 && <i className="ti ti-chevron-right arrow" aria-hidden />}
-          </span>
-        ))}
+          ))}
+        </div>
+        {canDelete && (
+          <button
+            title={t("deleteEventTitle")}
+            style={{ background: "none", border: "none", color: "var(--hint)", cursor: "pointer", padding: "2px 4px", flexShrink: 0 }}
+            onClick={() => { if (confirm(t("deleteEventConfirm"))) act(api.transition(detail.id, "deleted")); }}
+          >
+            <i className="ti ti-x" style={{ fontSize: 16 }} aria-hidden />
+          </button>
+        )}
       </div>
 
-      {/* Definição: escolher tipo */}
-      {detail.state === "definition" && (
+      {/* Attendance: movido para a barra de ações, ao lado do botão de
+          finalizar (todo mundo que participou recebe a mesma quantidade). */}
+
+      {/* Revisão: valor da tab + nodes lado a lado, payout, concluir. */}
+      {detail.state === "review" && (
         <div style={{ marginBottom: 16 }}>
-          <div className="hint" style={{ marginBottom: 6 }}>{t("ctaTypeLabel")}</div>
-          {canManage ? (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {Object.entries(TYPE_LABELS).map(([v, label]) => (
-                <button key={v} className={"btn" + (detail.type === v ? " primary" : "")}
-                  onClick={() => act(api.setType(detail.id, v))}>
-                  {label}
-                </button>
-              ))}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+            <div className="card" style={{ padding: 10 }}>
+              {/* Valor da tab (marcador opcional). */}
+              {detail.verification.map((v) =>
+                v.step === "tab_value" ? (
+                  <TabValueStep key={v.step} v={v} eventId={detail.id} act={canManage ? act : () => {}} />
+                ) : null
+              )}
             </div>
-          ) : (
-            <span className="hint">{detail.type ? TYPE_LABELS[detail.type] ?? detail.type : "—"}</span>
-          )}
-          {!detail.type && canManage && (
-            <p className="hint" style={{ marginTop: 6 }}>
-              <i className="ti ti-info-circle" aria-hidden /> {t("defineTypeHint")}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Verificação: passos */}
-      {detail.state === "verification" && (
-        <div style={{ marginBottom: 16 }}>
-          <div className="hint" style={{ marginBottom: 8 }}>{t("requiredStepsLabel")}</div>
-          {detail.verification.map((v) =>
-            v.step === "tab_value" ? (
-              <TabValueStep key={v.step} v={v} eventId={detail.id} act={canManage ? act : () => {}} />
-            ) : v.step === "missing_loots" ? (
-              <LootStep key={v.step} v={v} eventId={detail.id} act={act} />
-            ) : (
-              <button key={v.step} className="step-check" disabled={!canManage}
-                onClick={() => canManage && act(api.setStep(detail.id, v.step, !v.completed))}>
-                <span className={"box" + (v.completed ? " on" : "")}>
-                  {v.completed && <i className="ti ti-check" aria-hidden />}
-                </span>
-                {STEP_KEYS[v.step] ? t(STEP_KEYS[v.step]) : v.step}
-              </button>
-            )
-          )}
-        </div>
-      )}
-
-      {/* Espera: revisão + preview de payout */}
-      {detail.state === "waiting" && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
-            <i className="ti ti-clipboard-check" aria-hidden style={{ color: "var(--gold)" }} />
-            {t("reviewBeforeFinalize")}
+            <div className="card" style={{ padding: 10 }}>
+              {/* Nodes próximos do timer: capturamos? quanto vendemos? (% do
+                  scout sai do valor vendido aqui — ver NodeDef.weight). */}
+              <NodeClaimSection detail={detail} act={act} canManage={canManage} />
+            </div>
           </div>
-          {detail.payout ? (
-            <PayoutTable payout={detail.payout} type={detail.type} />
-          ) : (
-            <p className="hint">{t("addParticipantsForPayout")}</p>
-          )}
-          <DeathsSection detail={detail} act={act} />
+          <EventRegearsRow detail={detail} act={act} canManage={canManage} />
+          {/* Concluir vive na barra de ações no rodapé — um botão só. */}
         </div>
       )}
 
       {/* Finalizado: resumo */}
-      {detail.state === "finalized" && detail.payout && (
+      {detail.state === "finalized" && (
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
             <i className="ti ti-circle-check" aria-hidden style={{ color: "#6bbf73" }} />
             {t("eventFinalized")}
           </div>
-          <PayoutTable payout={detail.payout} type={detail.type} />
+          <EventRegearsRow detail={detail} act={act} canManage={canManage} />
         </div>
       )}
 
-      {/* Participantes (colapsável) */}
-      <ParticipantsSection
-        detail={detail} act={act} canManage={canManage}
-        pName={pName} setPName={setPName}
-        pPct={pPct} setPPct={setPPct}
-        onAdd={addParticipant}
-      />
+      <ParticipantsSection detail={detail} act={act} canManage={canManage} />
 
-      {/* Botões de transição */}
-      {canManage && (
-        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
-          <div className="hint" style={{ marginBottom: 6 }}>{t("moveToLabel")}</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {detail.allowed_transitions.length === 0 && <span className="muted">{t("finalStateLabel")}</span>}
-            {detail.allowed_transitions.map((to) => (
-              <button key={to}
-                className={"btn" + (to === "cancelled" || to === "deleted" ? "" : " primary")}
-                onClick={() => act(api.transition(detail.id, to))}>
-                {STATE_KEYS[to] ? t(STATE_KEYS[to]) : to}
+      {/* Barra de ações: roster + liberar funções + UM botão primário (a
+          próxima etapa do pipeline). Cancelar/excluir viraram o X lá em cima. */}
+      {(detail.comp_id || canManage) && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
+          {detail.comp_id && (
+            <button className="btn" style={{ fontSize: 12 }}
+              title={t("rosterSignupCountTitle")}
+              onClick={() => navigate(`/events/${g()}/${detail.id}/escalation`)}>
+              <i className="ti ti-users" aria-hidden /> {t("escBtn")}
+              {/* Inscritos (Discord), não escalados — o roster pode ter mais
+                  gente esperando vaga do que slots preenchidos. */}
+              {detail.signups.length > 0 && <span className="badge info" style={{ marginLeft: 4 }}>{detail.signups.length}</span>}
+            </button>
+          )}
+          {canManage && ["scheduled", "in_progress"].includes(detail.state) && (
+            <button
+              className={"btn" + (detail.functions_released ? " primary" : "")}
+              style={{ fontSize: 12 }}
+              onClick={() => act(api.releaseFunctions(detail.id, !detail.functions_released))}
+            >
+              <i className={"ti " + (detail.functions_released ? "ti-lock-open" : "ti-lock")} aria-hidden />{" "}
+              {detail.functions_released ? t("functionsReleasedOn") : t("releaseFunctionsBtn")}
+            </button>
+          )}
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Attendance: valor único do evento, sentado à esquerda do finalizar. */}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+              <i className="ti ti-info-circle" style={{ color: "var(--hint)", fontSize: 12 }} title={t("eventAttendanceHint")} aria-hidden />
+              <span className="hint">{t("eventAttendanceLabel")}</span>
+              {canManage ? (
+                <input
+                  type="text" inputMode="decimal"
+                  defaultValue={String(detail.attendance).replace(".", ",")}
+                  style={{ width: 48, fontSize: 12.5, padding: "2px 5px", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)", textAlign: "right" }}
+                  onBlur={(e) => {
+                    const v = parseFloat(e.target.value.replace(",", ".").trim());
+                    if (Number.isFinite(v) && v !== detail.attendance) act(api.setEventAttendance(detail.id, v));
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                />
+              ) : (
+                <strong>{detail.attendance}</strong>
+              )}
+            </span>
+            {canForward && (
+              <button className="btn primary"
+                onClick={() => act(api.transition(detail.id, forward!))}>
+                <i className={"ti " + (forward === "finalized" ? "ti-circle-check" : "ti-player-play")} aria-hidden />{" "}
+                {forwardLabel}
               </button>
-            ))}
+            )}
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -289,336 +495,253 @@ function TabValueStep({ v, eventId, act }: {
   );
 }
 
-// ── Passo: loots faltantes ───────────────────────────────────────────────
+// ── Captura de nodes em review (scout payout) ───────────────────────────────
 
-function LootStep({ v, eventId, act }: {
-  v: VerificationStep; eventId: number; act: (p: Promise<EventDetail>) => void;
+function NodeClaimSection({ detail, act, canManage }: {
+  detail: EventDetail; act: (p: Promise<EventDetail>) => void; canManage: boolean;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
-  const [loot, setLoot] = useState<LootReconcile | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [nodes, setNodes] = useState<NodeEventLog[]>([]);
+  // Valor digitado por node_log_id (string p/ o input; converte no claim).
+  const [vals, setVals] = useState<Record<number, string>>({});
 
-  function toggle() {
-    if (!open && !loot) {
-      setLoading(true);
-      api.getLoot(eventId).then(r => { setLoot(r); setLoading(false); }).catch(() => setLoading(false));
-    }
-    setOpen(o => !o);
+  // Janela ±30min do callout (ou started_at, ou agora). Rebusca quando o evento
+  // muda (ex.: acabou de entrar em review). detail.id no deps p/ re-fetch ao trocar evento.
+  const ts = detail.callout_at ?? detail.started_at ?? undefined;
+  useEffect(() => {
+    if (detail.state !== "review") return;
+    api.nearNodes(ts).then(r => {
+      setNodes(r.nodes);
+      // Pré-preenche o input com o sold_value já gravado (se capturado neste evento).
+      const prefilled: Record<number, string> = {};
+      for (const n of r.nodes) {
+        if (n.captured && n.event_id === detail.id && n.sold_value > 0) {
+          prefilled[n.id] = String(n.sold_value);
+        }
+      }
+      setVals(prefilled);
+    }).catch(() => setNodes([]));
+  }, [detail.id, detail.state, ts]);
+
+  function claim(node: NodeEventLog, captured: boolean) {
+    const raw = String(vals[node.id] ?? "").replace(/\D/g, "");
+    const sold = Number(raw) || 0;
+    act(api.claimNode(detail.id, node.id, { captured, sold_value: sold }).then(d => {
+      // Refetch p/ refletir o estado capturado (event_id vinculado ao evento).
+      api.nearNodes(ts).then(r => setNodes(r.nodes)).catch(() => {});
+      return d;
+    }));
   }
 
-  function refresh() {
-    api.getLoot(eventId).then(setLoot);
-  }
-
-  return (
-    <div style={{ marginBottom: 4 }}>
-      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-        <button className="step-check" style={{ flex: 1 }} onClick={toggle}>
-          <span className={"box" + (v.completed ? " on" : "")}>
-            {v.completed && <i className="ti ti-check" aria-hidden />}
-          </span>
-          {t(STEP_KEYS.missing_loots)}
-          <i className={"ti " + (open ? "ti-chevron-down" : "ti-chevron-right")} style={{ marginLeft: "auto", color: "var(--hint)" }} aria-hidden />
-        </button>
-        <button className="btn" style={{ fontSize: 11, padding: "3px 8px", flexShrink: 0 }}
-          onClick={() => act(api.setStep(eventId, "missing_loots", !v.completed))}>
-          {v.completed ? t("uncheckBtn") : t("markOkBtn")}
-        </button>
-      </div>
-      {open && (
-        <div style={{ paddingLeft: 26, marginTop: 8 }}>
-          {loading && <p className="hint">{t("loading")}</p>}
-          {loot && <LootPanel reconcile={loot} onRefresh={refresh} />}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LootPanel({ reconcile, onRefresh }: { reconcile: LootReconcile; onRefresh: () => void }) {
-  const t = useT();
   return (
     <div>
-      {/* Status dos uploads */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <span className={"badge " + (reconcile.has_loot_log ? "done" : "bad")}>
-          <i className={"ti " + (reconcile.has_loot_log ? "ti-check" : "ti-x")} aria-hidden />
-          {" "}{t("lootLogLabel")}
-        </span>
-        <span className={"badge " + (reconcile.has_chest_log ? "done" : "bad")}>
-          <i className={"ti " + (reconcile.has_chest_log ? "ti-check" : "ti-x")} aria-hidden />
-          {" "}{t("chestInventoryLabel")}
-        </span>
-        <button className="btn" style={{ fontSize: 11, padding: "3px 8px", marginLeft: "auto" }} onClick={onRefresh}>
-          <i className="ti ti-refresh" aria-hidden /> {t("updateBtn")}
-        </button>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+        <i className="ti ti-plant" aria-hidden style={{ color: "var(--green)" }} />
+        {t("nodeClaimTitle")}
       </div>
-
-      {!reconcile.has_loot_log ? (
-        <p className="hint" style={{ fontSize: 12 }}>
-          <i className="ti ti-info-circle" aria-hidden /> {t("waitingLootLogBot")}
-        </p>
-      ) : reconcile.missing.length === 0 ? (
-        <p style={{ color: "#6bbf73", fontSize: 13 }}>
-          <i className="ti ti-circle-check" aria-hidden /> {t("allItemsCoveredInChest")}
-        </p>
-      ) : (
-        <MissingItemsTable missing={reconcile.missing} missingValue={reconcile.missing_value} />
-      )}
-
-      {reconcile.has_loot_log && reconcile.looted.length > 0 && (
-        <details style={{ marginTop: 10 }}>
-          <summary style={{ fontSize: 12, color: "var(--hint)", cursor: "pointer", userSelect: "none" }}>
-            {t("allLootsLabel")} ({reconcile.looted.length} {t("entriesWord")} — {fmt(reconcile.total_looted_value)} {t("silverWord")})
-          </summary>
-          <div style={{ marginTop: 6, maxHeight: 220, overflowY: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  <th style={{ textAlign: "left", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("playerWord")}</th>
-                  <th style={{ textAlign: "left", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>Item</th>
-                  <th style={{ textAlign: "right", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("qtyAbbrev")}</th>
-                  <th style={{ textAlign: "right", padding: "3px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("colChest")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reconcile.looted.map((r) => (
-                  <tr key={r.id} style={{ borderBottom: "1px solid var(--border)", opacity: r.in_chest ? 0.65 : 1 }}>
-                    <td style={{ padding: "3px 6px" }}>{r.looted_by_name}</td>
-                    <td style={{ padding: "3px 6px" }}>{r.item_name}</td>
-                    <td style={{ textAlign: "right", padding: "3px 6px" }}>{r.quantity}</td>
-                    <td style={{ textAlign: "right", padding: "3px 6px", color: r.in_chest ? "#6bbf73" : "#e07a7a", fontWeight: 600 }}>
-                      {r.in_chest ? "✓" : "✗"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {nodes.length === 0 && <p className="hint" style={{ margin: 0 }}>{t("noNodesNearBy")}</p>}
+      {nodes.map((n) => {
+        // Capturado por ESTE evento (event_id casa). Capturado por outro evento
+        // não conta — mostra como disponível.
+        const mine = n.captured && n.event_id === detail.id;
+        return (
+          <div key={n.id} style={{
+            display: "flex", alignItems: "center", gap: 8, padding: "6px 8px",
+            background: "var(--surface-2)", borderRadius: "var(--radius-sm)", marginBottom: 4, fontSize: 12,
+            flexWrap: "wrap",
+          }}>
+            <span style={{ flex: 1, minWidth: 140 }}>
+              <strong>{n.node_type}</strong> · 🗺️ {n.map_name}
+              {n.scout_name && <span className="hint"> · 🔎 {n.scout_name}</span>}
+            </span>
+            <label style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--hint)", cursor: canManage ? "pointer" : "default" }}>
+              <input type="checkbox" disabled={!canManage} checked={mine}
+                onChange={(e) => canManage && claim(n, e.target.checked)} />
+              {t("nodeCapturedLabel")}
+            </label>
+            {(canManage || mine) && (
+              <input className="input" style={{ width: 130, fontSize: 12, padding: "3px 6px" }}
+                placeholder={t("soldValueLabel")}
+                value={vals[n.id] ?? ""}
+                disabled={!canManage}
+                onChange={(e) => setVals(v => ({ ...v, [n.id]: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && canManage && claim(n, true)}
+              />
+            )}
+            {mine && (
+              <span style={{ color: "#6bbf73", fontSize: 12 }}>
+                {fmt(n.sold_value)} {t("silverWord")}
+              </span>
+            )}
           </div>
-        </details>
-      )}
-    </div>
-  );
-}
-
-function MissingItemsTable({ missing, missingValue }: { missing: MissingItem[]; missingValue: number }) {
-  const t = useT();
-  return (
-    <div>
-      <p style={{ color: "#e07a7a", fontSize: 13, marginBottom: 6 }}>
-        <i className="ti ti-alert-triangle" aria-hidden />{" "}
-        {missing.length} {missing.length === 1 ? t("missingItemSingular") : t("missingItemPlural")} — {fmt(missingValue)} {t("silverWord")}
-      </p>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-        <thead>
-          <tr style={{ borderBottom: "1px solid var(--border)" }}>
-            <th style={{ textAlign: "left", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>Item</th>
-            <th style={{ textAlign: "right", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("colLooted")}</th>
-            <th style={{ textAlign: "right", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("colInChest")}</th>
-            <th style={{ textAlign: "right", padding: "4px 6px", color: "#e07a7a", fontWeight: 500 }}>{t("colMissing")}</th>
-            <th style={{ textAlign: "right", padding: "4px 6px", color: "var(--hint)", fontWeight: 500 }}>{t("colValue")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {missing.map((m, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-              <td style={{ padding: "4px 6px" }}>{m.item_name}</td>
-              <td style={{ textAlign: "right", padding: "4px 6px", color: "var(--muted)" }}>{m.looted_qty}</td>
-              <td style={{ textAlign: "right", padding: "4px 6px", color: "var(--muted)" }}>{m.chest_qty}</td>
-              <td style={{ textAlign: "right", padding: "4px 6px", color: "#e07a7a", fontWeight: 600 }}>{m.missing_qty}</td>
-              <td style={{ textAlign: "right", padding: "4px 6px", color: "var(--muted)" }}>{fmt(m.missing_value)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+        );
+      })}
     </div>
   );
 }
 
 // ── Mortes / Regear ───────────────────────────────────────────────────────
 
-function DeathsSection({ detail, act }: { detail: EventDetail; act: (p: Promise<EventDetail>) => void }) {
+function EventRegearsRow({ detail, act, canManage }: {
+  detail: EventDetail; act: (p: Promise<EventDetail>) => void; canManage: boolean;
+}) {
   const t = useT();
-  const [dName, setDName] = useState("");
-  const [dVal, setDVal] = useState("");
-  const hasRegear = detail.type === "regear" || detail.type === "lootsplit_regear";
-  if (!hasRegear) return null;
+  const s = detail.regear_summary;
+  // Lista dos pendentes carregada à parte do summary (que só tem contagens) —
+  // só o necessário pra editar/aprovar/negar sem sair do card de review. A
+  // tela cheia (screenshot, itens, notas) continua só no "Abrir no site".
+  const [pending, setPending] = useState<RegearRequest[] | null>(null);
+  const [edits, setEdits] = useState<Record<number, string>>({});
+  const [busy, setBusy] = useState<Record<number, string>>({});
 
-  function addDeath() {
-    if (!dName.trim()) return;
-    const silver = Number(dVal.replace(/\D/g, "")) || 0;
-    act(api.addDeath(detail.id, { display_name: dName.trim(), silver_value: silver }));
-    setDName(""); setDVal("");
+  useEffect(() => {
+    if (!canManage || !s || s.pending === 0) { setPending(null); return; }
+    api.eventRegears(detail.id)
+      .then(r => setPending(r.requests.filter(x => x.status === "pending")))
+      .catch(() => setPending(null));
+  }, [detail.id, s?.pending, canManage]);
+
+  if (!s) return null;
+  const blocked = s.pending > 0;
+
+  async function actOn(r: RegearRequest, status: "paid" | "denied") {
+    setBusy(b => ({ ...b, [r.id]: status }));
+    const payload: Record<string, unknown> = { status };
+    const txt = (edits[r.id] ?? "").trim();
+    if (txt !== "") {
+      const n = Number(txt);
+      if (Number.isFinite(n) && n >= 0) payload.final_total = Math.round(n);
+    }
+    try {
+      await api.updateRegear(r.id, payload);
+      const fresh = await api.eventRegears(detail.id);
+      setPending(fresh.requests.filter(x => x.status === "pending"));
+      act(api.getEvent(detail.id));
+    } catch (e) {
+      alert(String((e as Error)?.message ?? e));
+    } finally {
+      setBusy(b => { const n = { ...b }; delete n[r.id]; return n; });
+    }
   }
 
   return (
     <div style={{ marginTop: 14 }}>
-      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-        <i className="ti ti-skull" aria-hidden style={{ color: "#e07a7a" }} />
-        {t("deathsRegearTitle")}
-      </div>
-      {detail.deaths.length === 0 && (
-        <p className="hint" style={{ marginBottom: 8 }}>{t("noDeathsRecorded")}</p>
-      )}
-      {detail.deaths.map((d) => (
-        <DeathRow key={d.id} death={d} eventId={detail.id} act={act} />
-      ))}
-      <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-        <input className="input" style={{ flex: 1, minWidth: 120 }} placeholder={t("playerNamePlaceholder")}
-          value={dName} onChange={(e) => setDName(e.target.value)} />
-        <input className="input" style={{ width: 140 }} placeholder={t("silverValuePlaceholder")}
-          value={dVal} onChange={(e) => setDVal(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && addDeath()} />
-        <button className="btn primary" onClick={addDeath} disabled={!dName.trim()}>
-          <i className="ti ti-plus" aria-hidden /> {t("addBtn")}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function DeathRow({ death, eventId, act }: {
-  death: Death; eventId: number; act: (p: Promise<EventDetail>) => void;
-}) {
-  const t = useT();
-  const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState(String(death.silver_value));
-
-  function saveVal() {
-    const n = Number(val.replace(/\D/g, ""));
-    act(api.updateDeath(eventId, death.id, { silver_value: n }));
-    setEditing(false);
-  }
-
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 8, padding: "7px 10px",
-      background: "var(--surface-2)", borderRadius: "var(--radius-sm)", marginBottom: 6,
-    }}>
-      <span style={{ flex: 1, fontSize: 13 }}>{death.display_name}</span>
-      {editing ? (
-        <>
-          <input className="input" style={{ width: 130 }} value={val}
-            onChange={(e) => setVal(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && saveVal()} />
-          <button className="btn primary" style={{ fontSize: 12, padding: "4px 8px" }} onClick={saveVal}>OK</button>
-        </>
-      ) : (
-        <span style={{ color: "var(--muted)", fontSize: 13, cursor: "pointer" }}
-          onClick={() => setEditing(true)} title={t("clickToEditTitle")}>
-          {fmt(death.silver_value)} {t("silverWord")}
+      <div style={{
+        padding: "9px 12px", background: "var(--surface-2)",
+        borderRadius: "var(--radius-sm)", display: "flex", alignItems: "center",
+        gap: 10, flexWrap: "wrap",
+      }}>
+        <i className="ti ti-tools" aria-hidden style={{ color: "var(--gold)" }} />
+        <strong style={{ fontSize: 13 }}>{t("evRegearsRowTitle")}</strong>
+        <span className="hint" style={{ fontSize: 12 }}>
+          {t("regCountPending")}: {s.pending} · {t("regCountApproved")}: {s.approved} ·{" "}
+          {t("regCountDenied")}: {s.denied}
+          {s.approved_total > 0 && <> · {fmt(s.approved_total)} {t("silverWord")}</>}
         </span>
-      )}
-      <button
-        className={"btn" + (death.approved ? " primary" : "")}
-        style={{ fontSize: 11, padding: "3px 8px" }}
-        onClick={() => act(api.updateDeath(eventId, death.id, { approved: !death.approved }))}>
-        {death.approved ? <><i className="ti ti-check" aria-hidden /> {t("approvedBtn")}</> : t("approveBtn")}
-      </button>
-      <button style={{ background: "none", border: "none", color: "var(--hint)", cursor: "pointer", padding: "2px 4px" }}
-        onClick={() => act(api.removeDeath(eventId, death.id))}>
-        <i className="ti ti-x" aria-hidden />
-      </button>
-    </div>
-  );
-}
+        <button className="btn" style={{ fontSize: 11, padding: "3px 10px", marginLeft: "auto" }}
+          onClick={() => navigate(`/regears?event=${detail.id}`)}>
+          <i className="ti ti-external-link" aria-hidden /> {t("evRegearsOpen")}
+        </button>
+        {blocked && (
+          <span style={{ width: "100%", fontSize: 12, color: "#e0a070" }}>
+            <i className="ti ti-alert-triangle" aria-hidden /> {t("evRegearsFinalizeBlocked")}
+          </span>
+        )}
+      </div>
 
-// ── Tabela de payout ──────────────────────────────────────────────────────
-
-function PayoutTable({ payout, type }: { payout: PayoutPreview; type: string | null }) {
-  const t = useT();
-  const showLS = type === "lootsplit" || type === "lootsplit_regear";
-  const showRG = type === "regear" || type === "lootsplit_regear";
-  const showTotal = type === "lootsplit_regear";
-
-  return (
-    <div style={{ marginBottom: 12 }}>
-      {showLS && (
-        <p style={{ fontSize: 13, marginBottom: 8 }}>
-          <span className="hint">{t("tabValueLabel")} </span>
-          <strong>{fmt(payout.tab_value)} {t("silverWord")}</strong>
-        </p>
-      )}
-      {payout.payouts.length === 0 ? (
-        <p className="hint">{t("addParticipantsForPayoutSimple")}</p>
-      ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              <th style={{ textAlign: "left", padding: "4px 8px", color: "var(--hint)", fontWeight: 600 }}>{t("playerWord")}</th>
-              {showLS && <>
-                <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--hint)", fontWeight: 600 }}>%</th>
-                <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--hint)", fontWeight: 600 }}>Lootsplit</th>
-              </>}
-              {showRG && <th style={{ textAlign: "right", padding: "4px 8px", color: "#e07a7a", fontWeight: 600 }}>Regear</th>}
-              {showTotal && <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--gold)", fontWeight: 600 }}>{t("totalWord")}</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {payout.payouts.map((row, i) => (
-              <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                <td style={{ padding: "5px 8px" }}>{row.display_name}</td>
-                {showLS && <>
-                  <td style={{ textAlign: "right", padding: "5px 8px", color: "var(--muted)" }}>{row.percent}%</td>
-                  <td style={{ textAlign: "right", padding: "5px 8px" }}>{fmt(row.lootsplit)}</td>
-                </>}
-                {showRG && (
-                  <td style={{ textAlign: "right", padding: "5px 8px", color: row.regear > 0 ? "#e07a7a" : "var(--hint)" }}>
-                    {row.regear > 0 ? fmt(row.regear) : "—"}
-                  </td>
-                )}
-                {showTotal && (
-                  <td style={{ textAlign: "right", padding: "5px 8px", fontWeight: 600, color: "var(--gold)" }}>
-                    {fmt(row.total)}
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-          {(payout.total_lootsplit > 0 || payout.total_regear > 0) && (
-            <tfoot>
-              <tr style={{ borderTop: "1px solid var(--border-strong)" }}>
-                <td style={{ padding: "5px 8px", color: "var(--hint)", fontSize: 11 }}>{t("totalWord")}</td>
-                {showLS && <>
-                  <td />
-                  <td style={{ textAlign: "right", padding: "5px 8px", fontWeight: 600 }}>{fmt(payout.total_lootsplit)}</td>
-                </>}
-                {showRG && (
-                  <td style={{ textAlign: "right", padding: "5px 8px", fontWeight: 600 }}>{fmt(payout.total_regear)}</td>
-                )}
-                {showTotal && (
-                  <td style={{ textAlign: "right", padding: "5px 8px", fontWeight: 600, color: "var(--gold)" }}>
-                    {fmt(payout.total_lootsplit + payout.total_regear)}
-                  </td>
-                )}
-              </tr>
-            </tfoot>
-          )}
-        </table>
+      {canManage && pending && pending.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+          {pending.map(r => (
+            <div key={r.id} style={{
+              display: "flex", alignItems: "center", gap: 8, fontSize: 12,
+              background: "var(--surface)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)", padding: "6px 10px",
+            }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {r.requester_name ?? "—"}
+              </span>
+              <input
+                type="number" min={0} step={1}
+                placeholder={String(r.suggested_total)}
+                value={edits[r.id] ?? ""}
+                onChange={e => setEdits(p => ({ ...p, [r.id]: e.target.value }))}
+                style={{ width: 92 }}
+              />
+              <button className="btn btn-green" disabled={!!busy[r.id]} onClick={() => actOn(r, "paid")}>
+                {busy[r.id] === "paid" ? "…" : t("regearApprove")}
+              </button>
+              <button className="btn" disabled={!!busy[r.id]} onClick={() => actOn(r, "denied")}>
+                {busy[r.id] === "denied" ? "…" : t("regearDeny")}
+              </button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-// ── Participantes (colapsável) ────────────────────────────────────────────
+// ── Inscrições (auto-inscrição via Discord, só leitura) ──────────────────
 
-function ParticipantsSection({ detail, act, canManage, pName, setPName, pPct, setPPct, onAdd }: {
+// ── Participantes (lista única, ordenada por percent) ─────────────────────
+// Inscritos sem presença e ausentes-em-batalha NÃO são mais seções à parte —
+// contam como participante (percent 0) na MESMA lista, misturados por %.
+// Editar o % de uma linha virtual materializa ela (api.addParticipant).
+
+interface VirtualParticipantRow {
+  virtual: true;
+  rowKey: string;
+  user_id: number;
+  user_name: string | null;
+  percent: number;
+  origin: string;
+  functions?: string[];
+  // ponytail: só existe pra satisfazer o narrowing do TS — o acesso a
+  // game_role_name no renderRow já está guardado por `fn` (só truthy quando
+  // !p.virtual); linhas virtuais nunca populam este campo.
+  game_role_name?: string | null;
+}
+type ParticipantRow = (Participant & { virtual?: false }) | VirtualParticipantRow;
+
+function ParticipantsSection({ detail, act, canManage }: {
   detail: EventDetail; act: (p: Promise<EventDetail>) => void; canManage: boolean;
-  pName: string; setPName: (v: string) => void;
-  pPct: string; setPPct: (v: string) => void;
-  onAdd: () => void;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
   const [roles, setRoles] = useState<CatalogRole[]>([]);
   const [regearPanel, setRegearPanel] = useState<{ pid: number; est: RegearEstimate | null; loading: boolean } | null>(null);
-  const count = detail.participants.length;
+  const [newName, setNewName] = useState("");
+  const [newPct, setNewPct] = useState("100");
   const isActive = !["finalized", "cancelled", "deleted"].includes(detail.state);
+  const assignedIds = useMemo(() => new Set(detail.participants.map((p) => p.user_id)), [detail.participants]);
+  const unassignedSignups = detail.signups.filter((s) => !assignedIds.has(s.user_id));
+  const roleFnById = useMemo(
+    () => Object.fromEntries(roles.map((r) => [r.id, r.invisible_function])) as Record<number, string | null>,
+    [roles],
+  );
+  // Lista única (sem seções à parte) — participantes de verdade + inscritos
+  // sem presença + ausentes-em-batalha, todos como uma linha (virtual=true
+  // pros dois últimos, percent 0), ordenada junto por % desc / nome.
+  const rows = useMemo<ParticipantRow[]>(() => {
+    const real: ParticipantRow[] = detail.participants.map((p) => ({ ...p, virtual: false }));
+    const signupRows: ParticipantRow[] = unassignedSignups.map((s) => ({
+      virtual: true, rowKey: `signup-${s.user_id}`, user_id: s.user_id, user_name: s.user_name,
+      percent: 0, origin: "signup_no_call", functions: s.functions,
+    }));
+    const absenteeRows: ParticipantRow[] = detail.battle_absentees
+      .filter((a) => !assignedIds.has(a.user_id))
+      .map((a) => ({
+        virtual: true, rowKey: `absentee-${a.user_id}`, user_id: a.user_id, user_name: a.user_name,
+        percent: 0, origin: "battle_no_call",
+      }));
+    return [...real, ...signupRows, ...absenteeRows].sort((a, b) =>
+      b.percent - a.percent ||
+      (a.user_name || "").localeCompare(b.user_name || "", undefined, { sensitivity: "base" })
+    );
+  }, [detail.participants, unassignedSignups, detail.battle_absentees, assignedIds]);
 
   useEffect(() => {
-    if (open) api.listRoles().then(setRoles).catch(() => {});
-  }, [open]);
+    api.listRoles().then(setRoles).catch(() => {});
+  }, []);
 
   async function showRegear(p: Participant) {
     setRegearPanel({ pid: p.id, est: null, loading: true });
@@ -641,98 +764,133 @@ function ParticipantsSection({ detail, act, canManage, pName, setPName, pPct, se
     setRegearPanel(null);
   }
 
+  function submitAdd() {
+    if (!newName.trim()) return;
+    act(api.addParticipant(detail.id, {
+      user_id: Date.now(), user_name: newName.trim(), percent: Number(newPct) || 0, is_valid: true,
+    }));
+    setNewName(""); setNewPct("100");
+  }
+
+  function renderRow(p: ParticipantRow) {
+    const fn = !p.virtual && p.game_role_id ? roleFnById[p.game_role_id] : null;
+    const rowKey = p.virtual ? p.rowKey : p.id;
+    const active = !p.virtual && regearPanel?.pid === p.id;
+
+    function commitPercent(n: number) {
+      if (p.virtual) {
+        // Linha virtual (inscrito sem presença / ausente em batalha): editar o
+        // % materializa ela como EventParticipant de verdade — mesma ação que
+        // o antigo botão "+" das seções à parte, só que embutida no input.
+        act(api.addParticipant(detail.id, { user_id: p.user_id, user_name: p.user_name ?? undefined, percent: n, is_valid: true }));
+      } else if (n !== p.percent) {
+        act(api.updateParticipant(detail.id, p.id, { percent: n, is_valid: true }));
+      }
+    }
+
+    return (
+      <div key={rowKey}>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 6, padding: "3px 6px",
+          background: active ? "var(--surface)" : "var(--surface-2)",
+          borderRadius: "var(--radius-sm)", marginBottom: 2, fontSize: 12.5,
+          border: active ? "1px solid var(--info)44" : "1px solid transparent",
+        }}>
+          {/* Crucial: nome, % e remover — SEMPRE visíveis, mesmo na bracket mínima. */}
+          <span style={{ flex: 1, fontWeight: 500, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {p.user_name || `#${p.user_id}`}
+          </span>
+          {/* Origem além-da-escalação (sempre visível, fora do ev-participant-extra
+              que some na bracket mínima). Tooltip explica o porquê mesmo a 100%. */}
+          {p.origin && <OriginBadge origin={p.origin} />}
+          <span className="ev-participant-extra">
+            {!p.virtual && p.is_trial && <span className="hint" style={{ fontSize: 10 }} title={t("trialBadge")}>T</span>}
+            {/* Função: só o ícone do tipo (tank/healer/...) da planilha; nome no
+                hover. A escolha da função acontece na aba de escalação, não aqui. */}
+            {fn && (
+              <span title={p.game_role_name ?? ""} style={{ display: "inline-flex", flexShrink: 0 }}>
+                <RoleIcon role={fn} size={12} className="hint" />
+              </span>
+            )}
+            {/* Inscrito sem presença: funções que escolheu na inscrição. */}
+            {p.virtual && p.functions && p.functions.length > 0 && (
+              <span className="hint" style={{ fontSize: 10 }}>{p.functions.join(", ")}</span>
+            )}
+            {!p.virtual && p.silver_received > 0 && (
+              <span style={{ color: "#6bbf73", fontSize: 11, flexShrink: 0 }}>{fmt(p.silver_received)}</span>
+            )}
+            {!p.virtual && p.game_role_id && (
+              <button
+                style={{ background: "none", border: "none", color: "var(--info)", cursor: "pointer", padding: "1px 3px", fontSize: 11, flexShrink: 0 }}
+                title={t("calcRegearTitle")}
+                onClick={() => !p.virtual && (regearPanel?.pid === p.id ? setRegearPanel(null) : showRegear(p))}
+              >
+                <i className="ti ti-calculator" aria-hidden />
+              </button>
+            )}
+          </span>
+          {/* % — sempre um campo aberto (não é mais clique-pra-editar). Editar
+              o valor já implica válido (entra no split, mesmo que fosse irregular;
+              numa linha virtual, cria o participante). */}
+          {isActive && canManage ? (
+            <span className="ev-pct-input" style={{ flexShrink: 0 }}>
+              <input
+                type="text" inputMode="numeric"
+                defaultValue={p.percent}
+                style={{ width: 30, fontSize: 11, padding: "1px 4px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)", textAlign: "right" }}
+                onBlur={(e) => commitPercent(Number(e.target.value) || 0)}
+                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              />
+              <span className="ev-pct-suffix">%</span>
+            </span>
+          ) : (
+            <span className="hint" style={{ flexShrink: 0 }}>{p.percent}%</span>
+          )}
+          {isActive && canManage && !p.virtual && (
+            <button
+              style={{ background: "none", border: "none", color: "var(--hint)", cursor: "pointer", padding: "1px 3px", flexShrink: 0 }}
+              title={t("removeParticipantTitle")}
+              onClick={() => !p.virtual && act(api.removeParticipant(detail.id, p.id))}
+            >
+              <i className="ti ti-x" aria-hidden />
+            </button>
+          )}
+        </div>
+        {active && (
+          <RegearEstimatePanel
+            estimate={regearPanel!.est} loading={regearPanel!.loading}
+            onApply={applyRegearAsDeath} onClose={() => setRegearPanel(null)}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4, marginBottom: 12 }}>
-      <button
-        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, padding: 0, display: "flex", alignItems: "center", gap: 6 }}
-        onClick={() => setOpen(o => !o)}
-      >
-        <i className={"ti " + (open ? "ti-chevron-down" : "ti-chevron-right")} aria-hidden />
+      <div style={{ color: "var(--muted)", fontSize: 13, display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
         <i className="ti ti-users" aria-hidden />
         {t("participantsLabel")}
-        {count > 0 && <span className="badge info" style={{ marginLeft: 4 }}>{count}</span>}
-      </button>
-
-      {open && (
-        <div style={{ marginTop: 10 }}>
-          {count === 0 && (
-            <p className="hint" style={{ marginBottom: 8 }}>
-              {t("participantsAutoAddHint")}
-            </p>
-          )}
-          {detail.participants.map((p) => (
-            <div key={p.id}>
-              <div style={{
-                display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
-                background: regearPanel?.pid === p.id ? "var(--surface)" : "var(--surface-2)",
-                borderRadius: "var(--radius-sm)", marginBottom: 4, fontSize: 13,
-                border: regearPanel?.pid === p.id ? "1px solid var(--info)44" : "1px solid transparent",
-              }}>
-                <span style={{ flex: 1, fontWeight: 500 }}>{p.user_name || `#${p.user_id}`}</span>
-                {/* Seletor de função */}
-                {isActive && canManage && (
-                  <select
-                    className="cs-select"
-                    style={{ fontSize: 11, padding: "2px 4px", maxWidth: 130 }}
-                    value={p.game_role_id ?? ""}
-                    onChange={e => act(api.updateParticipant(detail.id, p.id, {
-                      game_role_id: e.target.value ? Number(e.target.value) : null,
-                    }))}
-                  >
-                    <option value="">{t("roleSelectPlaceholder")}</option>
-                    {roles.map(r => (
-                      <option key={r.id} value={r.id}>{r.name}</option>
-                    ))}
-                  </select>
-                )}
-                {!isActive && p.game_role_name && (
-                  <span style={{ fontSize: 11, color: "var(--info)" }}>{p.game_role_name}</span>
-                )}
-                {p.is_trial && <span className="hint" style={{ fontSize: 11 }}>{t("trialBadge")}</span>}
-                <span className="hint">{p.percent}%</span>
-                {p.silver_received > 0 && (
-                  <span style={{ color: "#6bbf73", fontSize: 12 }}>{fmt(p.silver_received)} {t("silverWord")}</span>
-                )}
-                {/* Botão de regear por função */}
-                {(isActive || detail.state === "definition") && p.game_role_id && (
-                  <button
-                    style={{ background: "none", border: "none", color: "var(--info)", cursor: "pointer", padding: "2px 4px", fontSize: 12 }}
-                    title={t("calcRegearTitle")}
-                    onClick={() => regearPanel?.pid === p.id ? setRegearPanel(null) : showRegear(p)}
-                  >
-                    <i className="ti ti-calculator" aria-hidden />
-                  </button>
-                )}
-                {isActive && canManage && (
-                  <button style={{ background: "none", border: "none", color: "var(--hint)", cursor: "pointer", padding: "2px 4px" }}
-                    onClick={() => act(api.removeParticipant(detail.id, p.id))}>
-                    <i className="ti ti-x" aria-hidden />
-                  </button>
-                )}
-              </div>
-              {/* Painel de estimativa de regear */}
-              {regearPanel?.pid === p.id && (
-                <RegearEstimatePanel
-                  estimate={regearPanel.est}
-                  loading={regearPanel.loading}
-                  onApply={applyRegearAsDeath}
-                  onClose={() => setRegearPanel(null)}
-                />
-              )}
-            </div>
-          ))}
-          {isActive && canManage && (
-            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-              <input className="input" style={{ flex: 1, minWidth: 120 }} placeholder={t("nameWord")}
-                value={pName} onChange={(e) => setPName(e.target.value)} />
-              <input className="input" style={{ width: 56 }} placeholder="%"
-                value={pPct} onChange={(e) => setPPct(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && onAdd()} />
-              <button className="btn" onClick={onAdd} disabled={!pName.trim()}>
-                <i className="ti ti-plus" aria-hidden /> {t("addBtn")}
-              </button>
-            </div>
-          )}
+        {rows.length > 0 && <span className="badge info" style={{ marginLeft: 4 }}>{rows.length}</span>}
+      </div>
+      {rows.length === 0 ? (
+        <p className="hint" style={{ marginBottom: 8 }}>{t("participantsAutoAddHint")}</p>
+      ) : (
+        <div className="ev-participants-grid">
+          {rows.map(renderRow)}
+        </div>
+      )}
+      {isActive && canManage && (
+        <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
+          <input className="input" style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "3px 6px" }} placeholder={t("nameWord")}
+            value={newName} onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
+          <input className="input" style={{ width: 44, fontSize: 12, padding: "3px 4px" }} placeholder="%"
+            value={newPct} onChange={(e) => setNewPct(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
+          <button className="btn" style={{ padding: "3px 8px" }} onClick={submitAdd} disabled={!newName.trim()} title={t("addBtn")}>
+            <i className="ti ti-plus" aria-hidden />
+          </button>
         </div>
       )}
     </div>

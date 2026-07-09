@@ -13,6 +13,7 @@ from app.models.catalog import Weapon
 from app.models.players import PlayerCountSnapshot, PlayerKillEvent
 from app.services import battle_groups, battle_sides, battle_tracker, prices
 from app.services.player_activity import active_player_count
+from app.services.search_norm import norm_sql, normalize as norm_name
 
 router = APIRouter(prefix="/battles", tags=["battles"])
 
@@ -392,13 +393,14 @@ def list_battles(
         q = q.where(Battle.id.in_(big_guild_battle_ids))
 
     if search:
-        term = f"%{search}%"
+        nq = norm_name(search)
+        term = f"%{nq}%"
         guild_battle_ids = select(BattleGuild.battle_id).where(
-            or_(BattleGuild.guild_name.ilike(term), BattleGuild.alliance_name.ilike(term))
+            or_(norm_sql(BattleGuild.guild_name).like(term), norm_sql(BattleGuild.alliance_name).like(term))
         )
-        player_battle_ids = select(BattleParticipant.battle_id).where(BattleParticipant.name.ilike(term))
+        player_battle_ids = select(BattleParticipant.battle_id).where(norm_sql(BattleParticipant.name).like(term))
         matching_battle_ids = set(db.scalars(guild_battle_ids).all()) | set(db.scalars(player_battle_ids).all())
-        q = q.where(or_(Battle.id.in_(matching_battle_ids), Battle.cluster.ilike(term)))
+        q = q.where(or_(Battle.id.in_(matching_battle_ids), Battle.cluster.ilike(f"%{search}%")))
 
     total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
     battles = db.scalars(q.order_by(Battle.start_time.desc()).limit(limit).offset(offset)).all()

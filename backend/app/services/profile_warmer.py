@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.models.battles import Battle, BattleParticipant
 from app.models.players import AlbionPlayer
+from app.services.albion_gate import OTHER, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client, sync_player_kills, upsert_player
 
 log = logging.getLogger(__name__)
@@ -40,7 +41,8 @@ async def _warm_player(client, db: Session, host: str, region: str, albion_id: s
     if player is not None and (datetime.now(timezone.utc) - _aware(player.last_seen_at)) < STALE_AFTER:
         return
     try:
-        resp = await client.get(f"https://{host}/api/gameinfo/players/{albion_id}")
+        async with slot():
+            resp = await client.get(f"https://{host}/api/gameinfo/players/{albion_id}")
         if resp.status_code != 200:
             return
         raw = resp.json()
@@ -83,7 +85,8 @@ async def run_forever() -> None:
     log.info("profile_warmer: iniciando")
     while True:
         try:
-            n = await sync_once()
+            async with albion_scope(OTHER):
+                n = await sync_once()
             if n:
                 log.debug("profile_warmer: %d batalhas processadas", n)
         except Exception as e:

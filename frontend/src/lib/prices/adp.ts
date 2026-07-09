@@ -107,6 +107,14 @@ export async function fetchAdpDemand(
   return totals;
 }
 
+export async function fetchAdpGold(server: PriceServer): Promise<number> {
+  const base = BASE[server];
+  const res = await fetch(`${base}/api/v2/stats/gold?count=1`);
+  if (!res.ok) throw new Error(`ADP gold ${res.status}`);
+  const rows = (await res.json()) as { price: number }[];
+  return rows[0]?.price ?? 0;
+}
+
 export async function fetchAdpPriceSeries(
   server: PriceServer,
   catalogItemId: string,

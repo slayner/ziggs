@@ -16,8 +16,13 @@ _settings = get_settings()
 # tasks (battle_tracker, profile_warmer, player_tracker).
 _is_sqlite = _settings.database_url.startswith("sqlite")
 _connect_args = {"check_same_thread": False, "timeout": 30} if _is_sqlite else {}
+# pool_size=20 + max_overflow=10: ~9 background tasks (bg pool do albion_gate)
+# + threads de request compartilham este pool; o default (5) deixava request
+# de perfil esperando vaga de conexão atrás de backfill/warmer sob carga.
+# SQLite/WAL tolera vários read handles; Postgres então com folga.
 engine = create_engine(
     _settings.database_url, pool_pre_ping=True, future=True,
+    pool_size=20, max_overflow=10,
     connect_args=_connect_args,
 )
 
