@@ -1,7 +1,8 @@
 """Rotas de perfis públicos de jogadores de Albion."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,6 +19,7 @@ from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, Pl
 from app.services import battle_groups, prices, user_profile
 from app.services.albion_gate import PROFILE, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client, sync_player_kills, upsert_player
+from app.services.profile_warmer import request_refresh
 
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -27,9 +29,55 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+# View cache-first não força mais fetch ao vivo a cada visita — mas
+# guild_id/guild_name só atualizam via feed global (amostra os 51 eventos
+# mais recentes por região a cada 5min, pode nunca pegar jogador pouco
+# ativo em PvP) ou o warmer semanal. Sem isso um perfil raramente visitado
+# podia ficar mostrando a guilda de MESES atrás como se fosse a atual
+# (e o "guild_history" interpretava isso como "voltou pra guilda antiga").
+# Um limiar bem mais curto aqui, só pra enfileirar correção em segundo
+# plano (mesma fila do botão ⟳) — a view em si continua instantânea.
+PROFILE_STALE_AFTER = timedelta(minutes=30)
+
+
+def _queue_refresh_if_stale(db: Session, player: AlbionPlayer) -> None:
+    if player.refresh_requested_at is not None:
+        return  # já enfileirado
+    if datetime.now(timezone.utc) - _aware(player.last_seen_at) > PROFILE_STALE_AFTER:
+        player.refresh_requested_at = datetime.now(timezone.utc)
+        db.commit()
+
+
+async def _get_with_retry(
+    client: httpx.AsyncClient, url: str, *, params: dict | None = None, attempts: int = 3,
+) -> httpx.Response:
+    """GET com retry pra erro transiente — 429 é comum na busca/perfil por
+    nick (usuário digitando gera bastante tráfego de uma vez) e sem isto
+    virava 502 pro usuário já na 1ª tentativa. Mesmo padrão de
+    battle_tracker._fetch_deep_data: 429 respeita o Retry-After da própria
+    API (ou backoff crescente se não vier), timeout com backoff exponencial.
+    Devolve a Response mesmo se não for 200 na última tentativa — quem chama
+    decide o que fazer com o status (raise_for_status/checagem manual)."""
+    for attempt in range(attempts):
+        try:
+            async with slot():
+                resp = await client.get(url, params=params)
+        except (httpx.ReadTimeout, httpx.ConnectTimeout):
+            if attempt == attempts - 1:
+                raise
+            await asyncio.sleep(2 ** attempt)
+            continue
+        if resp.status_code == 429 and attempt < attempts - 1:
+            retry_after = resp.headers.get("Retry-After")
+            wait = float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit() else 5.0 * (attempt + 1)
+            await asyncio.sleep(wait)
+            continue
+        return resp
+    raise AssertionError("unreachable")
+
+
 async def _fetch_player_raw(client: httpx.AsyncClient, host: str, albion_id: str) -> dict | None:
-    async with slot():
-        resp = await client.get(f"https://{host}/api/gameinfo/players/{albion_id}")
+    resp = await _get_with_retry(client, f"https://{host}/api/gameinfo/players/{albion_id}")
     if resp.status_code != 200:
         return None
     data = resp.json()
@@ -383,62 +431,109 @@ async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -
     }
 
 
+def _player_to_search_result(p: AlbionPlayer) -> dict:
+    return {
+        "Id": p.albion_id, "Name": p.name,
+        "GuildId": p.guild_id, "GuildName": p.guild_name,
+        "AllianceId": p.alliance_id, "AllianceName": p.alliance_name, "AllianceTag": p.alliance_tag,
+        "Avatar": p.avatar,
+        "KillFame": p.kill_fame, "DeathFame": p.death_fame,
+    }
+
+
 @router.get("/search")
 async def search_players(q: str = Query(min_length=2), region: str = "americas", db: Session = Depends(deps.db_session)):
     """Busca jogadores pelo nick no Albion Online (numa região por vez —
-    nomes não são únicos entre Americas/Europe/Asia, são servidores separados)."""
+    nomes não são únicos entre Americas/Europe/Asia, são servidores separados).
+
+    Busca primeiro na nossa base (instantâneo, sem chamar a Albion) — só cai
+    pra busca ao vivo se não achou ninguém localmente. Resultado ao vivo é
+    persistido (upsert_player) pra virar hit local da próxima vez."""
     host = HOSTS.get(region)
     if host is None:
         raise HTTPException(400, "Região inválida")
+
+    nq = q.lower()
+    local = db.scalars(
+        select(AlbionPlayer)
+        .where(AlbionPlayer.region == region, func.lower(AlbionPlayer.name).like(f"%{nq}%"))
+        .limit(20)
+    ).all()
+    if local:
+        local = sorted(local, key=lambda p: (not p.name.lower().startswith(nq), p.name.lower()))
+        return {"players": [_player_to_search_result(p) for p in local]}
+
     async with make_client() as c:
         async with albion_scope(PROFILE):
             try:
-                async with slot():
-                    resp = await c.get(f"https://{host}/api/gameinfo/search", params={"q": q})
+                resp = await _get_with_retry(c, f"https://{host}/api/gameinfo/search", params={"q": q})
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
                 raise HTTPException(status_code=502, detail=f"Albion API: {e.response.status_code}")
             except httpx.RequestError as e:
                 raise HTTPException(status_code=502, detail=f"Erro de conexão: {e}")
     players = resp.json().get("players", [])
-
-    # Sobrescreve guild/aliança com dados do nosso tracker quando disponíveis —
-    # a API de busca do Albion frequentemente retorna info desatualizada
-    ids = [p["Id"] for p in players if p.get("Id")]
-    if ids:
-        try:
-            our_data = {
-                r.albion_id: r
-                for r in db.scalars(select(AlbionPlayer).where(AlbionPlayer.albion_id.in_(ids))).all()
-            }
-            for p in players:
-                ap = our_data.get(p.get("Id"))
-                if ap:
-                    p["GuildId"] = ap.guild_id
-                    p["GuildName"] = ap.guild_name
-                    p["AllianceId"] = ap.alliance_id
-                    p["AllianceName"] = ap.alliance_name
-                    p["AllianceTag"] = ap.alliance_tag
-        except Exception:
-            pass
+    for p in players:
+        if p.get("Id"):
+            try:
+                upsert_player(db, p, region)
+            except Exception:
+                pass
 
     return {"players": players}
+
+
+def _synthetic_raw(player: AlbionPlayer) -> dict:
+    """Reconstrói o formato bruto da API do Albion a partir do que já temos
+    salvo — cobre os campos que o perfil realmente lê (ver
+    PlayerProfilePage.tsx): Id/Name/Guild*/Alliance*/Avatar/*Fame e o
+    LifetimeStatistics. Com lifetime_statistics preenchido (perfil/feed), o
+    blob cru volta inteiro — inclui coleta por recurso (Wood/Ore/...), que os
+    escalares não guardam. Sem o blob, reconstrói o mínimo a partir dos
+    escalares (coleta por recurso só aparece depois de um refresh ao vivo)."""
+    lifetime = player.lifetime_statistics
+    if not lifetime:
+        lifetime = {
+            "PvE": {"Total": player.pve_fame},
+            "Crafting": {"Total": player.crafting_fame},
+            "Gathering": {"All": {"Total": player.gathering_fame}},
+        }
+    return {
+        "Id": player.albion_id, "Name": player.name,
+        "GuildId": player.guild_id, "GuildName": player.guild_name,
+        "AllianceId": player.alliance_id, "AllianceName": player.alliance_name, "AllianceTag": player.alliance_tag,
+        "Avatar": player.avatar,
+        "KillFame": player.kill_fame, "DeathFame": player.death_fame,
+        "LifetimeStatistics": lifetime,
+    }
 
 
 @router.get("/by-name/{region}/{name}")
 async def get_player_by_name(region: str, name: str, db: Session = Depends(deps.db_session)):
     """Resolve `/am/Slayner` etc: busca o nome exato na região indicada,
-    depois carrega o perfil completo já sabendo o host certo."""
+    depois carrega o perfil completo já sabendo o host certo.
+
+    Cache-first: se já temos esse jogador (visto antes, ver profile_warmer),
+    mostra na hora o que já sabemos — sem chamada à Albion. Só busca ao vivo
+    quando é a primeira vez que vemos esse nome (nada pra mostrar ainda)."""
     host = HOSTS.get(region)
     if host is None:
         raise HTTPException(400, "Região inválida")
 
+    cached = db.scalar(
+        select(AlbionPlayer).where(AlbionPlayer.region == region, func.lower(AlbionPlayer.name) == name.lower())
+    )
+    if cached is not None:
+        _queue_refresh_if_stale(db, cached)
+        return await _build_profile_payload(db, cached, _synthetic_raw(cached))
+
     async with make_client() as c:
         async with albion_scope(PROFILE):
             try:
-                async with slot():
-                    resp = await c.get(f"https://{host}/api/gameinfo/search", params={"q": name})
+                resp = await _get_with_retry(c, f"https://{host}/api/gameinfo/search", params={"q": name})
                 resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(status_code=502, detail=f"Albion API: {e.response.status_code}")
             except httpx.RequestError as e:
                 raise HTTPException(status_code=502, detail=f"Erro de conexão: {e}")
             candidates = resp.json().get("players", [])
@@ -466,7 +561,15 @@ async def get_player_by_name(region: str, name: str, db: Session = Depends(deps.
 async def get_player(albion_id: str, region: str | None = None, db: Session = Depends(deps.db_session)):
     """Retorna perfil completo e salva snapshot no banco. Sem `region`
     informado, tenta os 3 hosts em sequência — um ID só responde 200 numa
-    região (mesmo padrão de battle_tracker.resolve_by_albion_id)."""
+    região (mesmo padrão de battle_tracker.resolve_by_albion_id).
+
+    Cache-first: mesma lógica de get_player_by_name — só busca ao vivo se
+    nunca vimos esse ID antes."""
+    cached = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
+    if cached is not None:
+        _queue_refresh_if_stale(db, cached)
+        return await _build_profile_payload(db, cached, _synthetic_raw(cached))
+
     async with make_client() as c:
         async with albion_scope(PROFILE):
             raw = None
@@ -492,6 +595,21 @@ async def get_player(albion_id: str, region: str | None = None, db: Session = De
 
     player = upsert_player(db, raw, resolved_region)
     return await _build_profile_payload(db, player, raw)
+
+
+@router.post("/{albion_id}/refresh")
+async def request_player_refresh(albion_id: str, db: Session = Depends(deps.db_session)):
+    """Enfileira uma atualização (botão ⟳ do perfil) — não busca nada agora,
+    só marca o pedido; o profile_warmer processa em alta prioridade (PROFILE,
+    reserved pool) e limpa o campo. O refresh_event acorda o warmer na hora,
+    sem esperar o sleep idle."""
+    player = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
+    if player is None:
+        raise HTTPException(404, "Jogador não encontrado")
+    player.refresh_requested_at = datetime.now(timezone.utc)
+    db.commit()
+    request_refresh()
+    return {"queued": True}
 
 
 @router.get("/{albion_id}/kills")

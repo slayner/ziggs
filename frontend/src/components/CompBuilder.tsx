@@ -5,7 +5,7 @@ import {
   type RegearItem, type WeaponOut, type WeaponSpell, type Permissions,
 } from "../api";
 import { ItemPicker } from "./ItemPicker";
-import { RENDER_URL, ITEM_BY_ID, itemRenderUrl, type ItemSlot } from "../data/albion-items";
+import { RENDER_URL, ITEM_BY_ID, itemRenderUrl, is2H, wBase, type ItemSlot } from "../data/albion-items";
 import { mockApiComp } from "../mock";
 import { useLang, useServer, useT } from "../i18n";
 
@@ -89,18 +89,10 @@ const SPELL_COLORS: Record<string, string> = {
   Q: "#5b8def", W: "#a26dbf", passive: "#d4a832", active: "#5b8def",
 };
 
-export function is2H(weaponId: string | undefined): boolean {
-  if (!weaponId) return false;
-  return wBase(weaponId).startsWith("2H_");
-}
-
 function itemUrl(id: string, quality = 0): string {
   const item = ITEM_BY_ID.get(id);
   return item ? itemRenderUrl(item, quality) : RENDER_URL(id, quality);
 }
-
-// ── Helpers ──────────────────────────────────────────────────
-function wBase(id: string) { return id.replace(/^T\d+_/, "").replace(/@\d+$/, ""); }
 
 // ── Conversions ──────────────────────────────────────────────
 function buildItemsToEquip(items: RegearItem[]): DraftEquip {
@@ -225,6 +217,56 @@ function SpellPicker({
       })}
     </div>
   );
+}
+
+// ── Identidade de build ────────────────────────────────────────
+// ID de uma build = os itens de verdade equipados (weapon/offhand/gear/
+// consumíveis), não o nome — duas roles com nome igual e gear diferente são
+// builds DIFERENTES; usado pra deduplicar sugestões de cópia (getPickableRoles).
+function buildSignature(equip: DraftEquip): string {
+  const slots: (keyof DraftEquip)[] = ["weapon", "offhand", "helmet", "armor", "boots", "cape", "food", "potion"];
+  return slots.map(k => (equip[k] as EquipItem | undefined)?.id ?? "").join("|");
+}
+
+function roleIdentityKey(r: DraftRole): string {
+  return r.catalog_id != null ? `id:${r.catalog_id}` : `build:${r.weapon_db_id ?? ""}:${buildSignature(r.equip)}`;
+}
+
+// ── Código de build (tipo código de mira do CS) ─────────────────
+// Um texto que descreve a build inteira (arma, gear, spells, consumíveis,
+// play style) — copia e cola pra reproduzir a MESMA build em qualquer role,
+// de qualquer comp. Base64 do JSON: nada de formato binário próprio pra
+// manter/versionar à toa.
+type BuildCode = {
+  v: 1;
+  equip: DraftEquip;
+  q_spell: string | null;
+  w_spell: string | null;
+  passive_spell: string | null;
+  gear_spells: Record<string, string | null>;
+  play_style: string | null;
+  abilities: string | null;
+  potion_qty: number;
+  food_qty: number;
+};
+
+function encodeBuildCode(r: DraftRole): string {
+  const payload: BuildCode = {
+    v: 1,
+    equip: r.equip, q_spell: r.q_spell, w_spell: r.w_spell, passive_spell: r.passive_spell,
+    gear_spells: r.gear_spells, play_style: r.play_style, abilities: r.abilities,
+    potion_qty: r.potion_qty, food_qty: r.food_qty,
+  };
+  return btoa(encodeURIComponent(JSON.stringify(payload)));
+}
+
+function decodeBuildCode(code: string): BuildCode | null {
+  try {
+    const obj = JSON.parse(decodeURIComponent(atob(code.trim())));
+    return obj && obj.v === 1 && obj.equip ? obj as BuildCode : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── EquipStrip ───────────────────────────────────────────────
@@ -898,6 +940,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
   const [flexMenu,         setFlexMenu]         = useState<[number, number] | null>(null);
   const [addSlotMenu,      setAddSlotMenu]      = useState<number | null>(null);
   const [editRi,           setEditRi]           = useState(0);
+  const [buildCodeMsg,     setBuildCodeMsg]     = useState<string | null>(null);
   // Build ativa no modo view do card aberto (abas de build de um slot flex).
   const [viewRi,           setViewRi]           = useState(0);
 
@@ -979,16 +1022,14 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
   function getPickableRoles(pi: number, si: number): DraftRole[] {
     if (!draft) return [];
     const inSlot = new Set(
-      draft.parties[pi]?.slots[si]?.roles.map(r =>
-        r.catalog_id != null ? `id:${r.catalog_id}` : `name:${r.name}`
-      ) ?? []
+      draft.parties[pi]?.slots[si]?.roles.map(roleIdentityKey) ?? []
     );
     const seen = new Set<string>();
     const result: DraftRole[] = [];
     for (const p of draft.parties) {
       for (const s of p.slots) {
         for (const r of s.roles) {
-          const key = r.catalog_id != null ? `id:${r.catalog_id}` : `name:${r.name}`;
+          const key = roleIdentityKey(r);
           if (!seen.has(key) && !inSlot.has(key) && (r.catalog_id != null || r.name.trim())) {
             seen.add(key);
             result.push(r);
@@ -1124,6 +1165,56 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
     }
   }
 
+  // Carrega o equip de uma role do catálogo por catalog_id, sem depender de
+  // (pi,si,ri) — usado pelos menus de "copiar build/slot existente"
+  // (getPickableRoles / addSlotMenu), que listam roles de QUALQUER parte da
+  // comp: muitas nunca tiveram o card aberto nesta sessão, então
+  // equip_loaded ainda é false e o EquipStrip da sugestão fica vazio.
+  async function ensureCatalogRoleLoaded(catalogId: number) {
+    if (!draft) return;
+    const already = draft.parties.some(p => p.slots.some(s => s.roles.some(r => r.catalog_id === catalogId && r.equip_loaded)));
+    if (already) return;
+    const applyToMatching = (fn: (r: DraftRole) => DraftRole) => {
+      setDraft(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          parties: prev.parties.map(p => ({
+            ...p,
+            slots: p.slots.map(s => ({
+              ...s,
+              roles: s.roles.map(r => r.catalog_id !== catalogId ? r : fn(r)),
+            })),
+          })),
+        };
+      });
+    };
+    try {
+      const detail: GameRoleDetail = await api.getRole(catalogId);
+      const equip = detail.build_items?.length ? buildItemsToEquip(detail.build_items) : {};
+      applyToMatching(r => ({
+        ...r, equip,
+        color: detail.color ?? null,
+        play_style: detail.play_style,
+        abilities: detail.abilities,
+        obs: detail.obs,
+        q_spell: detail.q_spell ?? null,
+        w_spell: detail.w_spell ?? null,
+        passive_spell: detail.passive_spell ?? null,
+        gear_spells: detail.gear_spells ?? {},
+        equip_loaded: true,
+      }));
+    } catch {
+      applyToMatching(r => ({ ...r, equip_loaded: true }));
+    }
+  }
+
+  function ensurePickableRolesLoaded(roles: DraftRole[]) {
+    for (const r of roles) {
+      if (r.catalog_id != null && !r.equip_loaded) ensureCatalogRoleLoaded(r.catalog_id);
+    }
+  }
+
   async function loadSpells(base: string) {
     if (!base || spellCache[base] !== undefined) return;
     try {
@@ -1146,6 +1237,57 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
       q_spell: null, w_spell: null, passive_spell: null,
     }));
     if (base && id) loadSpells(base);
+  }
+
+  // Aplica um código de build colado — mesma reconstrução de weapon_db_id/fn
+  // de onWeaponChange, mas SEM zerar os spells (o código já traz os certos
+  // pra essa arma).
+  function applyBuildCode(pi: number, si: number, ri: number, code: BuildCode) {
+    const weaponId = code.equip.weapon?.id;
+    const base = weaponId ? wBase(weaponId) : null;
+    const dbWeapon = base ? weapons.find(w => wBase(w.item_id) === base) : null;
+    updRole(pi, si, ri, r => ({
+      ...r,
+      equip: code.equip,
+      fn: dbWeapon?.invisible_function ?? r.fn,
+      weapon_db_id: dbWeapon?.id ?? null,
+      q_spell: code.q_spell, w_spell: code.w_spell, passive_spell: code.passive_spell,
+      gear_spells: code.gear_spells,
+      play_style: code.play_style, abilities: code.abilities,
+      potion_qty: code.potion_qty, food_qty: code.food_qty,
+    }));
+    if (base) loadSpells(base);
+    for (const gk of ["helmet", "armor", "boots"] as const) {
+      const gid = code.equip[gk]?.id;
+      if (gid) loadSpells(wBase(gid));
+    }
+  }
+
+  function copyBuildCode(role: DraftRole) {
+    navigator.clipboard.writeText(encodeBuildCode(role)).then(() => {
+      setBuildCodeMsg(t("buildCodeCopied"));
+      setTimeout(() => setBuildCodeMsg(null), 1500);
+    });
+  }
+
+  async function pasteBuildCode(pi: number, si: number, ri: number) {
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      setBuildCodeMsg(t("buildCodePasteFail"));
+      setTimeout(() => setBuildCodeMsg(null), 1500);
+      return;
+    }
+    const code = decodeBuildCode(text);
+    if (!code) {
+      setBuildCodeMsg(t("buildCodeInvalid"));
+      setTimeout(() => setBuildCodeMsg(null), 1500);
+      return;
+    }
+    applyBuildCode(pi, si, ri, code);
+    setBuildCodeMsg(t("buildCodePasted"));
+    setTimeout(() => setBuildCodeMsg(null), 1500);
   }
 
   // ── Party / slot management ───────────────────────────────
@@ -1630,9 +1772,12 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                   <BuildTabs roles={slot.roles}
                                     active={editRi}
                                     onSelect={setEditRi}
-                                    onAdd={() => setFlexMenu(prev =>
-                                      prev?.[0] === pi && prev?.[1] === si ? null : [pi, si]
-                                    )}
+                                    onAdd={() => setFlexMenu(prev => {
+                                      const next: [number, number] | null =
+                                        prev?.[0] === pi && prev?.[1] === si ? null : [pi, si];
+                                      if (next) ensurePickableRolesLoaded(getPickableRoles(pi, si));
+                                      return next;
+                                    })}
                                     addOpen={flexMenu?.[0] === pi && flexMenu?.[1] === si} />
 
                                   {/* Flex picker — ancorado logo abaixo das abas */}
@@ -1684,6 +1829,21 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                       </div>
                                     );
                                   })()}
+
+                                  {/* Código de build — copiar/colar a build inteira (tipo código de mira do CS) */}
+                                  <div className="build-code-row" onClick={e => e.stopPropagation()}>
+                                    <button type="button" className="btn" style={{ fontSize: 11, padding: "3px 9px" }}
+                                      onClick={() => formRole && copyBuildCode(formRole)}
+                                      title={t("copyBuildCodeBtn")}>
+                                      <i className="ti ti-copy" aria-hidden /> {t("copyBuildCodeBtn")}
+                                    </button>
+                                    <button type="button" className="btn" style={{ fontSize: 11, padding: "3px 9px" }}
+                                      onClick={() => pasteBuildCode(pi, si, editRi)}
+                                      title={t("pasteBuildCodeBtn")}>
+                                      <i className="ti ti-clipboard" aria-hidden /> {t("pasteBuildCodeBtn")}
+                                    </button>
+                                    {buildCodeMsg && <span style={{ fontSize: 11, color: "var(--hint)" }}>{buildCodeMsg}</span>}
+                                  </div>
 
                                   {/* Weapon */}
                                   <div className="equip-field">
@@ -1961,7 +2121,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                             for (const s of p.slots) {
                               const primary = s.roles[0];
                               if (!primary) continue;
-                              const key = primary.catalog_id != null ? `id:${primary.catalog_id}` : `name:${primary.name}`;
+                              const key = roleIdentityKey(primary);
                               if (!seen.has(key) && (primary.catalog_id != null || primary.name.trim())) {
                                 seen.add(key);
                                 pickableSlots.push({ fn: s.fn, roles: s.roles, primary });
@@ -2006,6 +2166,7 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                                       +{item.roles.length - 1} flex
                                     </span>
                                   )}
+                                  {item.primary.equip_loaded && <EquipStrip equip={item.primary.equip} />}
                                 </button>
                               ))}
                               {!pickableSlots.length && (
@@ -2015,7 +2176,14 @@ export default function CompBuilder({ perms }: { perms: Permissions }) {
                           );
                         })()}
                         <button className="party-col-add"
-                          onClick={() => setAddSlotMenu(addSlotMenu === pi ? null : pi)}
+                          onClick={() => {
+                            const opening = addSlotMenu !== pi;
+                            setAddSlotMenu(opening ? pi : null);
+                            if (opening) {
+                              const primaries = (draft?.parties ?? []).flatMap(p => p.slots.map(s => s.roles[0]).filter(Boolean));
+                              ensurePickableRolesLoaded(primaries);
+                            }
+                          }}
                           disabled={party.slots.length >= MAX_SLOTS}>
                           <i className="ti ti-plus" aria-hidden />
                           {party.slots.length >= MAX_SLOTS ? t("fullLabel") : t("addRoleBtn")}

@@ -8,12 +8,12 @@ está na guilda Albion configurada?" pra liberar cargo no Discord.
 import asyncio
 import os
 import time
-import aiohttp
 import discord
 from discord import app_commands, Interaction
 from discord.ext import commands
 from typing import Optional
 
+import http_client
 from cogs.general import _MENTION_RE, check_command_access, guild_lang, resolve_user_or_guild
 from i18n import t
 from localization import loc
@@ -67,79 +67,45 @@ _REASON_KEY = {
 
 
 async def _post_register(guild_id: int, discord_user_id: int, nick: str) -> dict | None:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.post(
-                f"{SITE_URL}/bot/register/{guild_id}",
-                json={"discord_user_id": str(discord_user_id), "albion_player_name": nick},
-                headers={"Authorization": f"Bearer {API_SECRET}"},
-                timeout=aiohttp.ClientTimeout(total=10),
-            )
-            return await r.json()
-    except Exception:
-        return None
+    return await http_client.request_json(
+        "POST", f"/bot/register/{guild_id}",
+        json={"discord_user_id": str(discord_user_id), "albion_player_name": nick},
+        timeout=10,
+    )
 
 
 async def _post_unregister(
     guild_id: int, *, discord_user_id: Optional[int] = None, albion_player_name: Optional[str] = None,
 ) -> dict | None:
-    if not SITE_URL or not API_SECRET:
-        return None
     body: dict = {}
     if discord_user_id is not None:
         body["discord_user_id"] = str(discord_user_id)
     if albion_player_name is not None:
         body["albion_player_name"] = albion_player_name
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.post(
-                f"{SITE_URL}/bot/unregister/{guild_id}",
-                json=body,
-                headers={"Authorization": f"Bearer {API_SECRET}"},
-                timeout=aiohttp.ClientTimeout(total=10),
-            )
-            return await r.json()
-    except Exception:
-        return None
+    return await http_client.request_json("POST", f"/bot/unregister/{guild_id}", json=body, timeout=10)
 
 
 async def _post_left_guild(guild_id: int, discord_user_id: int) -> None:
     """Best-effort: usuário saiu/foi kickado/banido — não há cargo pra remover
     (ele já não está mais no servidor), só desliga o registro no banco."""
-    if not SITE_URL or not API_SECRET:
-        return
-    try:
-        async with aiohttp.ClientSession() as s:
-            await s.post(
-                f"{SITE_URL}/bot/registration-left-guild/{guild_id}",
-                json={"discord_user_id": str(discord_user_id)},
-                headers={"Authorization": f"Bearer {API_SECRET}"},
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-    except Exception:
-        pass
+    await http_client.post_best_effort(
+        f"/bot/registration-left-guild/{guild_id}",
+        {"discord_user_id": str(discord_user_id)},
+    )
 
 
 async def _post_role_removed(guild_id: int, discord_user_id: int, removed_role_ids: list[int]) -> None:
     """Best-effort: alguém tirou manualmente um cargo do membro — se era o
     cargo de um registro ativo, esse registro perde a validade."""
-    if not SITE_URL or not API_SECRET or not removed_role_ids:
+    if not removed_role_ids:
         return
-    try:
-        async with aiohttp.ClientSession() as s:
-            await s.post(
-                f"{SITE_URL}/bot/registration-role-removed/{guild_id}",
-                json={
-                    "discord_user_id": str(discord_user_id),
-                    "removed_role_ids": [str(r) for r in removed_role_ids],
-                },
-                headers={"Authorization": f"Bearer {API_SECRET}"},
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-    except Exception:
-        pass
+    await http_client.post_best_effort(
+        f"/bot/registration-role-removed/{guild_id}",
+        {
+            "discord_user_id": str(discord_user_id),
+            "removed_role_ids": [str(r) for r in removed_role_ids],
+        },
+    )
 
 
 async def _is_clear_discord_ref(interaction: Interaction, raw: str) -> bool:
@@ -262,8 +228,8 @@ class Registration(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="register", description=loc("Vincula um nick do Albion a uma conta Discord e libera o cargo", "cmd_desc_register"))
-    @app_commands.describe(register=loc("Seu nick do Albion — ou, pra registrar outra pessoa, nick + usuário do Discord (qualquer ordem)", "opt_desc_register"))
+    @app_commands.command(name="register", description=loc("Links an Albion nickname to a Discord account and unlocks the role", "cmd_desc_register"))
+    @app_commands.describe(register=loc("Your Albion nickname — or, to register someone else, nickname + Discord user (any order)", "opt_desc_register"))
     @app_commands.guild_only()
     async def register(self, interaction: Interaction, register: Optional[str] = None) -> None:
         assert interaction.guild_id and interaction.guild
@@ -337,9 +303,9 @@ class Registration(commands.Cog):
     # ------------------------------------------------------------------
     # /unregister — comando de controle (admin por padrão)
     # ------------------------------------------------------------------
-    @app_commands.command(name="unregister", description=loc("Remove o registro e o cargo de um membro", "cmd_desc_unregister"))
-    @app_commands.describe(alvo=loc("Menção, ID, nome de usuário no Discord, ou nick no Albion do membro", "opt_desc_unregister_alvo"))
-    @app_commands.rename(alvo=loc("alvo", "opt_name_alvo"))
+    @app_commands.command(name="unregister", description=loc("Removes a member's registration and role", "cmd_desc_unregister"))
+    @app_commands.describe(alvo=loc("Mention, ID, Discord username, or the member's Albion nickname", "opt_desc_unregister_alvo"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"))
     @app_commands.guild_only()
     async def unregister(self, interaction: Interaction, alvo: str) -> None:
         if not await check_command_access(interaction, "unregister"):

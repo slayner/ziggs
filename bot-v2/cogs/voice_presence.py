@@ -16,10 +16,10 @@ import asyncio
 import os
 from typing import Optional
 
-import aiohttp
 import discord
 from discord.ext import commands, tasks
 
+import http_client
 from cogs.general import _guild_command_config
 
 SITE_URL   = os.getenv("BOT_SITE_URL", "").rstrip("/")
@@ -27,39 +27,11 @@ API_SECRET = os.getenv("BOT_API_SECRET", "")
 
 
 async def _get(path: str) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.get(f"{SITE_URL}{path}",
-                             headers={"Authorization": f"Bearer {API_SECRET}"},
-                             timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-            if r.status == 401:
-                print(f"[voice_presence] 401 em GET {path} — BOT_API_SECRET do bot não bate com o backend")
-            await r.read()
-    except Exception:
-        pass
-    return None
+    return await http_client.get_json(path, tag="voice_presence")
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.post(f"{SITE_URL}{path}", json=body,
-                              headers={"Authorization": f"Bearer {API_SECRET}"},
-                              timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-            txt = await r.text()
-            print(f"[voice_presence] POST {path} → {r.status}: {txt[:200]}")
-            return None
-    except Exception as e:
-        print(f"[voice_presence] exceção em POST {path}: {type(e).__name__}: {e}")
-        return None
+    return await http_client.post_json(path, body, tag="voice_presence")
 
 
 _cog_ref: "VoicePresence | None" = None

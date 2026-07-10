@@ -1,6 +1,6 @@
 import { lazy, useEffect, useState } from "react";
 import { useT, type TKey } from "../i18n";
-import type { Permissions } from "../api";
+import { api, type Permissions } from "../api";
 import AdBanner from "./AdBanner";
 
 const CompBuilder = lazy(() => import("./CompBuilder"));
@@ -12,8 +12,11 @@ interface Props { guildId: string; perms: Permissions; active?: boolean }
 
 type Tab = "comps" | "events" | "regear" | "reconcile";
 
-const TABS: { id: Tab; icon: string; label: TKey; show: (p: Permissions) => boolean }[] = [
-  { id: "comps",     icon: "ti-layout-grid",     label: "comps",  show: p => p["comps.view"] },
+// "comps" só faz sentido com Eventos ativo (é lá que uma comp é atribuída a
+// um evento) — eventsActive vem de settings.events_channel_id configurado,
+// mesmo sinal que GuildConfig usa pra "Eventos ligado".
+const TABS: { id: Tab; icon: string; label: TKey; show: (p: Permissions, eventsActive: boolean) => boolean }[] = [
+  { id: "comps",     icon: "ti-layout-grid",     label: "comps",  show: (p, ev) => p["comps.view"] && ev },
   { id: "events",    icon: "ti-calendar-event",  label: "events", show: p => p["events.view"] },
   { id: "regear",    icon: "ti-receipt-refund",  label: "regear", show: p => p["events.manage"] },
   { id: "reconcile", icon: "ti-scale",           label: "rec",    show: p => p["events.manage"] },
@@ -21,7 +24,11 @@ const TABS: { id: Tab; icon: string; label: TKey; show: (p: Permissions) => bool
 
 export default function ManagementPage({ guildId, perms, active = true }: Props) {
   const t = useT();
-  const visible = TABS.filter(tb => tb.show(perms));
+  const [eventsActive, setEventsActive] = useState(true); // otimista até o fetch resolver — evita esconder a aba num flash
+  useEffect(() => {
+    api.guildInfo(guildId).then(g => setEventsActive(!!g.settings.events_channel_id)).catch(() => {});
+  }, [guildId]);
+  const visible = TABS.filter(tb => tb.show(perms, eventsActive));
   const [tab, setTab] = useState<Tab | null>(null);
   // activeTab = sub-aba ativa (id). `active` (prop) = visibilidade no App
   // (keep-alive) — repassada pro RegearPage pra pausar o poll de 15s quando

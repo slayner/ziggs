@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timezone
 
 import httpx
@@ -141,11 +142,12 @@ async def _probe_detail(client: httpx.AsyncClient, host: str, albion_id: str) ->
             if attempt == MAX_429_RETRIES - 1:
                 return "error", None
             retry_after = resp.headers.get("Retry-After")
-            wait = (
-                float(retry_after)
-                if retry_after and retry_after.replace(".", "", 1).isdigit()
-                else 5.0 * (attempt + 1)
-            )
+            if retry_after and retry_after.replace(".", "", 1).isdigit():
+                wait = float(retry_after)
+            else:
+                # jitter (±30%): várias sondas do mesmo ciclo podem 429 juntas;
+                # sem isso todas dormiriam igual e retentariam sincronizadas.
+                wait = 5.0 * (attempt + 1) * random.uniform(0.7, 1.3)
             await asyncio.sleep(wait)
             continue
         # Outro 4xx/5xx — conservador: não grava probe, re-tenta no próximo ciclo.

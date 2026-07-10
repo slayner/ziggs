@@ -214,16 +214,6 @@ T: dict[str, dict[str, str]] = {
         "en": "{actor} added **{amount}** to {count} user(s)' balance: {targets}",
         "es": "{actor} agregó **{amount}** al saldo de {count} usuario(s): {targets}",
     },
-    "confirm_addmoney_title": {
-        "pt": "Confirmar adição em massa?",
-        "en": "Confirm bulk addition?",
-        "es": "¿Confirmar adición masiva?",
-    },
-    "confirm_addmoney_desc": {
-        "pt": "Adicionar **{amount}** ao saldo de {count} usuário(s):\n{targets}",
-        "en": "Add **{amount}** to {count} user(s)' balance:\n{targets}",
-        "es": "Agregar **{amount}** al saldo de {count} usuario(s):\n{targets}",
-    },
     "confirm_only_author": {
         "pt": "Apenas quem usou o comando pode confirmar ou cancelar.",
         "en": "Only whoever ran the command can confirm or cancel.",
@@ -240,11 +230,6 @@ T: dict[str, dict[str, str]] = {
         "pt": "❌ Não encontrei nenhum usuário ou cargo mencionado na mensagem.",
         "en": "❌ Couldn't find any mentioned user or role in the message.",
         "es": "❌ No encontré ningún usuario o rol mencionado en el mensaje.",
-    },
-    "prefix_no_amount": {
-        "pt": "❌ Não encontrei um valor válido na mensagem (ex: 100k, 1.5m, 2,500,000).",
-        "en": "❌ Couldn't find a valid amount in the message (e.g.: 100k, 1.5m, 2,500,000).",
-        "es": "❌ No encontré un valor válido en el mensaje (ej: 100k, 1.5m, 2,500,000).",
     },
     "remove_no_balance": {
         "pt": "⚠️ {target} não tem saldo positivo a remover (atual: `{balance}`).",
@@ -593,6 +578,47 @@ T: dict[str, dict[str, str]] = {
     "ev_done": {"pt": "✅ Evento finalizado.", "en": "✅ Event finalized.", "es": "✅ Evento finalizado."},
     "ev_only_manage": {"pt": "Só quem gerencia eventos pode fazer isso.", "en": "Only event managers can do this.", "es": "Solo los gestores de eventos pueden hacer esto."},
 
+    # cogs/event_cmd.py — /event criar/deletar/editar/adiar
+    "ev_pick_comp": {"pt": "Escolha a comp do evento:", "en": "Pick the event's comp:", "es": "Elige la comp del evento:"},
+    "ev_pick_time": {"pt": "Escolha o horário (UTC):", "en": "Pick the time (UTC):", "es": "Elige la hora (UTC):"},
+    "ev_pick_event": {"pt": "Selecione o evento:", "en": "Select the event:", "es": "Selecciona el evento:"},
+    "ev_pick_field": {"pt": "O que deseja editar?", "en": "What do you want to edit?", "es": "¿Qué deseas editar?"},
+    "ev_pick_time_range": {
+        "pt": "🕐 Faixa de 25min (pág {page}/{pages})…",
+        "en": "🕐 25-min slot (page {page}/{pages})…",
+        "es": "🕐 Franja de 25min (pág {page}/{pages})…",
+    },
+    "ev_pick_time_minute": {"pt": "🕐 Minuto exato (UTC)…", "en": "🕐 Exact minute (UTC)…", "es": "🕐 Minuto exacto (UTC)…"},
+    "ev_time_prev": {"pt": "◀️ Horários anteriores", "en": "◀️ Earlier", "es": "◀️ Horarios anteriores"},
+    "ev_time_next": {"pt": "▶️ Próximos horários", "en": "▶️ Later", "es": "▶️ Horarios siguientes"},
+    "ev_back": {"pt": "← Voltar", "en": "← Back", "es": "← Volver"},
+    "ev_cancel": {"pt": "Cancelar", "en": "Cancel", "es": "Cancelar"},
+    "ev_cancelled": {"pt": "❌ Cancelado.", "en": "❌ Cancelled.", "es": "❌ Cancelado."},
+    "ev_confirm": {"pt": "Confirmar", "en": "Confirm", "es": "Confirmar"},
+    "ev_no_comp": {"pt": "— Sem comp —", "en": "— No comp —", "es": "— Sin comp —"},
+    "ev_no_events": {"pt": "Nenhum evento disponível (apenas eventos não finalizados aparecem aqui).", "en": "No events available (only non-finalized events show up here).", "es": "Ningún evento disponible (solo eventos no finalizados aparecen aquí)."},
+    "ev_create_done": {"pt": "✅ Evento #{eid} criado às **{hora}** UTC.", "en": "✅ Event #{eid} created at **{hora}** UTC.", "es": "✅ Evento #{eid} creado a las **{hora}** UTC."},
+    "ev_create_fail": {"pt": "❌ Não deu pra criar o evento.", "en": "❌ Couldn't create the event.", "es": "❌ No se pudo crear el evento."},
+    "ev_delete_confirm": {"pt": "Deletar este evento?\n**{ev}**", "en": "Delete this event?\n**{ev}**", "es": "¿Eliminar este evento?\n**{ev}**"},
+    "ev_delete_btn": {"pt": "🗑️ Deletar", "en": "🗑️ Delete", "es": "🗑️ Eliminar"},
+    "ev_delete_done": {"pt": "✅ Evento #{eid} deletado.", "en": "✅ Event #{eid} deleted.", "es": "✅ Evento #{eid} eliminado."},
+    "ev_field_objetivo": {"pt": "Objetivo", "en": "Objective", "es": "Objetivo"},
+    "ev_field_horario": {"pt": "Horário", "en": "Time", "es": "Horario"},
+    "ev_field_comp": {"pt": "Comp", "en": "Comp", "es": "Comp"},
+    "ev_field_attendance": {"pt": "Pontos de attendance", "en": "Attendance points", "es": "Puntos de asistencia"},
+    "ev_edit_done_field": {"pt": "✅ {field} atualizado(s).", "en": "✅ {field} updated.", "es": "✅ {field} actualizado."},
+    "ev_reschedule_done": {"pt": "✅ Evento #{eid} adiado pra **{hora}** UTC.", "en": "✅ Event #{eid} rescheduled to **{hora}** UTC.", "es": "✅ Evento #{eid} aplazado a las **{hora}** UTC."},
+    "ev_comp_changed_summary": {
+        "pt": "✅ Comp alterada pra **{comp}**. {n} inscrição(ões) removida(s) — cada usuário foi avisado por DM pra repingar.",
+        "en": "✅ Comp changed to **{comp}**. {n} signup(s) removed — each user was DM'd to re-sign up.",
+        "es": "✅ Comp cambiada a **{comp}**. {n} inscripción(es) eliminada(s) — cada usuario fue avisado por DM para reinscribirse.",
+    },
+    "ev_comp_changed_dm": {
+        "pt": "⚠️ A comp do evento #{eid} ({title}) foi alterada pra **{comp}**. Sua inscrição foi removida — clique no botão do evento no canal de eventos pra se inscrever de novo.",
+        "en": "⚠️ The comp for event #{eid} ({title}) changed to **{comp}**. Your signup was removed — click the event's button in the events channel to sign up again.",
+        "es": "⚠️ La comp del evento #{eid} ({title}) cambió a **{comp}**. Tu inscripción fue eliminada — haz clic en el botón del evento en el canal de eventos para reinscribirte.",
+    },
+
     # audit_log.py
     "logs_entity": {"pt": "Entidade", "en": "Entity", "es": "Entidad"},
     "logs_actor": {"pt": "Autor", "en": "Actor", "es": "Autor"},
@@ -613,67 +639,126 @@ def t(lang: str, key: str, **kwargs) -> str:
 # Nomes/descrições de comando e opção — localizados via Translator do Discord,
 # por LOCALE DO CLIENTE de cada membro (não pelo bot_language da guilda: são
 # fixos no sync, não dá pra variar por servidor). Só "en"/"es": o texto
-# português já embutido no @app_commands.command/describe é o default (pt-BR
-# e qualquer locale sem tradução caem nele). Ver localization.py.
+# português embutido no @app_commands.command/describe é o default de pt-BR;
+# locales sem mapeamento dedicado (fr/de/…) caem no "en" (fallback inglês).
+# Ver localization.py.
 CMD_I18N: dict[str, dict[str, str]] = {
-    "opt_name_alvo": {"en": "user", "es": "usuario"},
-    "opt_name_quantia": {"en": "amount", "es": "cantidad"},
+    "opt_name_alvo": {"pt": "alvo", "en": "user", "es": "usuario"},
+    "opt_name_quantia": {"pt": "quantia", "en": "amount", "es": "cantidad"},
 
-    "cmd_desc_avatar": {"en": "Shows a user's or server's avatar", "es": "Muestra el avatar de un usuario o servidor"},
-    "cmd_desc_banner": {"en": "Shows a user's or server's banner", "es": "Muestra el banner de un usuario o servidor"},
+    "cmd_desc_avatar": {"pt": "Mostra o avatar de um usuário ou servidor", "en": "Shows a user's or server's avatar", "es": "Muestra el avatar de un usuario o servidor"},
+    "cmd_desc_banner": {"pt": "Mostra o banner de um usuário ou servidor", "en": "Shows a user's or server's banner", "es": "Muestra el banner de un usuario o servidor"},
     "opt_desc_avatar_banner_alvo": {
+        "pt": "ID de servidor, @menção, ID/nome de usuário ou apelido (padrão: você mesmo)",
         "en": "Server ID, @mention, user ID/name, or nickname (default: yourself)",
         "es": "ID de servidor, @mención, ID/nombre de usuario o apodo (por defecto: tú mismo)",
     },
 
     "cmd_desc_register": {
+        "pt": "Vincula um nick do Albion a uma conta Discord e libera o cargo",
         "en": "Links an Albion nickname to a Discord account and unlocks the role",
         "es": "Vincula un nick de Albion a una cuenta de Discord y libera el rol",
     },
     "opt_desc_register": {
+        "pt": "Seu nick do Albion — ou, pra registrar outra pessoa, nick + usuário do Discord (qualquer ordem)",
         "en": "Your Albion nickname — or, to register someone else, nickname + Discord user (any order)",
         "es": "Tu nick de Albion — o, para registrar a otra persona, nick + usuario de Discord (cualquier orden)",
     },
-    "cmd_desc_unregister": {"en": "Removes a member's registration and role", "es": "Elimina el registro y el rol de un miembro"},
+    "cmd_desc_unregister": {"pt": "Remove o registro e o cargo de um membro", "en": "Removes a member's registration and role", "es": "Elimina el registro y el rol de un miembro"},
     "opt_desc_unregister_alvo": {
+        "pt": "Menção, ID, nome de usuário no Discord, ou nick no Albion do membro",
         "en": "Mention, ID, Discord username, or the member's Albion nickname",
         "es": "Mención, ID, nombre de usuario de Discord, o nick de Albion del miembro",
     },
 
     "cmd_desc_balance": {
+        "pt": "Mostra o saldo de um usuário (o seu, se ninguém for informado)",
         "en": "Shows a user's balance (yours, if none given)",
         "es": "Muestra el saldo de un usuario (el tuyo, si no se indica ninguno)",
     },
-    "opt_desc_balance_alvo": {"en": "@mention, ID, or name (default: yourself)", "es": "@mención, ID o nombre (por defecto: tú mismo)"},
+    "opt_desc_balance_alvo": {"pt": "@menção, ID ou nome (padrão: você mesmo)", "en": "@mention, ID, or name (default: yourself)", "es": "@mención, ID o nombre (por defecto: tú mismo)"},
 
-    "cmd_desc_pay": {"en": "Transfers silver from your balance to another user", "es": "Transfiere plata de tu saldo a otro usuario"},
-    "opt_desc_pay_alvo": {"en": "Who will receive it", "es": "Quién va a recibir"},
+    "cmd_desc_pay": {"pt": "Transfere prata do seu saldo para outro usuário", "en": "Transfers silver from your balance to another user", "es": "Transfiere plata de tu saldo a otro usuario"},
+    "opt_desc_pay_alvo": {"pt": "Quem vai receber", "en": "Who will receive it", "es": "Quién va a recibir"},
     "opt_desc_pay_quantia": {
+        "pt": "Quanto enviar (ex: 100k, 1.5m, 2,500,000) ou `all`/`tudo`",
         "en": "How much to send (e.g.: 100k, 1.5m, 2,500,000) or `all`/`tudo`",
         "es": "Cuánto enviar (ej: 100k, 1.5m, 2,500,000) o `all`/`tudo`",
     },
 
-    "cmd_desc_addmoney": {"en": "Adds silver to a user's balance", "es": "Agrega plata al saldo de un usuario"},
-    "opt_desc_addmoney_alvo": {"en": "Target user", "es": "Usuario objetivo"},
-    "opt_desc_addmoney_quantia": {"en": "How much to add (e.g.: 100k, 1.5m)", "es": "Cuánto agregar (ej: 100k, 1.5m)"},
+    "cmd_desc_addmoney": {"pt": "Adiciona prata ao saldo de um usuário", "en": "Adds silver to a user's balance", "es": "Agrega plata al saldo de un usuario"},
+    "opt_desc_addmoney_alvo": {"pt": "Usuário alvo", "en": "Target user", "es": "Usuario objetivo"},
+    "opt_desc_addmoney_quantia": {"pt": "Quanto adicionar (ex: 100k, 1.5m)", "en": "How much to add (e.g.: 100k, 1.5m)", "es": "Cuánto agregar (ej: 100k, 1.5m)"},
 
     "cmd_desc_removemoney": {
+        "pt": "Remove prata do saldo de um usuário (sem valor = remove tudo)",
         "en": "Removes silver from a user's balance (no value = removes everything)",
         "es": "Remueve plata del saldo de un usuario (sin valor = remueve todo)",
     },
-    "opt_desc_removemoney_alvo": {"en": "Target user", "es": "Usuario objetivo"},
+    "opt_desc_removemoney_alvo": {"pt": "Usuário alvo", "en": "Target user", "es": "Usuario objetivo"},
     "opt_desc_removemoney_quantia": {
+        "pt": "Quanto remover (em branco ou `all`/`tudo` = remove tudo)",
         "en": "How much to remove (blank or `all`/`tudo` = removes everything)",
         "es": "Cuánto remover (vacío o `all`/`tudo` = remueve todo)",
     },
 
-    "cmd_desc_leaderboard": {"en": "Ranking of users by current silver balance", "es": "Ranking de usuarios por saldo actual de plata"},
-    "cmd_desc_economystats": {"en": "Shows a snapshot of the server's economy", "es": "Muestra un resumen de la economía del servidor"},
+    "cmd_desc_leaderboard": {"pt": "Ranking dos usuários pelo saldo atual de prata", "en": "Ranking of users by current silver balance", "es": "Ranking de usuarios por saldo actual de plata"},
+    "cmd_desc_economystats": {"pt": "Mostra um snapshot da economia do servidor", "en": "Shows a snapshot of the server's economy", "es": "Muestra un resumen de la economía del servidor"},
 
-    "cmd_desc_undo": {"en": "Reverts an economy transaction by its ID", "es": "Revierte una transacción de economía por su ID"},
+    "cmd_desc_undo": {"pt": "Reverte uma transação de economia pelo ID", "en": "Reverts an economy transaction by its ID", "es": "Revierte una transacción de economía por su ID"},
     "opt_desc_undo_id": {
+        "pt": "ID da transação a reverter (veja o rodapé do embed original)",
         "en": "Transaction ID to revert (see the original embed's footer)",
         "es": "ID de la transacción a revertir (ver el pie del embed original)",
+    },
+
+    "cmd_group_event": {
+        "pt": "Gerencia eventos (CTAs): criar, deletar, editar e adiar",
+        "en": "Manage events (CTAs): create, delete, edit and reschedule",
+        "es": "Gestiona eventos (CTAs): crear, eliminar, editar y aplazar",
+    },
+    "cmd_desc_event_criar": {
+        "pt": "Cria um novo evento (CTA): objetivo, comp e horário UTC",
+        "en": "Create a new event (CTA): objective, comp and UTC time",
+        "es": "Crea un nuevo evento (CTA): objetivo, comp y hora UTC",
+    },
+    "cmd_desc_event_deletar": {
+        "pt": "Deleta um evento ainda não finalizado",
+        "en": "Delete a not-yet-finalized event",
+        "es": "Elimina un evento aún no finalizado",
+    },
+    "cmd_desc_event_editar": {
+        "pt": "Edita objetivo, horário, comp ou pontos de attendance de um evento",
+        "en": "Edit objective, time, comp or attendance points of an event",
+        "es": "Edita objetivo, hora, comp o puntos de asistencia de un evento",
+    },
+    "cmd_desc_event_adiar": {
+        "pt": "Adia um evento (novo horário UTC)",
+        "en": "Reschedule an event (new UTC time)",
+        "es": "Aplaza un evento (nueva hora UTC)",
+    },
+    "opt_name_event_objetivo": {"pt": "objetivo", "en": "objective", "es": "objetivo"},
+    "opt_desc_event_objetivo": {
+        "pt": "Objetivo do evento (o nome/título dele)",
+        "en": "The event's objective (its name/title)",
+        "es": "El objetivo del evento (su nombre/título)",
+    },
+    "opt_name_event_comp": {"pt": "comp", "en": "comp", "es": "comp"},
+    "opt_desc_event_comp": {
+        "pt": "Comp do evento (comece a digitar pra buscar)",
+        "en": "The event's comp (start typing to search)",
+        "es": "La comp del evento (empieza a escribir para buscar)",
+    },
+    "opt_name_event_utc": {"pt": "utc", "en": "utc", "es": "utc"},
+    "opt_desc_event_utc": {
+        "pt": "Horário UTC: HH:MM, HHhMM ou data completa (YYYY-MM-DD HH:MM)",
+        "en": "UTC time: HH:MM, HHhMM, or full date (YYYY-MM-DD HH:MM)",
+        "es": "Hora UTC: HH:MM, HHhMM o fecha completa (YYYY-MM-DD HH:MM)",
+    },
+    "ev_bad_time": {
+        "pt": "Horário inválido — use HH:MM, HHhMM (ex: 18h30) ou uma data completa (2026-07-15 18:30).",
+        "en": "Invalid time — use HH:MM, HHhMM (e.g. 18h30), or a full date (2026-07-15 18:30).",
+        "es": "Hora inválida — usa HH:MM, HHhMM (ej: 18h30) o una fecha completa (2026-07-15 18:30).",
     },
 
 }

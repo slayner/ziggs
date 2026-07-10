@@ -60,6 +60,7 @@ interface RosterEvent {
 interface GuildProfile {
   albion_id: string; name: string;
   alliance_id: string | null; alliance_name: string | null;
+  last_synced_at: string | null;
   kills_total: number; deaths_total: number;
   kill_fame: WindowStat; silver_dropped: WindowStat; battles: WindowStat;
   members: GuildMember[];
@@ -433,6 +434,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
   const [filteredMembers, setFilteredMembers] = useState<(GuildMember | AllianceGuild)[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
   const [entityDeleted, setEntityDeleted] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Guarda de resposta obsoleta (mesmo padrão de GuildConfig.tsx): ao trocar
   // de mode/albionId (ex.: clicar na aliança a partir do perfil da guilda),
@@ -506,6 +508,23 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
       .finally(() => { if (!cancelled) setMembersLoading(false); });
     return () => { cancelled = true; };
   }, [albionId, mode, minPlayers, minKills]);
+
+  // Sem fila aqui — guild/alliance_profile já é 100% DB (nunca chama a Albion
+  // no caminho principal), então "refresh" é só reler os mesmos endpoints.
+  function forceRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    const endpoint = mode === "guild" ? "guilds" : "alliances";
+    Promise.all([
+      fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}`).then(r => (r.ok ? r.json() : null)),
+      fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}/check`).then(r => r.json()).catch(() => null),
+    ])
+      .then(([d, checkD]) => {
+        if (d) setData(d);
+        if (checkD) setEntityDeleted(checkD.exists === false);
+      })
+      .finally(() => setRefreshing(false));
+  }
 
   if (loading) {
     return (
@@ -589,6 +608,17 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
             <p className="mt-1 text-sm text-zinc-500">
               {data.kills_total.toLocaleString("pt-BR")} {t("killsSuffix")} · {data.deaths_total.toLocaleString("pt-BR")} {t("deathsWord")}
             </p>
+            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-600">
+              <button
+                onClick={forceRefresh}
+                disabled={refreshing}
+                title={t("forceRefreshTitle")}
+                className="text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors"
+              >
+                <i className={`ti ti-refresh inline-block${refreshing ? " animate-spin" : ""}`} aria-hidden="true" />
+              </button>
+              {data.last_synced_at ? `${timeAgo(data.last_synced_at)} ${t("justAgoSuffix")}` : t("neverSyncedLabel")}
+            </div>
           </div>
 
           {/* window selector */}

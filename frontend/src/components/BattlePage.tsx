@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { itemRenderUrl, ITEM_BY_ID, NO_WEAPON_ICON_ID } from "../data/albion-items";
+import { itemRenderUrl, ITEM_BY_ID, NO_WEAPON_ICON_ID, is2H } from "../data/albion-items";
 import { imgRetry } from "../api";
 import { navigate, navigateReplace } from "../router";
-import { EquipGrid, PriceHistoryChart, is2H, type DraftEquip } from "./CompBuilder";
+import { EquipGrid, PriceHistoryChart, type DraftEquip } from "./CompBuilder";
 import { useT, type TKey } from "../i18n";
 import { searchIncludes } from "../lib/search";
 

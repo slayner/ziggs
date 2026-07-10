@@ -14,11 +14,11 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-import aiohttp
 import discord
 from discord import Interaction
 from discord.ext import commands, tasks
 
+import http_client
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -27,75 +27,19 @@ API_SECRET = os.getenv("BOT_API_SECRET", "")
 
 
 async def _get(path: str) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.get(f"{SITE_URL}{path}", headers={"Authorization": f"Bearer {API_SECRET}"},
-                             timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-            if r.status == 401:
-                print(f"[event_embeds] 401 em GET {path} — BOT_API_SECRET do bot não bate com o backend")
-            await r.read()  # libera a conexão (senão vaza "Unclosed connection")
-    except Exception:
-        pass
-    return None
+    return await http_client.get_json(path, tag="event_embeds")
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.post(f"{SITE_URL}{path}", json=body,
-                              headers={"Authorization": f"Bearer {API_SECRET}"},
-                              timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-            if r.status == 401:
-                print(f"[event_embeds] 401 em POST {path} — BOT_API_SECRET não bate com o backend")
-            else:
-                txt = await r.text()
-                print(f"[event_embeds] POST {path} → {r.status}: {txt[:200]}")
-            return None
-    except Exception as e:
-        print(f"[event_embeds] exceção em POST {path}: {type(e).__name__}: {e}")
-        return None
+    return await http_client.post_json(path, body, tag="event_embeds")
 
 
 async def _patch(path: str, body: dict) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.patch(f"{SITE_URL}{path}", json=body,
-                               headers={"Authorization": f"Bearer {API_SECRET}"},
-                               timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-            if r.status != 401:
-                txt = await r.text()
-                print(f"[event_embeds] PATCH {path} → {r.status}: {txt[:200]}")
-            return None
-    except Exception as e:
-        print(f"[event_embeds] exceção em PATCH {path}: {type(e).__name__}: {e}")
-        return None
+    return await http_client.patch_json(path, body, tag="event_embeds")
 
 
 async def _delete(path: str) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.delete(f"{SITE_URL}{path}",
-                                headers={"Authorization": f"Bearer {API_SECRET}"},
-                                timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.delete_json(path)
 
 
 async def _dismiss_ephemeral(interaction: Interaction) -> None:

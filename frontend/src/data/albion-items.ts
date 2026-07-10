@@ -219,8 +219,10 @@ export const ALBION_ITEMS: AlbionItem[] = [
   ...art("OFF_TALISMAN_AVALON",        "Cetro Sagrado",      "offhand"),
   ...art("OFF_TOTEM_KEEPER",           "Raiz Mestra",        "offhand"),
   ...artAll("OFF_TORCH_CRYSTAL",       "Tocha Chama Azul",    "offhand", "Blueflame Torch"),
-  ...artAll("OFF_SHIELD_CRYSTAL",      "Escudo Inquebrável",  "offhand", "Unbreakable Ward"),
-  ...artAll("OFF_TOME_CRYSTAL",        "Grimório Bloqueado",  "offhand", "Timelocked Grimoire"),
+  // OFF_SHIELD_CRYSTAL e OFF_TOME_CRYSTAL já vêm das seções Escudos/Tomos
+  // acima — duplicar aqui fazia "Unbreakable Ward"/"Timelocked Grimoire"
+  // aparecerem repetidos na lista e na busca (2 nomes PT diferentes pro
+  // mesmo item base).
 
   // ═══════════════════════════════════════════════════════════
   // CAPAS
@@ -487,3 +489,15 @@ export function itemRenderUrl(item: AlbionItem | string, quality = 0): string {
 // Ícone usado no lugar da arma em kills/mortes onde o jogador lutou desarmado
 // (sem MainHand equipado) — em todo o site, atacante ou vítima.
 export const NO_WEAPON_ICON_ID = "T3_FARM_OX_BABY";
+
+// Base de um item sem tier/enchant: "T5_HEAD_PLATE_SET1@2" → "HEAD_PLATE_SET1".
+// Usado p/ lookup de spells de arma e checagem 2H (entre outros).
+export function wBase(id: string): string {
+  return id.replace(/^T\d+_/, "").replace(/@\d+$/, "");
+}
+
+// Arma de duas mãos? Pela base começar com "2H_" — esconde o slot offhand.
+export function is2H(weaponId: string | undefined): boolean {
+  if (!weaponId) return false;
+  return wBase(weaponId).startsWith("2H_");
+}

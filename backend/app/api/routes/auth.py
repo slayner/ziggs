@@ -28,6 +28,8 @@ from app.services import economy as economy_svc
 from app.services import event_signups as event_signups_svc
 from app.services import events as events_svc
 from app.services import nodes as nodes_svc
+from app.services import comps as comps_svc
+from app.api.schemas.events import EventCreate
 from app.services.events import ServiceError
 from app.services.albion_gate import BOT_REGISTER, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client
@@ -791,6 +793,7 @@ COMMANDS_REGISTRY = [
     {"name": "leaderboard", "description": "Ranking dos usuários pelo saldo atual de prata", "category": "economy"},
     {"name": "economystats", "description": "Mostra um snapshot da economia do servidor", "category": "economy"},
     {"name": "undo", "description": "Reverte uma transação de economia pelo ID", "category": "economy"},
+    {"name": "event", "description": "Gerencia eventos (CTAs): criar, deletar, editar e adiar", "category": "management"},
 ]
 
 # Default de allowed_roles pra comandos sensíveis quando o admin ainda não
@@ -804,6 +807,7 @@ DEFAULT_ALLOWED_ROLES = {
     "addmoney": ["admin"],
     "economystats": ["admin"],
     "undo": ["admin"],
+    "event": ["admin"],
 }
 
 # "register_others" não é um comando próprio — é uma sub-permissão do
@@ -1718,6 +1722,130 @@ def bot_events_transition(
         raise HTTPException(400, str(e))
     db.commit()
     return detail
+
+
+# ── /event no bot-v2: criar/deletar/editar/adiar ───────────────────────────────
+
+@router.get("/bot/events/{guild_id}/comps")
+def bot_events_list_comps(
+    guild_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Comps não-arquivadas da guilda, pro picker de comp do /event criar/editar."""
+    _require_bot_secret(authorization)
+    return [{"id": c.id, "name": c.name} for c in comps_svc.list_comps(db, guild_id, False)]
+
+
+@router.get("/bot/events/{guild_id}/manageable")
+def bot_events_manageable(
+    guild_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Eventos não-finalizados (agendado/andamento/revisão) — alimenta os pickers
+    de deletar/editar/adiar do /event no bot."""
+    _require_bot_secret(authorization)
+    return events_svc.list_manageable_events(db, guild_id)
+
+
+class BotEventCreateIn(BaseModel):
+    title: str | None = None
+    scheduled_at: str | None = None      # ISO UTC (o bot manda datetime.isoformat())
+    comp_id: int | None = None
+    message: str | None = None
+    actor_id: int | None = None
+    actor_name: str | None = None
+
+
+@router.post("/bot/events/{guild_id}")
+def bot_events_create(
+    guild_id: int, body: BotEventCreateIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    from datetime import datetime
+    scheduled_at = None
+    if body.scheduled_at:
+        try:
+            scheduled_at = datetime.fromisoformat(body.scheduled_at)
+        except ValueError:
+            raise HTTPException(400, "scheduled_at inválido")
+    try:
+        eid = events_svc.create_event(
+            db, guild_id,
+            EventCreate(title=body.title, scheduled_at=scheduled_at,
+                        comp_id=body.comp_id, message=body.message),
+            actor_id=body.actor_id, caller_name=body.actor_name,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return {"id": eid}
+
+
+class BotEventUpdateIn(BaseModel):
+    title: str | None = None
+    scheduled_at: str | None = None
+    comp_id: int | None = None
+    attendance: float | None = None
+    actor_id: int | None = None
+    # Flags: só aplica o campo cujo flag veio True (comp_id=None é válido = limpar).
+    set_title: bool = False
+    set_scheduled_at: bool = False
+    set_comp: bool = False
+    set_attendance: bool = False
+
+
+@router.patch("/bot/events/{guild_id}/{event_id}")
+def bot_events_update(
+    guild_id: int, event_id: int, body: BotEventUpdateIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Edição por campo do /event editar. Devolve notified_signups quando a comp
+    trocou e havia inscritos — o bot manda a DM pedindo reping."""
+    _require_bot_secret(authorization)
+    from datetime import datetime
+    scheduled_at = events_svc._UNSET
+    if body.set_scheduled_at:
+        if body.scheduled_at:
+            try:
+                scheduled_at = datetime.fromisoformat(body.scheduled_at)
+            except ValueError:
+                raise HTTPException(400, "scheduled_at inválido")
+        else:
+            scheduled_at = None
+    try:
+        result = events_svc.update_event(
+            db, guild_id, event_id,
+            title=body.title if body.set_title else events_svc._UNSET,
+            scheduled_at=scheduled_at,
+            comp_id=body.comp_id if body.set_comp else events_svc._UNSET,
+            attendance=body.attendance if body.set_attendance else events_svc._UNSET,
+            actor_id=body.actor_id,
+        )
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return result
+
+
+@router.delete("/bot/events/{guild_id}/{event_id}")
+def bot_events_delete(
+    guild_id: int, event_id: int,
+    actor_id: int | None = None,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    try:
+        events_svc.delete_event(db, guild_id, event_id, actor_id, actor_source="bot")
+    except events_svc.ServiceError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return {"ok": True}
 
 
 class BotNodeClaimIn(BaseModel):

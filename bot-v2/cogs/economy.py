@@ -10,13 +10,13 @@ import os
 import re
 from typing import Optional
 
-import aiohttp
 import discord
 from discord import app_commands, Interaction
 from discord.ext import commands
 
+import http_client
 from cogs.general import (
-    _MENTION_RE, _ROLE_MENTION_RE, check_command_access, check_command_access_ctx,
+    _ROLE_MENTION_RE, check_command_access,
     dedupe_members, extract_mention_targets, guild_lang, guild_lang_for, resolve_user_or_guild,
 )
 from i18n import t
@@ -74,18 +74,6 @@ def _format_target_list(members: list[discord.Member], limit: int = MAX_TARGETS_
     return ", ".join(mentions)
 
 
-def _extract_amount(text: str) -> Optional[int]:
-    """Tira as menções do texto e tenta achar um valor de prata em algum dos
-    tokens restantes — usado no parse do comando de prefixo, onde não tem
-    campo separado pra quantia como no slash command."""
-    stripped = _ROLE_MENTION_RE.sub("", _MENTION_RE.sub("", text))
-    for token in stripped.split():
-        amount = parse_silver(token)
-        if amount:
-            return amount
-    return None
-
-
 def _set_tx_footer(embed: discord.Embed, lang: str, tx_ids: list[int]) -> None:
     """ID(s) da transação no rodapé — é o que o /undo espera como argumento."""
     ids = [i for i in tx_ids if i is not None]
@@ -98,31 +86,11 @@ def _set_tx_footer(embed: discord.Embed, lang: str, tx_ids: list[int]) -> None:
 
 
 async def _get(path: str) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.get(f"{SITE_URL}{path}", headers={"Authorization": f"Bearer {API_SECRET}"},
-                             timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.get_json(path)
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.post(f"{SITE_URL}{path}", json=body, headers={"Authorization": f"Bearer {API_SECRET}"},
-                              timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.post_json(path, body)
 
 
 async def _resolve_target(interaction: Interaction, raw: Optional[str], lang: str):
@@ -139,10 +107,10 @@ class Economy(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="balance", description=loc("Mostra o saldo de um usuário (o seu, se ninguém for informado)", "cmd_desc_balance"))
+    @app_commands.command(name="balance", description=loc("Shows a user's balance (yours, if none given)", "cmd_desc_balance"))
     @app_commands.guild_only()
-    @app_commands.describe(alvo=loc("@menção, ID ou nome (padrão: você mesmo)", "opt_desc_balance_alvo"))
-    @app_commands.rename(alvo=loc("alvo", "opt_name_alvo"))
+    @app_commands.describe(alvo=loc("@mention, ID, or name (default: yourself)", "opt_desc_balance_alvo"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"))
     async def balance(self, interaction: Interaction, alvo: Optional[str] = None) -> None:
         if not await check_command_access(interaction, "balance"):
             return
@@ -158,11 +126,11 @@ class Economy(commands.Cog):
                                description=t(lang, "balance_display", balance=format_silver(data["balance"])))
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="pay", description=loc("Transfere prata do seu saldo para outro usuário", "cmd_desc_pay"))
+    @app_commands.command(name="pay", description=loc("Transfers silver from your balance to another user", "cmd_desc_pay"))
     @app_commands.guild_only()
-    @app_commands.describe(alvo=loc("Quem vai receber", "opt_desc_pay_alvo"),
-                            quantia=loc("Quanto enviar (ex: 100k, 1.5m, 2,500,000) ou `all`/`tudo`", "opt_desc_pay_quantia"))
-    @app_commands.rename(alvo=loc("alvo", "opt_name_alvo"), quantia=loc("quantia", "opt_name_quantia"))
+    @app_commands.describe(alvo=loc("Who will receive it", "opt_desc_pay_alvo"),
+                            quantia=loc("How much to send (e.g.: 100k, 1.5m, 2,500,000) or `all`/`tudo`", "opt_desc_pay_quantia"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"))
     async def pay(self, interaction: Interaction, alvo: str, quantia: str) -> None:
         if not await check_command_access(interaction, "pay"):
             return
@@ -210,11 +178,11 @@ class Economy(commands.Cog):
         _set_tx_footer(embed, lang, [result.get("transaction_id")])
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="addmoney", description=loc("Adiciona prata ao saldo de um usuário", "cmd_desc_addmoney"))
+    @app_commands.command(name="addmoney", description=loc("Adds silver to a user's balance", "cmd_desc_addmoney"))
     @app_commands.guild_only()
-    @app_commands.describe(alvo=loc("Usuário alvo", "opt_desc_addmoney_alvo"),
-                            quantia=loc("Quanto adicionar (ex: 100k, 1.5m)", "opt_desc_addmoney_quantia"))
-    @app_commands.rename(alvo=loc("alvo", "opt_name_alvo"), quantia=loc("quantia", "opt_name_quantia"))
+    @app_commands.describe(alvo=loc("Target user", "opt_desc_addmoney_alvo"),
+                            quantia=loc("How much to add (e.g.: 100k, 1.5m)", "opt_desc_addmoney_quantia"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"))
     async def addmoney(self, interaction: Interaction, alvo: str, quantia: str) -> None:
         if not await check_command_access(interaction, "addmoney"):
             return
@@ -259,11 +227,11 @@ class Economy(commands.Cog):
         _set_tx_footer(embed, lang, tx_ids)
         await interaction.followup.send(embed=embed)
 
-    @app_commands.command(name="removemoney", description=loc("Remove prata do saldo de um usuário (sem valor = remove tudo)", "cmd_desc_removemoney"))
+    @app_commands.command(name="removemoney", description=loc("Removes silver from a user's balance (no value = removes everything)", "cmd_desc_removemoney"))
     @app_commands.guild_only()
-    @app_commands.describe(alvo=loc("Usuário alvo", "opt_desc_removemoney_alvo"),
-                            quantia=loc("Quanto remover (em branco ou `all`/`tudo` = remove tudo)", "opt_desc_removemoney_quantia"))
-    @app_commands.rename(alvo=loc("alvo", "opt_name_alvo"), quantia=loc("quantia", "opt_name_quantia"))
+    @app_commands.describe(alvo=loc("Target user", "opt_desc_removemoney_alvo"),
+                            quantia=loc("How much to remove (blank or `all`/`tudo` = removes everything)", "opt_desc_removemoney_quantia"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"))
     async def removemoney(self, interaction: Interaction, alvo: str, quantia: Optional[str] = None) -> None:
         if not await check_command_access(interaction, "removemoney"):
             return
@@ -331,9 +299,9 @@ class Economy(commands.Cog):
         _set_tx_footer(embed, lang, [result.get("transaction_id")])
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="undo", description=loc("Reverte uma transação de economia pelo ID", "cmd_desc_undo"))
+    @app_commands.command(name="undo", description=loc("Reverts an economy transaction by its ID", "cmd_desc_undo"))
     @app_commands.guild_only()
-    @app_commands.describe(id=loc("ID da transação a reverter (veja o rodapé do embed original)", "opt_desc_undo_id"))
+    @app_commands.describe(id=loc("Transaction ID to revert (see the original embed's footer)", "opt_desc_undo_id"))
     async def undo(self, interaction: Interaction, id: int) -> None:
         if not await check_command_access(interaction, "undo"):
             return
@@ -350,7 +318,7 @@ class Economy(commands.Cog):
             color=discord.Color.orange(),
             description=t(lang, "undo_success", id=id, amount=format_silver(result["amount"]))))
 
-    @app_commands.command(name="economystats", description=loc("Mostra um snapshot da economia do servidor", "cmd_desc_economystats"))
+    @app_commands.command(name="economystats", description=loc("Shows a snapshot of the server's economy", "cmd_desc_economystats"))
     @app_commands.guild_only()
     async def economystats(self, interaction: Interaction) -> None:
         if not await check_command_access(interaction, "economystats"):
@@ -365,7 +333,7 @@ class Economy(commands.Cog):
         embed.add_field(name=t(lang, "stats_total_field"), value=f"`{format_silver(stats['balances_sum'])}`", inline=False)
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="leaderboard", description=loc("Ranking dos usuários pelo saldo atual de prata", "cmd_desc_leaderboard"))
+    @app_commands.command(name="leaderboard", description=loc("Ranking of users by current silver balance", "cmd_desc_leaderboard"))
     @app_commands.guild_only()
     async def leaderboard(self, interaction: Interaction) -> None:
         if not await check_command_access(interaction, "leaderboard"):
@@ -381,100 +349,6 @@ class Economy(commands.Cog):
         view = LeaderboardView(guild_id=interaction.guild_id, author_id=interaction.user.id, total=data["total"], lang=lang)
         view.update_buttons()
         await interaction.response.send_message(embed=view.build_embed(data["rows"], offset=0), view=view)
-
-    # ------------------------------------------------------------------
-    # !addmoney — versão de PREFIXO: sem campos separados de alvo/quantia,
-    # então em vez de tentar adivinhar e já executar, monta a interpretação
-    # e pede confirmação (botões) antes de tocar em qualquer saldo.
-    # ------------------------------------------------------------------
-    @commands.command(name="addmoney")
-    @commands.guild_only()
-    async def addmoney_prefix(self, ctx: commands.Context, *, args: str = "") -> None:
-        if not await check_command_access_ctx(ctx, "addmoney"):
-            return
-        lang = await guild_lang_for(ctx.guild.id)
-
-        targets = dedupe_members(ctx.message.mentions, ctx.message.role_mentions)
-        if not targets:
-            await ctx.send(t(lang, "prefix_no_targets"))
-            return
-
-        amount = _extract_amount(args)
-        if amount is None:
-            await ctx.send(t(lang, "prefix_no_amount"))
-            return
-
-        embed = discord.Embed(
-            color=discord.Color.gold(),
-            title=t(lang, "confirm_addmoney_title"),
-            description=t(lang, "confirm_addmoney_desc", amount=format_silver(amount),
-                          count=len(targets), targets=_format_target_list(targets)),
-        )
-        view = ConfirmAddMoneyView(author_id=ctx.author.id, guild_id=ctx.guild.id,
-                                    targets=targets, amount=amount, lang=lang)
-        await ctx.send(embed=embed, view=view)
-
-
-class ConfirmAddMoneyView(discord.ui.View):
-    """Botões Confirmar/Cancelar pro !addmoney de prefixo — só quem rodou o
-    comando pode decidir; nada é aplicado até o Confirmar."""
-
-    def __init__(self, *, author_id: int, guild_id: int, targets: list[discord.Member], amount: int, lang: str):
-        super().__init__(timeout=60)
-        self.author_id = author_id
-        self.guild_id = guild_id
-        self.targets = targets
-        self.amount = amount
-        self.lang = lang
-
-        confirm_btn = discord.ui.Button(label=t(lang, "confirm_btn"), style=discord.ButtonStyle.success)
-        confirm_btn.callback = self._on_confirm
-        cancel_btn = discord.ui.Button(label=t(lang, "cancel_btn"), style=discord.ButtonStyle.secondary)
-        cancel_btn.callback = self._on_cancel
-        self.add_item(confirm_btn)
-        self.add_item(cancel_btn)
-
-    async def interaction_check(self, interaction: Interaction) -> bool:
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message(t(self.lang, "confirm_only_author"), ephemeral=True)
-            return False
-        return True
-
-    def _disable_all(self) -> None:
-        for item in self.children:
-            item.disabled = True
-
-    async def _on_confirm(self, interaction: Interaction) -> None:
-        await interaction.response.defer()
-        self._disable_all()
-
-        ok_targets, tx_ids = [], []
-        for target in self.targets:
-            result = await _post(f"/bot/economy/add/{self.guild_id}",
-                                  {"discord_user_id": target.id, "amount": self.amount,
-                                   "actor_discord_id": self.author_id})
-            if result is not None:
-                ok_targets.append(target)
-                tx_ids.append(result.get("transaction_id"))
-
-        if not ok_targets:
-            await interaction.edit_original_response(content=t(self.lang, "add_fail"), embed=None, view=self)
-            return
-
-        actor = f"<@{self.author_id}>"
-        if len(ok_targets) == 1:
-            description = t(self.lang, "add_success", actor=actor, target=ok_targets[0].mention,
-                             amount=format_silver(self.amount))
-        else:
-            description = t(self.lang, "add_success_multi", actor=actor, amount=format_silver(self.amount),
-                             count=len(ok_targets), targets=_format_target_list(ok_targets))
-        embed = discord.Embed(color=discord.Color.green(), description=description)
-        _set_tx_footer(embed, self.lang, tx_ids)
-        await interaction.edit_original_response(content=None, embed=embed, view=self)
-
-    async def _on_cancel(self, interaction: Interaction) -> None:
-        self._disable_all()
-        await interaction.response.edit_message(content=t(self.lang, "prefix_cancelled"), embed=None, view=self)
 
 
 class ConfirmRemoveMoneyView(discord.ui.View):

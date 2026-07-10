@@ -11,6 +11,14 @@ mesmo pool. Aqui centralizamos a concorrência em 2 pools:
 
 Total 9 (era ~15) — abaixo do limiar de 429 (~24) e deixa headroom pra serving.
 
+Concorrência sozinha não limita TAXA: 9 slots com requests rápidos (ida-e-volta
+de ~50-100ms) ainda sustentam dezenas de requests/segundo, e foi exatamente
+isso que gerou 429 em cascata mesmo com o cap de concorrência já em vigor (ver
+battle_tracker.py). ``_rate_limiter`` abaixo complementa com um teto de
+requests/segundo agregado — mesma fila de prioridade dos pools, só que o
+"slot" é devolvido por tempo (após ``1/rate`` segundos) em vez de quando o
+corpo do ``async with`` termina.
+
 **Uso:** tasks/routes envolvem o corpo com ``async with albion_scope(P):``; cada
 ``client.get`` contra gameinfo envolve com ``async with slot():``. A prioridade
 vive num ``ContextVar`` — funções compartilhadas (fetch_battle_detail,
@@ -97,14 +105,48 @@ _reserved = _PriorityPool(_RESERVED_SLOTS)
 _bg = _PriorityPool(_BG_SLOTS)
 
 
+class _RateLimiter:
+    """Teto de requests/segundo agregado (todas as prioridades, um recurso só
+    — é o que a Albion vê do nosso lado). Reaproveita _PriorityPool: em vez
+    de devolver o "slot" quando o caller termina (concorrência), devolve
+    ``1/rate`` segundos depois de adquirido — vira limite de taxa, com a
+    mesma fila por prioridade (heap) já testada acima. ``burst`` = quantos
+    requests podem estar "em resfriamento" ao mesmo tempo."""
+
+    def __init__(self, rate: float, burst: int):
+        self._pool = _PriorityPool(burst)
+        self._interval = 1.0 / rate
+
+    async def acquire(self, prio: int) -> None:
+        await self._pool.acquire(prio)
+        asyncio.get_running_loop().call_later(self._interval, self._pool.release)
+
+
+# ponytail: Albion não publica limite oficial pro gameinfo público.
+# 10/10 e depois 5/5 ainda deixavam passar 429 — e o padrão nos logs (muitas
+# batalhas DIFERENTES falhando na 1ª página quase juntas, sobrevivendo às 3
+# tentativas de retry) aponta pra sensibilidade a RAJADA instantânea, não só
+# taxa sustentada: burst=5 deixava 5 requests saírem no mesmíssimo instante
+# antes de qualquer espaçamento. Burst cortado pra 1 — zero rajada da nossa
+# parte, todo request espaçado em pelo menos 1/rate segundos, sem exceção.
+# Ajustar rate pra baixo de novo se 429 persistir (battle_tracker/
+# battle_reprocessor logam toda falha), pra cima se um período limpo mostrar folga.
+ALBION_RATE_LIMIT = 3   # requests/segundo agregado, todas as prioridades
+ALBION_RATE_BURST = 1   # sem rajada — cada request espaçado em 1/rate segundos
+
+_rate_limiter = _RateLimiter(ALBION_RATE_LIMIT, ALBION_RATE_BURST)
+
+
 @asynccontextmanager
 async def slot():
-    """Adquire um slot do pool correspondente à prioridade corrente. Envolver
-    CADA ``client.get`` contra gameinfo com isto."""
+    """Adquire um slot do pool correspondente à prioridade corrente e um
+    token do limitador de taxa agregado. Envolver CADA ``client.get`` contra
+    gameinfo com isto."""
     prio = _current.get()
     pool = _reserved if prio <= _HIGH_MAX else _bg
     await pool.acquire(prio)
     try:
+        await _rate_limiter.acquire(prio)
         yield
     finally:
         pool.release()
@@ -126,6 +168,12 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         return cm
 
     async def _main():
+        # (a)-(c) testam só os pools de concorrência — troca o rate limiter
+        # global por um bem generoso pra essas asserções de timing não
+        # dependerem do burst/rate de produção (testado isolado no (e)).
+        global _rate_limiter
+        _rate_limiter = _RateLimiter(rate=1000, burst=1000)
+
         # (a) bg pool cheio: 7º OTHER bloqueia
         holds = [await _hold(OTHER) for _ in range(_BG_SLOTS)]
         seventh_done = asyncio.Event()
@@ -188,6 +236,16 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         assert battle_priority(B(50), is_new=False) == OLD_ELIGIBLE
         assert battle_priority(B(5), is_new=False) == OLD_SMALL
         assert battle_priority(B(None), is_new=True) == NEW_SMALL  # None → 0 → small
+
+        # (e) rate limiter: burst dispara na hora, o (burst+1)º espera ~1/rate
+        rl = _RateLimiter(rate=20, burst=3)
+        t0 = asyncio.get_running_loop().time()
+        for _ in range(3):
+            await rl.acquire(OTHER)
+        assert asyncio.get_running_loop().time() - t0 < 0.05, "burst deveria ser imediato"
+        await rl.acquire(OTHER)
+        elapsed = asyncio.get_running_loop().time() - t0
+        assert elapsed >= 1 / 20, f"4º request deveria esperar ~1/rate, levou {elapsed}s"
 
         print("albion_gate OK")
 

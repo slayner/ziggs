@@ -148,6 +148,12 @@ async def run_forever() -> None:
     # all-time escaneava ao vivo), mas não é zero. Upgrade se isso incomodar:
     # mover a agregação pra GROUP BY no banco em vez de dict em Python.
     log.info("weapon_stats: iniciando (intervalo=%ds)", REBUILD_INTERVAL)
+    # ponytail: folga antes da 1ª rodada — o rebuild disparando direto no boot
+    # (junto com todos os outros serviços acordando) era a maior fonte dos
+    # gaps de GIL logo na janela em que o bot-v2 conecta e faz o catch-up
+    # (timeouts de 5s em regear/lootlog/embed-work). Intervalo é 1h; começar
+    # 5min depois não muda nada do resultado.
+    await asyncio.sleep(300)
     while True:
         try:
             n = await asyncio.to_thread(_rebuild_sync)

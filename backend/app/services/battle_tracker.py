@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -68,7 +69,18 @@ BACKFILL_CYCLE_INTERVAL = 20  # segundos entre ciclos do loop de backfill (roda 
 # avança nem marca done, e o backfill fica retentando o mesmo offset pra sempre.
 BATTLES_API_OFFSET_LIMIT = 10000
 
-PAGE_PAUSE = 0.5  # segundos entre páginas na varredura reversa de startup (ver _reverse_startup_sweep)
+# ponytail: era 0.5 — a varredura reversa cobre ~196 páginas/região (todo o
+# teto de 10k) TODA vez que o servidor sobe, e _write_deep_data comita por
+# BATALHA (não por página): com o rate limiter da Albion agora bem mais
+# apertado (ver albion_gate.py), essa varredura passou a levar muito mais
+# tempo, e cada commit síncrono dela (mais os de todo outro serviço de
+# fundo escrevendo ao mesmo tempo) prendia o event loop com frequência alta
+# o bastante pra deixar até /health engasgando por vários segundos logo após
+# um restart — exatamente quando o bot está tentando se conectar. Não é
+# urgente (rede de segurança, ver docstring de _reverse_startup_sweep):
+# espaçar mais não perde nada, só demora mais pra terminar.
+PAGE_PAUSE = 2.0  # segundos entre páginas na varredura reversa de startup (ver _reverse_startup_sweep)
+STARTUP_GRACE_DELAY = 90  # segundos de folga antes da varredura reversa começar (ver run_backfill_forever)
 
 _EQUIP_SLOT_MAP = {
     "MainHand": "weapon", "OffHand": "offhand", "Head": "helmet",
@@ -275,7 +287,12 @@ async def _fetch_deep_data(client: httpx.AsyncClient, host: str, battle: Battle)
     na hora e só voltava a ser tentada num ciclo futuro (via reprocess_reason,
     ver _deep_process_batch), o que sob rate limit sustentado (muitos
     serviços de fundo batendo na mesma API ao mesmo tempo) virava uma
-    cascata de 429 em vez de se recuperar sozinho."""
+    cascata de 429 em vez de se recuperar sozinho.
+
+    Jitter (±30%) no backoff sem Retry-After: várias batalhas do mesmo lote
+    (ver _backfill_deep_fetch_all) podem falhar quase no mesmo instante e,
+    sem jitter, todas dormiriam o MESMO tempo e retentariam juntas de novo —
+    uma manada sincronizada que reproduz o pico de 429 em vez de se espalhar."""
     for attempt in range(3):
         try:
             raw = await fetch_battle_detail(client, host, battle.albion_id)
@@ -284,12 +301,14 @@ async def _fetch_deep_data(client: httpx.AsyncClient, host: str, battle: Battle)
         except (httpx.ReadTimeout, httpx.ConnectTimeout):
             if attempt == 2:
                 raise
-            await asyncio.sleep(2 ** attempt)
+            await asyncio.sleep(random.uniform(0.7, 1.3) * (2 ** attempt))
         except httpx.HTTPStatusError as e:
             if e.response.status_code != 429 or attempt == 2:
                 raise
             retry_after = e.response.headers.get("Retry-After")
             wait = float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit() else 5.0 * (attempt + 1)
+            if not retry_after:
+                wait *= random.uniform(0.7, 1.3)
             await asyncio.sleep(wait)
 
 
@@ -508,6 +527,10 @@ def _prio_old(b: Battle) -> int: return battle_priority(b, is_new=False)
 def _prio_other(_b: Battle) -> int: return OTHER
 
 
+DEEP_FETCH_CONCURRENCY = 4  # batalhas com deep-fetch em voo ao mesmo tempo (ver _backfill_deep_fetch_all)
+_deep_fetch_gate = asyncio.Semaphore(DEEP_FETCH_CONCURRENCY)
+
+
 async def _backfill_deep_fetch_all(
     client: httpx.AsyncClient, host: str, battles: list[Battle], *, priority_fn,
 ) -> list[tuple[Battle, dict | None, list[dict]] | tuple[Battle, Exception]]:
@@ -517,14 +540,23 @@ async def _backfill_deep_fetch_all(
     espera de rede das várias batalhas se sobrepõe em vez de somar.
     `priority_fn(battle)` decide o tier do bg pool praquele deep-fetch — o
     `slot()` real vive dentro de fetch_battle_detail/fetch_events e lê o
-    contextvar que o scope aqui seta."""
+    contextvar que o scope aqui seta.
+
+    `_deep_fetch_gate` cap quantas batalhas processam ao mesmo tempo: mesmo
+    com slot()/rate limiter serializando as requests de verdade, disparar as
+    ~20 batalhas de um lote TODAS de uma vez (via gather sem cap) fazia todo
+    mundo falhar 429 perto do mesmo instante e retentar com backoff parecido
+    — uma "manada" de retries sincronizados que gerava outro pico de 429 em
+    vez de se espalhar. Com poucas em voo por vez, uma falha de uma batalha
+    não arrasta um bloco inteiro pro mesmo instante de retry."""
     async def fetch_one(battle: Battle):
-        async with albion_scope(priority_fn(battle)):
-            try:
-                raw, events = await _fetch_deep_data(client, host, battle)
-                return battle, raw, events
-            except Exception as e:
-                return battle, e
+        async with _deep_fetch_gate:
+            async with albion_scope(priority_fn(battle)):
+                try:
+                    raw, events = await _fetch_deep_data(client, host, battle)
+                    return battle, raw, events
+                except Exception as e:
+                    return battle, e
 
     return await asyncio.gather(*[fetch_one(b) for b in battles])
 
@@ -908,8 +940,15 @@ async def run_backfill_forever() -> None:
     Antes do loop perpétuo normal, roda 1x a varredura reversa de startup
     (ver _reverse_startup_sweep) — toda vez que o servidor sobe, cobre a
     janela de trás pra frente pra pegar primeiro quem está mais perto de
-    sumir da janela de ~10000 que a API expõe."""
+    sumir da janela de ~10000 que a API expõe.
+
+    STARTUP_GRACE_DELAY: espera antes de sequer começar a varredura — ela é
+    a maior fonte de commits síncronos logo após o servidor subir (não
+    urgente, é rede de segurança), e competia bem com quem realmente precisa
+    de uma resposta rápida logo no boot (bot-v2 tentando conectar, ver
+    main.py _wait_for_backend). Dar essa folga primeiro não perde nada."""
     log.info("battle_tracker: backfill iniciando (bg pool do albion_gate)")
+    await asyncio.sleep(STARTUP_GRACE_DELAY)
 
     db = SessionLocal()
     try:

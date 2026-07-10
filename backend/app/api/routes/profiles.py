@@ -766,10 +766,17 @@ def _search(db: Session, q: str) -> dict:
         top_battles = db.scalars(
             select(Battle).where(Battle.id.in_(all_bids)).order_by(Battle.start_time.desc()).limit(6)
         ).all()
-        groups = battle_groups.get_or_create_groups_bulk(db, [b.id for b in top_battles])
+        # Só lê (nunca cria) — busca roda a cada tecla digitada, não vale a
+        # pena escrever (e disputar lock com o resto do tráfego de fundo) só
+        # pra sugestão de autocomplete. Batalha sem link público ainda fica
+        # de fora da sugestão (ganha um assim que alguém abrir ela de fato).
+        groups = battle_groups.get_existing_groups_bulk(db, [b.id for b in top_battles])
         for b in top_battles:
+            group = groups.get(b.id)
+            if group is None:
+                continue
             battles.append({
-                "public_id": groups[b.id].public_id,
+                "public_id": group.public_id,
                 "start_time": _aware(b.start_time).isoformat(),
                 "cluster": b.cluster,
                 "kill_count": b.kill_count,
@@ -806,12 +813,18 @@ def guild_profile(albion_id: str, db: Session = Depends(deps.db_session)):
 
     c7, c30 = _cutoffs()
     kills_total, deaths_total = _totals(db, guild_id=albion_id)
+    last_synced_at = db.scalar(
+        select(func.max(Battle.fetched_at))
+        .join(BattleGuild, BattleGuild.battle_id == Battle.id)
+        .where(BattleGuild.albion_guild_id == albion_id)
+    )
 
     return {
         "albion_id": albion_id,
         "name": bg.guild_name,
         "alliance_id": bg.alliance_id,
         "alliance_name": bg.alliance_name,
+        "last_synced_at": _aware(last_synced_at).isoformat() if last_synced_at else None,
         "kills_total": kills_total,
         "deaths_total": deaths_total,
         "kill_fame": _fame_windows(db, c7, c30, guild_id=albion_id),
@@ -840,10 +853,16 @@ def alliance_profile(albion_id: str, db: Session = Depends(deps.db_session)):
 
     c7, c30 = _cutoffs()
     kills_total, deaths_total = _totals(db, alliance_id=albion_id)
+    last_synced_at = db.scalar(
+        select(func.max(Battle.fetched_at))
+        .join(BattleGuild, BattleGuild.battle_id == Battle.id)
+        .where(BattleGuild.alliance_id == albion_id)
+    )
 
     return {
         "albion_id": albion_id,
         "name": bg.alliance_name,
+        "last_synced_at": _aware(last_synced_at).isoformat() if last_synced_at else None,
         "kills_total": kills_total,
         "deaths_total": deaths_total,
         "kill_fame": _fame_windows(db, c7, c30, alliance_id=albion_id),

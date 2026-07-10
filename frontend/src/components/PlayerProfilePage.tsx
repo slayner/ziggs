@@ -661,6 +661,58 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
   const [newBattleIds, setNewBattleIds] = useState<Set<string>>(new Set());
   const staggerTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
+  function applyProfile(data: PlayerProfile, silent: boolean) {
+    const z = data._ziggs;
+
+    if (silent && prevStatsRef.current) {
+      const changed = new Set<string>();
+      if (data.KillFame !== prevStatsRef.current.killFame) { changed.add("killFame"); changed.add("kd"); }
+      if (data.DeathFame !== prevStatsRef.current.deathFame) { changed.add("deathFame"); changed.add("kd"); }
+      if (z.silver_dropped !== prevStatsRef.current.silver) changed.add("silver");
+      if (changed.size) setGlowingStats(prev => new Set([...prev, ...changed]));
+
+      const allActivity = [
+        ...z.kills.map(ev => ({ id: ev.event_id })),
+        ...z.deaths.map(ev => ({ id: ev.event_id })),
+      ];
+      const newActivity = allActivity.filter(ev => !knownActivityRef.current.has(ev.id));
+      if (newActivity.length) {
+        staggerTimersRef.current.forEach(clearTimeout);
+        staggerTimersRef.current = [];
+        newActivity.forEach(({ id }, i) => {
+          const t = setTimeout(() => setNewActivityIds(prev => new Set([...prev, id])), i * STAGGER_MS);
+          staggerTimersRef.current.push(t);
+        });
+      }
+      allActivity.forEach(({ id }) => knownActivityRef.current.add(id));
+
+      const newBattles = z.battle_history.filter(b => !knownBattlesRef.current.has(b.public_id));
+      if (newBattles.length) {
+        newBattles.forEach((b, i) => {
+          const t = setTimeout(() => setNewBattleIds(prev => new Set([...prev, b.public_id])), i * STAGGER_MS);
+          staggerTimersRef.current.push(t);
+        });
+      }
+      z.battle_history.forEach(b => knownBattlesRef.current.add(b.public_id));
+    }
+
+    prevStatsRef.current = { killFame: data.KillFame, deathFame: data.DeathFame, silver: z.silver_dropped };
+
+    if (!silent) {
+      knownActivityRef.current = new Set([
+        ...z.kills.map(ev => ev.event_id),
+        ...z.deaths.map(ev => ev.event_id),
+      ]);
+      knownBattlesRef.current = new Set(z.battle_history.map(b => b.public_id));
+      setActiveTab("activity");
+      setActivityPage(1);
+      setBattlesPage(1);
+      setHistoryPage(1);
+    }
+
+    setProfile(data);
+  }
+
   function load(silent: boolean) {
     if (silent) setRefreshing(true); else setLoading(true);
     setError(null);
@@ -693,58 +745,36 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
       if (resolved) return;
       resolved = true;
       if (silent) setRefreshing(false); else setLoading(false);
-      const z = data._ziggs;
-
-      if (silent && prevStatsRef.current) {
-        const changed = new Set<string>();
-        if (data.KillFame !== prevStatsRef.current.killFame) { changed.add("killFame"); changed.add("kd"); }
-        if (data.DeathFame !== prevStatsRef.current.deathFame) { changed.add("deathFame"); changed.add("kd"); }
-        if (z.silver_dropped !== prevStatsRef.current.silver) changed.add("silver");
-        if (changed.size) setGlowingStats(prev => new Set([...prev, ...changed]));
-
-        const allActivity = [
-          ...z.kills.map(ev => ({ id: ev.event_id })),
-          ...z.deaths.map(ev => ({ id: ev.event_id })),
-        ];
-        const newActivity = allActivity.filter(ev => !knownActivityRef.current.has(ev.id));
-        if (newActivity.length) {
-          staggerTimersRef.current.forEach(clearTimeout);
-          staggerTimersRef.current = [];
-          newActivity.forEach(({ id }, i) => {
-            const t = setTimeout(() => setNewActivityIds(prev => new Set([...prev, id])), i * STAGGER_MS);
-            staggerTimersRef.current.push(t);
-          });
-        }
-        allActivity.forEach(({ id }) => knownActivityRef.current.add(id));
-
-        const newBattles = z.battle_history.filter(b => !knownBattlesRef.current.has(b.public_id));
-        if (newBattles.length) {
-          newBattles.forEach((b, i) => {
-            const t = setTimeout(() => setNewBattleIds(prev => new Set([...prev, b.public_id])), i * STAGGER_MS);
-            staggerTimersRef.current.push(t);
-          });
-        }
-        z.battle_history.forEach(b => knownBattlesRef.current.add(b.public_id));
-      }
-
-      prevStatsRef.current = { killFame: data.KillFame, deathFame: data.DeathFame, silver: z.silver_dropped };
-
-      if (!silent) {
-        knownActivityRef.current = new Set([
-          ...z.kills.map(ev => ev.event_id),
-          ...z.deaths.map(ev => ev.event_id),
-        ]);
-        knownBattlesRef.current = new Set(z.battle_history.map(b => b.public_id));
-        setActiveTab("activity");
-        setActivityPage(1);
-        setBattlesPage(1);
-        setHistoryPage(1);
-      }
-
-      setProfile(data);
+      applyProfile(data, silent);
     };
 
     attempt(3_000);
+  }
+
+  // Botão ⟳: só enfileira no backend (POST /refresh) e faz polling da leitura
+  // normal até last_seen_at mudar — nunca bloqueia esperando o fetch pesado
+  // na Albion (ver profile_warmer.sync_refresh_requests).
+  function forceRefresh() {
+    if (!profile || refreshing) return;
+    setRefreshing(true);
+    const beforeLastSeen = profile._ziggs.last_seen_at;
+    fetch(`${API}/players/${encodeURIComponent(profile.Id)}/refresh`, { method: "POST" }).catch(() => {});
+
+    const deadline = Date.now() + 15_000;
+    const poll = () => {
+      fetch(`${API}/players/by-name/${region}/${encodeURIComponent(name)}`)
+        .then(res => (res.ok ? res.json() : null))
+        .then((data: PlayerProfile | null) => {
+          const changed = !!data && data._ziggs.last_seen_at !== beforeLastSeen;
+          if (!changed && Date.now() < deadline) { setTimeout(poll, 2_000); return; }
+          setRefreshing(false);
+          if (data) applyProfile(data, true);
+        })
+        .catch(() => {
+          if (Date.now() < deadline) setTimeout(poll, 2_000); else setRefreshing(false);
+        });
+    };
+    setTimeout(poll, 2_000);
   }
 
   useEffect(() => {
@@ -841,14 +871,14 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
                 </div>
                 <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-600">
                   <button
-                    onClick={() => load(true)}
+                    onClick={forceRefresh}
                     disabled={refreshing}
                     title={t("forceRefreshTitle")}
                     className="text-zinc-500 hover:text-amber-400 disabled:opacity-40 transition-colors"
                   >
-                    <span className={refreshing ? "inline-block animate-spin" : "inline-block"}>⟳</span>
+                    <i className={`ti ti-refresh inline-block${refreshing ? " animate-spin" : ""}`} aria-hidden="true" />
                   </button>
-                  {t("updatedAgoPrefix")} {timeAgo(z.last_seen_at)} {t("agoSinceSuffix")} {dateUTC(z.first_seen_at)}
+                  {timeAgo(z.last_seen_at)} {t("justAgoSuffix")}
                 </div>
               </div>
               <TopWeaponsWidget weapons={z.top_weapons} />

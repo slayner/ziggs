@@ -11,11 +11,14 @@ from app.config import get_settings
 _settings = get_settings()
 
 # SQLite (dev local) precisa de check_same_thread=False porque o FastAPI roda
-# endpoints síncronos em várias threads. timeout=30: espera até 30s pelo lock
+# endpoints síncronos em várias threads. timeout=60: espera até 60s pelo lock
 # em vez de falhar imediatamente quando há writes concorrentes dos background
-# tasks (battle_tracker, profile_warmer, player_tracker).
+# tasks. Subido de 30→60 após o dashboard_cache (transação de leitura longa de
+# 45 batalhas × 3 regiões) segurar snapshot por vários segundos e fazer
+# commiters concorrentes (sweeper/tracker) estourarem busy_timeout durante
+# auto-checkpoint do WAL.
 _is_sqlite = _settings.database_url.startswith("sqlite")
-_connect_args = {"check_same_thread": False, "timeout": 30} if _is_sqlite else {}
+_connect_args = {"check_same_thread": False, "timeout": 60} if _is_sqlite else {}
 # pool_size=20 + max_overflow=10: ~9 background tasks (bg pool do albion_gate)
 # + threads de request compartilham este pool; o default (5) deixava request
 # de perfil esperando vaga de conexão atrás de backfill/warmer sob carga.

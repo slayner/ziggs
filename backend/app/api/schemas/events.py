@@ -17,6 +17,17 @@ class EventCreate(BaseModel):
     message: str | None = None  # texto livre do caller, mostrado no mass-info
 
 
+class EventUpdate(BaseModel):
+    """Edição parcial de um evento (PATCH). Só os campos presentes no body são
+    aplicados (caller usa exclude_unset). comp_id=null desvincula a comp; trocar
+    a comp remove os signups existentes (a inscrição era pra função da comp
+    antiga) — o bot avisa os inscritos por DM, do site só são limpos."""
+    title: str | None = None
+    scheduled_at: datetime | None = None
+    comp_id: int | None = None
+    attendance: float | None = None
+
+
 class EventSummary(BaseModel):
     id: int
     state: str

@@ -54,12 +54,20 @@ def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
     alliance_tag = data.get("AllianceTag") or data.get("allianceTag") or None
     avatar = data.get("Avatar") or data.get("avatar") or None
 
-    lifetime = data.get("LifetimeStatistics") or {}
-    pve_fame = ((lifetime.get("PvE") or {}).get("Total") or 0)
-    crafting_fame = ((lifetime.get("Crafting") or {}).get("Total") or 0)
-    gathering_fame = (((lifetime.get("Gathering") or {}).get("All") or {}).get("Total") or 0)
+    lifetime = data.get("LifetimeStatistics")
+    has_lifetime = isinstance(lifetime, dict) and bool(lifetime)
     kill_fame = data.get("KillFame") or 0
     death_fame = data.get("DeathFame") or 0
+    # Stats detalhadas (PvE/Crafting/Gathering por recurso) só vêm no perfil
+    # completo e no feed; buscas trazem só o topo. Sem LifetimeStatistics no
+    # payload, NÃO sobrescreve — senão um upsert de busca zera as coletas que
+    # já tínhamos (ver _synthetic_raw em routes/players.py).
+    if has_lifetime:
+        pve_fame = ((lifetime.get("PvE") or {}).get("Total") or 0)
+        crafting_fame = ((lifetime.get("Crafting") or {}).get("Total") or 0)
+        gathering_fame = (((lifetime.get("Gathering") or {}).get("All") or {}).get("Total") or 0)
+    else:
+        pve_fame = crafting_fame = gathering_fame = None  # type: ignore[assignment]
 
     now = datetime.now(timezone.utc)
     player = db.query(AlbionPlayer).filter_by(albion_id=albion_id).first()
@@ -73,7 +81,8 @@ def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
             alliance_id=alliance_id, alliance_name=alliance_name, alliance_tag=alliance_tag,
             avatar=avatar,
             kill_fame=kill_fame, death_fame=death_fame,
-            pve_fame=pve_fame, crafting_fame=crafting_fame, gathering_fame=gathering_fame,
+            pve_fame=pve_fame or 0, crafting_fame=crafting_fame or 0, gathering_fame=gathering_fame or 0,
+            lifetime_statistics=lifetime if has_lifetime else None,
             first_seen_at=now, last_seen_at=now,
         )
         db.add(player)
@@ -89,9 +98,11 @@ def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
             player.avatar = avatar
         player.kill_fame = kill_fame
         player.death_fame = death_fame
-        player.pve_fame = pve_fame
-        player.crafting_fame = crafting_fame
-        player.gathering_fame = gathering_fame
+        if has_lifetime:
+            player.lifetime_statistics = lifetime
+            player.pve_fame = pve_fame
+            player.crafting_fame = crafting_fame
+            player.gathering_fame = gathering_fame
         player.last_seen_at = now
         player.is_deleted = False
 
@@ -110,7 +121,7 @@ def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
             player_id=player.id,
             guild_id=guild_id, guild_name=guild_name,
             alliance_id=alliance_id, alliance_tag=alliance_tag,
-            kill_fame=kill_fame, death_fame=death_fame, pve_fame=pve_fame,
+            kill_fame=player.kill_fame, death_fame=player.death_fame, pve_fame=player.pve_fame,
             snapshotted_at=now,
         ))
 

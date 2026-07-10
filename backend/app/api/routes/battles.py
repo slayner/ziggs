@@ -1,6 +1,7 @@
 """Rotas públicas de battle tracker — sem escopar por guilda."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.models.battles import Battle, BattleGuild, BattleKillEvent, BattleParticipant, BattleSide
 from app.models.catalog import Weapon
+from app.models.dashboard_cache import DashboardCache
 from app.models.players import PlayerCountSnapshot, PlayerKillEvent
 from app.services import battle_groups, battle_sides, battle_tracker, prices
 from app.services.player_activity import active_player_count
@@ -290,7 +292,27 @@ def battle_highlights(regions: str | None = None, db: Session = Depends(deps.db_
     conta fama de batalha elegível: a guilda teve mais de 15 jogadores NESSA
     luta (limiar é por guilda, não pela batalha toda), a luta é letal (ver
     Battle.is_lethal em battle_tracker._write_deep_data), e houve cura
-    registrada — de qualquer lado, não precisa ser da própria guilda."""
+    registrada — de qualquer lado, não precisa ser da própria guilda.
+
+    Lido do precompute de 1min (dashboard_cache) — cada guilda pertence a uma
+    única região, então mesclar os top-N cacheados de cada região pedida e
+    reordenar dá o mesmo resultado da query ao vivo. Cai pra query ao vivo só
+    se o cache ainda não esquentou (bem no boot)."""
+    from app.services.dashboard_cache import REGIONS
+    region_list = [r.strip() for r in regions.split(",") if r.strip()] if regions else list(REGIONS)
+    cached = {row.key: row.payload for row in db.execute(
+        select(DashboardCache).where(DashboardCache.key.in_([f"highlights:{r}" for r in region_list]))
+    ).scalars()}
+    if len(cached) == len(region_list):
+        merged: dict[str, dict] = {}
+        week_start_iso = None
+        for payload in cached.values():
+            week_start_iso = payload["week_start"]
+            for g in payload["guilds"]:
+                merged[g["albion_guild_id"]] = g
+        guilds = sorted(merged.values(), key=lambda g: g["fame"], reverse=True)[:10]
+        return {"week_start": week_start_iso or _week_start_utc().isoformat(), "guilds": guilds}
+
     week_start = _week_start_utc()
 
     battle_filters = [
@@ -359,6 +381,45 @@ def list_battles(
     """Lista de batalhas — só consulta a nossa base, nunca a API do Albion.
     Os 3 filtros (data, jogadores mínimos, kills mínimas) sempre se combinam
     (AND), com busca por guilda/aliança/jogador/zona por cima."""
+    from app.services.dashboard_cache import DEFAULT_MIN_KILLS, DEFAULT_MIN_PLAYERS
+
+    # Formato "cacheável" = exatamente o que o BattlesCard do dashboard pede
+    # (sem busca/filtro de data, primeira página, filtros default). Precompute
+    # de 1min (dashboard_cache) evita recomputar isso a cada visita.
+    cacheable = (
+        offset == 0 and not search and not date_from and not date_to
+        and min_players == DEFAULT_MIN_PLAYERS and min_kills == DEFAULT_MIN_KILLS
+    )
+    if cacheable:
+        cached_row = db.get(DashboardCache, "recent_battles")
+        if cached_row is not None:
+            payload = cached_row.payload
+            # ponytail: defesa contra payload chegar como JSON-texto cru
+            # (coluna JSON devolve objeto, mas se algum dia vier str, parseia).
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            # back-compat: payload já foi uma lista crua — dict novo carrega
+            # rows + counts por região (ver dashboard_cache.refresh_recent_battles).
+            if isinstance(payload, dict):
+                rows = payload.get("rows", [])
+                counts = payload.get("counts", {}) or {}
+            else:
+                rows = payload
+                counts = {}
+            wanted_regions = {r.strip() for r in regions.split(",") if r.strip()} if regions else None
+            if wanted_regions is not None:
+                rows = [r for r in rows if r["region"] in wanted_regions]
+            # total REAL que bate com o que o path DB retorna pra offset>0 —
+            # sem isso a paginação via cache via total=len(slice)≈10 e só
+            # mostrava a página 0 das ~12k batalhas.
+            if counts:
+                regions_for_total = wanted_regions if wanted_regions is not None else set(counts)
+                total = sum(counts.get(r, 0) for r in regions_for_total)
+            else:
+                total = len(rows)
+            rows = rows[:limit]
+            return {"battles": rows, "total": total}
+
     q = select(Battle)
 
     if regions:

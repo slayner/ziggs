@@ -12,6 +12,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from localization import ZiggsTranslator
+import http_client
 
 load_dotenv()
 
@@ -35,36 +36,12 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 async def _post(path: str, body: dict | None = None) -> None:
     """Envia uma requisição POST ao site (best-effort)."""
-    if not SITE_URL or not API_SECRET:
-        return
-    try:
-        async with aiohttp.ClientSession() as s:
-            await s.post(
-                f"{SITE_URL}{path}",
-                json=body or {},
-                headers={"Authorization": f"Bearer {API_SECRET}"},
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-    except Exception:
-        pass
+    await http_client.post_best_effort(path, body)
 
 
 async def _get(path: str) -> dict | None:
     """GET no site (best-effort) — usado pelo polling de trabalho pendente."""
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.get(
-                f"{SITE_URL}{path}",
-                headers={"Authorization": f"Bearer {API_SECRET}"},
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.get_json(path)
 
 
 async def heartbeat(guild: discord.Guild) -> None:
@@ -129,13 +106,11 @@ async def _wait_for_backend() -> None:
     if not SITE_URL:
         print("✗ BOT_SITE_URL vazio — bot vai rodar sem backend (apenas comandos locais)")
         return
-    import aiohttp as _aiohttp
     url = f"{SITE_URL}/health"
     last_log = 0.0
     while True:
         try:
-            async with _aiohttp.ClientSession() as s:
-                r = await s.get(url, timeout=_aiohttp.ClientTimeout(total=3))
+            async with http_client.session().get(url, timeout=aiohttp.ClientTimeout(total=3)) as r:
                 if r.status == 200:
                     print(f"✓ backend online ({SITE_URL})")
                     return
@@ -221,6 +196,21 @@ async def on_ready() -> None:
                 await lootlog_cog.sync_guild(guild)
             except Exception:
                 pass
+    # Mesmo catch-up pro calendário de nodes — sem isto, o update_calendar
+    # (loop de 5min, cogs/nodes.py) faz a 1ª tentativa gated só por
+    # wait_until_ready() (gateway do Discord), sem esperar o backend. Bot
+    # costuma ganhar a corrida do start-all.cmd contra o backend, então essa
+    # 1ª tentativa quase sempre batia num backend ainda fora do ar antes desse
+    # catch-up existir — _sync_calendar já tem a defesa (não cria mensagem
+    # nova se a requisição falhar), mas sem chamar aqui o calendário só
+    # relinkava depois de até 5min esperando o próximo tick do loop.
+    nodes_cog = bot.get_cog("Nodes")
+    if nodes_cog is not None:
+        for guild in bot.guilds:
+            try:
+                await nodes_cog.refresh_calendar(guild)
+            except Exception:
+                pass
     # Canal de logs (feature sempre ativa, ver cogs/audit_log.py): garante o
     # canal já na reconexão em vez de esperar o primeiro tick do loop (8s) —
     # guildas sem logs_channel_id ainda ganham o canal admin-only assim que o
@@ -272,8 +262,12 @@ async def main() -> None:
         await bot.load_extension("cogs.nodes")
         await bot.load_extension("cogs.voice_presence")
         await bot.load_extension("cogs.event_embeds")
+        await bot.load_extension("cogs.event_cmd")
         await bot.load_extension("cogs.audit_log")
-        await bot.start(TOKEN)
+        try:
+            await bot.start(TOKEN)
+        finally:
+            await http_client.close()
 
 
 asyncio.run(main())

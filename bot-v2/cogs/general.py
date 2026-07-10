@@ -6,6 +6,7 @@ from discord import app_commands, Interaction
 from discord.ext import commands
 from typing import Optional
 
+import http_client
 from i18n import t
 from localization import loc
 
@@ -45,12 +46,11 @@ async def _guild_command_config(guild_id: int) -> dict:
     if not SITE_URL or not API_SECRET:
         return empty
     try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.get(
-                f"{SITE_URL}/bot/guild-commands/{guild_id}",
-                headers={"Authorization": f"Bearer {API_SECRET}"},
-                timeout=aiohttp.ClientTimeout(total=3),
-            )
+        async with http_client.session().get(
+            f"{SITE_URL}/bot/guild-commands/{guild_id}",
+            headers={"Authorization": f"Bearer {API_SECRET}"},
+            timeout=aiohttp.ClientTimeout(total=3),
+        ) as r:
             if r.status == 200:
                 data = await r.json()
                 cfg = {
@@ -124,19 +124,6 @@ async def check_command_access(interaction: discord.Interaction, name: str) -> b
         return True
     key = "cmd_disabled" if status == "disabled" else "no_permission"
     await interaction.response.send_message(t(lang, key), ephemeral=True)
-    return False
-
-
-async def check_command_access_ctx(ctx: commands.Context, name: str) -> bool:
-    """Mesma checagem de check_command_access, mas pra comandos de prefixo
-    (ctx.send em vez de interaction.response)."""
-    if not ctx.guild:
-        return True
-    status, lang = await _access_status(ctx.guild.id, ctx.author, name)
-    if status == "ok":
-        return True
-    key = "cmd_disabled" if status == "disabled" else "no_permission"
-    await ctx.send(t(lang, key))
     return False
 
 
@@ -224,9 +211,9 @@ class General(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="avatar", description=loc("Mostra o avatar de um usuário ou servidor", "cmd_desc_avatar"))
-    @app_commands.describe(alvo=loc("ID de servidor, @menção, ID/nome de usuário ou apelido (padrão: você mesmo)", "opt_desc_avatar_banner_alvo"))
-    @app_commands.rename(alvo=loc("alvo", "opt_name_alvo"))
+    @app_commands.command(name="avatar", description=loc("Shows a user's or server's avatar", "cmd_desc_avatar"))
+    @app_commands.describe(alvo=loc("Server ID, @mention, user ID/name, or nickname (default: yourself)", "opt_desc_avatar_banner_alvo"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"))
     async def avatar(self, interaction: Interaction, alvo: Optional[str] = None) -> None:
         if not await check_command_access(interaction, "avatar"):
             return
@@ -257,9 +244,9 @@ class General(commands.Cog):
             embed.description = t(lang, "global_avatar_link", url=user.avatar.url)
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="banner", description=loc("Mostra o banner de um usuário ou servidor", "cmd_desc_banner"))
-    @app_commands.describe(alvo=loc("ID de servidor, @menção, ID/nome de usuário ou apelido (padrão: você mesmo)", "opt_desc_avatar_banner_alvo"))
-    @app_commands.rename(alvo=loc("alvo", "opt_name_alvo"))
+    @app_commands.command(name="banner", description=loc("Shows a user's or server's banner", "cmd_desc_banner"))
+    @app_commands.describe(alvo=loc("Server ID, @mention, user ID/name, or nickname (default: yourself)", "opt_desc_avatar_banner_alvo"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"))
     async def banner(self, interaction: Interaction, alvo: Optional[str] = None) -> None:
         if not await check_command_access(interaction, "banner"):
             return

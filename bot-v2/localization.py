@@ -26,6 +26,20 @@ _LOCALE_LANG = {
 }
 
 
+def name_locs(pt: str, en: str, es: str) -> dict[discord.Locale, str]:
+    """Localizações de NOME de comando/subcomando (o nome é fixo no sync e o
+    Translator NÃO cobre nomes — só descrições/options via locale_str). O nome
+    canonico (registrado) fica em inglês (fallback pra qualquer locale sem
+    tradução); pt-BR/es-ES/es-419 recebem os nomes traduzidos."""
+    return {
+        discord.Locale.american_english: en,
+        discord.Locale.british_english: en,
+        discord.Locale.brazil_portuguese: pt,
+        discord.Locale.spain_spanish: es,
+        discord.Locale.latin_american_spanish: es,
+    }
+
+
 class ZiggsTranslator(app_commands.Translator):
     async def translate(
         self,
@@ -34,11 +48,16 @@ class ZiggsTranslator(app_commands.Translator):
         context: app_commands.TranslationContextTypes,
     ) -> str | None:
         lang = _LOCALE_LANG.get(locale)
-        # None = devolve o texto padrão (pt, já embutido no código) — cobre
-        # tanto locales sem tradução quanto o próprio pt-BR.
-        if lang is None or lang == "pt":
-            return None
         key = string.extras.get("key")
         if not key:
             return None
+        if lang is None:
+            # locale sem mapeamento dedicado (fr/de/ja/…) → fallback inglês,
+            # que é o default do bot.
+            return CMD_I18N.get(key, {}).get("en")
+        if lang == "pt":
+            # pt-BR: devolve a entrada pt do CMD_I18N se existir (default embutido
+            # em inglês); senão None → cai no default embutido (comandos antigos
+            # ainda embutem PT, então continuam mostrando PT em pt-BR).
+            return CMD_I18N.get(key, {}).get("pt")
         return CMD_I18N.get(key, {}).get(lang)

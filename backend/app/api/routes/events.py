@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.api.schemas.events import (
     AssignIn, AssignmentOut, AttendanceIn, DeathIn, DeathUpdate, EscalationOut,
-    EscalationPricesOut, EventCreate, EventDetail, EventSummary,
+    EscalationPricesOut, EventCreate, EventDetail, EventSummary, EventUpdate,
     NodeClaimIn, ParticipantIn, ParticipantUpdate, RegearEstimateOut, RegearItemOut,
     ReleaseFunctionsIn, SignupOut, StepRequest, TransitionRequest,
 )
@@ -58,6 +58,36 @@ def create_event(
     )
     db.commit()
     detail = svc.get_event(db, guild.id, eid)
+    assert detail is not None
+    return detail
+
+
+@router.patch("/{event_id}", response_model=EventDetail)
+def update_event(
+    event_id: int,
+    payload: EventUpdate,
+    guild: Guild = Depends(deps.tenant_guild),
+    db: Session = Depends(deps.db_session),
+    user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
+):
+    """Edição parcial: só campos presentes (exclude_unset). Trocar a comp remove
+    os signups (inscrição era pra função da comp antiga) — o bot DMa os inscritos
+    quando a troca vem do /event; do site os signups só são limpos."""
+    data = payload.model_dump(exclude_unset=True)
+    try:
+        svc.update_event(
+            db, guild.id, event_id,
+            title=data.get("title", svc._UNSET),
+            scheduled_at=data.get("scheduled_at", svc._UNSET),
+            comp_id=data.get("comp_id", svc._UNSET),
+            attendance=data.get("attendance", svc._UNSET),
+            actor_id=user.id if user else None,
+        )
+    except svc.ServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    detail = svc.get_event(db, guild.id, event_id)
     assert detail is not None
     return detail
 

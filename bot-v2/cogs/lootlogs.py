@@ -21,6 +21,7 @@ import aiohttp
 import discord
 from discord.ext import commands
 
+import http_client
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -119,13 +120,12 @@ async def _process_submission(interaction: discord.Interaction,
 
     out: dict | None = None
     try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.post(
-                f"{SITE_URL}/bot/guilds/{interaction.guild.id}/lootlog/ingest",
-                data=form,
-                headers={"Authorization": f"Bearer {API_SECRET}"},
-                timeout=aiohttp.ClientTimeout(total=20),
-            )
+        async with http_client.session().post(
+            f"{SITE_URL}/bot/guilds/{interaction.guild.id}/lootlog/ingest",
+            data=form,
+            headers={"Authorization": f"Bearer {API_SECRET}"},
+            timeout=aiohttp.ClientTimeout(total=20),
+        ) as r:
             if r.status == 200:
                 try:
                     out = await r.json()

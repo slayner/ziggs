@@ -24,8 +24,21 @@ from app.domain.states import (
 from app.models.audit import AuditLog
 from app.models.battles import Battle, BattleGuild, BattleParticipant
 from app.models.economy import EconomyTransaction
-from app.models.events import Event, EventDeath, EventParticipant, EventVerificationStep
+from app.models.events import Event, EventDeath, EventParticipant, EventSignup, EventVerificationStep
+from app.models.comps import Comp
 from app.models.regear import RegearRequest
+
+
+# Sentinela pra update_event distinguish "não tocar nesse campo" de "setar pra None"
+# (comp_id pode virar None pra desvincular a comp do evento).
+_UNSET = object()
+
+
+# Estados em que o evento ainda pode ser gerenciado (editado/deletado/adiado) pelo
+# bot — anything não-terminal. Espelho de TERMINAL invertido, em valores string.
+_MANAGEABLE_STATES = (
+    EventState.SCHEDULED, EventState.IN_PROGRESS, EventState.REVIEW,
+)
 from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildMember
 from app.services import economy as economy_svc
@@ -615,6 +628,125 @@ def set_attendance(
     db.flush()
     db.refresh(ev)
     return _detail(ev, db)
+
+
+def list_manageable_events(db: Session, guild_id: int) -> list[dict]:
+    """Eventos não-finalizados (SCHEDULED/IN_PROGRESS/REVIEW) com comp_name e
+    contagem de signups — alimenta os pickers de deletar/editar/adiar do /event
+    no bot. Espelho do lookup em batch de build_pending_work."""
+    rows = list(db.scalars(
+        select(Event).where(
+            Event.guild_id == guild_id, Event.state.in_(_MANAGEABLE_STATES),
+        ).order_by(Event.scheduled_at.is_(None), Event.scheduled_at.asc())
+    ))
+    comp_ids = {e.comp_id for e in rows if e.comp_id}
+    comp_names: dict[int, str] = {}
+    if comp_ids:
+        comp_names = {c.id: c.name for c in db.scalars(select(Comp).where(Comp.id.in_(comp_ids)))}
+    out = []
+    for e in rows:
+        out.append({
+            "id": e.id,
+            "title": e.title,
+            "scheduled_at": e.scheduled_at.isoformat() if e.scheduled_at else None,
+            "state": e.state.value,
+            "comp_id": e.comp_id,
+            "comp_name": comp_names.get(e.comp_id) if e.comp_id else None,
+            "signup_count": len(e.signups),
+        })
+    return out
+
+
+def delete_event(
+    db: Session, guild_id: int, event_id: int, actor_id: int | None,
+    *, actor_source: str = "bot",
+) -> EventDetail:
+    """Deleta um evento levando-o ao estado DELETED pela máquina de estados
+    (transição válida a partir de qualquer estado não-terminal). Grava transição
+    + audit e marca dirty — o bot reconstrói o mass-info pra tirar a linha."""
+    return transition(
+        db, guild_id, event_id, EventState.DELETED.value,
+        actor_id=actor_id, reason=None, actor_source=actor_source,
+    )
+
+
+def update_event(
+    db: Session, guild_id: int, event_id: int, *,
+    title=_UNSET, scheduled_at=_UNSET, comp_id=_UNSET, attendance=_UNSET,
+    actor_id: int | None = None,
+) -> dict:
+    """Edita campos soltos de um evento (objetivo/horário/comp/pontos de
+    attendance). `_UNSET` = não tocar; `comp_id=None` = desvincular a comp.
+
+    Trocar a comp QUANDO há signups remove todos os signups (a inscrição foi feita
+    pra função da comp antiga) e devolve a lista de users notificados — o bot manda
+    a DM pedindo pra repingar. Sem signups, só troca a comp."""
+    ev = _get(db, guild_id, event_id)
+    if ev is None:
+        raise ServiceError("evento não encontrado")
+
+    comp_changed = False
+    notified_signups: list[dict] = []
+
+    if title is not _UNSET and title != ev.title:
+        before = ev.title
+        ev.title = title
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+            action="event.update_title", entity="event", entity_id=str(ev.id),
+            before={"title": before}, after={"title": title},
+        ))
+
+    if scheduled_at is not _UNSET:
+        # Normaliza UTC igual create_event (naive = assume UTC, aware = normaliza).
+        if scheduled_at is not None:
+            scheduled_at = scheduled_at.astimezone(timezone.utc) if scheduled_at.tzinfo else scheduled_at.replace(tzinfo=timezone.utc)
+        if scheduled_at != ev.scheduled_at:
+            before = ev.scheduled_at.isoformat() if ev.scheduled_at else None
+            ev.scheduled_at = scheduled_at
+            db.add(AuditLog(
+                guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+                action="event.update_scheduled_at", entity="event", entity_id=str(ev.id),
+                before={"scheduled_at": before},
+                after={"scheduled_at": scheduled_at.isoformat() if scheduled_at else None},
+            ))
+
+    if comp_id is not _UNSET and comp_id != ev.comp_id:
+        comp_changed = True
+        # Inscrições referenced funções da comp antiga — trocar a comp invalida
+        # cada uma. Coleta quem precisa ser avisado (o bot manda a DM) e limpa.
+        if ev.signups:
+            notified_signups = [
+                {"user_id": s.user_id, "user_name": s.user_name}
+                for s in ev.signups
+            ]
+            ev.signups.clear()  # cascade delete-orphan remove os signups
+        before = ev.comp_id
+        ev.comp_id = comp_id
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+            action="event.update_comp", entity="event", entity_id=str(ev.id),
+            before={"comp_id": before},
+            after={"comp_id": comp_id, "signups_cleared": len(notified_signups)},
+        ))
+
+    if attendance is not _UNSET and attendance != ev.attendance:
+        before = ev.attendance
+        ev.attendance = attendance
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+            action="event.set_attendance", entity="event", entity_id=str(ev.id),
+            before={"attendance": before}, after={"attendance": attendance},
+        ))
+
+    _mark_dirty(ev)
+    db.flush()
+    db.refresh(ev)
+    return {
+        "event_id": ev.id,
+        "comp_changed": comp_changed,
+        "notified_signups": notified_signups,
+    }
 
 
 def list_signups(db: Session, guild_id: int, event_id: int) -> list[SignupOut]:

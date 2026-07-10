@@ -10,11 +10,11 @@ import os
 from datetime import datetime
 from typing import Optional
 
-import aiohttp
 import discord
 from discord import Interaction
 from discord.ext import commands
 
+import http_client
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -40,45 +40,15 @@ _CATEGORY_EMOJI = {"tank": "🛡️", "healer": "🕊️", "support": "✨", "dp
 
 
 async def _get(path: str) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.get(f"{SITE_URL}{path}", headers={"Authorization": f"Bearer {API_SECRET}"},
-                             timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.get_json(path)
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.post(f"{SITE_URL}{path}", json=body, headers={"Authorization": f"Bearer {API_SECRET}"},
-                              timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.post_json(path, body)
 
 
 async def _delete(path: str) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.delete(f"{SITE_URL}{path}", headers={"Authorization": f"Bearer {API_SECRET}"},
-                                timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.delete_json(path)
 
 
 def _member_role_ids(user) -> list[int]:

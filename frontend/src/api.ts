@@ -798,6 +798,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ value }),
     }),
+  // PATCH parcial: só os campos passados são atualizados. comp_id=null
+  // desvincula a comp; trocar a comp limpa os signups (o bot avisa por DM).
+  updateEvent: (id: number, payload: {
+    title?: string | null; scheduled_at?: string | null;
+    comp_id?: number | null; attendance?: number;
+  }) =>
+    req<EventDetail>(`/guilds/${g()}/events/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
   listSignups: (id: number) => req<EventSignup[]>(`/guilds/${g()}/events/${id}/signups`),
   getEvent: (id: number) => req<EventDetail>(`/guilds/${g()}/events/${id}`),
   // Escalação: guildId explícito (página é deep-link, não depende da guilda corrente).

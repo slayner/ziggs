@@ -12,11 +12,11 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import aiohttp
 import discord
 from discord import app_commands, Interaction
 from discord.ext import commands, tasks
 
+import http_client
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -46,45 +46,15 @@ def _fmt_eta(minutes: int) -> str:
 
 
 async def _get(path: str) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.get(f"{SITE_URL}{path}", headers={"Authorization": f"Bearer {API_SECRET}"},
-                             timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.get_json(path)
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.post(f"{SITE_URL}{path}", json=body, headers={"Authorization": f"Bearer {API_SECRET}"},
-                              timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.post_json(path, body)
 
 
 async def _delete(path: str) -> Optional[dict]:
-    if not SITE_URL or not API_SECRET:
-        return None
-    try:
-        async with aiohttp.ClientSession() as s:
-            r = await s.delete(f"{SITE_URL}{path}", headers={"Authorization": f"Bearer {API_SECRET}"},
-                                timeout=aiohttp.ClientTimeout(total=5))
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+    return await http_client.delete_json(path)
 
 
 def _is_staff(member: discord.Member) -> bool:
@@ -487,10 +457,22 @@ class Nodes(commands.Cog):
         embed = _build_calendar_embed(lang, events, emoji_map)
         view = CalendarView(lang)
 
-        cal = await _get(f"/bot/guilds/{guild.id}/nodes/calendar")
         message_id = self._calendar_msg.get(guild.id)
-        if message_id is None and cal and cal.get("message_id"):
-            message_id = int(cal["message_id"])
+        if message_id is None:
+            # Sem cache em memória (cog acabou de subir) — só o backend sabe se
+            # já existe uma mensagem. cal=None aqui significa que a REQUISIÇÃO
+            # falhou (backend ainda subindo — corrida comum quando bot+backend
+            # reiniciam juntos via start-all.cmd, o bot costuma ganhar), não que
+            # não haja calendário: tratar os dois casos igual duplicava a
+            # mensagem a cada restart. Só cria mensagem nova quando o backend
+            # CONFIRMA (200) que message_id é null; se a requisição falhar,
+            # aborta este ciclo e tenta de novo no próximo (5min, ou no
+            # catch-up de on_ready assim que o backend responder).
+            cal = await _get(f"/bot/guilds/{guild.id}/nodes/calendar")
+            if cal is None:
+                return
+            if cal.get("message_id"):
+                message_id = int(cal["message_id"])
 
         message = None
         if message_id:

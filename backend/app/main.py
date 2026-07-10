@@ -12,8 +12,9 @@ from app.api.routes import auth, battles, catalog, claims, comps, craft, events,
 from app.config import get_settings
 from app.domain.states import EventState, allowed_targets
 from app.services import (
-    battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, player_count_snapshot,
-    player_tracker, profile_warmer, registration_checker, regear_retry, small_battle_discovery, weapon_stats,
+    battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, dashboard_cache,
+    player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry, small_battle_discovery,
+    weapon_stats,
 )
 
 
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(player_count_snapshot.run_forever()),
             asyncio.create_task(battle_price_reprocessor.run_forever()),
             asyncio.create_task(regear_retry.run_forever()),
+            asyncio.create_task(dashboard_cache.run_forever()),
         ]
     yield
     for t in tasks:

@@ -12,6 +12,7 @@ import aiohttp
 import discord
 from discord.ext import commands
 
+import http_client
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -39,18 +40,9 @@ async def _regear_channels(guild_id: int) -> set[int]:
         return cached[1]
     channels: set[int] = set()
     if SITE_URL and API_SECRET:
-        try:
-            async with aiohttp.ClientSession() as s:
-                r = await s.get(
-                    f"{SITE_URL}/bot/guilds/{guild_id}/regear/settings",
-                    headers={"Authorization": f"Bearer {API_SECRET}"},
-                    timeout=aiohttp.ClientTimeout(total=5),
-                )
-                if r.status == 200:
-                    data = await r.json()
-                    channels = {int(c["channel_id"]) for c in (data.get("channels") or []) if c.get("channel_id")}
-        except Exception:
-            pass
+        data = await http_client.get_json(f"/bot/guilds/{guild_id}/regear/settings")
+        if data:
+            channels = {int(c["channel_id"]) for c in (data.get("channels") or []) if c.get("channel_id")}
     _channel_cache[guild_id] = (now + _CHANNEL_TTL, channels)
     return channels
 
@@ -125,13 +117,12 @@ class Regears(commands.Cog):
             form.add_field("requester_user_id", str(message.author.id))
             form.add_field("channel_id", str(chan.id))
             try:
-                async with aiohttp.ClientSession() as s:
-                    r = await s.post(
-                        f"{SITE_URL}/guilds/{guild_id}/regear/ingest",
-                        data=form,
-                        headers={"Authorization": f"Bearer {API_SECRET}"},
-                        timeout=aiohttp.ClientTimeout(total=20),
-                    )
+                async with http_client.session().post(
+                    f"{SITE_URL}/guilds/{guild_id}/regear/ingest",
+                    data=form,
+                    headers={"Authorization": f"Bearer {API_SECRET}"},
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as r:
                     if r.status == 200:
                         out = await r.json()
                         request_id = out.get("id")

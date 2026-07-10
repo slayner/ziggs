@@ -49,20 +49,21 @@ def get_or_create_group(db: Session, battle_ids: list[int]) -> BattleGroup:
 
     for attempt in range(2):
         try:
-            with db.begin_nested():  # savepoint — rollback parcial se houver corrida
-                group = BattleGroup(public_id=_generate_code(db), fingerprint=fingerprint)
-                db.add(group)
-                db.flush()
-                for position, battle_id in enumerate(sorted(set(battle_ids))):
-                    db.add(BattleGroupMember(group_id=group.id, battle_id=battle_id, position=position))
-        except IntegrityError:
-            group = db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fingerprint))
-
-        try:
+            try:
+                with db.begin_nested():  # savepoint — rollback parcial se houver corrida
+                    group = BattleGroup(public_id=_generate_code(db), fingerprint=fingerprint)
+                    db.add(group)
+                    db.flush()
+                    for position, battle_id in enumerate(sorted(set(battle_ids))):
+                        db.add(BattleGroupMember(group_id=group.id, battle_id=battle_id, position=position))
+            except IntegrityError:
+                group = db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fingerprint))
             db.commit()
             return group
         except OperationalError:
-            # mesma contenção passageira do get_or_create_groups_bulk — 1 retry curto
+            # contenção passageira (escrita de fundo de outros serviços) — pode
+            # bater tanto no flush (dentro do savepoint) quanto no commit, por
+            # isso os dois ficam dentro do mesmo retry. 1 retry curto.
             db.rollback()
             if attempt == 1:
                 raise
@@ -96,36 +97,54 @@ def get_or_create_groups_bulk(db: Session, battle_ids: list[int]) -> dict[int, B
     fingerprints = {bid: _fingerprint([bid]) for bid in battle_ids}
 
     for attempt in range(2):
-        existing = {
-            g.fingerprint: g for g in db.scalars(
-                select(BattleGroup).where(BattleGroup.fingerprint.in_(fingerprints.values()))
-            )
-        }
-        out: dict[int, BattleGroup] = {}
-        for bid in battle_ids:
-            fp = fingerprints[bid]
-            group = existing.get(fp)
-            if group is None:
-                try:
-                    with db.begin_nested():  # savepoint — rollback só deste item se perder a corrida
-                        group = BattleGroup(public_id=_generate_code(db), fingerprint=fp)
-                        db.add(group)
-                        db.flush()
-                        db.add(BattleGroupMember(group_id=group.id, battle_id=bid, position=0))
-                except IntegrityError:
-                    group = db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fp))
-                existing[fp] = group
-            out[bid] = group
-
         try:
+            existing = {
+                g.fingerprint: g for g in db.scalars(
+                    select(BattleGroup).where(BattleGroup.fingerprint.in_(fingerprints.values()))
+                )
+            }
+            out: dict[int, BattleGroup] = {}
+            for bid in battle_ids:
+                fp = fingerprints[bid]
+                group = existing.get(fp)
+                if group is None:
+                    try:
+                        with db.begin_nested():  # savepoint — rollback só deste item se perder a corrida
+                            group = BattleGroup(public_id=_generate_code(db), fingerprint=fp)
+                            db.add(group)
+                            db.flush()
+                            db.add(BattleGroupMember(group_id=group.id, battle_id=bid, position=0))
+                    except IntegrityError:
+                        group = db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fp))
+                    existing[fp] = group
+                out[bid] = group
+
             db.commit()
             return out
         except OperationalError:
+            # contenção passageira (escrita de fundo de outros serviços) — pode
+            # bater tanto num flush (dentro do savepoint) quanto no commit, por
+            # isso a tentativa inteira fica dentro do mesmo retry.
             db.rollback()
             if attempt == 1:
                 raise
             time.sleep(1.0)
     raise AssertionError("unreachable")  # o laço sempre retorna ou levanta antes de chegar aqui
+
+
+def get_existing_groups_bulk(db: Session, battle_ids: list[int]) -> dict[int, BattleGroup]:
+    """Só lê — nunca cria (sem flush/commit, sem risco de 'database is
+    locked'). Usado por refresh de background (dashboard_cache) que roda
+    sem pedido de usuário: batalha sem grupo ainda fica de fora do cache
+    dessa passada e some assim que alguém (ou outro serviço) criar o grupo
+    dela — não vale forçar escrita extra num loop periódico só por isso."""
+    fingerprints = {bid: _fingerprint([bid]) for bid in battle_ids}
+    existing = {
+        g.fingerprint: g for g in db.scalars(
+            select(BattleGroup).where(BattleGroup.fingerprint.in_(fingerprints.values()))
+        )
+    }
+    return {bid: existing[fp] for bid, fp in fingerprints.items() if fp in existing}
 
 
 def get_group_battle_ids(db: Session, public_id: str) -> list[int] | None:

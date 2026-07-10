@@ -18,6 +18,7 @@ from app.models.prices import ItemPrice, ItemPriceLatest  # noqa: F401
 from app.models.players import (  # noqa: F401
     AlbionPlayer, PlayerSnapshot, PlayerKillEvent, PlayerWeaponStat, PlayerCountSnapshot,
 )
+from app.models.dashboard_cache import DashboardCache  # noqa: F401
 from app.models.battles import (  # noqa: F401
     Battle, BattleGuild, BattleSide, BattleParticipant, BattleKillEvent,
     BattleGroup, BattleGroupMember, ReprocessCampaign, BattleIdProbe,
@@ -41,6 +42,7 @@ __all__ = [
     "EventLootEntry", "GuildChestEntry", "ItemPriceCache",
     "ItemPrice", "ItemPriceLatest",
     "AlbionPlayer", "PlayerSnapshot", "PlayerKillEvent", "PlayerWeaponStat", "PlayerCountSnapshot",
+    "DashboardCache",
     "Battle", "BattleGuild", "BattleSide", "BattleParticipant", "BattleKillEvent",
     "BattleGroup", "BattleGroupMember", "ReprocessCampaign", "BattleIdProbe",
     "CharacterClaim", "RegisteredCharacter",

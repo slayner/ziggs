@@ -39,6 +39,12 @@ class AlbionPlayer(Base):
     pve_fame: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
     crafting_fame: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
     gathering_fame: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
+    # Blob cru de LifetimeStatistics da API do Albion — guarda o detalhe que os
+    # escalares acima não cobrem (coleta por recurso Wood/Ore/..., FishingFame,
+    # FarmingFame). Só preenchido quando o payload tem LifetimeStatistics
+    # (perfil/feed); buscas trazem só o topo e NÃO zeram o que já havia.
+    # Ver upsert_player e _synthetic_raw (routes/players.py).
+    lifetime_statistics: Mapped[dict | None] = mapped_column(json_type())
 
     is_deleted: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default=sa.false(), default=False)
 
@@ -48,6 +54,9 @@ class AlbionPlayer(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Setado por POST /players/{id}/refresh — o profile_warmer prioriza essas
+    # linhas na fila e limpa o campo depois de re-sincronizar.
+    refresh_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PlayerSnapshot(Base):
