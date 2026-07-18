@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, BigInt, json_type, pk
@@ -198,6 +198,36 @@ class PlayerCountSnapshot(Base):
     region: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # "global"|"americas"|"europe"|"asia"
     count: Mapped[int] = mapped_column(Integer, nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class SearchEntry(Base):
+    """Índice pré-normalizado pra busca global (jogador/guilda/aliança) — evita
+    varrer battle_participants/battle_guilds inteiros a cada tecla digitada
+    (ver services/search_index.py). Repovoado do zero periodicamente
+    (rebuild, fonte da verdade) e mantido fresco entre rebuilds pelo
+    write-path (upsert_entry, chamado por battle_tracker/player_tracker)."""
+    __tablename__ = "search_entries"
+    __table_args__ = (
+        UniqueConstraint("entity_type", "entity_id"),
+        Index("ix_search_entries_type_norm", "entity_type", "norm_name"),
+        Index("ix_search_entries_type_len", "entity_type", "name_len"),
+    )
+
+    id: Mapped[int] = pk()
+    entity_type: Mapped[str] = mapped_column(String(16), nullable=False)  # player|guild|alliance
+    entity_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    norm_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name_len: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    region: Mapped[str | None] = mapped_column(String(16))          # players
+    guild_name: Mapped[str | None] = mapped_column(String(255))     # players/guilds
+    alliance_name: Mapped[str | None] = mapped_column(String(255))  # players/guilds
+    guild_count: Mapped[int | None] = mapped_column(Integer)        # alliances
+
+    # Ordenação dos resultados — nº de batalhas (recalculado no rebuild; o
+    # write-path não toca aqui, custaria um COUNT a cada kill/batalha).
+    weight: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class DeletedProfile(Base):

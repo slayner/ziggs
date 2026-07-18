@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, false, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, json_type, pk
@@ -54,3 +54,8 @@ class RegisteredCharacter(Base):
     claim_id: Mapped[int] = mapped_column(
         ForeignKey("character_claims.id"), nullable=False
     )
+    # Conta principal do usuário — invariante: todo usuário com personagens tem
+    # exatamente 1 main (primeiro verificado vira main; troca via
+    # PUT /claims/main/{id}). Perfil das alts mostra link pra main
+    # (ver user_profile.get_public_customization).
+    is_main: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())

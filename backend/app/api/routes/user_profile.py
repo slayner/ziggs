@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -54,18 +54,31 @@ def put_theme(
     return user_profile.my_profile_dict(user)
 
 
+def _crop_tuple(x: float | None, y: float | None, w: float | None, h: float | None) -> user_profile.Crop | None:
+    if None in (x, y, w, h):
+        return None
+    return (x, y, w, h)
+
+
+# Uploads são `def` (não async) DE PROPÓSITO: FastAPI roda rota sync em
+# threadpool, então re-encodar um GIF de 100 MB no Pillow não congela o event
+# loop onde rodam battle_tracker e os demais serviços de fundo.
 @router.post("/avatar")
-async def upload_avatar(
+def upload_avatar(
     file: UploadFile = File(...),
+    crop_x: float | None = Form(None),
+    crop_y: float | None = Form(None),
+    crop_w: float | None = Form(None),
+    crop_h: float | None = Form(None),
     user: User = Depends(deps.require_user),
     db: Session = Depends(deps.db_session),
 ) -> dict:
     _require_verified(db, user)
-    data = await file.read()
+    data = file.file.read()
     if not data:
         raise HTTPException(400, "arquivo vazio")
     try:
-        user_profile.set_avatar(user, data, file.filename or "avatar.png", file.content_type)
+        user_profile.set_avatar(user, data, _crop_tuple(crop_x, crop_y, crop_w, crop_h))
     except user_profile.ProfileServiceError as e:
         raise HTTPException(400, str(e))
     db.commit()
@@ -77,23 +90,28 @@ def delete_avatar(
     user: User = Depends(deps.require_user),
     db: Session = Depends(deps.db_session),
 ) -> dict:
+    _require_verified(db, user)
     user_profile.remove_avatar(user)
     db.commit()
     return user_profile.my_profile_dict(user)
 
 
 @router.post("/banner")
-async def upload_banner(
+def upload_banner(
     file: UploadFile = File(...),
+    crop_x: float | None = Form(None),
+    crop_y: float | None = Form(None),
+    crop_w: float | None = Form(None),
+    crop_h: float | None = Form(None),
     user: User = Depends(deps.require_user),
     db: Session = Depends(deps.db_session),
 ) -> dict:
     _require_verified(db, user)
-    data = await file.read()
+    data = file.file.read()
     if not data:
         raise HTTPException(400, "arquivo vazio")
     try:
-        user_profile.set_banner(user, data, file.filename or "banner.png", file.content_type)
+        user_profile.set_banner(user, data, _crop_tuple(crop_x, crop_y, crop_w, crop_h))
     except user_profile.ProfileServiceError as e:
         raise HTTPException(400, str(e))
     db.commit()
@@ -105,6 +123,7 @@ def delete_banner(
     user: User = Depends(deps.require_user),
     db: Session = Depends(deps.db_session),
 ) -> dict:
+    _require_verified(db, user)
     user_profile.remove_banner(user)
     db.commit()
     return user_profile.my_profile_dict(user)

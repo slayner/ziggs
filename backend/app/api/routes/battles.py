@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -13,7 +14,9 @@ from app.models.battles import Battle, BattleGuild, BattleKillEvent, BattleParti
 from app.models.catalog import Weapon
 from app.models.dashboard_cache import DashboardCache
 from app.models.players import PlayerCountSnapshot, PlayerKillEvent
+from app.models.prices import GoldPriceSnapshot
 from app.services import battle_groups, battle_sides, battle_tracker, prices
+from app.services.battle_preview import render_battle_preview
 from app.services.player_activity import active_player_count
 from app.services.search_norm import norm_sql, normalize as norm_name
 
@@ -216,6 +219,67 @@ def active_players_history(range: str = "6m", db: Session = Depends(deps.db_sess
         "collected_since": _aware(since_row).isoformat() if since_row else None,
         "series": series,
     }
+
+
+_GOLD_RANGE_DAYS = {"1m": 31, "6m": 183, "1y": 366}
+_GOLD_REGIONS = ("americas", "europe", "asia")
+_GOLD_MAX_POINTS = 400
+_GOLD_CACHE_TTL = 600  # 10min — "all" lê ~210k rows (3 regiões × ~70k), não vale recomputar a cada visita
+_gold_history_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _bucket_avg(rows: list[tuple[datetime, int]], max_points: int) -> list[dict]:
+    """Downsample por média de bucket — mesmo algoritmo do downsample() do
+    frontend (Dashboard.tsx), mas rodando aqui pra não trafegar dezenas de
+    milhares de pontos por região no range 'all'."""
+    n = len(rows)
+    if n <= max_points:
+        return [{"t": int(_aware(ts).timestamp() * 1000), "price": price} for ts, price in rows]
+    bucket_size = n / max_points
+    out: list[dict] = []
+    for i in range(max_points):
+        start = int(i * bucket_size)
+        end = max(start + 1, int((i + 1) * bucket_size))
+        bucket = rows[start:end]
+        if not bucket:
+            continue
+        mid_ts = bucket[len(bucket) // 2][0]
+        avg_price = round(sum(p for _, p in bucket) / len(bucket))
+        out.append({"t": int(_aware(mid_ts).timestamp() * 1000), "price": avg_price})
+    return out
+
+
+@router.get("/gold/history")
+def gold_price_history(range: str = "6m", db: Session = Depends(deps.db_session)):
+    """Série histórica da cotação prata↔ouro por região — nosso próprio
+    backfill (services/gold_price.py), não mais fetch direto do browser pra
+    AODP. Cache em memória por range: o range 'all' varre ~210k linhas, não
+    vale recomputar a cada visita ao dashboard."""
+    now_mono = time.monotonic()
+    cached = _gold_history_cache.get(range)
+    if cached and (now_mono - cached[0]) < _GOLD_CACHE_TTL:
+        return cached[1]
+
+    since_row = db.execute(select(func.min(GoldPriceSnapshot.recorded_at))).scalar_one_or_none()
+
+    q = select(GoldPriceSnapshot.region, GoldPriceSnapshot.recorded_at, GoldPriceSnapshot.price)
+    days = _GOLD_RANGE_DAYS.get(range)
+    if days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        q = q.where(GoldPriceSnapshot.recorded_at >= cutoff)
+    q = q.order_by(GoldPriceSnapshot.region, GoldPriceSnapshot.recorded_at)
+
+    by_region: dict[str, list[tuple[datetime, int]]] = {r: [] for r in _GOLD_REGIONS}
+    for region, recorded_at, price in db.execute(q).all():
+        if region in by_region:
+            by_region[region].append((recorded_at, price))
+
+    payload = {
+        "collected_since": _aware(since_row).isoformat() if since_row else None,
+        "series": {region: _bucket_avg(rows, _GOLD_MAX_POINTS) for region, rows in by_region.items()},
+    }
+    _gold_history_cache[range] = (now_mono, payload)
+    return payload
 
 
 def _week_start_utc() -> datetime:
@@ -678,6 +742,8 @@ def _combined_detail(db: Session, battle_ids: list[int], public_id: str) -> dict
         "rats": {"participants": rat_payload, "player_count": len(rat_payload)},
         "highlights": highlights,
         "kill_timeline": kill_timeline,
+        # Nicks de quem descobriu estas batalhas via companion (agradecimento).
+        "found_by": sorted({b.found_by for b in battles if b.found_by}),
     }
 
 
@@ -754,3 +820,73 @@ def merge_battles(public_ids: list[str] = Body(..., embed=True), db: Session = D
 
     group = battle_groups.get_or_create_group(db, battle_ids)
     return _combined_detail(db, battle_ids, group.public_id)
+
+
+@router.get("/preview/{public_id}.png")
+def battle_preview_png(public_id: str, db: Session = Depends(deps.db_session)):
+    """Imagem PNG de resumo da batalha pra embeds do Discord. Cacheada em disco
+    (data/battle_preview_cache/) — batalhas são imutáveis, nunca regenera."""
+    from fastapi.responses import FileResponse
+
+    if not public_id or len(public_id) > 20:
+        raise HTTPException(400, "código inválido")
+    path = render_battle_preview(db, public_id)
+    if path is None:
+        raise HTTPException(404, "batalha não encontrada")
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@router.get("/embed/{public_id}")
+def battle_embed_html(public_id: str, db: Session = Depends(deps.db_session)):
+    """HTML mínimo com OG tags pra gerar embed no Discord quando alguém cola o
+    link da batalha. O Discord crawler lê as meta tags (og:image aponta pro
+    /battles/preview/{public_id}.png) e mostra o card com a imagem de resumo.
+
+    meta-refresh redireciona humanos pro frontend (SPA). O Discord não segue
+    redirects em OG crawls, então as tags são lidas antes do redirect.
+
+    ponytail: HTML inline em vez de template engine — só 8 linhas de meta
+    tags, Jinja2 seria overhead pra isso."""
+    from fastapi.responses import HTMLResponse
+    from app.config import get_settings
+
+    if not public_id or len(public_id) > 20:
+        raise HTTPException(400, "código inválido")
+    battle_ids = battle_groups.get_group_battle_ids(db, public_id)
+    if not battle_ids:
+        raise HTTPException(404, "batalha não encontrada")
+
+    s = get_settings()
+    # Garante que o PNG existe (render sob demanda na 1ª vez)
+    path = render_battle_preview(db, public_id)
+
+    # Altura real do PNG (dinâmica conforme nº de factions)
+    img_h = 250
+    if path and path.exists():
+        from PIL import Image as PILImage
+        with PILImage.open(path) as img:
+            img_h = img.height
+
+    # Título: dados básicos da batalha pra mostrar no card do Discord
+    b = db.get(Battle, battle_ids[0])
+    title = f"{b.players_total} players · {b.kill_count} kills" if b else "Battle"
+    if b and b.cluster:
+        title += f" · {b.cluster}"
+    image_url = f"{s.frontend_url}/battles/preview/{public_id}.png"
+    canonical = f"{s.frontend_url}/{public_id}"
+
+    html = f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta property="og:title" content="{title}">
+<meta property="og:image" content="{image_url}">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="600">
+<meta property="og:image:height" content="{img_h}">
+<meta property="og:url" content="{canonical}">
+<meta property="og:type" content="website">
+<meta http-equiv="refresh" content="0;url={canonical}">
+<title>{title}</title>
+</head><body>Redirecting to <a href="{canonical}">{canonical}</a></body></html>"""
+    return HTMLResponse(content=html, headers={"Cache-Control": "public, max-age=3600"})

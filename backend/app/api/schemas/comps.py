@@ -103,3 +103,19 @@ class BuildSuggestionOut(BaseModel):
     target_function: str
     sample_size: int
     fields: dict[str, FieldSuggestionOut] = Field(default_factory=dict)
+
+
+# ----- tipos de função (fn-types) por guilda ---------------------------------
+class FnTypeIn(BaseModel):
+    key: str
+    label: str
+    color: str
+    emoji: str | None = None
+
+
+class FnTypesUpdate(BaseModel):
+    fn_types: list[FnTypeIn]
+
+
+class FnTypesOut(BaseModel):
+    fn_types: list[FnTypeIn]

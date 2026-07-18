@@ -13,8 +13,8 @@ from app.models.events import (  # noqa: F401
     EventAssignment,
 )
 from app.models.audit import AuditLog  # noqa: F401
-from app.models.loot import EventLootEntry, GuildChestEntry, ItemPriceCache  # noqa: F401
-from app.models.prices import ItemPrice, ItemPriceLatest  # noqa: F401
+from app.models.loot import EventLootEntry, GuildChestEntry, ItemPriceCache, LootVerification  # noqa: F401
+from app.models.prices import ItemPrice, ItemPriceLatest, ItemPriceHistory, MarketSnapshot  # noqa: F401
 from app.models.players import (  # noqa: F401
     AlbionPlayer, PlayerSnapshot, PlayerKillEvent, PlayerWeaponStat, PlayerCountSnapshot,
 )
@@ -31,6 +31,9 @@ from app.models.lootlog import LootLogSubmission  # noqa: F401
 from app.models.nodes import (  # noqa: F401
     NodeDef, NodeEvent, NodeEventLog, NodeMap, NodeMapExclusion, NodeCalendar,
 )
+from app.models.companion import (  # noqa: F401
+    CompanionScanTask,
+)
 
 __all__ = [
     "Base",
@@ -39,8 +42,8 @@ __all__ = [
     "Comp", "CompParty", "CompSlot", "CompSlotRole",
     "Event", "EventParticipant", "EventVerificationStep", "EventStateTransition", "EventSignup", "EventAssignment",
     "AuditLog",
-    "EventLootEntry", "GuildChestEntry", "ItemPriceCache",
-    "ItemPrice", "ItemPriceLatest",
+    "EventLootEntry", "GuildChestEntry", "ItemPriceCache", "LootVerification",
+    "ItemPrice", "ItemPriceLatest", "ItemPriceHistory", "MarketSnapshot",
     "AlbionPlayer", "PlayerSnapshot", "PlayerKillEvent", "PlayerWeaponStat", "PlayerCountSnapshot",
     "DashboardCache",
     "Battle", "BattleGuild", "BattleSide", "BattleParticipant", "BattleKillEvent",
@@ -51,4 +54,5 @@ __all__ = [
     "RegearRequest",
     "LootLogSubmission",
     "NodeDef", "NodeEvent", "NodeEventLog", "NodeMap", "NodeMapExclusion", "NodeCalendar",
+    "CompanionScanTask",
 ]

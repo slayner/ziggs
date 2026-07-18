@@ -1,0 +1,69 @@
+[package]
+name = "ziggs-companion"
+version = "0.1.0"
+description = "Ziggs Companion — battle scanner, DNS optimizer, lootlog helper"
+authors = ["Ziggs"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "companion_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2.5"
+tauri-plugin-shell = "2.3"
+tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "5"
+dirs = "5"
+url = "2"
+rand = "0.8"
+hickory-resolver = "0.24"
+ping = "0.5"
+chrono = "0.4"
+# WireGuard tunnel (Fase 1.5 — rota tipo ExitLag)
+boringtun = { version = "0.7", default-features = false }
+wintun = "0.5"
+socket2 = "0.5"
+base64 = "0.22"
+hex = "0.4"
+sha2 = "0.10"
+rand_core = "0.6"
+pcap = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.48", features = [
+    "Win32_Security",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Memory",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+# Por padrão, custom protocol (tela cheia de produção). Com `devserver` o
+# frontend aponta pro Vite dev server em http://localhost:1420.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

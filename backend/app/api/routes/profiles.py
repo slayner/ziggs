@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.api.routes.battles import _as_builds, _classify_role, _factions_summary, _weapon_function_map, _wbase
 from app.models.battles import Battle, BattleGuild, BattleParticipant, BattleSide
-from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent
+from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, SearchEntry
 from app.services import battle_groups
-from app.services.search_norm import match as search_match, norm_sql, normalize as norm_name
+from app.services.search_norm import match as search_match, normalize as norm_name, prefix_range
 
 router = APIRouter(prefix="/public", tags=["profiles"])
 
@@ -572,193 +572,104 @@ def _battles_alliance(db: Session, alliance_id: str, page: int = 0, min_players:
 # Busca global
 # ---------------------------------------------------------------------------
 
+def _search_entities(db: Session, entity_type: str, q: str, nq: str, limit: int = 6) -> list[SearchEntry]:
+    """3 passes sargáveis sobre SearchEntry, cada um só roda se o anterior não
+    encheu `limit`: prefixo (usa ix_search_entries_type_norm) -> substring ->
+    fuzzy (edit-distance ≤1, só p/ queries de entidade ≥4 chars — mesma regra
+    de search_norm.match). Substitui os full-scans de norm_sql(...).like()
+    direto em battle_participants/battle_guilds do _search antigo."""
+    lo, hi = prefix_range(nq)
+    found = list(db.scalars(
+        select(SearchEntry)
+        .where(SearchEntry.entity_type == entity_type, SearchEntry.norm_name >= lo, SearchEntry.norm_name < hi)
+        .order_by(SearchEntry.weight.desc())
+        .limit(limit)
+    ).all())
+    seen = {e.entity_id for e in found}
+
+    if len(found) < limit:
+        more = db.scalars(
+            select(SearchEntry)
+            .where(
+                SearchEntry.entity_type == entity_type,
+                SearchEntry.norm_name.like(f"%{nq}%"),
+                SearchEntry.entity_id.notin_(seen),
+            )
+            .order_by(SearchEntry.weight.desc())
+            .limit(limit - len(found))
+        ).all()
+        found.extend(more)
+        seen.update(e.entity_id for e in more)
+
+    if len(found) < limit and len(nq) >= 4:
+        ln = len(nq)
+        candidates = db.scalars(
+            select(SearchEntry)
+            .where(
+                SearchEntry.entity_type == entity_type,
+                SearchEntry.name_len.between(ln - 1, ln + 1),
+                SearchEntry.entity_id.notin_(seen),
+            )
+            .order_by(SearchEntry.weight.desc())
+            .limit(300)
+        ).all()
+        for e in candidates:
+            if len(found) == limit:
+                break
+            if search_match(q, e.display_name):
+                found.append(e)
+                seen.add(e.entity_id)
+
+    return found
+
+
 def _search(db: Session, q: str) -> dict:
     nq = norm_name(q)
-    pat = f"%{nq}%"
 
-    # Jogadores — agrupa por player_id para evitar duplicatas de troca de guilda
-    p_rows = db.execute(
-        select(
-            BattleParticipant.albion_player_id,
-            BattleParticipant.name,
-            func.count(BattleParticipant.id).label("battles"),
-            func.max(Battle.start_time).label("last_seen"),
-            func.max(Battle.region).label("region"),
-        )
-        .join(Battle, Battle.id == BattleParticipant.battle_id)
-        .where(norm_sql(BattleParticipant.name).like(pat))
-        .group_by(BattleParticipant.albion_player_id, BattleParticipant.name)
-        .order_by(func.count(BattleParticipant.id).desc())
-        .limit(6)
-    ).mappings().all()
-
-    # Guild/aliança atual por jogador — prefere AlbionPlayer (tracker, mais fresco)
-    # e cai para BattleParticipant mais recente só se não tiver no tracker
-    pids = [r["albion_player_id"] for r in p_rows]
-    tracker_map: dict[str, AlbionPlayer] = {
-        ap.albion_id: ap
-        for ap in db.scalars(select(AlbionPlayer).where(AlbionPlayer.albion_id.in_(pids))).all()
-    }
-
-    def _latest_affil(pid: str) -> tuple[str | None, str | None]:
-        ap = tracker_map.get(pid)
-        if ap is not None:
-            return (ap.guild_name, ap.alliance_name)
-        row = db.execute(
-            select(BattleParticipant.guild_name, BattleParticipant.alliance_name)
-            .join(Battle, Battle.id == BattleParticipant.battle_id)
-            .where(BattleParticipant.albion_player_id == pid)
-            .order_by(Battle.start_time.desc())
-            .limit(1)
-        ).first()
-        return (row[0] if row else None, row[1] if row else None)
+    player_entries = _search_entities(db, "player", q, nq)
+    guild_entries = _search_entities(db, "guild", q, nq)
+    alliance_entries = _search_entities(db, "alliance", q, nq)
 
     players = [
         {
-            "albion_id": r["albion_player_id"],
-            "name": r["name"],
-            "battles": r["battles"],
-            "region": r["region"] or "americas",
-            **dict(zip(("guild_name", "alliance_name"), _latest_affil(r["albion_player_id"]))),
+            "albion_id": e.entity_id, "name": e.display_name, "battles": e.weight,
+            "region": e.region or "americas",
+            "guild_name": e.guild_name, "alliance_name": e.alliance_name,
         }
-        for r in p_rows
+        for e in player_entries
+    ]
+    guilds = [
+        {"albion_id": e.entity_id, "name": e.display_name, "alliance_name": e.alliance_name, "battles": e.weight}
+        for e in guild_entries
+    ]
+    alliances = [
+        {"albion_id": e.entity_id, "name": e.display_name, "guild_count": e.guild_count or 0, "battles": e.weight}
+        for e in alliance_entries
     ]
 
-    # Guildas — deduplica por guild_id (mesma guilda pode ter trocado de aliança)
-    g_rows = db.execute(
-        select(
-            BattleGuild.albion_guild_id,
-            BattleGuild.guild_name,
-            BattleGuild.alliance_name,
-            func.count(func.distinct(BattleGuild.battle_id)).label("battles"),
-        )
-        .where(norm_sql(BattleGuild.guild_name).like(pat))
-        .group_by(BattleGuild.albion_guild_id, BattleGuild.guild_name, BattleGuild.alliance_name)
-        .order_by(func.count(func.distinct(BattleGuild.battle_id)).desc())
-        .limit(12)
-    ).mappings().all()
-    seen_g: set[str] = set()
-    guilds = []
-    for r in g_rows:
-        if r["albion_guild_id"] not in seen_g:
-            seen_g.add(r["albion_guild_id"])
-            guilds.append({
-                "albion_id": r["albion_guild_id"],
-                "name": r["guild_name"],
-                "alliance_name": r["alliance_name"],
-                "battles": r["battles"],
-            })
-        if len(guilds) == 6:
-            break
+    # Batalhas — une player hits + guild/aliança hits (dos resultados já
+    # resolvidos acima, por FK indexada — não escaneia mais nome/aliança),
+    # pega as 6 mais recentes.
+    p_ids = [e.entity_id for e in player_entries]
+    g_ids = [e.entity_id for e in guild_entries]
+    a_ids = [e.entity_id for e in alliance_entries]
 
-    # Fuzzy — variantes com 1 letra trocada (ex: "pivas" → PLVAS). O fast-path
-    # SQL (substring normalizado) não pega; varre candidatos de comprimento
-    # parecido e aplica match() (normalize + levenshtein ≤ 1). Só pra queries
-    # de entidade ≥ 4 chars (queries curtas geram muitos falsos positivos).
-    # ponytail: length-filter no SQL limita a varredura; limit 300 + Python.
-    if len(guilds) < 6 and len(nq) >= 4:
-        ln = len(nq)
-        g_where = [sa.func.length(sa.func.replace(BattleGuild.guild_name, " ", "")).between(ln - 1, ln + 1)]
-        if seen_g:
-            g_where.append(BattleGuild.albion_guild_id.notin_(seen_g))
-        fuzz_g = db.execute(
-            select(
-                BattleGuild.albion_guild_id,
-                BattleGuild.guild_name,
-                BattleGuild.alliance_name,
-                func.count(func.distinct(BattleGuild.battle_id)).label("battles"),
-            )
-            .where(*g_where)
-            .group_by(BattleGuild.albion_guild_id, BattleGuild.guild_name, BattleGuild.alliance_name)
-            .order_by(func.count(func.distinct(BattleGuild.battle_id)).desc())
-            .limit(300)
-        ).mappings().all()
-        for r in fuzz_g:
-            if len(guilds) == 6:
-                break
-            if search_match(q, r["guild_name"]):
-                seen_g.add(r["albion_guild_id"])
-                guilds.append({
-                    "albion_id": r["albion_guild_id"],
-                    "name": r["guild_name"],
-                    "alliance_name": r["alliance_name"],
-                    "battles": r["battles"],
-                })
-
-    # Alianças
-    a_rows = db.execute(
-        select(
-            BattleGuild.alliance_id,
-            BattleGuild.alliance_name,
-            func.count(func.distinct(BattleGuild.albion_guild_id)).label("guild_count"),
-            func.count(func.distinct(BattleGuild.battle_id)).label("battles"),
-        )
-        .where(norm_sql(BattleGuild.alliance_name).like(pat), BattleGuild.alliance_id.isnot(None))
-        .group_by(BattleGuild.alliance_id, BattleGuild.alliance_name)
-        .order_by(func.count(func.distinct(BattleGuild.battle_id)).desc())
-        .limit(6)
-    ).mappings().all()
-    seen_a: set[str] = set()
-    alliances = []
-    for r in a_rows:
-        if r["alliance_id"] in seen_a:
-            continue
-        seen_a.add(r["alliance_id"])
-        alliances.append({
-            "albion_id": r["alliance_id"],
-            "name": r["alliance_name"],
-            "guild_count": r["guild_count"],
-            "battles": r["battles"],
-        })
-        if len(alliances) == 6:
-            break
-
-    # Fuzzy de alianças — mesmo motivo/shape do fuzzy de guildas acima.
-    if len(alliances) < 6 and len(nq) >= 4:
-        ln = len(nq)
-        a_where = [
-            sa.func.length(sa.func.replace(BattleGuild.alliance_name, " ", "")).between(ln - 1, ln + 1),
-            BattleGuild.alliance_id.isnot(None),
-        ]
-        if seen_a:
-            a_where.append(BattleGuild.alliance_id.notin_(seen_a))
-        fuzz_a = db.execute(
-            select(
-                BattleGuild.alliance_id,
-                BattleGuild.alliance_name,
-                func.count(func.distinct(BattleGuild.albion_guild_id)).label("guild_count"),
-                func.count(func.distinct(BattleGuild.battle_id)).label("battles"),
-            )
-            .where(*a_where)
-            .group_by(BattleGuild.alliance_id, BattleGuild.alliance_name)
-            .order_by(func.count(func.distinct(BattleGuild.battle_id)).desc())
-            .limit(300)
-        ).mappings().all()
-        for r in fuzz_a:
-            if len(alliances) == 6:
-                break
-            if search_match(q, r["alliance_name"]):
-                seen_a.add(r["alliance_id"])
-                alliances.append({
-                    "albion_id": r["alliance_id"],
-                    "name": r["alliance_name"],
-                    "guild_count": r["guild_count"],
-                    "battles": r["battles"],
-                })
-
-    # Batalhas — une player hits + guild hits, pega as 6 mais recentes
-    p_bids = set(db.scalars(
-        select(Battle.id)
-        .join(BattleParticipant, BattleParticipant.battle_id == Battle.id)
-        .where(norm_sql(BattleParticipant.name).like(pat))
-        .order_by(Battle.start_time.desc()).limit(30)
-    ).all())
-    g_bids = set(db.scalars(
-        select(Battle.id)
-        .join(BattleGuild, BattleGuild.battle_id == Battle.id)
-        .where(norm_sql(BattleGuild.guild_name).like(pat) | norm_sql(BattleGuild.alliance_name).like(pat))
-        .order_by(Battle.start_time.desc()).limit(30)
-    ).all())
+    p_bids: set[int] = set()
+    if p_ids:
+        p_bids = set(db.scalars(
+            select(Battle.id)
+            .join(BattleParticipant, BattleParticipant.battle_id == Battle.id)
+            .where(BattleParticipant.albion_player_id.in_(p_ids))
+            .order_by(Battle.start_time.desc()).limit(30)
+        ).all())
+    g_bids: set[int] = set()
+    if g_ids or a_ids:
+        g_bids = set(db.scalars(
+            select(Battle.id)
+            .join(BattleGuild, BattleGuild.battle_id == Battle.id)
+            .where(sa.or_(BattleGuild.albion_guild_id.in_(g_ids), BattleGuild.alliance_id.in_(a_ids)))
+            .order_by(Battle.start_time.desc()).limit(30)
+        ).all())
     all_bids = list(p_bids | g_bids)
 
     battles = []
@@ -800,6 +711,29 @@ def global_search(q: str = "", db: Session = Depends(deps.db_session)):
     return _search(db, q)
 
 
+# Etapa corrente da montagem de um perfil de guilda/aliança (agregação pesada
+# sobre todas as batalhas — leva ~1min), consumida por polling do frontend.
+# Mesma mecânica de /players/load-progress (routes/players.py). Valor =
+# (token_da_run, stage): cargas simultâneas do MESMO perfil (StrictMode em
+# dev, dois visitantes) compartilham a chave — o token garante que uma run
+# terminando não apague a etapa de outra ainda em andamento.
+# ponytail: dict em memória — mover pra Redis/DB se o deploy virar multi-processo.
+_load_progress: dict[str, tuple[object, str]] = {}
+
+
+@router.get("/load-progress/{entity_type}/{albion_id}")
+def get_load_progress(entity_type: str, albion_id: str):
+    """Etapa da montagem em andamento (stage=null: nada em andamento)."""
+    entry = _load_progress.get(f"{entity_type}:{albion_id}")
+    return {"stage": entry[1] if entry else None}
+
+
+def _pop_progress_if_owner(key: str, token: object) -> None:
+    entry = _load_progress.get(key)
+    if entry is not None and entry[0] is token:
+        _load_progress.pop(key, None)
+
+
 @router.get("/guilds/{albion_id}")
 def guild_profile(albion_id: str, db: Session = Depends(deps.db_session)):
     bg = db.scalars(
@@ -811,13 +745,32 @@ def guild_profile(albion_id: str, db: Session = Depends(deps.db_session)):
     if not bg:
         raise HTTPException(404, "Guild não encontrada")
 
-    c7, c30 = _cutoffs()
-    kills_total, deaths_total = _totals(db, guild_id=albion_id)
-    last_synced_at = db.scalar(
-        select(func.max(Battle.fetched_at))
-        .join(BattleGuild, BattleGuild.battle_id == Battle.id)
-        .where(BattleGuild.albion_guild_id == albion_id)
-    )
+    key = f"guild:{albion_id}"
+    token = object()
+    _load_progress[key] = (token, "stats")
+    try:
+        c7, c30 = _cutoffs()
+        kills_total, deaths_total = _totals(db, guild_id=albion_id)
+        last_synced_at = db.scalar(
+            select(func.max(Battle.fetched_at))
+            .join(BattleGuild, BattleGuild.battle_id == Battle.id)
+            .where(BattleGuild.albion_guild_id == albion_id)
+        )
+        kill_fame = _fame_windows(db, c7, c30, guild_id=albion_id)
+        _load_progress[key] = (token, "silver")
+        silver_dropped = _silver_windows(db, c7, c30, guild_id=albion_id)
+        battle_windows = _battle_windows(db, c7, c30, guild_id=albion_id)
+        _load_progress[key] = (token, "members")
+        members = _members(db, albion_id)
+        _load_progress[key] = (token, "history")
+        battles_count = db.scalar(
+            select(func.count(func.distinct(BattleGuild.battle_id)))
+            .join(Battle, Battle.id == BattleGuild.battle_id)
+            .where(BattleGuild.albion_guild_id == albion_id, *_LETHAL_BIG)
+        ) or 0
+        alliance_history = _guild_alliance_history(db, albion_id)
+    finally:
+        _pop_progress_if_owner(key, token)
 
     return {
         "albion_id": albion_id,
@@ -827,16 +780,12 @@ def guild_profile(albion_id: str, db: Session = Depends(deps.db_session)):
         "last_synced_at": _aware(last_synced_at).isoformat() if last_synced_at else None,
         "kills_total": kills_total,
         "deaths_total": deaths_total,
-        "kill_fame": _fame_windows(db, c7, c30, guild_id=albion_id),
-        "silver_dropped": _silver_windows(db, c7, c30, guild_id=albion_id),
-        "battles": _battle_windows(db, c7, c30, guild_id=albion_id),
-        "members": _members(db, albion_id),
-        "battles_count": db.scalar(
-            select(func.count(func.distinct(BattleGuild.battle_id)))
-            .join(Battle, Battle.id == BattleGuild.battle_id)
-            .where(BattleGuild.albion_guild_id == albion_id, *_LETHAL_BIG)
-        ) or 0,
-        "alliance_history": _guild_alliance_history(db, albion_id),
+        "kill_fame": kill_fame,
+        "silver_dropped": silver_dropped,
+        "battles": battle_windows,
+        "members": members,
+        "battles_count": battles_count,
+        "alliance_history": alliance_history,
     }
 
 
@@ -851,13 +800,32 @@ def alliance_profile(albion_id: str, db: Session = Depends(deps.db_session)):
     if not bg:
         raise HTTPException(404, "Aliança não encontrada")
 
-    c7, c30 = _cutoffs()
-    kills_total, deaths_total = _totals(db, alliance_id=albion_id)
-    last_synced_at = db.scalar(
-        select(func.max(Battle.fetched_at))
-        .join(BattleGuild, BattleGuild.battle_id == Battle.id)
-        .where(BattleGuild.alliance_id == albion_id)
-    )
+    key = f"alliance:{albion_id}"
+    token = object()
+    _load_progress[key] = (token, "stats")
+    try:
+        c7, c30 = _cutoffs()
+        kills_total, deaths_total = _totals(db, alliance_id=albion_id)
+        last_synced_at = db.scalar(
+            select(func.max(Battle.fetched_at))
+            .join(BattleGuild, BattleGuild.battle_id == Battle.id)
+            .where(BattleGuild.alliance_id == albion_id)
+        )
+        kill_fame = _fame_windows(db, c7, c30, alliance_id=albion_id)
+        _load_progress[key] = (token, "silver")
+        silver_dropped = _silver_windows(db, c7, c30, alliance_id=albion_id)
+        battle_windows = _battle_windows(db, c7, c30, alliance_id=albion_id)
+        _load_progress[key] = (token, "members")
+        guilds = _guilds_in_alliance(db, albion_id)
+        _load_progress[key] = (token, "history")
+        battles_count = db.scalar(
+            select(func.count(func.distinct(BattleGuild.battle_id)))
+            .join(Battle, Battle.id == BattleGuild.battle_id)
+            .where(BattleGuild.alliance_id == albion_id, *_LETHAL_BIG)
+        ) or 0
+        roster_log = _alliance_roster_log(db, albion_id)
+    finally:
+        _pop_progress_if_owner(key, token)
 
     return {
         "albion_id": albion_id,
@@ -865,16 +833,12 @@ def alliance_profile(albion_id: str, db: Session = Depends(deps.db_session)):
         "last_synced_at": _aware(last_synced_at).isoformat() if last_synced_at else None,
         "kills_total": kills_total,
         "deaths_total": deaths_total,
-        "kill_fame": _fame_windows(db, c7, c30, alliance_id=albion_id),
-        "silver_dropped": _silver_windows(db, c7, c30, alliance_id=albion_id),
-        "battles": _battle_windows(db, c7, c30, alliance_id=albion_id),
-        "guilds": _guilds_in_alliance(db, albion_id),
-        "battles_count": db.scalar(
-            select(func.count(func.distinct(BattleGuild.battle_id)))
-            .join(Battle, Battle.id == BattleGuild.battle_id)
-            .where(BattleGuild.alliance_id == albion_id, *_LETHAL_BIG)
-        ) or 0,
-        "roster_log": _alliance_roster_log(db, albion_id),
+        "kill_fame": kill_fame,
+        "silver_dropped": silver_dropped,
+        "battles": battle_windows,
+        "guilds": guilds,
+        "battles_count": battles_count,
+        "roster_log": roster_log,
     }
 
 

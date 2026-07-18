@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerSnapshot
+from app.services import search_index
 from app.services.albion_gate import NEW_ELIGIBLE, albion_scope, slot
 
 log = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ HOSTS = {
     "asia": "gameinfo-sgp.albiononline.com",
 }
 
-TIMEOUT = 20.0
+TIMEOUT = httpx.Timeout(20.0, read=40.0)  # ponytail: read 40s — API do Albion (Américas) estoura 20s sob carga; connect/pool/write ficam em 20s
 POLL_INTERVAL = 300  # segundos — o kill feed do Albion atualiza nesse ritmo
 SNAPSHOT_MAX_AGE = timedelta(hours=24)  # resolução do gráfico de crescimento de fama
 
@@ -124,6 +125,11 @@ def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
             kill_fame=player.kill_fame, death_fame=player.death_fame, pve_fame=player.pve_fame,
             snapshotted_at=now,
         ))
+
+    search_index.safe_upsert_entry(
+        db, entity_type="player", entity_id=albion_id, display_name=name,
+        region=region, guild_name=guild_name, alliance_name=alliance_name,
+    )
 
     db.commit()
     return player

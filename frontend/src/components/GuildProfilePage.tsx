@@ -3,6 +3,8 @@ import { navigate } from "../router";
 import { dateUTC } from "../lib/format";
 import { RoleIcon } from "./RoleIcons";
 import { useLang, useT, REGION_LABELS } from "../i18n";
+import { Panel } from "./Panel";
+import LoadProgress from "./LoadProgress";
 
 const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 
@@ -435,6 +437,8 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
   const [membersLoading, setMembersLoading] = useState(false);
   const [entityDeleted, setEntityDeleted] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadStage, setLoadStage] = useState<string | null>(null);
+  const [retryAttempt, setRetryAttempt] = useState(0);
 
   // Guarda de resposta obsoleta (mesmo padrão de GuildConfig.tsx): ao trocar
   // de mode/albionId (ex.: clicar na aliança a partir do perfil da guilda),
@@ -447,6 +451,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setRetryAttempt(0);
     setData(null);
     setBattlesPage(null);
     setBattlesCurPage(0);
@@ -463,6 +468,8 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
         .then(async r => {
           if (cancelled) return null;
           if (TRANSIENT.has(r.status)) {
+            // instabilidade — o LoadProgress mostra o aviso de retry
+            setRetryAttempt(a => a + 1);
             setTimeout(() => attempt(Math.min(delay * 2, 30_000)), delay);
             return null;
           }
@@ -479,6 +486,20 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [mode, albionId]);
+
+  // Polling da etapa da montagem do perfil (ver LoadProgress) — a agregação
+  // no backend leva ~1min pra guildas grandes; só roda enquanto carrega.
+  useEffect(() => {
+    if (!loading) { setLoadStage(null); return; }
+    let alive = true;
+    const iv = setInterval(() => {
+      fetch(`${API}/public/load-progress/${mode}/${encodeURIComponent(albionId)}`)
+        .then(r => r.json())
+        .then(d => { if (alive) setLoadStage(d.stage ?? null); })
+        .catch(() => {});
+    }, 1000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [loading, mode, albionId]);
   useEffect(() => {
     if (tab !== "battles") return;
     let cancelled = false;
@@ -532,6 +553,18 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
         <button onClick={onBack} className="mb-6 flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-300">
           <i className="ti ti-arrow-left" /> {t("back")}
         </button>
+        <LoadProgress
+          key={`${mode}:${albionId}`}
+          steps={[
+            { key: "stats", label: t("gpStepStats") },
+            { key: "silver", label: t("silverDroppedLabel") },
+            { key: "members", label: mode === "guild" ? t("membersTabLabel") : t("guildsLabel") },
+            { key: "history", label: mode === "guild" ? t("allianceHistoryTabLabel") : t("rosterHistoryTabLabel") },
+          ]}
+          stage={loadStage}
+          retrying={retryAttempt > 0}
+          hint={t("gpCrunching")}
+        />
         <div className="animate-pulse space-y-4">
           <div className="h-8 w-64 rounded bg-zinc-800" />
           <div className="grid grid-cols-4 gap-3">
@@ -579,7 +612,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
       </button>
 
       {/* header */}
-      <div className="mb-5 rounded-xl border border-zinc-800 bg-zinc-900/60 px-5 py-4">
+      <Panel className="mb-5 px-5 py-4">
         <div className="mb-3 flex flex-wrap items-start gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -622,10 +655,10 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
           </div>
 
           {/* window selector */}
-          <div className="flex rounded-lg border border-zinc-700 bg-zinc-800/40 p-0.5 text-xs">
+          <div className="flex gap-1 text-xs">
             {(["7d", "30d", "all"] as Win[]).map(w => (
               <button key={w} onClick={() => setWin(w)}
-                className={`rounded-md px-3 py-1 font-medium transition-colors ${win === w ? "bg-amber-500/20 text-amber-300" : "text-zinc-500 hover:text-zinc-300"}`}>
+                className={`dash-chip ${win === w ? "dash-chip-on" : ""}`}>
                 {w === "all" ? t("rangeAll") : w}
               </button>
             ))}
@@ -645,7 +678,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
             </div>
           ))}
         </div>
-      </div>
+      </Panel>
 
       {/* tabs + filter */}
       <div className="mb-4 flex items-end gap-1 border-b border-zinc-800">

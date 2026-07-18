@@ -16,8 +16,10 @@
   --discord: #5865f2;
   --green: #4ade80;
   --red: #f87171;
-  --radius: 10px;
-  --radius-sm: 7px;
+  /* Design v2 (jul/2026): site inteiro esquadrado — só rounded-full fica
+     redondo. Knob: subir esses valores re-arredonda os componentes CSS-puro. */
+  --radius: 0px;
+  --radius-sm: 0px;
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
@@ -43,7 +45,7 @@ a { color: var(--info); text-decoration: none; }
 }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; }
 .brand .logo {
-  width: 30px; height: 30px; border-radius: 8px;
+  width: 30px; height: 30px;
   background: var(--gold-soft); color: var(--gold);
   display: flex; align-items: center; justify-content: center; font-size: 18px;
 }
@@ -96,7 +98,7 @@ a { color: var(--info); text-decoration: none; }
 .login-wrap { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px; }
 .login-card { width: 340px; text-align: center; }
 .login-card .logo-big {
-  width: 56px; height: 56px; border-radius: 12px; margin: 0 auto 16px;
+  width: 56px; height: 56px; margin: 0 auto 16px;
   background: var(--gold-soft); color: var(--gold);
   display: flex; align-items: center; justify-content: center; font-size: 30px;
 }
@@ -217,7 +219,7 @@ a { color: var(--info); text-decoration: none; }
 /* Zona da guilda — caixa destacada */
 .nav-guild-box {
   display: flex; align-items: center; gap: 6px;
-  border: 1px solid var(--border-strong); border-radius: 8px;
+  border: 1px solid var(--border-strong);
   padding: 3px 10px 3px 8px; background: var(--surface-2);
 }
 .nav-guild-box.locked { opacity: 0.6; }
@@ -309,6 +311,42 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 8px; padding: 32px 16px; text-align: center;
   border: 1px dashed var(--border); border-radius: var(--radius); min-height: 120px;
+}
+
+/* Painel de detalhe do CompBuilder (master-detail, ver comp/CompEditor.tsx
+   renderDetailPanel) — só existe em modo Edição agora (Ver não abre painel
+   nenhum), então pode ser mais largo que o .comp-right padrão pra dar
+   espaço de verdade ao formulário (abas de build, colunas de itens alt,
+   spell pickers); a lista à esquerda encolhe de propósito pra dar destaque
+   a ele. Rola independente da lista. */
+.comp-detail {
+  width: 460px; max-height: calc(100vh - 32px); overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+}
+/* Cabeçalho sticky do painel: identidade da build (nome/arma/tipo) + preview
+   vivo do equipamento ficam visíveis enquanto o formulário rola. */
+.comp-detail-head {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.comp-detail-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+
+/* Seções tituladas do formulário de edição */
+.detail-section {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 9px 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: rgba(255,255,255,0.02);
+}
+.detail-section-title {
+  display: flex; align-items: center; gap: 6px; margin: 0;
+  font-size: 10px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px;
+}
+.detail-section-title .ti { font-size: 13px; color: var(--hint); }
+
+@media (max-width: 1100px) {
+  .comp-builder-layout { flex-direction: column; }
+  .comp-builder-layout .comp-detail { position: static; width: 100%; max-height: none; }
 }
 
 /* ── Escalação: painel direito (título do evento + inscritos) ──────────── */
@@ -773,7 +811,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .guild-picker-card {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 16px; padding: 36px 32px; width: 100%; max-width: 460px;
+  padding: 36px 32px; width: 100%; max-width: 460px;
   display: flex; flex-direction: column; align-items: center; text-align: center;
 }
 .guild-picker-icon { font-size: 40px; color: var(--gold); margin-bottom: 12px; }
@@ -1046,7 +1084,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .color-picker-popup {
   position: absolute; left: 0; top: calc(100% + 4px); z-index: 200;
   background: var(--surface-2); border: 1px solid var(--border-strong);
-  border-radius: 6px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.35);
+  padding: 8px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.35);
   white-space: nowrap;
 }
 
@@ -1098,6 +1136,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .rc-strip-icon {
   width: 22px; height: 22px; object-fit: contain;
   border-radius: 3px; background: var(--surface-2); flex-shrink: 0;
+  transform: translateY(1.5px);
 }
 .rc-strip-sep {
   width: 1px; height: 16px; background: var(--border-strong);
@@ -1130,10 +1169,14 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .party-collapse-btn:hover { background: var(--surface); color: var(--text); }
 
-/* Weapon icon in rc-head */
+/* Weapon icon in rc-head — os renders de item do Albion desenham o ícone
+   deslocado pro topo do canvas (sombra ocupa a faixa de baixo), então mesmo
+   centralizado pelo flex ele parece "subido" perto do texto; empurra alguns
+   px pra baixo pra compensar visualmente. */
 .rc-weapon-icon {
   width: 28px; height: 28px; object-fit: contain; border-radius: 4px;
   background: var(--surface-2); flex-shrink: 0;
+  transform: translateY(2px);
 }
 
 /* Fn type select in edit mode */
@@ -1280,12 +1323,35 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 [data-profile-theme="teal"] .border-amber-500 { border-color: rgb(20 184 166); }
 [data-profile-theme="teal"] .bg-amber-500\/10 { background-color: rgb(20 184 166 / 0.1); }
 
-/* AdBanner (ver components/AdBanner.tsx) — slot de anúncio + fallback anti-adblock. */
+/* Remap da var de acento pro design v2 (PLANO-DESIGN-V2 WS2): cantos de
+   Panel, links e chips que usam var(--gold) seguem o tema do dono do perfil.
+   Os overrides de classe acima são o legado — não expandir. */
+[data-profile-theme="blue"]   { --gold: #3b82f6; --gold-soft: rgb(59 130 246 / 0.15); }
+[data-profile-theme="green"]  { --gold: #22c55e; --gold-soft: rgb(34 197 94 / 0.15); }
+[data-profile-theme="red"]    { --gold: #ef4444; --gold-soft: rgb(239 68 68 / 0.15); }
+[data-profile-theme="purple"] { --gold: #a855f7; --gold-soft: rgb(168 85 247 / 0.15); }
+[data-profile-theme="teal"]   { --gold: #14b8a6; --gold-soft: rgb(20 184 166 / 0.15); }
+
+/* AdBanner (ver components/AdBanner.tsx) — slot de anúncio + fallback anti-adblock.
+   .ad-slot centraliza; .ad-box tem o tamanho fixo da variante (via style inline)
+   e nunca estoura a largura do pai, mesmo num container menor que o anúncio
+   (ex.: rail de 220px do ManagementPage com variante skyscraper 160px). */
 .ad-slot { width: 100%; margin: 0 auto; display: flex; align-items: center; justify-content: center; }
+.ad-box { max-width: 100%; overflow: hidden; }
 .ad-slot-placeholder, .ad-slot-blocked {
   width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
-  gap: 8px; text-align: center; border: 1px dashed var(--border); border-radius: var(--radius-sm);
+  gap: 8px; text-align: center; border: 1px dashed var(--border);
   color: var(--hint); font-size: 12px; padding: 8px 16px;
+}
+/* Placeholder (só dev/sem AdSense): "área reservada" de planta técnica —
+   hachura diagonal, cantos retos, rótulo micro uppercase. */
+.ad-slot-placeholder {
+  border-color: #2a2d36;
+  color: #565b66;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  background: repeating-linear-gradient(45deg, transparent 0 10px, rgba(148, 163, 184, 0.02) 10px 20px);
 }
 .ad-slot-blocked { color: var(--gold); border-color: var(--gold-soft); background: var(--gold-soft); }
 .ad-slot-blocked i { font-size: 16px; }
@@ -1302,3 +1368,371 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 @media (max-width: 900px) {
   .ev-participant-extra { display: none; }
 }
+
+/* ── Design v2: war-room / blueprint ─────────────────────────────────────
+   Assinatura visual do site: cantos RETOS, colchetes de canto (TL+BR) que
+   acendem em dourado no hover, headers editoriais com régua e um grid
+   técnico sutil de fundo. Desde o WS5 o esquadramento é global (:root) e o
+   .dash-root (grid de fundo) vive no wrapper de conteúdo do App.tsx. */
+
+/* Esquadramento GLOBAL (WS5): vale pro site inteiro, inclusive dropdowns do
+   topbar e modais position:fixed (CropModal) que ficam fora do wrapper de
+   conteúdo. rounded-full fica de fora de propósito: avatares e dots continuam
+   circulares. Os componentes CSS-puro (rc-, sd-, comp-, btn, dropdowns) já
+   esquadram via --radius: 0 no :root — ver docs/PLANO-DESIGN-V2.md. O :root
+   no seletor garante vitória sobre as utilities do Tailwind. */
+:root :is(.rounded, .rounded-md, .rounded-lg, .rounded-xl) { border-radius: 0; }
+
+/* Grid centralizado (background-position: center) — ancorado na borda
+   esquerda ele desalinha do conteúdo, que é centralizado. Tons puxados pro
+   azul do --bg (#0e0f13) em vez de zinco neutro, pra ler como a mesma folha. */
+.dash-root {
+  background-image:
+    radial-gradient(700px 240px at 50% -60px, rgba(245, 185, 66, 0.04), transparent 70%),
+    linear-gradient(to right, rgba(148, 163, 184, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.035) 1px, transparent 1px);
+  background-size: auto, 36px 36px, 36px 36px;
+  background-position: center top;
+}
+
+.dash-panel {
+  position: relative;
+  border: 1px solid #24262e;
+  /* Opaco de propósito: o grid vive nas calhas ENTRE os painéis, não dentro */
+  background: linear-gradient(180deg, #14151a, #101116);
+}
+/* Cantos fixos (TL + BR), como no design original — acendem dourado no
+   hover do painel. */
+.dash-panel::before,
+.dash-panel::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+  transition: border-color 0.25s;
+}
+.dash-panel::before { top: -1px; left: -1px; border-top: 1px solid #52525b; border-left: 1px solid #52525b; }
+.dash-panel::after { bottom: -1px; right: -1px; border-bottom: 1px solid #52525b; border-right: 1px solid #52525b; }
+.dash-panel:hover::before,
+.dash-panel:hover::after { border-color: var(--gold, #f5b942); }
+
+/* A "respiração" é o BRILHO: radial dourado em cada canto alternando devagar
+   entre baixo e alto, contido no quadrante (wrapper com overflow:hidden).
+   Animação de opacity pura = composta na GPU, fluida por construção (nada de
+   timers JS). Alpha de pico baixíssimo de propósito (~2% do potencial):
+   perceptível, nunca o centro da atenção. Delays aleatórios por painel
+   (inline, ver Panel.tsx) dessincronizam os quadrantes. */
+/* Brilho só com o mouse em cima do quadrante. O gate de hover fica no
+   WRAPPER (fade de 0.6s) e a respiração no elemento interno — keyframe e
+   gate na mesma opacity brigariam (animação sobrescreve a declaração);
+   em camadas separadas elas multiplicam, e a fase da respiração segue
+   correndo invisível: o hover nunca "pula". */
+.dash-cglowwrap {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+.dash-panel:hover .dash-cglowwrap { opacity: 1; }
+.dash-cglow {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(245, 185, 66, 0.05), transparent 65%);
+  animation: dash-glow-breathe 7s ease-in-out infinite;
+}
+.dash-cglow-tl { top: -110px; left: -110px; }
+.dash-cglow-br { bottom: -110px; right: -110px; }
+@keyframes dash-glow-breathe {
+  0%, 100% { opacity: 0.2; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dash-cglow { animation: none; opacity: 0.5; }
+}
+
+.dash-panel-h {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.dash-panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #e4e4e7;
+  white-space: nowrap;
+}
+.dash-panel-rule {
+  flex: 1;
+  min-width: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, #27272a 0%, transparent 100%);
+}
+.dash-panel-link {
+  font-size: 11px;
+  color: #71717a;
+  letter-spacing: 0.04em;
+  transition: color 0.15s;
+}
+.dash-panel-link:hover { color: var(--gold, #f5b942); }
+
+/* Chips de período (1m/6m/1a/tudo) e reset de zoom */
+.dash-chip {
+  font-size: 11px;
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  color: #a1a1aa;
+  letter-spacing: 0.04em;
+  transition: color 0.15s, border-color 0.15s;
+}
+.dash-chip:hover { color: #e4e4e7; border-color: #3f3f46; }
+.dash-chip-on {
+  border-color: rgba(245, 185, 66, 0.55);
+  background: rgba(245, 185, 66, 0.08);
+  color: #fbbf24;
+}
+
+/* Barra de progresso da carga fria de perfil (PlayerProfilePage — 1ª visita
+   consulta a Albion e demora; ver /players/load-progress no backend). */
+.dash-progress { height: 2px; background: #24262e; }
+.dash-progress-fill {
+  height: 100%;
+  background: var(--gold, #f5b942);
+  transition: width 0.6s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dash-progress-fill { transition: none; }
+}
+/* ── Market history page ─────────────────────────────────────────────────── */
+.market-page { max-width: 1000px; margin: 0 auto; padding: 24px 20px 48px; }
+.market-head h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+.market-sub { color: var(--muted); font-size: 13px; line-height: 1.55; max-width: 640px; }
+
+.market-empty { color: var(--hint); text-align: center; padding: 60px 20px; font-size: 14px; }
+
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
+.seg-btn {
+  background: transparent; border: none; color: var(--muted);
+  padding: 6px 12px; font-size: 13px; cursor: pointer;
+  border-right: 1px solid var(--border);
+}
+.seg-btn:last-child { border-right: none; }
+.seg-btn:hover { background: var(--surface-2); color: var(--text); }
+.seg-btn.active { background: var(--gold-soft); color: var(--gold); font-weight: 600; }
+
+.market-source { font-size: 12px; margin-bottom: 8px; }
+.market-source.ziggs { color: var(--green); }
+.market-source.aodp { color: var(--muted); }
+
+.market-chart-box {
+  position: relative; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px;
+}
+.market-chart-loading, .market-chart-empty {
+  color: var(--hint); text-align: center; padding: 100px 20px; font-size: 14px;
+}
+.market-tip {
+  position: absolute; top: 16px; right: 20px;
+  display: flex; flex-direction: column; align-items: flex-end;
+  background: var(--surface-2); border: 1px solid var(--border-strong);
+  border-radius: 6px; padding: 6px 10px; pointer-events: none;
+}
+.market-tip strong { color: var(--gold); font-size: 16px; }
+.market-tip span { color: var(--muted); font-size: 11px; }
+
+.market-legend { display: flex; gap: 18px; padding: 8px 4px 0; }
+.market-legend-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.market-legend-swatch { width: 14px; height: 8px; border-radius: 2px; display: inline-block; }
+.market-legend-swatch.price { background: var(--gold); height: 3px; }
+.market-legend-swatch.vol { background: var(--info); opacity: 0.5; }
+
+/* ── Market: busca, categorias e lista ───────────────────────────────────── */
+/* Barra de busca destacada, com ícone e limpador; tier como select à direita. */
+.market-searchbar {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 10px; padding: 4px 6px 4px 14px; margin: 14px 0 12px;
+  transition: border-color 0.15s;
+}
+.market-searchbar:focus-within { border-color: var(--gold); }
+.market-searchbar > .ti-search { color: var(--hint); font-size: 17px; flex-shrink: 0; }
+.market-searchbar input {
+  flex: 1; background: transparent; border: none; outline: none;
+  color: var(--text); font-size: 15px; padding: 8px 0;
+}
+.market-search-clear {
+  background: transparent; border: none; color: var(--hint); cursor: pointer;
+  font-size: 13px; padding: 4px 8px; border-radius: 6px; flex-shrink: 0;
+}
+.market-search-clear:hover { background: var(--surface-2); color: var(--text); }
+.market-tier-select {
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text); font-size: 13px; padding: 7px 10px; border-radius: 8px;
+  flex-shrink: 0; cursor: pointer;
+}
+
+.market-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.market-cat {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--muted); font-size: 12.5px; padding: 6px 12px 6px 10px;
+  border-radius: 999px; cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.market-cat i { font-size: 14px; opacity: 0.85; }
+.market-cat:hover { background: var(--surface-2); color: var(--text); }
+.market-cat.active { background: var(--gold-soft); border-color: var(--gold); color: var(--gold); font-weight: 600; }
+.market-cat.active i { opacity: 1; }
+
+.market-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.market-row-head {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 8px 14px; background: transparent; border: none;
+  border-bottom: 1px solid var(--border); text-align: left; cursor: pointer;
+}
+.market-row-head:last-child { border-bottom: none; }
+.market-row-head:hover { background: var(--surface-2); }
+.market-row-head img { flex-shrink: 0; image-rendering: crisp-edges; }
+.market-row-name { flex: 1; min-width: 0; color: var(--text); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Colunas numéricas (preço / margem / demanda) */
+.market-col { flex-shrink: 0; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+.market-col.price { width: 90px; color: var(--text); font-weight: 600; }
+.market-col.margin { width: 78px; color: var(--muted); }
+.market-col.margin.up { color: var(--green); }
+.market-col.margin.down { color: var(--red); }
+.market-col.demand { width: 88px; color: var(--info); }
+
+/* Cabeçalho ordenável */
+.market-list-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 14px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border-strong);
+}
+.mlh-spacer { width: 40px; flex-shrink: 0; }
+.mlh-btn {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+  text-align: right; flex-shrink: 0; padding: 2px 0;
+}
+.mlh-btn.left { flex: 1; text-align: left; }
+.mlh-btn:hover { color: var(--text); }
+.mlh-btn.active { color: var(--gold); font-weight: 700; }
+.market-list-header .mlh-btn:nth-child(3) { width: 90px; }
+.market-list-header .mlh-btn:nth-child(4) { width: 78px; }
+.market-list-header .mlh-btn:nth-child(5) { width: 88px; }
+
+@keyframes fade-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.market-row .market-detail { padding: 4px 14px 14px 40px; animation: fade-in 0.15s ease-out; }
+.market-detail .market-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+
+.market-more {
+  margin: 14px auto 0; display: block;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  color: var(--text); font-size: 13px; padding: 9px 22px; border-radius: 8px; cursor: pointer;
+}
+.market-more:hover { background: var(--surface-2); }
+
+/* ── Banner backend fora do ar ───────────────────────────────────────────── */
+.backend-down-banner {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--red-soft, #2c1618); color: var(--red, #f87171);
+  border-bottom: 1px solid var(--red, #f87171);
+  padding: 7px 16px; font-size: 13px; font-weight: 600;
+  position: sticky; top: 0; z-index: 200;
+}
+
+/* ── Market v2: rankings de oportunidade + modal ─────────────────────────── */
+.market-section-title { font-size: 15px; font-weight: 700; margin: 26px 0 4px; color: var(--text); }
+.market-pulse { color: var(--hint); font-size: 11.5px; margin-top: 8px; }
+
+.market-movers {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px; margin-top: 18px;
+}
+.mover-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px 8px;
+  border-top: 2px solid var(--border-strong);
+}
+.mover-card.up { border-top-color: var(--green); }
+.mover-card.down { border-top-color: var(--red); }
+.mover-card.hot { border-top-color: var(--gold); }
+.mover-card-title {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--muted); margin-bottom: 8px;
+}
+.mover-card.up .mover-card-title i { color: var(--green); }
+.mover-card.down .mover-card-title i { color: var(--red); }
+.mover-card.hot .mover-card-title i { color: var(--gold); }
+.mover-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px 2px; background: transparent; border: none; text-align: left;
+  cursor: pointer; border-radius: 6px;
+}
+.mover-row:hover { background: var(--surface-2); }
+.mover-rank { color: var(--hint); font-size: 11px; width: 14px; text-align: right; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.mover-row img { flex-shrink: 0; image-rendering: crisp-edges; }
+.mover-name { flex: 1; min-width: 0; color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mover-price { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.mover-pct { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; width: 58px; text-align: right; flex-shrink: 0; }
+.mover-pct.up { color: var(--green); }
+.mover-pct.down { color: var(--red); }
+.mover-demand { color: var(--info); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; width: 58px; text-align: right; flex-shrink: 0; }
+.mover-empty { color: var(--hint); font-size: 12px; padding: 12px 4px; }
+
+/* Modal de detalhe do item */
+.market-modal-backdrop {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 6vh 16px 16px; overflow-y: auto;
+  animation: fade-in 0.12s ease-out;
+}
+.market-modal {
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 14px; width: 100%; max-width: 980px;
+  padding: 20px 22px; box-shadow: 0 20px 56px rgba(0,0,0,0.55);
+}
+.market-modal-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
+.market-modal-head img { image-rendering: crisp-edges; flex-shrink: 0; }
+.market-modal-title { flex: 1; min-width: 0; }
+.market-modal-name { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 10px; }
+.market-modal-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.market-modal-close {
+  background: transparent; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--muted); font-size: 15px; padding: 5px 11px; cursor: pointer; flex-shrink: 0;
+}
+.market-modal-close:hover { background: var(--surface-2); color: var(--text); }
+
+/* Faixa de estatísticas do período (atual / variação / mín / máx / volume) */
+.market-stat-strip {
+  display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;
+}
+.market-stat {
+  flex: 1; min-width: 96px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px;
+}
+.market-stat-label {
+  color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px;
+  margin-bottom: 3px;
+}
+.market-stat-value { font-size: 17px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.market-stat-value.strong { color: var(--gold); }
+.market-stat-value.up { color: var(--green); }
+.market-stat-value.down { color: var(--red); }
+.market-stat-value.vol { color: var(--info); }
+
+/* Linha do catálogo agora é <button> (abre o modal) */
+.market-row-head { border-bottom: 1px solid var(--border); }
+.market-list > .market-row-head:last-of-type { border-bottom: none; }

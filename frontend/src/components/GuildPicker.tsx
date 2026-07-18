@@ -56,7 +56,7 @@ export default function GuildPicker({ onSelect }: Props) {
       let botPresent: boolean;
 
       if (setupMode && item.isAdmin !== undefined) {
-        const res = await api.selectGuild(item.id, item.name, item.icon ?? null, item.isAdmin);
+        const res = await api.selectGuild(item.id, item.name, item.icon ?? null);
         guildId    = res.guild_id;
         botPresent = res.bot_present;
       } else {

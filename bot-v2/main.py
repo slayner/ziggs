@@ -12,7 +12,10 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from localization import ZiggsTranslator
+import error_handler
 import http_client
+import offline_queue
+import ephemeral_guard
 
 load_dotenv()
 
@@ -54,8 +57,9 @@ async def heartbeat(guild: discord.Guild) -> None:
 
 @tasks.loop(minutes=5)
 async def heartbeat_loop() -> None:
-    for guild in bot.guilds:
-        await heartbeat(guild)
+    # ponytail: paralelo como event_work_loop — com muitas guildas o
+    # sequencial soma latência à toa (heartbeat é fire-and-forget anyway).
+    await asyncio.gather(*(heartbeat(g) for g in bot.guilds), return_exceptions=True)
 
 
 @tasks.loop(seconds=5)
@@ -75,18 +79,24 @@ async def event_work_loop() -> None:
     (start-all.cmd pode ligar o bot antes do backend), então o reedit do
     on_ready pode ter falhado; aqui reedita no primeiro poll bom pra religar
     os botões mortos pelo restart. Pings pendentes disparam no próximo poll
-    normal (não-force)."""
+    normal (não-force).
+
+    Paralelo: com N guildas o loop sequencial (await _get uma atrás da outra)
+    nunca terminava a tempo — 50 guildas a 200ms cada = 10s, mas o ciclo é
+    5s. asyncio.gather faz todas as requisições em paralelo (o TCPConnector
+    limita a 32 conexões simultâneas por host, o que é o teto natural)."""
     cog = bot.get_cog("Events")
     if cog is None:
         return
-    for guild in bot.guilds:
+
+    async def _poll_guild(guild) -> None:
         rebind = guild.id in cog._rebind_pending
         path = f"/bot/events/{guild.id}/pending-work"
         if rebind:
             path += "?force=true"
         data = await _get(path)
         if data is None:
-            continue  # site fora do ar — rebind fica pendente pro próximo tick
+            return  # site fora do ar — rebind fica pendente pro próximo tick
         if rebind:
             cog._rebind_pending.discard(guild.id)
         if data.get("events") or data.get("needs_rebuild"):
@@ -95,6 +105,21 @@ async def event_work_loop() -> None:
                 ping_triggers=data.get("ping_triggers") or [],
                 purge_orphans=rebind,
             )
+
+    await asyncio.gather(*(_poll_guild(g) for g in bot.guilds), return_exceptions=True)
+
+
+@tasks.loop(seconds=3)
+async def offline_queue_loop() -> None:
+    """Drena a fila de escritas que falharam por erro de conexão (ver
+    offline_queue.py). Roda a cada 3s: se a fila tem itens, tenta um drain —
+    drain() para no primeiro erro de conexão (backend ainda fora), então é
+    barato quando o backend está de pé e a fila está vazia (no-op)."""
+    if not offline_queue.pending():
+        return
+    n = await offline_queue.drain()
+    if n:
+        print(f"✓ offline_queue: {n} escrita(s) re-enviada(s) ({offline_queue.pending()} pendentes)")
 
 
 async def _wait_for_backend() -> None:
@@ -137,6 +162,8 @@ async def on_ready() -> None:
         heartbeat_loop.start()
     if not event_work_loop.is_running():
         event_work_loop.start()
+    if not offline_queue_loop.is_running():
+        offline_queue_loop.start()
     # Catch-up imediato pós-(re)conexão: se o bot esteve offline, eventos cujo
     # horário chegou nesse meio ainda estão SCHEDULED no site. O pending-work faz
     # a transição automática SCHEDULED->IN_PROGRESS — força esse poll agora em
@@ -242,6 +269,15 @@ async def on_guild_remove(guild: discord.Guild) -> None:
     print(f"✗ Saí de: {guild.name} ({guild.id})")
 
 
+@bot.event
+async def on_interaction(interaction: discord.Interaction) -> None:
+    """Hook global: roda antes de qualquer dispatch de componente. Reseta
+    o timer de auto-delete da ephemeral ativa dessa interação — qualquer
+    clique de botão/select conta como 'atividade' e renova os 60s."""
+    if interaction.type is discord.InteractionType.component:
+        ephemeral_guard.touch(interaction)
+
+
 async def main() -> None:
     # bot.run() configura logging sozinho; como usamos bot.start() direto
     # (pra rodar dentro do nosso próprio asyncio.run), isso NUNCA acontece
@@ -250,6 +286,8 @@ async def main() -> None:
     # mudo, sem NENHUM handler configurado. Explica botão que parece "não
     # responder": a exceção real nunca aparecia em lugar nenhum.
     discord.utils.setup_logging()
+    ephemeral_guard.install()  # auto-delete de 60s pra toda ephemeral
+    error_handler.install(bot)  # resposta educada + log pra qualquer comando que exploda
     async with bot:
         await bot.load_extension("cogs.general")
         await bot.load_extension("cogs.registration")
@@ -264,6 +302,7 @@ async def main() -> None:
         await bot.load_extension("cogs.event_embeds")
         await bot.load_extension("cogs.event_cmd")
         await bot.load_extension("cogs.audit_log")
+        await bot.load_extension("cogs.battle_feed")
         try:
             await bot.start(TOKEN)
         finally:

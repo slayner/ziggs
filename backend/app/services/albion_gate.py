@@ -129,10 +129,10 @@ class _RateLimiter:
 # taxa sustentada: burst=5 deixava 5 requests saírem no mesmíssimo instante
 # antes de qualquer espaçamento. Burst cortado pra 1 — zero rajada da nossa
 # parte, todo request espaçado em pelo menos 1/rate segundos, sem exceção.
-# Ajustar rate pra baixo de novo se 429 persistir (battle_tracker/
-# battle_reprocessor logam toda falha), pra cima se um período limpo mostrar folga.
-ALBION_RATE_LIMIT = 3   # requests/segundo agregado, todas as prioridades
-ALBION_RATE_BURST = 1   # sem rajada — cada request espaçado em 1/rate segundos
+# 3/s com burst 1 ainda gerava 504 frequente (trabalhando no limite da API).
+# Cortado pra 0.2/s (1 req a cada 5s) — folga pro Albion responder sem timeout.
+ALBION_RATE_LIMIT = 0.2  # requests/segundo agregado, todas as prioridades (1 a cada 5s)
+ALBION_RATE_BURST = 1     # sem rajada — cada request espaçado em 1/rate segundos
 
 _rate_limiter = _RateLimiter(ALBION_RATE_LIMIT, ALBION_RATE_BURST)
 

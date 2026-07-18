@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, BOT_INVITE, type CatalogRole, type DiscordRole, type NodeDef, type NodeMaps, type Permissions, type RegearSettings, type SiteGuild } from "../api";
 import { useLang, useT, REGION_LABELS, LANG_FULL, type Lang, type TKey } from "../i18n";
 import { ALBION_ITEMS, itemRenderUrl } from "../data/albion-items";
+import { Panel } from "./Panel";
 
 const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
 
@@ -148,6 +149,10 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [trialRoleId, setTrialRoleId] = useState<string>("");
   const [nodesCalendarChannelId, setNodesCalendarChannelId] = useState<string>("");
   const [nodesEnabled, setNodesEnabled] = useState(false);
+  // Battle feed — mensageiro de batalhas (link + imagem de resumo no canal)
+  const [battleFeedChannelId, setBattleFeedChannelId] = useState<string>("");
+  const [battleFeedMinPlayers, setBattleFeedMinPlayers] = useState<string>("10");
+  const [battleFeedEnabled, setBattleFeedEnabled] = useState(false);
   // Canal de logs do bot (retransmissão do AuditLog) — o bot cria e mantém
   // sozinho quando ligado (ver cogs/audit_log.py); aqui é só leitura pro admin
   // saber onde olhar. Toggle mestre em botLogsEnabled (default true).
@@ -271,6 +276,10 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setNodesEnabled(!!nodesCh);
       setLogsChannelId((g.settings.logs_channel_id as string | undefined) ?? "");
       setBotLogsEnabled((g.settings.bot_logs_enabled as boolean | undefined) ?? true);
+      const bfCh = (g.settings.battle_feed_channel_id as string | undefined) ?? "";
+      setBattleFeedChannelId(bfCh);
+      setBattleFeedEnabled(!!bfCh);
+      setBattleFeedMinPlayers(String(g.settings.battle_feed_min_players ?? 10));
       setEventRoleGates((g.settings.event_role_gates as Record<string, string[]> | undefined) ?? {});
       setSignupMinBuilds(String(g.settings.signup_min_builds ?? ""));
       setSignupMaxBuilds(String(g.settings.signup_max_builds ?? ""));
@@ -486,6 +495,31 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       else openFeat("nodes");
     } else {
       api.updateGuildSettings(guildId, { nodes_calendar_channel_id: null });
+    }
+  }
+
+  // ── Battle feed: mensageiro de batalhas ──
+  async function saveBattleFeedChannel(value: string) {
+    setBattleFeedChannelId(value);
+    setBattleFeedEnabled(!!value);
+    await api.updateGuildSettings(guildId, { battle_feed_channel_id: value || null });
+  }
+
+  async function saveBattleFeedMinPlayers(value: string) {
+    setBattleFeedMinPlayers(value);
+    const n = parseInt(value, 10);
+    if (!isNaN(n) && n > 0) {
+      await api.updateGuildSettings(guildId, { battle_feed_min_players: n });
+    }
+  }
+
+  function toggleBattleFeedFeature(v: boolean) {
+    setBattleFeedEnabled(v);
+    if (v) {
+      if (battleFeedChannelId) api.updateGuildSettings(guildId, { battle_feed_channel_id: battleFeedChannelId });
+      else openFeat("battlefeed");
+    } else {
+      api.updateGuildSettings(guildId, { battle_feed_channel_id: null });
     }
   }
 
@@ -874,7 +908,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       <div className="space-y-4">
 
         {/* Status do bot */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+        <Panel className="p-5">
           <div className="flex items-center gap-3 mb-3">
             <i className="ti ti-brand-discord text-indigo-400 text-xl" aria-hidden="true" />
             <h2 className="text-sm font-semibold text-zinc-100">{t("discordBot")}</h2>
@@ -919,11 +953,11 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
               </a>
             </>
           )}
-        </div>
+        </Panel>
 
         {/* Funcionalidades — sistemas agrupados por dependência, cada um com
             seu master toggle e suas configs/comandos aninhados dentro. */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+        <Panel className="p-5">
           <div className="flex items-center gap-3 mb-1">
             <i className="ti ti-apps text-amber-400 text-xl" aria-hidden="true" />
             <h2 className="text-sm font-semibold text-zinc-100">{t("featuresTitle")}</h2>
@@ -1631,6 +1665,28 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
               )}
             </FeatureRow>
 
+            {/* ── Battle Feed — mensageiro de batalhas ── */}
+            <FeatureRow
+              icon="ti-swords" iconColor="text-rose-400"
+              title={t("battleFeedTitle")} desc={t("featBattleFeedDesc")}
+              on={battleFeedEnabled}
+              onToggle={toggleBattleFeedFeature}
+              statusHint={battleFeedEnabled && battleFeedChannelId ? chName(battleFeedChannelId) : (featOpen.has("battlefeed") ? undefined : t("featNeedsSetup"))}
+              open={featOpen.has("battlefeed")} onOpen={() => toggleFeat("battlefeed")}
+            >
+              <label className="block text-xs text-zinc-400 mb-1">{t("battleFeedChannelLabel")}</label>
+              <p className="text-[11px] text-zinc-600 mb-2">{t("battleFeedChannelDesc")}</p>
+              {channelSelect(battleFeedChannelId, saveBattleFeedChannel, "mb-3")}
+
+              <label className="block text-xs text-zinc-400 mb-1">{t("battleFeedMinPlayersLabel")}</label>
+              <p className="text-[11px] text-zinc-600 mb-2">{t("battleFeedMinPlayersDesc")}</p>
+              <input
+                type="number" min={1} max={500} value={battleFeedMinPlayers}
+                onChange={e => saveBattleFeedMinPlayers(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200"
+              />
+            </FeatureRow>
+
           </div>
 
           {/* Comandos avulsos (sem sistema por trás) */}
@@ -1644,10 +1700,10 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
               {miscCmds.map(cmdRow)}
             </div>
           )}
-        </div>
+        </Panel>
 
         {/* Permissões do site, por cargo */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+        <Panel className="p-5">
           <div className="flex items-center gap-3 mb-3">
             <i className="ti ti-key text-violet-400 text-xl" aria-hidden="true" />
             <h2 className="text-sm font-semibold text-zinc-100">{t("rolePermsTitle")}</h2>
@@ -1694,10 +1750,10 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
               ))}
             </div>
           )}
-        </div>
+        </Panel>
 
         {/* Trocar servidor */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+        <Panel className="p-5">
           <div className="flex items-center gap-3 mb-3">
             <i className="ti ti-switch-horizontal text-zinc-400 text-xl" aria-hidden="true" />
             <h2 className="text-sm font-semibold text-zinc-100">{t("switchServer")}</h2>
@@ -1708,7 +1764,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
           <button className="btn" onClick={onSwitch}>
             <i className="ti ti-refresh" aria-hidden="true" /> {t("switchServer")}
           </button>
-        </div>
+        </Panel>
 
       </div>
     </div>

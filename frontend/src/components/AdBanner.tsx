@@ -22,38 +22,107 @@ function useAdblockDetected(): boolean | null {
   return blocked;
 }
 
-const SIZES = {
-  leaderboard: { height: 90 },
-  rectangle: { height: 250 },
-} as const;
+// Tamanhos padrão IAB — o que a rede de anúncio realmente entrega. Antes o
+// AdBanner só fixava a ALTURA e deixava a largura esticar 100% do pai, que
+// nunca bate com o retângulo real de nenhuma rede (AdSense inclusive).
+export type AdVariant = "leaderboard" | "mediumRectangle" | "largeRectangle" | "skyscraper" | "mobileBanner";
 
-// Slot de anúncio, sempre presente (montado uma vez no shell do App e em
-// alguns gutters vazios de páginas específicas — ver App.tsx/ManagementPage/
-// Dashboard). Sem rede de anúncio plugada ainda: mostra um placeholder no
-// lugar do <ins class="adsbygoogle"> real; adblock detectado troca pro
-// pedido de desativar.
-//
-// Sem maxWidth próprio: preenche 100% do container (.ad-slot), que já se
-// encaixa na largura de cada página (site inteiro no App.tsx/Dashboard,
-// sidebar de 220px no ManagementPage) — largura vem sempre do pai, nunca
-// travada aqui.
-export default function AdBanner({ size = "leaderboard" }: { size?: keyof typeof SIZES }) {
+const AD_SIZES: Record<AdVariant, { w: number; h: number }> = {
+  leaderboard: { w: 728, h: 90 },
+  mediumRectangle: { w: 300, h: 250 },
+  largeRectangle: { w: 336, h: 280 },
+  skyscraper: { w: 160, h: 600 },
+  mobileBanner: { w: 320, h: 50 },
+};
+
+const ADS_CLIENT = import.meta.env.VITE_ADSENSE_CLIENT as string | undefined;
+const MOBILE_QUERY = "(max-width: 767px)";
+
+function useIsMobile(): boolean {
+  const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_QUERY);
+    const onChange = () => setMobile(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return mobile;
+}
+
+declare global {
+  interface Window { adsbygoogle?: unknown[] }
+}
+
+// index.html não tem como incluir o script condicionalmente (sem template
+// engine — só troca %VITE_X% por string fixa, quebraria a URL se a env var
+// não existisse), então o loader entra sob demanda aqui: só quando um slot
+// AO VIVO de verdade monta (ADS_CLIENT setado, fora de dev), uma vez só.
+let adsenseLoaderInjected = false;
+function ensureAdsenseLoader(): void {
+  if (adsenseLoaderInjected || !ADS_CLIENT) return;
+  adsenseLoaderInjected = true;
+  const s = document.createElement("script");
+  s.async = true;
+  s.crossOrigin = "anonymous";
+  s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADS_CLIENT}`;
+  document.head.appendChild(s);
+}
+
+// <ins> isolado num componente próprio, remontado via key={variant} pelo
+// chamador — o AdSense injeta conteúdo direto no <ins> depois do push() e
+// nunca mais "re-renderiza" ele; um <ins> que sobrevive a uma troca de
+// variante (breakpoint mobile) fica com o tamanho/formato antigo pra sempre.
+function LiveAdSlot({ variant, slot }: { variant: AdVariant; slot?: string }) {
+  const { w, h } = AD_SIZES[variant];
+  useEffect(() => {
+    ensureAdsenseLoader();
+    try {
+      (window.adsbygoogle = window.adsbygoogle || []).push({});
+    } catch {
+      // AdSense ainda não carregou ou foi bloqueado — a UI de adblock cobre o caso comum
+    }
+  }, []);
+  return (
+    <ins
+      className="adsbygoogle"
+      style={{ display: "inline-block", width: w, height: h }}
+      data-ad-client={ADS_CLIENT}
+      data-ad-slot={slot}
+    />
+  );
+}
+
+// Slot de anúncio dimensionado por variante (tamanhos padrão IAB), com
+// fallback pra mobile (`mobileVariant`, resolvido por media query). Em dev ou
+// sem VITE_ADSENSE_CLIENT configurado, mostra um placeholder do tamanho REAL
+// (dá pra validar o layout sem depender do AdSense estar rodando); adblock
+// detectado troca pro pedido de desativar; em prod com client configurado,
+// renderiza o <ins class="adsbygoogle"> de verdade (loader injetado sob
+// demanda, ver ensureAdsenseLoader).
+export default function AdBanner({ variant, mobileVariant, slot }: {
+  variant: AdVariant; mobileVariant?: AdVariant; slot?: string;
+}) {
   const t = useT();
   const blocked = useAdblockDetected();
-  const { height } = SIZES[size];
+  const isMobile = useIsMobile();
+  const resolved = isMobile && mobileVariant ? mobileVariant : variant;
+  const { w, h } = AD_SIZES[resolved];
+  const live = !import.meta.env.DEV && !!ADS_CLIENT;
 
   return (
-    <div className="ad-slot" style={{ height }}>
-      {blocked === null ? null : blocked ? (
-        <div className="ad-slot-blocked">
-          <i className="ti ti-shield-off" aria-hidden="true" />
-          <span>{t("adblockMessage")}</span>
-        </div>
-      ) : (
-        // TODO: colar aqui a tag da rede de anúncio escolhida (ex.: <ins
-        // className="adsbygoogle" .../> do Google AdSense) no lugar do texto.
-        <div className="ad-slot-placeholder">{t("adPlaceholder")}</div>
-      )}
+    <div className="ad-slot">
+      <div className="ad-box" style={{ width: w, height: h }}>
+        {blocked === null ? null : blocked ? (
+          <div className="ad-slot-blocked">
+            <i className="ti ti-shield-off" aria-hidden="true" />
+            <span>{t("adblockMessage")}</span>
+          </div>
+        ) : live ? (
+          <LiveAdSlot key={resolved} variant={resolved} slot={slot} />
+        ) : (
+          <div className="ad-slot-placeholder">{t("adPlaceholder")} ({w}×{h})</div>
+        )}
+      </div>
     </div>
   );
 }

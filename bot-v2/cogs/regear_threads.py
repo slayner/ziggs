@@ -165,17 +165,8 @@ class RegearThreads(commands.Cog):
             f"/bot/events/{guild.id}/{event_id}/regear-thread-archived", {})
 
 
-_tick_n = 0
-
-
 @tasks.loop(seconds=10)
 async def regear_thread_work_loop(cog: "RegearThreads") -> None:
-    # ponytail: tick sempre imprime algo (mesmo sem trabalho) — sem isto,
-    # silêncio é ambíguo entre "nada pra fazer" e "o loop morreu". Só remover
-    # depois de confirmar que o loop sobrevive entre restarts.
-    global _tick_n
-    _tick_n += 1
-    print(f"[regear_threads] tick #{_tick_n}")
     for guild in cog.bot.guilds:
         try:
             await cog.sync_guild(guild)

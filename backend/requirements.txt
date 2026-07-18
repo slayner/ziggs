@@ -14,3 +14,7 @@ python-multipart>=0.0.9
 # Sem ele, o fluxo degrada pra "manual" (logística preenche os itens na UI).
 pytesseract>=0.3.10
 Pillow>=10.0
+# Dashboard TUI do companion — tabela live de companions ativos, batalhas
+# escaneadas, preços ingeridos, top contributors. Sobe em janela de terminal
+# própria via start-all.cmd (run-dashboard.cmd).
+rich>=13.8

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, setGuild, type EventSummary, type UnifiedReconcile } from "../api";
+import { api, setGuild, type EventSummary, type UnifiedReconcile, type ReconcileLooterItem } from "../api";
 import { useT, useLang, itemLocalName, type TKey } from "../i18n";
 import { itemRenderUrl, ITEM_BY_ID } from "../data/albion-items";
 import { prioritizeEvents } from "../lib/events";
@@ -48,6 +48,21 @@ export default function ReconcileSection({ guildId }: Props) {
     try { setRec(await api.getReconcile(id)); }
     catch { setRec(null); }
     finally { setBusy(false); }
+  }
+
+  // Toggle "conferido" (vermelho ↔ amarelo). Otimista: flipa o item no estado
+  // local e reverte se a chamada falhar. Só itens missing são clicáveis.
+  async function toggleVerify(looter: string, it: ReconcileLooterItem) {
+    if (it.status !== "missing" || eventId == null) return;
+    const before = rec;
+    setRec(r => r && {
+      ...r,
+      looters: r.looters.map(l => l.looted_by !== looter ? l : {
+        ...l, items: l.items.map(x => x === it ? { ...x, verified: !x.verified } : x),
+      }),
+    });
+    try { await api.verifyReconcileItem(eventId, looter, it.item_id); }
+    catch { setRec(before); }
   }
 
   useEffect(() => {
@@ -220,39 +235,70 @@ export default function ReconcileSection({ guildId }: Props) {
 
       {busy && <p className="hint">{t("loading")}</p>}
 
-      {/* Fixo abaixo, nas duas sub-abas: quem não depositou. */}
-      {rec && rec.not_deposited.length > 0 && (
+      {/* Fixo abaixo, nas duas sub-abas: devido por JOGADOR (foco no looter,
+          não no item). Cores: vermelho = roubado (sobreviveu, não depositou),
+          amarelo = conferido, verde = depositado, cinza = morreu com (fora do
+          devido). Só os vermelhos/amarelos são clicáveis (toggle conferido). */}
+      {rec && (rec.looters.length > 0 || rec.has_loot_log) && (
         <div className="lootlog-card" style={{ marginBottom: 16 }}>
-          <strong style={{ color: "var(--gold)" }}>{t("recNotDeposited")} ({rec.not_deposited.length})</strong>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 10 }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                <th style={{ textAlign: "left", padding: "4px 8px", color: "var(--hint)" }}>{t("llItem")}</th>
-                <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--hint)" }}>{t("recMissing")}</th>
-                <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--hint)" }}>{t("recLooted")}</th>
-                <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--hint)" }}>{t("recInChest")}</th>
-                <th style={{ textAlign: "right", padding: "4px 8px", color: "var(--hint)" }}>{t("llAmount")}</th>
-                <th style={{ textAlign: "left", padding: "4px 8px", color: "var(--hint)" }}>{t("llLooter")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rec.not_deposited.map((n, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "4px 8px", display: "flex", alignItems: "center", gap: 6 }}>
-                    <img src={itemRenderUrl(n.item_id)} alt="" width={20} height={20} />
-                    {n.item_name}
-                  </td>
-                  <td style={{ textAlign: "right", padding: "4px 8px", color: "var(--gold)", fontWeight: 700 }}>{n.missing_qty}</td>
-                  <td style={{ textAlign: "right", padding: "4px 8px", color: "var(--muted)" }}>{n.looted_qty}</td>
-                  <td style={{ textAlign: "right", padding: "4px 8px", color: "var(--green)" }}>{n.chest_qty}</td>
-                  <td style={{ textAlign: "right", padding: "4px 8px", color: "var(--gold)" }}>{fmt(n.missing_value)}</td>
-                  <td style={{ padding: "4px 8px", fontSize: 11, color: "var(--muted)" }}>
-                    {n.looters.map(l => `${l.looted_by} (${l.qty})`).join(", ")}
-                  </td>
-                </tr>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+            <strong style={{ color: "var(--gold)" }}>{t("recByPlayer")}</strong>
+            <span className="hint" style={{ fontSize: 11 }}>{t("recVerifyHint")}</span>
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", margin: "8px 0 2px", fontSize: 11 }}>
+            {([["var(--red)", t("recStolen")], ["var(--gold)", t("recVerified")], ["var(--green)", t("recDeposited")], ["var(--muted)", t("recDiedWith")]] as [string, string][]).map(([c, lbl]) => (
+              <span key={lbl} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--muted)" }}>
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: c, display: "inline-block" }} />{lbl}
+              </span>
+            ))}
+          </div>
+
+          {rec.looters.length === 0 ? (
+            <p className="hint" style={{ marginTop: 10 }}>{t("recNoOwed")}</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+              {rec.looters.map(l => (
+                <div key={l.looted_by} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, gap: 10 }}>
+                    <strong style={{ fontSize: 13 }}>{l.looted_by}</strong>
+                    {l.missing_value > 0 && (
+                      <span style={{ color: "var(--red)", fontWeight: 700, fontSize: 13 }}>{fmt(l.missing_value)}</span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {l.items.map((it, j) => {
+                      const clickable = it.status === "missing";
+                      const color = it.status === "deposited" ? "var(--green)"
+                        : it.status === "died" ? "var(--muted)"
+                        : it.verified ? "var(--gold)" : "var(--red)";
+                      const known = ITEM_BY_ID.get(it.item_id);
+                      const name = known ? itemLocalName(known, lang) : it.item_name;
+                      const label = it.status === "deposited" ? t("recDeposited")
+                        : it.status === "died" ? t("recDiedWith")
+                        : it.verified ? t("recVerified") : t("recStolen");
+                      return (
+                        <button
+                          key={j} type="button" disabled={!clickable} title={label}
+                          onClick={clickable ? () => toggleVerify(l.looted_by, it) : undefined}
+                          style={{
+                            display: "inline-flex", alignItems: "center", gap: 5,
+                            padding: "3px 8px 3px 4px", borderRadius: 6,
+                            border: `1px solid ${color}`, background: "transparent",
+                            opacity: it.status === "died" ? 0.55 : 1,
+                            cursor: clickable ? "pointer" : "default", fontSize: 12,
+                          }}
+                        >
+                          <img src={itemRenderUrl(it.item_id)} alt="" width={22} height={22} />
+                          <span style={{ color: it.status === "died" ? "var(--muted)" : "var(--text)" }}>{name}</span>
+                          <span style={{ color, fontWeight: 600 }}>×{it.quantity}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          )}
         </div>
       )}
     </div>

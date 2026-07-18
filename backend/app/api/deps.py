@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.auth import discord
 from app.auth.crypto import decrypt_token
 from app.auth.permissions import has_permission
-from app.auth.session import verify_session
+from app.auth.session import verify_session, verify_companion_token
 from app.config import get_settings
 from app.db import get_session
 from app.models.tenancy import Guild, GuildMember, User
@@ -103,6 +103,26 @@ def require_bot_api(authorization: str = Header(...)) -> bool:
     return True
 
 
+def require_companion_user(
+    authorization: str = Header(...),
+    db: Session = Depends(db_session),
+) -> User:
+    """Auth companion↔site: Bearer <companion_token> (JWT-like, assinado).
+    O companion faz login Discord no navegador, recebe este token, e usa em
+    todas as rotas /companion/auth/* e /companion/lootlog/*. Devolve o User
+    que o token representa — rotas usam user.id pra filtrar signups/eventos."""
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(401, detail="token companion ausente")
+    token = authorization[7:]
+    uid = verify_companion_token(token)
+    if uid is None:
+        raise HTTPException(401, detail="token companion inválido ou expirado")
+    user = db.scalar(select(User).where(User.id == uid))
+    if user is None:
+        raise HTTPException(401, detail="usuário não encontrado")
+    return user
+
+
 # ponytail: debug temporário do 403 da escalação — só grava em DEVELOPMENT
 # (em prod vira no-op: logava IDs de usuário num arquivo de crescimento
 # ilimitado). Remover de vez quando o 403 for confirmado morto após o reboot.
@@ -117,24 +137,15 @@ def _dbg(*a):
         pass
 
 
-def _provision_member(db: Session, user: User, guild_id: int) -> GuildMember:
-    """Garante a row Guild + GuildMember pra um user que é membro do server
-    Discord. A página de escalação é deep link e precisa abrir pra quem é do
-    server mesmo sem nunca ter selecionado a guilda no site (caso "bot em server
-    público").
+def verify_guild_membership(user: User, guild_id: int) -> tuple[str | None, str | None, bool, list[int]]:
+    """Confirma junto ao DISCORD (nunca ao body do cliente) que `user` é membro
+    de `guild_id`, e deriva (name, icon, is_admin, role_ids) de lá. Sem acesso
+    a DB — puramente verificação externa, para ser chamada ANTES de qualquer
+    write (select-guild, switch-guild).
 
     Filiação é confirmada pelo TOKEN DO BOT (não expira; o bot tá no server) —
     fonte primária. Só cai no token OAuth do user (que expira) se o bot não
-    estiver no server. 403 se o user não é membro; 502 se nenhuma fonte responde.
-    Dep `def` (não async) → roda em threadpool, não bloqueia o event loop."""
-    member = db.scalar(select(GuildMember).where(
-        GuildMember.guild_id == guild_id, GuildMember.user_id == user.id,
-    ))
-    if member is not None:
-        _dbg("provision HIT existing member user=", user.id, "guild=", guild_id, "is_admin=", member.is_guild_admin)
-        return member
-
-    _dbg("provision MISS user=", user.id, "guild=", guild_id, "bot_token_set=", bool(get_settings().discord_bot_token))
+    estiver no server. 403 se o user não é membro; 502 se nenhuma fonte responde."""
     s = get_settings()
     name: str | None = None
     icon: str | None = None
@@ -147,54 +158,63 @@ def _provision_member(db: Session, user: User, guild_id: int) -> GuildMember:
     if s.discord_bot_token:
         try:
             ginfo = discord.fetch_guild(str(guild_id), s.discord_bot_token)
-        except Exception as ex:
-            _dbg("bot fetch_guild EXC guild=", guild_id, repr(ex))
+        except Exception:
             ginfo = None
         if ginfo is not None:
-            _dbg("bot in server guild=", guild_id, "owner=", ginfo.get("owner_id"))
             try:
                 mdata = discord.fetch_guild_member_bot(str(guild_id), str(user.id), s.discord_bot_token)
-            except Exception as ex:
-                _dbg("bot fetch_guild_member_bot EXC user=", user.id, repr(ex))
+            except Exception:
                 mdata = None
             if mdata is None:
                 # bot no server mas o user não é membro — decisivo, nem tenta o
                 # token do user.
-                _dbg("bot path: member NOT in server -> 403 user=", user.id, "guild=", guild_id)
                 raise HTTPException(403, "sem acesso a essa guilda")
-            name = ginfo.get("name")
-            icon = ginfo.get("icon")
             role_perms = {str(r["id"]): int(r.get("permissions", 0)) for r in ginfo.get("roles", [])}
             role_ids = [int(r) for r in mdata.get("roles", [])]
             ADMIN = 0x8  # ADMINISTRATOR implica todas as perms
             is_admin = (str(ginfo.get("owner_id")) == str(user.id)) or any(
                 role_perms.get(str(rid), 0) & ADMIN for rid in role_ids
             )
+            return ginfo.get("name"), ginfo.get("icon"), is_admin, role_ids
 
     # 2) Token OAuth do user — só se o bot não estiver no server. O token expira
     #    (o cookie de sessão não), então pode falhar com 401 → 502.
-    if name is None and icon is None and not role_ids:
-        _dbg("falling back to user OAuth token user=", user.id, "guild=", guild_id)
-        token = decrypt_token(user.discord_access_token)
-        if not token:
-            _dbg("user token None -> 403 user=", user.id)
-            raise HTTPException(403, "sem acesso a essa guilda")
-        try:
-            gds = discord.fetch_guilds(token)
-        except Exception as ex:
-            _dbg("fetch_guilds EXC -> 502 user=", user.id, repr(ex))
-            raise HTTPException(502, "erro ao confirmar filiação à guilda")
-        g = next((x for x in gds if int(x["id"]) == guild_id), None)
-        if g is None:
-            _dbg("user token: guild not in user's guilds -> 403 user=", user.id, "guild=", guild_id)
-            raise HTTPException(403, "sem acesso a essa guilda")
-        name = g.get("name")
-        icon = g.get("icon")
-        is_admin = bool(int(g.get("permissions", 0)) & 0x20)  # MANAGE_GUILD
-        try:
-            role_ids = [int(r) for r in discord.fetch_guild_member(str(guild_id), token).get("roles", [])]
-        except Exception:
-            pass
+    token = decrypt_token(user.discord_access_token)
+    if not token:
+        raise HTTPException(403, "sem acesso a essa guilda")
+    try:
+        gds = discord.fetch_guilds(token)
+    except Exception:
+        raise HTTPException(502, "erro ao confirmar filiação à guilda")
+    g = next((x for x in gds if int(x["id"]) == guild_id), None)
+    if g is None:
+        raise HTTPException(403, "sem acesso a essa guilda")
+    name = g.get("name")
+    icon = g.get("icon")
+    is_admin = bool(int(g.get("permissions", 0)) & 0x20)  # MANAGE_GUILD
+    try:
+        role_ids = [int(r) for r in discord.fetch_guild_member(str(guild_id), token).get("roles", [])]
+    except Exception:
+        pass
+    return name, icon, is_admin, role_ids
+
+
+def _provision_member(db: Session, user: User, guild_id: int) -> GuildMember:
+    """Garante a row Guild + GuildMember pra um user que é membro do server
+    Discord. A página de escalação é deep link e precisa abrir pra quem é do
+    server mesmo sem nunca ter selecionado a guilda no site (caso "bot em server
+    público").
+
+    Dep `def` (não async) → roda em threadpool, não bloqueia o event loop."""
+    member = db.scalar(select(GuildMember).where(
+        GuildMember.guild_id == guild_id, GuildMember.user_id == user.id,
+    ))
+    if member is not None:
+        _dbg("provision HIT existing member user=", user.id, "guild=", guild_id, "is_admin=", member.is_guild_admin)
+        return member
+
+    _dbg("provision MISS user=", user.id, "guild=", guild_id, "bot_token_set=", bool(get_settings().discord_bot_token))
+    name, icon, is_admin, role_ids = verify_guild_membership(user, guild_id)
 
     guild = db.scalar(select(Guild).where(Guild.id == guild_id))
     if guild is None:

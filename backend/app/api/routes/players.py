@@ -15,11 +15,12 @@ from app.api.routes.battles import (
     SUPPORT_ELIGIBLE_FIGHT_POINTS, TANK_ELIGIBLE_FIGHT_POINTS,
 )
 from app.models.battles import Battle, BattleParticipant
-from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, PlayerSnapshot, PlayerWeaponStat
+from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, PlayerSnapshot, PlayerWeaponStat, SearchEntry
 from app.services import battle_groups, prices, user_profile
 from app.services.albion_gate import PROFILE, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client, sync_player_kills, upsert_player
 from app.services.profile_warmer import request_refresh
+from app.services.search_norm import normalize as norm_name, prefix_range
 
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -453,14 +454,35 @@ async def search_players(q: str = Query(min_length=2), region: str = "americas",
     if host is None:
         raise HTTPException(400, "Região inválida")
 
-    nq = q.lower()
-    local = db.scalars(
-        select(AlbionPlayer)
-        .where(AlbionPlayer.region == region, func.lower(AlbionPlayer.name).like(f"%{nq}%"))
+    # Prefixo (sargável, indexado) primeiro; substring só completa se sobrar
+    # espaço — mesmo padrão de _search_entities em routes/profiles.py.
+    nq = norm_name(q)
+    lo, hi = prefix_range(nq)
+    local_ids: list[str] = list(db.scalars(
+        select(SearchEntry.entity_id)
+        .where(SearchEntry.entity_type == "player", SearchEntry.region == region,
+               SearchEntry.norm_name >= lo, SearchEntry.norm_name < hi)
+        .order_by(SearchEntry.weight.desc())
         .limit(20)
-    ).all()
+    ).all())
+    if len(local_ids) < 20:
+        local_ids += list(db.scalars(
+            select(SearchEntry.entity_id)
+            .where(
+                SearchEntry.entity_type == "player", SearchEntry.region == region,
+                SearchEntry.norm_name.like(f"%{nq}%"), SearchEntry.entity_id.notin_(local_ids),
+            )
+            .order_by(SearchEntry.weight.desc())
+            .limit(20 - len(local_ids))
+        ).all())
+
+    local: list[AlbionPlayer] = []
+    if local_ids:
+        by_id = {p.albion_id: p for p in db.scalars(select(AlbionPlayer).where(AlbionPlayer.albion_id.in_(local_ids))).all()}
+        local = [by_id[pid] for pid in local_ids if pid in by_id]
     if local:
-        local = sorted(local, key=lambda p: (not p.name.lower().startswith(nq), p.name.lower()))
+        qlow = q.lower()
+        local = sorted(local, key=lambda p: (not p.name.lower().startswith(qlow), p.name.lower()))
         return {"players": [_player_to_search_result(p) for p in local]}
 
     async with make_client() as c:
@@ -508,6 +530,25 @@ def _synthetic_raw(player: AlbionPlayer) -> dict:
     }
 
 
+# Etapa corrente da carga FRIA de um perfil (primeira visita — caminho lento
+# que consulta a Albion), consumida por polling do frontend enquanto o fetch
+# principal não retorna. Chave "region:nome_minusculo"; some ao terminar.
+# Valor = (token_da_run, stage): cargas simultâneas do mesmo perfil
+# (StrictMode em dev, dois visitantes) compartilham a chave — o token impede
+# uma run terminando de apagar a etapa de outra em andamento.
+# ponytail: dict em memória — com múltiplos workers cada um só vê o próprio;
+# mover pra Redis/DB se o deploy virar multi-processo.
+_load_progress: dict[str, tuple[object, str]] = {}
+
+
+@router.get("/load-progress/{region}/{name}")
+def get_load_progress(region: str, name: str):
+    """Etapa da carga fria em andamento pra esse perfil (stage=null: nada
+    em andamento — ou é um perfil já cacheado, que resolve na hora)."""
+    entry = _load_progress.get(f"{region}:{name.lower()}")
+    return {"stage": entry[1] if entry else None}
+
+
 @router.get("/by-name/{region}/{name}")
 async def get_player_by_name(region: str, name: str, db: Session = Depends(deps.db_session)):
     """Resolve `/am/Slayner` etc: busca o nome exato na região indicada,
@@ -527,34 +568,46 @@ async def get_player_by_name(region: str, name: str, db: Session = Depends(deps.
         _queue_refresh_if_stale(db, cached)
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
 
-    async with make_client() as c:
-        async with albion_scope(PROFILE):
-            try:
-                resp = await _get_with_retry(c, f"https://{host}/api/gameinfo/search", params={"q": name})
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=502, detail=f"Albion API: {e.response.status_code}")
-            except httpx.RequestError as e:
-                raise HTTPException(status_code=502, detail=f"Erro de conexão: {e}")
-            candidates = resp.json().get("players", [])
-            # Nomes da Albion diferenciam maiúsculas/minúsculas — "Moskka" e
-            # "MosKKa" são DUAS contas distintas. Prioriza match exato; só cai
-            # pra case-insensitive se não achar nenhum (ex: erro de digitação na
-            # URL) — nunca o contrário, senão pode resolver pra conta errada.
-            match = next((p for p in candidates if p.get("Name") == name), None)
-            if match is None:
-                match = next((p for p in candidates if p.get("Name", "").lower() == name.lower()), None)
-            if match is None:
-                raise HTTPException(404, "Jogador não encontrado nessa região")
-            raw = await _fetch_player_raw(c, host, match["Id"])
-            if raw is None:
-                raise HTTPException(404, "Jogador não encontrado")
-            # Não depende só do feed global ter visto a luta desse jogador
-            # específico — busca direto nos endpoints de kills/deaths dele.
-            await sync_player_kills(c, db, host, region, raw["Id"])
+    progress_key = f"{region}:{name.lower()}"
+    progress_token = object()
+    _load_progress[progress_key] = (progress_token, "search")
+    try:
+        async with make_client() as c:
+            async with albion_scope(PROFILE):
+                try:
+                    resp = await _get_with_retry(c, f"https://{host}/api/gameinfo/search", params={"q": name})
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    raise HTTPException(status_code=502, detail=f"Albion API: {e.response.status_code}")
+                except httpx.RequestError as e:
+                    raise HTTPException(status_code=502, detail=f"Erro de conexão: {e}")
+                candidates = resp.json().get("players", [])
+                # Nomes da Albion diferenciam maiúsculas/minúsculas — "Moskka" e
+                # "MosKKa" são DUAS contas distintas. Prioriza match exato; só cai
+                # pra case-insensitive se não achar nenhum (ex: erro de digitação na
+                # URL) — nunca o contrário, senão pode resolver pra conta errada.
+                match = next((p for p in candidates if p.get("Name") == name), None)
+                if match is None:
+                    match = next((p for p in candidates if p.get("Name", "").lower() == name.lower()), None)
+                if match is None:
+                    raise HTTPException(404, "Jogador não encontrado nessa região")
+                _load_progress[progress_key] = (progress_token, "details")
+                raw = await _fetch_player_raw(c, host, match["Id"])
+                if raw is None:
+                    raise HTTPException(404, "Jogador não encontrado")
+                # Não depende só do feed global ter visto a luta desse jogador
+                # específico — busca direto nos endpoints de kills/deaths dele.
+                _load_progress[progress_key] = (progress_token, "kills")
+                await sync_player_kills(c, db, host, region, raw["Id"])
 
-    player = upsert_player(db, raw, region)
-    return await _build_profile_payload(db, player, raw)
+        _load_progress[progress_key] = (progress_token, "build")
+        player = upsert_player(db, raw, region)
+        return await _build_profile_payload(db, player, raw)
+    finally:
+        # só limpa se a etapa ainda é desta run — não apaga a de outra em andamento
+        entry = _load_progress.get(progress_key)
+        if entry is not None and entry[0] is progress_token:
+            _load_progress.pop(progress_key, None)
 
 
 @router.get("/{albion_id}")

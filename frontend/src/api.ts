@@ -48,6 +48,12 @@ export interface ApiComp {
   archived: boolean;
   parties: ApiParty[];
 }
+export interface ApiFnType {
+  key: string;
+  label: string;
+  color: string;
+  emoji?: string;
+}
 export interface CatalogRole {
   id: number;
   name: string;
@@ -220,6 +226,10 @@ export interface Me {
 }
 
 // ── Perfil customizado (tema/avatar/banner do personagem verificado) ────────
+// Retângulo de crop como FRAÇÕES 0..1 da imagem original — contrato com o
+// backend (form fields crop_x/y/w/h), ver docs/PLANO-PERFIL-V2.md. O crop é
+// aplicado no servidor (Pillow); o cliente só escolhe o retângulo.
+export interface CropRect { x: number; y: number; w: number; h: number }
 export const PROFILE_THEMES = ["gold", "blue", "green", "red", "purple", "teal"] as const;
 export type ProfileTheme = typeof PROFILE_THEMES[number];
 export interface MyProfile {
@@ -434,12 +444,31 @@ export interface LootReconcileEvent {
   looted_by: string;
   looted_from: string | null;
 }
+// Timeline por looter: cada item vira "missing" (sobreviveu, não depositou →
+// vermelho/amarelo), "deposited" (baú → verde) ou "died" (morreu com → cinza).
+export type ReconcileItemStatus = "missing" | "deposited" | "died";
+export interface ReconcileLooterItem {
+  item_id: string;
+  item_name: string;
+  status: ReconcileItemStatus;
+  quantity: number;
+  silver_value: number;
+  value: number;
+  verified: boolean;
+}
+export interface ReconcileLooter {
+  looted_by: string;
+  missing_qty: number;
+  missing_value: number;
+  items: ReconcileLooterItem[];
+}
 export interface UnifiedReconcile {
   has_loot_log: boolean;
   has_chest_log: boolean;
   has_deaths: boolean;
   deposited: ChestEntry[];
   not_deposited: NotDepositedItem[];
+  looters: ReconcileLooter[];
   died_with: DeathLoss[];
   loot_events: LootReconcileEvent[];
   total_looted_value: number;
@@ -614,6 +643,36 @@ export function imgRetry(onFail?: (img: HTMLImageElement) => void) {
   };
 }
 
+// ── Market history (fonte própria — companion captura do jogo) ──────────────
+export interface MarketHistoryBucket { bucket_ts: number; item_count: number; avg_price: number; }
+export interface MarketHistoryOut {
+  item_id: string; quality: number; timescale: number;
+  location: string | null; buckets: MarketHistoryBucket[];
+}
+
+export interface MarketCatalogItem { id: string; en: string; pt: string; c: string; }
+
+export async function getMarketCatalog(): Promise<MarketCatalogItem[]> {
+  return req<MarketCatalogItem[]>("/market-history/catalog");
+}
+
+export interface MarketSnapshotRow { id: string; price: number; change_pct: number; demand: number; source: string; }
+
+// region = servidor do Albion (west|east|europe, mesmo valor do seletor do site).
+export async function getMarketSnapshot(region: string): Promise<MarketSnapshotRow[]> {
+  return req<MarketSnapshotRow[]>(`/market-history/snapshot?region=${encodeURIComponent(region)}`);
+}
+
+export async function getMarketHistory(
+  itemId: string, region: string, quality = 1, timescale = 1, location?: string,
+): Promise<MarketHistoryOut> {
+  const qs = new URLSearchParams({
+    region, quality: String(quality), timescale: String(timescale),
+  });
+  if (location) qs.set("location", location);
+  return req<MarketHistoryOut>(`/market-history/${encodeURIComponent(itemId)}?${qs}`);
+}
+
 export async function fetchRetry(input: RequestInfo, retries = 3): Promise<Response> {
   let res: Response = await fetch(input);
   for (let i = 1; i < retries && !res.ok && res.status >= 500; i++) {
@@ -623,20 +682,64 @@ export async function fetchRetry(input: RequestInfo, retries = 3): Promise<Respo
   return res;
 }
 
+// ── Estado global "backend fora do ar" (banner no App) ──────────────────────
+// req() marca down quando o fetch falha na rede; o App mostra o banner e faz
+// poll de /health até voltar. Qualquer resposta HTTP (mesmo erro) = backend vivo.
+let _backendDown = false;
+const _downListeners = new Set<(down: boolean) => void>();
+
+export function onBackendDown(cb: (down: boolean) => void): () => void {
+  _downListeners.add(cb);
+  cb(_backendDown);
+  return () => { _downListeners.delete(cb); };
+}
+
+export function setBackendDown(down: boolean): void {
+  if (_backendDown === down) return;
+  _backendDown = down;
+  for (const cb of _downListeners) cb(down);
+}
+
+// Mensagens amigáveis pra falhas que não têm detail humano do backend —
+// api.ts não tem acesso ao hook de idioma, lê o mesmo localStorage do i18n.
+const _ERR_MSG: Record<string, { net: string; server: string }> = {
+  pt: { net: "Sem conexão com o servidor. Tente novamente.", server: "Erro no servidor. Tente novamente em instantes." },
+  en: { net: "Can't reach the server. Try again.", server: "Server error. Try again in a moment." },
+  es: { net: "Sin conexión con el servidor. Inténtalo de nuevo.", server: "Error del servidor. Inténtalo de nuevo en un momento." },
+};
+
+function _errMsg(kind: "net" | "server"): string {
+  const lang = localStorage.getItem("lang") ?? "pt";
+  return (_ERR_MSG[lang] ?? _ERR_MSG.pt)[kind];
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   // FormData: deixa o fetch definir o Content-Type (multipart + boundary).
   const isForm = init?.body instanceof FormData;
-  const res = await fetch(path, {
-    credentials: "include",
-    ...(isForm ? {} : { headers: { "Content-Type": "application/json" } }),
-    ...init,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      credentials: "include",
+      ...(isForm ? {} : { headers: { "Content-Type": "application/json" } }),
+      ...init,
+    });
+  } catch (e) {
+    // Falha de REDE (backend fora/aba offline) — não uma resposta HTTP.
+    setBackendDown(true);
+    throw new Error(_errMsg("net"));
+  }
+  setBackendDown(false);
   if (!res.ok) {
-    let detail = res.statusText;
+    let detail: string | undefined;
     try {
-      detail = (await res.json()).detail ?? detail;
+      detail = (await res.json()).detail;
     } catch {
       // sem corpo JSON
+    }
+    // 5xx sem detail humano (ou "Internal Server Error" cru) → mensagem
+    // amigável em vez de vazar statusText técnico pro usuário.
+    if (!detail || (res.status >= 500 && /internal server error/i.test(detail))) {
+      detail = res.status >= 500 ? _errMsg("server") : (detail ?? res.statusText);
     }
     throw new Error(detail);
   }
@@ -644,6 +747,18 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const BOT_INVITE = `https://discord.com/oauth2/authorize?client_id=1518276093294153859&permissions=8&scope=bot+applications.commands`;
+
+function profileImageForm(file: File, crop?: CropRect): FormData {
+  const form = new FormData();
+  form.append("file", file);
+  if (crop) {
+    form.append("crop_x", String(crop.x));
+    form.append("crop_y", String(crop.y));
+    form.append("crop_w", String(crop.w));
+    form.append("crop_h", String(crop.h));
+  }
+  return form;
+}
 
 export const api = {
   me: () => req<Me | null>("/auth/me").catch(() => null),
@@ -653,10 +768,10 @@ export const api = {
   setCraftFocusEfficiency: (values: Record<string, number>) =>
     req<Record<string, number>>("/craft/focus-efficiency", { method: "PUT", body: JSON.stringify({ values }) }),
   myDiscordGuilds: () => req<DiscordGuild[]>("/auth/guilds"),
-  selectGuild: (guild_id: string, guild_name: string, icon: string | null, is_admin = false) =>
+  selectGuild: (guild_id: string, guild_name: string, icon: string | null) =>
     req<{ guild_id: string; bot_present: boolean }>("/auth/select-guild", {
       method: "POST",
-      body: JSON.stringify({ guild_id, guild_name, icon, is_admin }),
+      body: JSON.stringify({ guild_id, guild_name, icon }),
     }),
   switchGuild: (guild_id: string) =>
     req<{ guild_id: string; bot_present: boolean }>(`/auth/switch-guild/${guild_id}`, { method: "POST" }),
@@ -691,6 +806,11 @@ export const api = {
     // Default (chave ausente) = true — desligar faz o bot parar de criar/manter
     // o canal de logs e de postar. Ver cogs/audit_log.py.
     bot_logs_enabled?: boolean | null;
+    // Canal onde o bot posta novas batalhas detectadas (link + imagem PNG
+    // de resumo). Ver cogs/battle_feed.py.
+    battle_feed_channel_id?: string | null;
+    // Mínimo de jogadores pra uma batalha ser postada no feed (default 10).
+    battle_feed_min_players?: number | null;
   }) =>
     req<{ ok: boolean; albion_guild_resolved: boolean }>(`/auth/guild-settings/${guild_id}`, {
       method: "PATCH",
@@ -702,15 +822,11 @@ export const api = {
   getMyProfile: () => req<MyProfile>("/profile/me"),
   setProfileTheme: (theme: ProfileTheme) =>
     req<MyProfile>("/profile/theme", { method: "PUT", body: JSON.stringify({ theme }) }),
-  uploadProfileAvatar: (file: File) => {
-    const form = new FormData(); form.append("file", file);
-    return req<MyProfile>("/profile/avatar", { method: "POST", body: form });
-  },
+  uploadProfileAvatar: (file: File, crop?: CropRect) =>
+    req<MyProfile>("/profile/avatar", { method: "POST", body: profileImageForm(file, crop) }),
   removeProfileAvatar: () => req<MyProfile>("/profile/avatar", { method: "DELETE" }),
-  uploadProfileBanner: (file: File) => {
-    const form = new FormData(); form.append("file", file);
-    return req<MyProfile>("/profile/banner", { method: "POST", body: form });
-  },
+  uploadProfileBanner: (file: File, crop?: CropRect) =>
+    req<MyProfile>("/profile/banner", { method: "POST", body: profileImageForm(file, crop) }),
   removeProfileBanner: () => req<MyProfile>("/profile/banner", { method: "DELETE" }),
   guildDiscordRoles: (guild_id: string) => req<DiscordRole[]>(`/auth/guild-discord-roles/${guild_id}`),
   guildDiscordChannels: (guild_id: string, voice = false) =>
@@ -747,6 +863,12 @@ export const api = {
     }),
   deleteComp: (id: number) =>
     req<void>(`/guilds/${g()}/comps/${id}`, { method: "DELETE" }),
+  getCompFnTypes: () => req<{ fn_types: ApiFnType[] }>(`/guilds/${g()}/comps/fn-types`),
+  putCompFnTypes: (fn_types: ApiFnType[]) =>
+    req<{ fn_types: ApiFnType[] }>(`/guilds/${g()}/comps/fn-types`, {
+      method: "PUT",
+      body: JSON.stringify({ fn_types }),
+    }),
   listRoles: () => req<CatalogRole[]>(`/guilds/${g()}/catalog/roles`),
   getPrices: (itemIds: string[], quality = 1) =>
     req<{ prices: Record<string, number> }>(`/guilds/${g()}/catalog/prices?items=${itemIds.join(",")}&quality=${quality}`),
@@ -875,6 +997,12 @@ export const api = {
   // Reconciliação própria (lootlog + baú + mortes).
   getReconcile: (eventId: number) =>
     req<UnifiedReconcile>(`/guilds/${g()}/events/${eventId}/reconcile`),
+  // Toggle "conferido" num item devido (vermelho ↔ amarelo). Retorna novo estado.
+  verifyReconcileItem: (eventId: number, looted_by: string, item_id: string) =>
+    req<{ verified: boolean }>(`/guilds/${g()}/events/${eventId}/reconcile/verify`, {
+      method: "POST",
+      body: JSON.stringify({ looted_by, item_id }),
+    }),
   uploadChest: (eventId: number, entries: ChestUploadEntry[], replace = true) =>
     req<LootReconcile>(`/guilds/${g()}/events/${eventId}/chest`, {
       method: "POST",

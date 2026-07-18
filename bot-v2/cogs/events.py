@@ -7,7 +7,8 @@ site-nativa. O bot NUNCA calcula o gate de vagas/cargos sozinho, só chama
 `main.py`'s `event_work_loop` pro polling que aciona `sync_massinfo`)."""
 import asyncio
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import discord
@@ -91,6 +92,22 @@ def _fmt_time(iso: Optional[str]) -> str:
         return "--:--"
 
 
+def _rel_ts(iso: Optional[str]) -> str:
+    """Timestamp relativo nativo do Discord ("em 2 horas"/"há 20 min", no
+    idioma e fuso de CADA membro). Complementa o HH:MM UTC — que fica, porque
+    UTC é a língua franca de CTA no Albion — sem ninguém precisar converter
+    de cabeça. String vazia se o ISO não parsear."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return f" (<t:{int(dt.timestamp())}:R>)"
+
+
 def _build_massinfo_embed(lang: str, guild_id: int, events: list[dict]) -> discord.Embed:
     embed = discord.Embed(color=discord.Color.blurple(), title=t(lang, "massinfo_title"))
     if not events:
@@ -112,7 +129,7 @@ def _build_massinfo_embed(lang: str, guild_id: int, events: list[dict]) -> disco
             time_disp = f"**{time_str}**"
         comp = e.get("comp_name") or "—"
         msg = f" · **{e['message'].upper()}**" if e.get("message") else ""
-        lines.append(f"{emoji} {time_disp} · `{e['signup_count']}` · {comp}{msg}")
+        lines.append(f"{emoji} {time_disp}{_rel_ts(e['scheduled_at'])} · `{e['signup_count']}` · {comp}{msg}")
 
         if e.get("lupa_active") and e.get("parties"):
             header_key = "massinfo_massing_now" if e["state"] == "in_progress" else "massinfo_massing_soon"
@@ -164,6 +181,8 @@ class MassinfoView(discord.ui.View):
             self.add_item(EventSignupButton(event))
 
 
+import ephemeral_guard
+
 async def _replace_ephemeral(interaction: Interaction, content: str, view: Optional[discord.ui.View]) -> None:
     """Reenvia o ephemeral: apaga o velho e manda um novo via followup. Nunca
     edita uma mensagem antiga — a cada passo do wizard nasce um ephemeral
@@ -181,11 +200,19 @@ async def _replace_ephemeral(interaction: Interaction, content: str, view: Optio
     defer() e delete_original_response() ficam em tries SEPARADOS: _on_done já
     deferiu mais cedo (antes do POST, pra não estourar os 15s do Discord) —
     nesse caso o defer() daqui levanta InteractionResponded, mas a mensagem
-    original ainda existe e precisa ser apagada do mesmo jeito."""
+    original ainda existe e precisa ser apagada do mesmo jeito.
+
+    Auto-delete: o followup.send(ephemeral=True) é interceptado pelo
+    ephemeral_guard (monkey-patch) e agenda o auto-delete de 60s. O timer
+    da mensagem original é cancelado aqui (ela vai ser apagada explicitamente
+    abaixo, não precisa de timer)."""
     try:
         await interaction.response.defer()
     except (discord.InteractionResponded, discord.HTTPException):
         pass  # já deferida antes (ex.: _on_done) — segue OK, mensagem original ainda dá pra apagar
+    # Cancela o timer da mensagem original — ela vai ser apagada explicitamente.
+    if interaction.token:
+        ephemeral_guard.cleanup(interaction.token)
     try:
         await interaction.delete_original_response()
     except (discord.NotFound, discord.HTTPException):
@@ -194,9 +221,14 @@ async def _replace_ephemeral(interaction: Interaction, content: str, view: Optio
         # discord.py 2.7+ rejeita view=None em webhook.send (followup); None aqui
         # significa "sem view nesta nova msg" → só omitir o kwarg.
         if view is not None:
-            await interaction.followup.send(content, view=view, ephemeral=True)
+            msg = await interaction.followup.send(content, view=view, ephemeral=True)
         else:
-            await interaction.followup.send(content, ephemeral=True)
+            msg = await interaction.followup.send(content, ephemeral=True)
+        # followup.send patched já agendou o auto-delete, mas o patch usa o
+        # token do webhook — garante que track() registrou com a interaction
+        # pra que touch() (on_interaction) reset o timer corretamente.
+        if msg is not None and hasattr(msg, "id"):
+            ephemeral_guard.track(interaction, msg.id)
     except (discord.HTTPException, discord.NotFound):
         pass
 
@@ -503,11 +535,35 @@ async def _trigger_massinfo_refresh(bot: commands.Bot, guild: discord.Guild) -> 
     """Dispara sync_massinfo imediatamente após uma mutação do bot (signup/
     remoção). Roda em background (asyncio.create_task) pra não bloquear a
     resposta da interação. Best-effort: se falhar, o polling de 5s do
-    event_work_loop cobre no próximo tick."""
+    event_work_loop cobre no próximo tick.
+
+    Throttle: coalesce múltiplos disparos numa janela de 1s — o embed só
+    muda o contador de inscritos, e 30 pessoas clicando no botão ao mesmo
+    tempo não precisam de 30 edits do mesmo embed (backend + Discord). O
+    refresh pegou o estado final; o poll de 5s cobre qualquer drift residual."""
+    gid = guild.id
+    existing = _refresh_tasks.get(gid)
+    if existing is not None and not existing.done():
+        return  # já tem refresh pendente — coalesce
     cog = bot.get_cog("Events")
     if cog is None:
         return
-    await cog.refresh_massinfo(guild)
+
+    async def _delayed() -> None:
+        try:
+            await asyncio.sleep(_REFRESH_COALESCE)
+            await cog.refresh_massinfo(guild)
+        except Exception:
+            pass
+        finally:
+            _refresh_tasks.pop(gid, None)
+
+    _refresh_tasks[gid] = asyncio.create_task(_delayed())
+
+
+# Throttle de refresh do mass-info (ver _trigger_massinfo_refresh).
+_refresh_tasks: dict[int, asyncio.Task] = {}
+_REFRESH_COALESCE = 1.0  # segundos
 
 
 class Events(commands.Cog):

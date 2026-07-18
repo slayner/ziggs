@@ -3,8 +3,9 @@ import { navigate } from "../router";
 import { useLang, useT, type Lang } from "../i18n";
 import { CHALLENGE_ITEM_NAMES } from "../data/challenge-items";
 import { itemRenderUrl } from "../data/albion-items";
-import { api, imgRetry, PROFILE_THEMES, type MyProfile, type ProfileTheme } from "../api";
+import { api, imgRetry, PROFILE_THEMES, type CropRect, type MyProfile, type ProfileTheme } from "../api";
 import { normSearch } from "../lib/search";
+import CropModal from "./CropModal";
 
 const THEME_COLORS: Record<ProfileTheme, string> = {
   gold: "#f5b942", blue: "#3b82f6", green: "#22c55e",
@@ -35,7 +36,16 @@ function cooldownUntil(createdAt: string): Date {
 interface Registered {
   id: number; albion_player_id: string; albion_player_name: string;
   region: string; registered_at: string;
+  is_main?: boolean; // opcional até o backend (workstream D) expor
 }
+
+// Limites espelhados no backend (fonte da verdade é lá — trust boundary);
+// aqui é só feedback rápido antes do upload. Ver docs/PLANO-PERFIL-V2.md.
+const IMG_LIMITS = {
+  avatar: { mb: 25, minW: 128, minH: 128, aspect: 1, round: true },
+  banner: { mb: 100, minW: 320, minH: 100, aspect: 16 / 5, round: false },
+} as const;
+type ImgKind = keyof typeof IMG_LIMITS;
 
 function itemName(itemId: string, lang: "pt" | "en" | "es"): string {
   return CHALLENGE_ITEM_NAMES[itemId]?.[lang] ?? itemId;
@@ -88,19 +98,57 @@ function ChallengeItem({ item, lang, spoiler = false }: { item: ChallItem; lang:
 
 // Só desbloqueado com personagem verificado (RegisteredCharacter) — o
 // /register do bot não conta, é só filiação de guilda sem prova de posse.
-function ProfileCustomize({ onBack }: { onBack: () => void }) {
+function ProfileCustomize({ onBack, playerIds }: { onBack: () => void; playerIds: string[] }) {
   const t = useT();
   const [profile, setProfile] = useState<MyProfile | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [pendingCrop, setPendingCrop] = useState<{ kind: ImgKind; file: File; url: string } | null>(null);
 
   useEffect(() => { api.getMyProfile().then(setProfile).catch(() => {}); }, []);
 
   async function apply(action: () => Promise<MyProfile>) {
     setBusy(true); setErr("");
-    try { setProfile(await action()); }
+    try {
+      const next = await action();
+      setProfile(next);
+      // PlayerProfilePage aberta atrás escuta e aplica sem reload — só nos
+      // perfis dos personagens do próprio usuário (playerIds).
+      window.dispatchEvent(new CustomEvent("ziggs:profile-updated", { detail: { profile: next, playerIds } }));
+    }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
+  }
+
+  // Valida tamanho/dimensão e abre o modal de crop. Dimensões via <img> em
+  // objectURL — funciona pra PNG/JPEG/WebP/GIF sem decodificar nada à mão.
+  function pickFile(kind: ImgKind, f: File) {
+    setErr("");
+    const lim = IMG_LIMITS[kind];
+    if (f.size > lim.mb * 1024 * 1024) {
+      setErr(t("imgTooBig").replace("{mb}", String(lim.mb)));
+      return;
+    }
+    const url = URL.createObjectURL(f);
+    const probe = new Image();
+    probe.onload = () => {
+      if (probe.naturalWidth < lim.minW || probe.naturalHeight < lim.minH) {
+        URL.revokeObjectURL(url);
+        setErr(t("imgTooSmall").replace("{min}", `${lim.minW}×${lim.minH}px`));
+        return;
+      }
+      setPendingCrop({ kind, file: f, url });
+    };
+    probe.onerror = () => { URL.revokeObjectURL(url); setErr(t("imgInvalid")); };
+    probe.src = url;
+  }
+
+  function confirmCrop(rect: CropRect) {
+    if (!pendingCrop) return;
+    const { kind, file, url } = pendingCrop;
+    setPendingCrop(null);
+    URL.revokeObjectURL(url);
+    apply(() => kind === "avatar" ? api.uploadProfileAvatar(file, rect) : api.uploadProfileBanner(file, rect));
   }
 
   return (
@@ -130,8 +178,8 @@ function ProfileCustomize({ onBack }: { onBack: () => void }) {
               {profile.avatar_url && <img src={profile.avatar_url} alt="" className="h-10 w-10 rounded-full object-cover" />}
               <label className="flex-1 cursor-pointer rounded-lg bg-zinc-800 px-3 py-1.5 text-center text-xs text-zinc-300 hover:bg-zinc-700">
                 {t("uploadImage")}
-                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={busy}
-                  onChange={e => { const f = e.target.files?.[0]; if (f) apply(() => api.uploadProfileAvatar(f)); }} />
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" disabled={busy}
+                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickFile("avatar", f); }} />
               </label>
               {profile.avatar_url && (
                 <button disabled={busy} onClick={() => apply(api.removeProfileAvatar)} className="text-zinc-600 hover:text-red-400 text-xs">✕</button>
@@ -145,8 +193,8 @@ function ProfileCustomize({ onBack }: { onBack: () => void }) {
             <div className="flex items-center gap-2">
               <label className="flex-1 cursor-pointer rounded-lg bg-zinc-800 px-3 py-1.5 text-center text-xs text-zinc-300 hover:bg-zinc-700">
                 {t("uploadImage")}
-                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={busy}
-                  onChange={e => { const f = e.target.files?.[0]; if (f) apply(() => api.uploadProfileBanner(f)); }} />
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" disabled={busy}
+                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickFile("banner", f); }} />
               </label>
               {profile.banner_url && (
                 <button disabled={busy} onClick={() => apply(api.removeProfileBanner)} className="text-zinc-600 hover:text-red-400 text-xs">✕</button>
@@ -156,6 +204,16 @@ function ProfileCustomize({ onBack }: { onBack: () => void }) {
 
           {err && <p className="text-[10px] text-red-400">{err}</p>}
         </div>
+      )}
+
+      {pendingCrop && (
+        <CropModal
+          url={pendingCrop.url}
+          aspect={IMG_LIMITS[pendingCrop.kind].aspect}
+          round={IMG_LIMITS[pendingCrop.kind].round}
+          onCancel={() => { URL.revokeObjectURL(pendingCrop.url); setPendingCrop(null); }}
+          onConfirm={confirmCrop}
+        />
       )}
     </>
   );
@@ -236,12 +294,21 @@ export default function ClaimsPanel({ onBack }: { onBack: () => void }) {
     finally { setSubmitting(false); }
   }
 
+  async function setMain(id: number) {
+    const r = await fetch(`/claims/main/${id}`, { method: "PUT", credentials: "include" });
+    if (r.ok) {
+      const d = await r.json(); // mesmo shape do GET /claims/my
+      setClaims(d.claims);
+      setRegistered(d.registered);
+    }
+  }
+
   const pendingClaims = claims.filter(c => c.status === "pending");
   const verifiedClaims = claims.filter(c => c.status === "verified");
   const expiredClaims = claims.filter(c => c.status === "expired" && cooldownUntil(c.created_at).getTime() > Date.now());
 
   if (view === "customize") {
-    return <ProfileCustomize onBack={() => setView("list")} />;
+    return <ProfileCustomize onBack={() => setView("list")} playerIds={registered.map(r => r.albion_player_id)} />;
   }
 
   if (view === "new") {
@@ -330,13 +397,21 @@ export default function ClaimsPanel({ onBack }: { onBack: () => void }) {
           {registered.length > 0 && (
             <div className="px-1 py-1">
               {registered.map(r => (
-                <button key={r.id}
-                  onClick={() => navigate(`/${REGION_PREFIX[r.region] ?? "am"}/${encodeURIComponent(r.albion_player_name)}`)}
-                  className="topbar-dropdown-item">
-                  <i className="ti ti-user-check text-emerald-500" style={{ fontSize: 14 }} />
-                  <span className="flex-1 text-left truncate">{r.albion_player_name}</span>
-                  <span className="text-[10px] text-zinc-600">{REGION_LABEL[r.region] ?? r.region}</span>
-                </button>
+                <div key={r.id} className="flex items-center">
+                  <button
+                    onClick={() => navigate(`/${REGION_PREFIX[r.region] ?? "am"}/${encodeURIComponent(r.albion_player_name)}`)}
+                    className="topbar-dropdown-item min-w-0 flex-1">
+                    <i className="ti ti-user-check text-emerald-500" style={{ fontSize: 14 }} />
+                    <span className="flex-1 text-left truncate">{r.albion_player_name}</span>
+                    <span className="text-[10px] text-zinc-600">{REGION_LABEL[r.region] ?? r.region}</span>
+                  </button>
+                  {registered.length > 1 && (
+                    <button onClick={() => setMain(r.id)} title={t("setAsMain")} disabled={r.is_main}
+                      className={`shrink-0 px-2 py-1 ${r.is_main ? "text-amber-400" : "text-zinc-600 hover:text-amber-400"}`}>
+                      <i className={`ti ${r.is_main ? "ti-star-filled" : "ti-star"}`} style={{ fontSize: 13 }} />
+                    </button>
+                  )}
+                </div>
               ))}
               <button className="topbar-dropdown-item" onClick={() => setView("customize")}>
                 <i className="ti ti-palette" style={{ fontSize: 14 }} />

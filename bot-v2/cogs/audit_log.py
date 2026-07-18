@@ -140,16 +140,8 @@ class BotAuditLog(commands.Cog):
             await _post(f"/bot/guilds/{guild.id}/audit-log-synced", {"last_id": last_id})
 
 
-_tick_n = 0
-
-
 @tasks.loop(seconds=8)
 async def audit_log_loop(cog: BotAuditLog) -> None:
-    # ponytail: tick sempre imprime algo (mesmo sem trabalho) — sem isto,
-    # silêncio é ambíguo entre "nada pra fazer" e "o loop morreu".
-    global _tick_n
-    _tick_n += 1
-    print(f"[audit_log] tick #{_tick_n}")
     for guild in cog.bot.guilds:
         try:
             await cog.sync_guild(guild)

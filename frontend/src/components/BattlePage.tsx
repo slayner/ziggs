@@ -5,6 +5,7 @@ import { navigate, navigateReplace } from "../router";
 import { EquipGrid, PriceHistoryChart, type DraftEquip } from "./CompBuilder";
 import { useT, type TKey } from "../i18n";
 import { searchIncludes } from "../lib/search";
+import { Panel, PanelHeader } from "./Panel";
 
 const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 
@@ -74,6 +75,7 @@ interface BattleDetail {
   };
   kill_timeline: KillEvent[];
   unresolved_ids?: string[];
+  found_by?: string[];
 }
 
 function useRegionLabels(): Record<string, string> {
@@ -457,7 +459,8 @@ function ParticipantTable({ participants, region }: { participants: Participant[
   }
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+    // sem overflow-hidden aqui: clipa os cantos fixos do Panel (ficam a -1px)
+    <Panel>
       <div className="border-b border-zinc-800 px-4 py-2.5 flex flex-wrap items-center gap-2">
         <GuildFilterSelect participants={participants} value={guildFilter} onChange={v => { setGuildFilter(v); setPage(1); }} align="left" />
         <input
@@ -509,7 +512,7 @@ function ParticipantTable({ participants, region }: { participants: Participant[
         </div>
         <span className="text-zinc-500">{sorted.length} {t("playersWord")}</span>
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -740,7 +743,7 @@ function AllianceList({ participants, silverByVictim, title }: {
   }
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+    <Panel>
       <div className="border-b border-zinc-800 px-4 py-2.5 flex items-center gap-3">
         <div className="flex-1 text-sm font-semibold text-zinc-200">{title}</div>
         <div className="w-[360px] shrink-0 grid grid-cols-6 gap-2">
@@ -771,7 +774,7 @@ function AllianceList({ participants, silverByVictim, title }: {
           {showLowImpact ? t("hideLowImpactBtn") : `${t("showMorePrefix")} ${lowGroups.length} ${t("guildsAlliancesSuffix")}`}
         </button>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -957,15 +960,12 @@ function CompositionSection({ participants }: { participants: Participant[] }) {
   const totalKnown = useMemo(() => Object.values(roleCounts).reduce((a, b) => a + b, 0), [roleCounts]);
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-zinc-200 shrink-0">{t("compositionTitle")}</div>
+    <Panel className="p-4">
+      <PanelHeader title={t("compositionTitle")}>
         <div className="flex flex-nowrap gap-1 overflow-x-auto">
           <button
             onClick={() => setSelectedRole(ALL_ROLES)}
-            className={`shrink-0 whitespace-nowrap px-2 py-1 rounded-lg text-xs font-medium border ${
-              activeRole === ALL_ROLES ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-zinc-700 text-zinc-500 hover:text-zinc-300"
-            }`}
+            className={`shrink-0 whitespace-nowrap dash-chip ${activeRole === ALL_ROLES ? "dash-chip-on" : ""}`}
           >
             {t("allRolesBtn")} ({totalKnown})
           </button>
@@ -973,16 +973,14 @@ function CompositionSection({ participants }: { participants: Participant[] }) {
             <button
               key={r}
               onClick={() => setSelectedRole(r)}
-              className={`shrink-0 whitespace-nowrap px-2 py-1 rounded-lg text-xs font-medium border ${
-                activeRole === r ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-zinc-700 text-zinc-500 hover:text-zinc-300"
-              }`}
+              className={`shrink-0 whitespace-nowrap dash-chip ${activeRole === r ? "dash-chip-on" : ""}`}
             >
               {roleLabels[r] ?? r} ({roleCounts[r]})
             </button>
           ))}
         </div>
         <GuildFilterSelect participants={participants} value={guildFilter} onChange={setGuildFilter} />
-      </div>
+      </PanelHeader>
       <div className="flex flex-col sm:flex-row gap-6 items-start">
         <div className="flex justify-start shrink-0">
           <PieChart counts={roleCounts} selected={activeRole === ALL_ROLES ? null : activeRole} onSelect={setSelectedRole} size={260} />
@@ -991,7 +989,7 @@ function CompositionSection({ participants }: { participants: Participant[] }) {
           {activeRole && <RoleBuildList role={activeRole} participants={filtered} />}
         </div>
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -1616,6 +1614,19 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
             {fameShort(battle.total_fame)} {t("totalFameSuffix")} · {battle.kill_count} kills · {fameShort(totalSilver)} {t("silverDroppedSuffix")}
           </div>
 
+          {!!battle.found_by?.length && (
+            <p className="mb-5 -mt-3 text-center text-xs text-zinc-500">
+              🤝 {t("foundByThanksPrefix")}{" "}
+              <span className="font-medium text-amber-400/80">{battle.found_by.join(", ")}</span>{" "}
+              {t("foundByThanksSuffix")}{" "}
+              <a
+                href="/download"
+                className="text-zinc-400 underline decoration-zinc-600 underline-offset-2 hover:text-zinc-200"
+                onClick={e => { e.preventDefault(); navigate("/download"); }}
+              >Ziggs Companion</a>.
+            </p>
+          )}
+
           {(() => {
             const items = [
               { icon: "⚔️", label: t("highlightMostKills"), h: battle.highlights.top_kills },
@@ -1639,7 +1650,7 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
             <CompositionSection participants={allParticipants} />
           </div>
 
-          <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+          <Panel className="mt-4 p-4">
             {battle.kill_timeline.length === 0 ? (
               <div className="text-xs text-zinc-500">{t("noKillEventsRecorded")}</div>
             ) : (
@@ -1649,7 +1660,7 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
                 <KillFeed events={battle.kill_timeline} prices={prices} />
               </>
             )}
-          </div>
+          </Panel>
         </>
       )}
     </div>

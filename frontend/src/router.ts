@@ -5,14 +5,26 @@ import { useEffect, useState } from "react";
 
 export function navigate(path: string) {
   if (window.location.pathname + window.location.search === path) return;
-  history.pushState({}, "", path);
+  // depth = quantas navegações in-app existem ANTES desta entrada. Vive no
+  // history.state (não numa variável) pra sobreviver a back/forward do
+  // navegador sem dessincronizar.
+  history.pushState({ depth: (history.state?.depth ?? 0) + 1 }, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 // Troca a URL sem empilhar no histórico — usado pra "limpar" a barra de
 // endereço depois de resolver um ID cru do Albion pro nosso código curto.
+// Preserva o state (depth) da entrada atual.
 export function navigateReplace(path: string) {
-  history.replaceState({}, "", path);
+  history.replaceState(history.state, "", path);
+}
+
+// Botão "voltar" das páginas: volta pra entrada anterior quando ela é do
+// próprio app (perfil aberto a partir de uma batalha volta pra batalha);
+// entrada inicial (deep link, aba nova) cai pra home.
+export function goBack() {
+  if (history.state?.depth > 0) history.back();
+  else navigate("/");
 }
 
 export function useLocation(): string {

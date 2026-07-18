@@ -7,6 +7,7 @@ Mensagem única por guilda (não uma por evento) — replica o mass-info do bot
 antigo, que é um único embed rolando com todos os CTAs ativos."""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -180,14 +181,36 @@ def _load_party_defs(
     """(parties, {nome_da_funcao: categoria}, flex_names) — categoria vem de
     GameRole.weapon_id -> Weapon.invisible_function (tank/healer/support/dps/
     pierce), usada pro bot agrupar o picker. O bot antigo usava um emoji
-    prefixado no nome da função pra isso; os GameRole reais daqui não têm
-    essa convenção (conferido direto no banco antes de portar).
+    prefixado no nome da função pra isso; os GameRole reais daqui não têm essa
+    convenção (conferido direto no banco antes de portar).
 
     `flex_names` = nomes das funções que pertencem a algum slot com >1 role
     (flex é emergente da estrutura do slot, sem flag no banco). Usado pela
-    validação de min/max builds: roles flex contam no máx mas não no min (>1)."""
+    validação de min/max builds: roles flex contam no máx mas não no min (>1).
+
+    Cache: 3 queries pesadas (Comp selectinload + GameRole batch + Weapon
+    batch) por clique de botão. Durante clique-massa (30 pessoas em 10s) a
+    comp não muda — TTL 30s corta de ~90 queries pra 3 por janela. Inva-
+    lidação por TTL: se o admin editar a comp no meio, expira em até 30s,
+    sem acoplar esse serviço a cada mutação de comp/role/weapon."""
     if comp_id is None:
         return [], {}, set()
+    now = time.monotonic()
+    cached = _party_defs_cache.get(comp_id)
+    if cached and (now - cached[1]) < _PARTY_DEFS_TTL:
+        return cached[0]
+    result = _load_party_defs_uncached(db, comp_id)
+    _party_defs_cache[comp_id] = (result, now)
+    return result
+
+
+_party_defs_cache: dict[int, tuple[tuple[list, dict, set], float]] = {}
+_PARTY_DEFS_TTL = 30.0  # segundos
+
+
+def _load_party_defs_uncached(
+    db: Session, comp_id: int,
+) -> tuple[list[event_gates.PartyDef], dict[str, str], set[str]]:
     comp = db.scalar(
         select(Comp)
         .where(Comp.id == comp_id)

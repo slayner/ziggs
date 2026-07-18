@@ -169,19 +169,33 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
   // key muda a cada resultado novo → React remonta o container → animação retrigger
   const [animKey, setAnimKey] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Digitação rápida dispara várias requests em voo — aborta a anterior (evita
+  // gastar backend/rede à toa) e ainda guarda um id monotônico como cinto de
+  // segurança contra a resposta antiga chegar DEPOIS da mais nova mesmo assim.
+  const abortRef = useRef<AbortController | null>(null);
+  const reqIdRef = useRef(0);
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const q = e.target.value;
     setQuery(q);
     onQueryChange?.(q);
     if (timer.current) clearTimeout(timer.current);
+    abortRef.current?.abort();
     if (q.trim().length < 2) { setResults(null); setLoading(false); return; }
     setLoading(true);
     timer.current = setTimeout(() => {
-      fetch(`${BATTLES_API}/public/search?q=${encodeURIComponent(q.trim())}`)
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const reqId = ++reqIdRef.current;
+      fetch(`${BATTLES_API}/public/search?q=${encodeURIComponent(q.trim())}`, { signal: controller.signal })
         .then(r => r.json())
-        .then((d: SearchResults) => { setResults(d); setLoading(false); setAnimKey(k => k + 1); })
-        .catch(() => setLoading(false));
+        .then((d: SearchResults) => {
+          if (reqId !== reqIdRef.current) return; // resposta antiga — ignora
+          setResults(d); setLoading(false); setAnimKey(k => k + 1);
+        })
+        .catch((err: unknown) => {
+          if ((err as { name?: string })?.name !== "AbortError") setLoading(false);
+        });
     }, 300);
   }
 

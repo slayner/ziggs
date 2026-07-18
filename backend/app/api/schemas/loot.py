@@ -122,12 +122,41 @@ class DeathLossOut(BaseModel):
     recovered_items: list[RecoveredItem]  # itens saídos do cadáver (lootlog)
 
 
+# ── Timeline por looter (foco no jogador, não no item) ───────────────────────
+# status de cada item na visão do looter:
+#   "missing"   — sobreviveu e trouxe pra cidade, mas NÃO depositou (vermelho /
+#                 amarelo se conferido). É o "roubado".
+#   "deposited" — chegou no baú (verde).
+#   "died"      — pegou mas morreu carregando (cinza) — desconsiderado do devido.
+class ReconcileLooterItem(BaseModel):
+    item_id: str
+    item_name: str
+    status: str            # "missing" | "deposited" | "died"
+    quantity: int
+    silver_value: int      # unitário
+    value: int             # quantity * silver_value
+    verified: bool = False  # só relevante em status="missing"
+
+
+class ReconcileLooter(BaseModel):
+    looted_by: str
+    missing_qty: int       # total de itens devidos (status=missing)
+    missing_value: int     # soma dos value dos itens missing
+    items: list[ReconcileLooterItem]
+
+
+class ReconcileVerifyIn(BaseModel):
+    looted_by: str
+    item_id: str
+
+
 class LootReconcileOut(BaseModel):
     has_loot_log: bool
     has_chest_log: bool
     has_deaths: bool
     deposited: list[ChestEntryOut] = Field(default_factory=list)
     not_deposited: list[NotDepositedOut] = Field(default_factory=list)
+    looters: list[ReconcileLooter] = Field(default_factory=list)
     died_with: list[DeathLossOut] = Field(default_factory=list)
     loot_events: list[LootReconcileEventOut] = Field(default_factory=list)
     total_looted_value: int = 0

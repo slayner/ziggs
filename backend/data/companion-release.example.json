@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "notes": "Primeira atualização via auto-updater.",
+  "pub_date": "2026-07-16T12:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "",
+      "url": "https://ziggs.ai/companion/Ziggs-Companion_0.2.0_x64-setup.exe"
+    },
+    "linux-x86_64": {
+      "signature": "",
+      "url": "https://ziggs.ai/companion/Ziggs-Companion_0.2.0_amd64.AppImage"
+    },
+    "darwin-x86_64": {
+      "signature": "",
+      "url": "https://ziggs.ai/companion/Ziggs-Companion.app.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "",
+      "url": "https://ziggs.ai/companion/Ziggs-Companion_aarch64.app.tar.gz"
+    }
+  }
+}

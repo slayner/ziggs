@@ -4,6 +4,7 @@ import { silver, silverShort, dateUTC } from "../lib/format";
 import { navigate } from "../router";
 import GlobalSearch, { RecentBattleRow, type RecentBattle } from "./GlobalSearch";
 import AdBanner from "./AdBanner";
+import { Panel, PanelHeader } from "./Panel";
 
 // ── Patch notes (Steam News, ver app/api/routes/meta.py pro porquê) ────────
 interface PatchNote { title: string; url: string; date: number }
@@ -34,17 +35,14 @@ function PatchNotesCard({ onSeeAll }: { onSeeAll: () => void }) {
   const t = useT();
   const notes = usePatchNotes();
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-bold text-zinc-100">{t("patchNotesTitle")}</h2>
-        <button onClick={onSeeAll} className="text-xs text-zinc-500 hover:text-amber-300">{t("seeAllPatchNotes")}</button>
-      </div>
+    <Panel className="p-4">
+      <PanelHeader title={t("patchNotesTitle")} action={t("seeAllPatchNotes")} onAction={onSeeAll} />
       {notes === null && <div className="py-8 text-center text-sm text-zinc-500">{t("loading")}</div>}
       {notes?.length === 0 && <div className="py-8 text-center text-sm text-zinc-500">{t("changelogUnavailable")}</div>}
       <div className="divide-y divide-zinc-800/60">
         {notes?.slice(0, 10).map(n => <PatchNoteRow key={n.url} n={n} />)}
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -54,11 +52,11 @@ function PatchNotesPage({ onBack }: { onBack: () => void }) {
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6">
       <button onClick={onBack} className="mb-4 text-sm text-zinc-400 hover:text-zinc-200">← {t("back")}</button>
-      <h1 className="mb-4 text-lg font-bold text-zinc-100">{t("patchNotesPageTitle")}</h1>
+      <h1 className="dash-panel-title mb-4">{t("patchNotesPageTitle")}</h1>
       {notes === null && <div className="py-16 text-center text-zinc-500">{t("loading")}</div>}
-      <div className="divide-y divide-zinc-800/60 rounded-xl border border-zinc-800 bg-zinc-900/40 px-4">
+      <Panel className="divide-y divide-zinc-800/60 px-4">
         {notes?.map(n => <PatchNoteRow key={n.url} n={n} />)}
-      </div>
+      </Panel>
     </div>
   );
 }
@@ -130,31 +128,24 @@ function ActivePlayersCard() {
   const availableRanges = RANGES.filter(r => collectedDays >= RANGE_MIN_DAYS[r.key]);
 
   return (
-    <div className="flex h-full min-h-[300px] flex-col rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5">
-          <h2 className="text-sm font-bold text-zinc-100">{t("activePlayersTitle")}</h2>
-          <i className="ti ti-info-circle text-zinc-600" title={t("activePlayersTooltip")} />
-        </span>
-        <div className="flex gap-1 text-xs">
+    <Panel className="flex h-full min-h-[300px] flex-col p-4">
+      <PanelHeader title={t("activePlayersTitle")} tooltip={t("activePlayersTooltip")}>
+        <div className="flex gap-1">
           {zoom ? (
-            <button
-              onClick={() => setZoom(null)}
-              className="rounded-lg border border-amber-500 bg-amber-500/10 px-2 py-1 text-amber-300"
-            >
+            <button onClick={() => setZoom(null)} className="dash-chip dash-chip-on">
               ↺ {t("resetZoom")}
             </button>
           ) : availableRanges.map(r => (
             <button
               key={r.key}
               onClick={() => selectRange(r.key)}
-              className={`rounded-lg px-2 py-1 ${r.key === range ? "bg-amber-500/10 text-amber-300 border border-amber-500" : "text-zinc-400 hover:text-zinc-200 border border-transparent"}`}
+              className={`dash-chip${r.key === range ? " dash-chip-on" : ""}`}
             >
               {r.label}
             </button>
           ))}
         </div>
-      </div>
+      </PanelHeader>
       {historyError && <div className="flex flex-1 items-center justify-center text-center text-sm text-red-400">{t("chartLoadError")}</div>}
       {!historyError && !series && <div className="min-h-0 flex-1"><ChartSkeleton /></div>}
       {!historyError && series && (
@@ -165,7 +156,7 @@ function ActivePlayersCard() {
           />
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -248,14 +239,9 @@ function ServerHighlightsCard({ onSeeAll }: { onSeeAll: () => void }) {
   }, [servers]);
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <span className="flex items-center gap-1.5">
-          <h2 className="text-sm font-bold text-zinc-100">{t("serverHighlightsTitle")}</h2>
-          <i className="ti ti-info-circle text-zinc-600" title={t("serverHighlightsTooltip")} />
-        </span>
-        <button onClick={onSeeAll} className="text-xs text-zinc-500 hover:text-amber-300">{t("seeAllHighscoresLink")}</button>
-      </div>
+    <Panel className="p-4">
+      <PanelHeader title={t("serverHighlightsTitle")} tooltip={t("serverHighlightsTooltip")}
+        action={t("seeAllHighscoresLink")} onAction={onSeeAll} />
       {guilds === null && <div className="py-8 text-center text-sm text-zinc-500">{t("loading")}</div>}
       {guilds?.length === 0 && <div className="py-8 text-center text-sm text-zinc-500">{t("notEnoughData")}</div>}
       <div className="divide-y divide-zinc-800/60">
@@ -271,7 +257,7 @@ function ServerHighlightsCard({ onSeeAll }: { onSeeAll: () => void }) {
         />
       ))}
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -446,6 +432,23 @@ function MultiLineChart({ series, formatValue, gridStep, zoom, onZoomChange }: {
 
   const ordered = [...visible].sort((a, b) => (a.primary ? 1 : 0) - (b.primary ? 1 : 0));
 
+  // Rótulos de série à esquerda são ancorados no 1º ponto de cada linha —
+  // séries com valores iniciais próximos (Americas/Europa/Ásia) empilhavam os
+  // textos ilegíveis uns sobre os outros. Afasta verticalmente até um vão
+  // mínimo, empurrando de volta pra cima se estourar a base do gráfico.
+  const labelYs = (() => {
+    const MIN_GAP = 13;
+    const desired = ordered.filter(s => s.points.length)
+      .map(s => ({ key: s.key, y: cy(s.points[0].v) + 4 }))
+      .sort((a, b) => a.y - b.y);
+    for (let i = 1; i < desired.length; i++) {
+      if (desired[i].y - desired[i - 1].y < MIN_GAP) desired[i].y = desired[i - 1].y + MIN_GAP;
+    }
+    const over = desired.length ? desired[desired.length - 1].y - (baseY + 4) : 0;
+    if (over > 0) for (const d of desired) d.y -= over;
+    return new Map(desired.map(d => [d.key, d.y]));
+  })();
+
   // tooltip de hover: ponto mais próximo do mouse em CADA série (podem ter
   // timestamps levemente diferentes entre si — cada uma foi reduzida por
   // downsample independentemente), agrupados sob o horário da série primária.
@@ -497,7 +500,7 @@ function MultiLineChart({ series, formatValue, gridStep, zoom, onZoomChange }: {
             <g key={s.key} opacity={s.primary ? 1 : 0.3}>
               <path d={path(s.points)} fill="none" stroke={s.color} strokeWidth={s.primary ? 1.8 : 1.2} strokeLinejoin="round" />
               <circle cx={cx(last.t)} cy={cy(last.v)} r={s.primary ? 1.6 : 1.4} fill={s.color} />
-              <text x={2} y={cy(first.v) + 4} fontSize="11" fontWeight="700" fill={s.color}>{s.label}</text>
+              <text x={2} y={labelYs.get(s.key) ?? cy(first.v) + 4} fontSize="11" fontWeight="700" fill={s.color}>{s.label}</text>
               {s.primary && (
                 <text x={w - 2} y={cy(last.v) + 4} textAnchor="end" fontSize="11" fontWeight="700" fill={s.color}>
                   {formatValue(last.v)}
@@ -521,7 +524,7 @@ function MultiLineChart({ series, formatValue, gridStep, zoom, onZoomChange }: {
               const iso = new Date(hoverAnchor.t).toISOString();
               return (
                 <g transform={`translate(${boxX},${boxY})`}>
-                  <rect width={boxW} height={boxH} rx={3} fill="#18181b" stroke="var(--border)" strokeWidth="0.5" opacity="0.95" />
+                  <rect width={boxW} height={boxH} fill="#18181b" stroke="var(--border)" strokeWidth="0.5" opacity="0.95" />
                   <text x={7} y={14} fontSize="10" fontWeight="700" fill="var(--text, #e4e4e7)">
                     {dateUTC(iso)} {iso.slice(11, 16)} UTC
                   </text>
@@ -545,46 +548,27 @@ function MultiLineChart({ series, formatValue, gridStep, zoom, onZoomChange }: {
 }
 
 // ── Gold price chart ────────────────────────────────────────────────────
-// Endpoint dedicado do AODP pra taxa de câmbio prata↔ouro — não é um item
-// comum, não passa pelos helpers de preço de item em lib/prices/adp.ts.
-const GOLD_BASE: Record<GameServer, string> = {
-  west: "https://west.albion-online-data.com",
-  east: "https://east.albion-online-data.com",
-  europe: "https://europe.albion-online-data.com",
-};
+// Histórico próprio (services/gold_price.py, backend) — antes buscava direto
+// da AODP no browser por servidor; agora um fetch só no nosso banco (backfill
+// completo desde 2017 + poll periódico, não depende de quanto tempo a AODP
+// externa continuar no ar).
 const SERVERS: GameServer[] = ["europe", "west", "east"];
 const SERVER_COLORS: Record<GameServer, string> = { europe: "#38bdf8", west: "#34d399", east: "#fbbf24" };
 
 type GoldPoint = { t: number; price: number };
-// histórico de ouro existe desde dez/2017 (checado direto na API) — "Tudo"
-// busca a partir daí; mesma data usada na legenda "coletando desde".
-const GOLD_SINCE = new Date("2017-01-01T00:00:00Z");
-const RANGE_START: Record<ChartRange, () => Date> = {
-  "1m": () => new Date(Date.now() - 31 * 86_400_000),
-  "6m": () => new Date(Date.now() - 183 * 86_400_000),
-  "1y": () => new Date(Date.now() - 366 * 86_400_000),
-  all: () => GOLD_SINCE,
-};
+type GoldHistory = Record<string, GoldPoint[]>; // chave = region (americas|europe|asia), ver SERVER_TO_REGION
 
-function mmddyyyy(d: Date): string {
-  return `${d.getUTCMonth() + 1}-${d.getUTCDate()}-${d.getUTCFullYear()}`;
+async function fetchGoldHistory(range: ChartRange): Promise<GoldHistory> {
+  const res = await fetch(`${BATTLES_API}/battles/gold/history?range=${range}`);
+  if (!res.ok) throw new Error(`gold-history ${res.status}`);
+  const d: { series: GoldHistory } = await res.json();
+  return d.series;
 }
 
-async function fetchGoldHistory(server: GameServer, range: ChartRange): Promise<GoldPoint[]> {
-  const date = mmddyyyy(RANGE_START[range]());
-  const endDate = mmddyyyy(new Date());
-  const url = `${GOLD_BASE[server]}/api/v2/stats/gold.json?date=${date}&end_date=${endDate}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`gold ${res.status}`);
-  const rows: { price: number; timestamp: string }[] = await res.json();
-  return rows
-    .map(r => ({ t: Date.parse(r.timestamp.endsWith("Z") ? r.timestamp : `${r.timestamp}Z`), price: r.price }))
-    .filter(p => Number.isFinite(p.t) && p.price > 0)
-    .sort((a, b) => a.t - b.t);
-}
-
-// O período "Tudo" tem ~70k pontos horários — reduz pra uma quantidade
-// renderizável sem perder a forma da curva, fazendo a média de cada bucket.
+// O período "Tudo" pode chegar a centenas de pontos (o backend já faz bucket
+// a ≤400/região) — reduz mais um pouco pra não perder a forma da curva,
+// fazendo a média de cada bucket. No estado normal isso é um no-op de
+// segurança: a redução pesada já aconteceu no servidor.
 const TARGET_POINTS = 150;
 function downsample<T extends { t: number }>(points: T[], avg: (bucket: T[]) => Omit<T, "t">): T[] {
   if (points.length <= TARGET_POINTS) return points;
@@ -609,7 +593,7 @@ function GoldPriceCard() {
   const RANGES = useRanges();
   const { server: primary } = useLang();
   const [range, setRange] = useState<ChartRange>("6m");
-  const [cache, setCache] = useState<Partial<Record<ChartRange, Record<GameServer, GoldPoint[]>>>>({});
+  const [data, setData] = useState<GoldHistory | null>(null);
   const [error, setError] = useState(false);
   const lastTRef = useRef<number>(0);
   const [chartGlowing, setChartGlowing] = useState(false);
@@ -623,19 +607,13 @@ function GoldPriceCard() {
   useEffect(() => {
     function fetchRange(isRefresh = false) {
       setError(false);
-      Promise.all(SERVERS.map(s => fetchGoldHistory(s, range).catch(() => [] as GoldPoint[])))
-        .then(results => {
-          const byServer = Object.fromEntries(SERVERS.map((s, i) => [s, results[i]])) as Record<GameServer, GoldPoint[]>;
-          if (isRefresh) {
-            const pts = byServer[primary];
-            const lastT = pts[pts.length - 1]?.t ?? 0;
-            if (lastT > lastTRef.current) setChartGlowing(true);
-            lastTRef.current = lastT;
-          } else {
-            const pts = byServer[primary];
-            lastTRef.current = pts[pts.length - 1]?.t ?? 0;
-          }
-          setCache(prev => ({ ...prev, [range]: byServer }));
+      fetchGoldHistory(range)
+        .then(series => {
+          const pts = series[SERVER_TO_REGION[primary]] ?? [];
+          const lastT = pts[pts.length - 1]?.t ?? 0;
+          if (isRefresh && lastT > lastTRef.current) setChartGlowing(true);
+          lastTRef.current = lastT;
+          setData(series);
         })
         .catch(() => setError(true));
     }
@@ -646,38 +624,32 @@ function GoldPriceCard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range]);
 
-  const data = cache[range];
-  const cutoff = RANGE_START[range]().getTime();
   const series: ChartSeriesInput[] | null = data ? [...SERVERS]
     .sort((a, b) => (a === primary ? 1 : 0) - (b === primary ? 1 : 0))
     .map(s => ({
       key: s, label: SERVER_LABELS[s], color: SERVER_COLORS[s], primary: s === primary,
-      points: downsampleGold(data[s].filter(p => p.t >= cutoff)).map(p => ({ t: p.t, v: p.price })),
+      points: downsampleGold(data[SERVER_TO_REGION[s]] ?? []).map(p => ({ t: p.t, v: p.price })),
     })) : null;
 
   return (
-    <div className="flex h-full min-h-[300px] flex-col rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-bold text-zinc-100">{t("goldPriceTitle")}</h2>
-        <div className="flex gap-1 text-xs">
+    <Panel className="flex h-full min-h-[300px] flex-col p-4">
+      <PanelHeader title={t("goldPriceTitle")}>
+        <div className="flex gap-1">
           {zoom ? (
-            <button
-              onClick={() => setZoom(null)}
-              className="rounded-lg border border-amber-500 bg-amber-500/10 px-2 py-1 text-amber-300"
-            >
+            <button onClick={() => setZoom(null)} className="dash-chip dash-chip-on">
               ↺ {t("resetZoom")}
             </button>
           ) : RANGES.map(r => (
             <button
               key={r.key}
               onClick={() => selectRange(r.key)}
-              className={`rounded-lg px-2 py-1 ${r.key === range ? "bg-amber-500/10 text-amber-300 border border-amber-500" : "text-zinc-400 hover:text-zinc-200 border border-transparent"}`}
+              className={`dash-chip${r.key === range ? " dash-chip-on" : ""}`}
             >
               {r.label}
             </button>
           ))}
         </div>
-      </div>
+      </PanelHeader>
       {error && <div className="flex flex-1 items-center justify-center text-center text-sm text-red-400">{t("goldPriceError")}</div>}
       {!error && !series && <div className="min-h-0 flex-1"><ChartSkeleton /></div>}
       {!error && series && (
@@ -688,7 +660,7 @@ function GoldPriceCard() {
           <MultiLineChart key={range} series={series} formatValue={silver} gridStep={5000} zoom={zoom} onZoomChange={setZoom} />
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -776,11 +748,8 @@ function BattlesCard({ onSeeAll }: { onSeeAll: () => void }) {
   }, [servers]);
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-bold text-zinc-100">{t("recentBattlesTitle")}</h2>
-        <button onClick={onSeeAll} className="text-xs text-zinc-500 hover:text-amber-300">{t("seeAllBattlesLink")}</button>
-      </div>
+    <Panel className="p-4">
+      <PanelHeader title={t("recentBattlesTitle")} action={t("seeAllBattlesLink")} onAction={onSeeAll} />
       {battles === null && <div className="py-8 text-center text-sm text-zinc-500">{t("loading")}</div>}
       {battles?.length === 0 && <div className="py-8 text-center text-sm text-zinc-500">{t("noBattlesFound")}</div>}
       <div className="space-y-2">
@@ -793,11 +762,28 @@ function BattlesCard({ onSeeAll }: { onSeeAll: () => void }) {
           />
         ))}
       </div>
-    </div>
+    </Panel>
   );
 }
 
 // ── Dashboard ───────────────────────────────────────────────────────────
+// Indicador do app desktop — leva pra página /download (download + features).
+function CompanionStrip() {
+  const t = useT();
+  return (
+    <Panel className="flex items-center gap-4 p-4">
+      <i className="ti ti-device-desktop" style={{ fontSize: 28, color: "var(--gold)" }} />
+      <div className="min-w-0 flex-1">
+        <div className="font-semibold">{t("companionPromoTitle")}</div>
+        <div className="text-sm text-zinc-400">{t("companionPromoText")}</div>
+      </div>
+      <button className="btn" onClick={() => navigate("/download")}>
+        <i className="ti ti-download" /> {t("companionPromoBtn")}
+      </button>
+    </Panel>
+  );
+}
+
 export default function Dashboard({ onOpenBattles, onOpenHighscores }: {
   onOpenBattles: () => void; onOpenHighscores: () => void;
 }) {
@@ -815,8 +801,11 @@ export default function Dashboard({ onOpenBattles, onOpenHighscores }: {
       <div className="mt-4">
         <BattlesCard onSeeAll={onOpenBattles} />
       </div>
+      <div className="mt-4">
+        <CompanionStrip />
+      </div>
       <div className="mt-4 flex justify-center">
-        <AdBanner size="rectangle" />
+        <AdBanner variant="leaderboard" mobileVariant="mobileBanner" />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ServerHighlightsCard onSeeAll={onOpenHighscores} />

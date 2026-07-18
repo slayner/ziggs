@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, lazy, Suspense, Component, type ReactNode } from "react";
-import { useLocation, navigate, parseBattleRoute, parsePlayerRoute, parseGuildRoute, parseEventRoute, parseRegearRoute, parseRegearEventFilter } from "./router";
-import { api, setGuild, NO_PERMS, type Me, type Permissions, type SiteGuild } from "./api";
+import { useLocation, navigate, goBack, parseBattleRoute, parsePlayerRoute, parseGuildRoute, parseEventRoute, parseRegearRoute, parseRegearEventFilter } from "./router";
+import { api, setGuild, onBackendDown, setBackendDown, NO_PERMS, type Me, type Permissions, type SiteGuild } from "./api";
 import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, type Lang, type GameServer } from "./i18n";
 import AdBanner from "./components/AdBanner";
 
@@ -8,6 +8,7 @@ import AdBanner from "./components/AdBanner";
 // pela primeira vez, em vez de tudo (CompBuilder ~2000 linhas incluso) no bundle inicial.
 const Dashboard = lazy(() => import("./components/Dashboard"));
 const CraftCalculator = lazy(() => import("./components/CraftCalculator"));
+const MarketPage = lazy(() => import("./components/MarketPage"));
 const BattleTracker = lazy(() => import("./components/BattleTracker"));
 const HighscoresPage = lazy(() => import("./components/HighscoresPage"));
 const BattlePage = lazy(() => import("./components/BattlePage"));
@@ -21,8 +22,9 @@ const RegearPage = lazy(() => import("./components/RegearPage"));
 const ManagementPage = lazy(() => import("./components/ManagementPage"));
 const ClaimsPanel = lazy(() => import("./components/ClaimsPanel"));
 const BotDocsPage = lazy(() => import("./components/BotDocsPage"));
+const CompanionPage = lazy(() => import("./components/CompanionPage"));
 
-type PublicView = "dashboard" | "craft" | "players" | "battles" | "highscores" | "docs";
+type PublicView = "dashboard" | "craft" | "market" | "players" | "battles" | "highscores" | "docs";
 type GuildView = "config" | "management";
 type View = PublicView | GuildView;
 
@@ -39,6 +41,18 @@ class ErrorBoundary extends Component<
   componentDidCatch(error: Error) { console.error("[ErrorBoundary]", error); }
   render() {
     if (this.state.error) {
+      // Chunk lazy que sumiu (deploy trocou os hashes com a aba aberta):
+      // "Tentar de novo" não resolve — o import rejeitado fica cacheado.
+      // Recarrega a página sozinho, com guarda de 30s contra loop de reload.
+      const msg = this.state.error.message || "";
+      if (/dynamically imported module|Loading chunk|module script failed/i.test(msg)) {
+        const last = Number(sessionStorage.getItem("ziggs-chunk-reload") || 0);
+        if (Date.now() - last > 30_000) {
+          sessionStorage.setItem("ziggs-chunk-reload", String(Date.now()));
+          location.reload();
+          return null;
+        }
+      }
       return (
         <div style={{ padding: 24, color: "var(--text)", maxWidth: 720, margin: "0 auto" }}>
           <h2 style={{ color: "var(--gold)" }}>⚠️ Algo quebrou ao renderizar</h2>
@@ -47,9 +61,14 @@ class ErrorBoundary extends Component<
             {"\n\n"}
             {this.state.error.stack}
           </pre>
-          <button className="btn" onClick={() => this.setState({ error: null })}>
-            Tentar de novo
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn" onClick={() => location.reload()}>
+              Recarregar página
+            </button>
+            <button className="btn" onClick={() => this.setState({ error: null })}>
+              Tentar de novo
+            </button>
+          </div>
         </div>
       );
     }
@@ -100,6 +119,8 @@ export default function App() {
   const eventRoute  = parseEventRoute(loc);
   const regearRoute = parseRegearRoute(loc);
   const regearEventFilter = parseRegearEventFilter(loc);
+  // /download (não /companion — esse prefixo é da API do backend em prod).
+  const companionActive = loc.split("?")[0] === "/download";
 
   useEffect(() => {
     // a página de batalha também mostra o topbar (login/idioma/servidor), então
@@ -163,7 +184,7 @@ export default function App() {
   // Keep-alive ativo quando estamos mostrando management ou config direto
   // (sem deep link de rota, sem picker aberto, logado com guilda). Fora disso
   // as duas continuam montadas mas escondidas (display:none), preservando estado.
-  const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute;
+  const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive;
   const useKeepAlive = loggedIn && hasGuild && !pickingGuild && noRoute && (view === "management" || view === "config");
   // Deep links escalacao/regear ativos no momento (definem qual keep-alive show).
   const escActive = !!eventRoute;
@@ -190,6 +211,39 @@ export default function App() {
     if (regearRoute) setRegearState({ guildId: regearRoute.guildId, initialRequestId: regearRoute.requestId });
     else if (regearEventFilter && me?.guild_id) setRegearState({ guildId: String(me.guild_id), eventId: regearEventFilter });
   }, [regearRoute?.guildId, regearRoute?.requestId, regearEventFilter, me?.guild_id]);
+
+  // Título da aba do navegador por view/rota — sem isto, toda aba, favorito e
+  // entrada de histórico vira o mesmo "Ziggs — Controle de guildas…".
+  useEffect(() => {
+    let label = "";
+    if (companionActive) label = t("companionNav");
+    else if (battleRoute) label = t("battles");
+    else if (playerRoute) label = playerRoute.name || t("players");
+    else if (!guildRoute) {
+      const map: Partial<Record<View, string>> = {
+        battles: t("battles"), players: t("players"),
+        highscores: t("highscores"), craft: t("craft"), market: t("market"),
+        management: t("management"), config: "Config",
+      };
+      label = map[view] ?? "";
+    }
+    document.title = label ? `${label} · Ziggs` : "Ziggs — Controle de guildas de Albion";
+  }, [view, companionActive, battleRoute, playerRoute, guildRoute, t]);
+
+  // Banner "backend fora do ar": api.ts marca down em falha de rede; aqui
+  // mostramos o aviso e fazemos poll de /health até voltar.
+  const [backendDown, setBackendDownState] = useState(false);
+  useEffect(() => onBackendDown(setBackendDownState), []);
+  useEffect(() => {
+    if (!backendDown) return;
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch("/health");
+        if (r.ok) setBackendDown(false);
+      } catch { /* ainda fora — continua tentando */ }
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [backendDown]);
 
   // Precisa vir DEPOIS de todos os hooks acima (não antes) — um early return
   // no meio da função pula os useEffect que vêm depois dele só QUANDO `me`
@@ -228,7 +282,7 @@ export default function App() {
   }
 
   const nb = (v: View, icon: string, label: string) => (
-    <button className={!battleRoute && !playerRoute && !guildRoute && view === v ? "active" : ""} onClick={() => { navigate("/"); setView(v); }}>
+    <button className={!battleRoute && !playerRoute && !guildRoute && !companionActive && view === v ? "active" : ""} onClick={() => { navigate("/"); setView(v); }}>
       <i className={`ti ${icon}`} aria-hidden="true" /> {label}
     </button>
   );
@@ -361,14 +415,16 @@ export default function App() {
     content = <RegearPage guildId={regearRoute.guildId} initialRequestId={regearRoute.requestId} />;
   } else if (regearEventFilter && me?.guild_id) {
     content = <RegearPage guildId={String(me.guild_id)} eventId={regearEventFilter} />;;
+  } else if (companionActive) {
+    content = <CompanionPage />;
   } else if (battleRoute) {
     content = battleRoute.type === "code"
       ? <BattlePage code={battleRoute.code} onBack={() => navigate("/")} />
       : <BattlePage albionIds={battleRoute.albionIds} onBack={() => navigate("/")} />;
   } else if (playerRoute) {
-    content = <PlayerProfilePage region={playerRoute.region} name={playerRoute.name} onBack={() => navigate("/")} />;
+    content = <PlayerProfilePage region={playerRoute.region} name={playerRoute.name} onBack={goBack} />;
   } else if (guildRoute) {
-    content = <GuildProfilePage mode={guildRoute.type} albionId={guildRoute.albionId} onBack={() => navigate("/")} />;
+    content = <GuildProfilePage mode={guildRoute.type} albionId={guildRoute.albionId} onBack={goBack} />;
   } else if (pickingGuild && loggedIn) {
     content = <GuildPicker onSelect={onGuildSelected} />;
   } else if (!loggedIn && (view === "management" || view === "config")) {
@@ -396,6 +452,7 @@ export default function App() {
   else if (view === "highscores") { content = <HighscoresPage initialWindow={highscoresInitialWindow} />; }
   else if (view === "players")   { content = <PlayerLookup />; }
   else if (view === "craft")     { content = <CraftCalculator />; }
+  else if (view === "market")    { content = <MarketPage />; }
   else if (view === "docs")      { content = <BotDocsPage />; }
   else if (view === "management") { content = <ManagementPage guildId={me!.guild_id!} perms={perms} />; }
   else                           { content = <GuildConfig guildId={me!.guild_id!} onSwitch={() => setPickingGuild(true)} />; }
@@ -468,6 +525,11 @@ export default function App() {
 
   return (
     <>
+      {backendDown && (
+        <div className="backend-down-banner" role="alert">
+          <i className="ti ti-plug-connected-x" aria-hidden="true" /> {t("backendDown")}
+        </div>
+      )}
       <div className="topbar">
         <div className="brand">
           <span className="logo"><i className="ti ti-shield-half" /></span>
@@ -480,6 +542,10 @@ export default function App() {
           {nb("players", "ti-sword",          t("players"))}
           {nb("highscores", "ti-trophy",      t("highscores"))}
           {nb("craft",   "ti-hammer",         t("craft"))}
+          {nb("market",  "ti-chart-line",     t("market"))}
+          <button className={companionActive ? "active" : ""} onClick={() => navigate("/download")}>
+            <i className="ti ti-download" aria-hidden="true" /> {t("companionNav")}
+          </button>
           {loggedIn && isDiscordAdmin && nb("docs", "ti-book-2", t("botDocs"))}
         </nav>
 
@@ -502,11 +568,21 @@ export default function App() {
       </div>
 
       <div style={{ padding: "10px 16px 0" }}>
-        <AdBanner size="leaderboard" />
+        <AdBanner variant="leaderboard" mobileVariant="mobileBanner" />
       </div>
 
+      {/* WS5: dash-root (grid técnico de fundo do design v2) vive no wrapper
+          de conteúdo — TODAS as páginas herdam, o topbar/banner ficam fora.
+          O esquadramento em si é global no styles.css (não depende disso). */}
+      <div className="dash-root">
       <ErrorBoundary>
-      <Suspense fallback={null}>
+      {/* Fallback visível: em conexão lenta, trocar de view carrega um chunk
+          novo — com fallback null a tela ficava em branco e parecia travada. */}
+      <Suspense fallback={
+        <div style={{ display: "flex", justifyContent: "center", padding: 48 }}>
+          <i className="ti ti-loader-2 spin" style={{ fontSize: 22, color: "var(--muted)" }} aria-hidden="true" />
+        </div>
+      }>
         {/* useKeepAlive ou deep link ativo → o conteúdo vem dos blocos
             keep-alive abaixo (não do `content`), pra não montar duplicado. */}
         {!useKeepAlive && !escActive && !regearActive && content}
@@ -551,6 +627,7 @@ export default function App() {
         )}
       </Suspense>
       </ErrorBoundary>
+      </div>
     </>
   );
 }

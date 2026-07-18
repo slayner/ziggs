@@ -15,6 +15,16 @@ T: dict[str, dict[str, str]] = {
         "en": "You don't have permission to use this command.",
         "es": "No tienes permiso para usar este comando.",
     },
+    "unexpected_error": {
+        "pt": "⚠️ Algo deu errado ao executar o comando. Tente de novo em instantes — se continuar, avise um admin.",
+        "en": "⚠️ Something went wrong running the command. Try again in a moment — if it keeps happening, tell an admin.",
+        "es": "⚠️ Algo salió mal al ejecutar el comando. Inténtalo de nuevo en un momento — si persiste, avisa a un admin.",
+    },
+    "cooldown_wait": {
+        "pt": "⏳ Calma! Tente de novo em {seconds}s.",
+        "en": "⏳ Slow down! Try again in {seconds}s.",
+        "es": "⏳ ¡Calma! Inténtalo de nuevo en {seconds}s.",
+    },
     "not_found_target": {
         "pt": "❌ Não encontrei `{alvo}`.",
         "en": "❌ Couldn't find `{alvo}`.",
@@ -625,6 +635,14 @@ T: dict[str, dict[str, str]] = {
     "logs_system": {"pt": "Sistema", "en": "System", "es": "Sistema"},
     "logs_changes": {"pt": "Alterações", "en": "Changes", "es": "Cambios"},
     "logs_note": {"pt": "Nota", "en": "Note", "es": "Nota"},
+
+    # event_cmd.py — estava por engano no CMD_I18N (dict do Translator), onde
+    # t() nunca acha: o usuário via a chave crua "ev_bad_time" no chat.
+    "ev_bad_time": {
+        "pt": "Horário inválido — use HH:MM, HHhMM (ex: 18h30) ou uma data completa (2026-07-15 18:30).",
+        "en": "Invalid time — use HH:MM, HHhMM (e.g. 18h30), or a full date (2026-07-15 18:30).",
+        "es": "Hora inválida — usa HH:MM, HHhMM (ej: 18h30) o una fecha completa (2026-07-15 18:30).",
+    },
 }
 
 
@@ -755,10 +773,4 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "en": "UTC time: HH:MM, HHhMM, or full date (YYYY-MM-DD HH:MM)",
         "es": "Hora UTC: HH:MM, HHhMM o fecha completa (YYYY-MM-DD HH:MM)",
     },
-    "ev_bad_time": {
-        "pt": "Horário inválido — use HH:MM, HHhMM (ex: 18h30) ou uma data completa (2026-07-15 18:30).",
-        "en": "Invalid time — use HH:MM, HHhMM (e.g. 18h30), or a full date (2026-07-15 18:30).",
-        "es": "Hora inválida — usa HH:MM, HHhMM (ej: 18h30) o una fecha completa (2026-07-15 18:30).",
-    },
-
 }

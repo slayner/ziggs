@@ -41,6 +41,11 @@ export default function ManagementPage({ guildId, perms, active = true }: Props)
   useEffect(() => {
     if (activeTab) setVisited(prev => prev.has(activeTab) ? prev : new Set(prev).add(activeTab));
   }, [activeTab]);
+  // Uma comp aberta (master-detail: lista + painel de detalhe) já é larga —
+  // espremida ao lado da barra de abas fica apertada. Some com a barra
+  // enquanto uma comp estiver aberta, devolve a largura toda pro editor.
+  const [compOpen, setCompOpen] = useState(false);
+  const hideTabs = activeTab === "comps" && compOpen;
 
   if (visible.length === 0) {
     return <div className="lootlog-page"><p className="hint">{t("escNoAccess")}</p></div>;
@@ -48,23 +53,25 @@ export default function ManagementPage({ guildId, perms, active = true }: Props)
 
   return (
     <div className="lootlog-page">
-      <div className="grid items-start gap-5 md:grid-cols-[220px_1fr]">
-        <aside className="flex flex-col gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-          {visible.map(tb => (
-            <button
-              key={tb.id}
-              className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left transition-colors ${
-                activeTab === tb.id ? "bg-zinc-700/60 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
-              }`}
-              onClick={() => setTab(tb.id)}
-            >
-              <i className={`ti ${tb.icon}`} aria-hidden="true" /> {t(tb.label)}
-            </button>
-          ))}
-          <div className="mt-2">
-            <AdBanner size="rectangle" />
+      <div className={hideTabs ? undefined : "grid items-start gap-5 md:grid-cols-[220px_1fr]"}>
+        {!hideTabs && (
+          <div className="flex flex-col gap-3">
+            <aside className="flex flex-col gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+              {visible.map(tb => (
+                <button
+                  key={tb.id}
+                  className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left transition-colors ${
+                    activeTab === tb.id ? "bg-zinc-700/60 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
+                  }`}
+                  onClick={() => setTab(tb.id)}
+                >
+                  <i className={`ti ${tb.icon}`} aria-hidden="true" /> {t(tb.label)}
+                </button>
+              ))}
+            </aside>
+            <AdBanner variant="skyscraper" />
           </div>
-        </aside>
+        )}
         <div>
           {visible.map(tb => {
             // Só monta se já foi visitada (ou é a ativa); visited mantém
@@ -72,7 +79,7 @@ export default function ManagementPage({ guildId, perms, active = true }: Props)
             if (!(activeTab === tb.id || visited.has(tb.id))) return null;
             return (
               <div key={tb.id} style={activeTab === tb.id ? undefined : { display: "none" }}>
-                {tb.id === "comps" && <CompBuilder perms={perms} />}
+                {tb.id === "comps" && <CompBuilder perms={perms} onOpenChange={setCompOpen} />}
                 {tb.id === "events" && <EventsPage perms={perms} active={active && activeTab === tb.id} />}
                 {tb.id === "regear" && <RegearPage guildId={guildId} active={active && activeTab === tb.id} />}
                 {tb.id === "reconcile" && <ReconcileSection guildId={guildId} />}

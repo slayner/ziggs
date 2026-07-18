@@ -98,6 +98,25 @@ def my_claims(
     }
 
 
+@router.put("/main/{registered_id}")
+def set_main_character(
+    registered_id: int,
+    user: User = Depends(deps.require_user),
+    db: Session = Depends(deps.db_session),
+) -> dict:
+    """Define qual personagem registrado é a conta principal do usuário.
+    Devolve o mesmo shape do GET /claims/my (o frontend substitui a lista)."""
+    target = db.get(RegisteredCharacter, registered_id)
+    if target is None or target.user_id != user.id:
+        raise HTTPException(404, "Personagem não encontrado")
+    for rc in db.scalars(
+        select(RegisteredCharacter).where(RegisteredCharacter.user_id == user.id)
+    ):
+        rc.is_main = rc.id == registered_id
+    db.commit()
+    return my_claims(user, db)
+
+
 @router.get("/character/{claim_id}")
 def get_claim(
     claim_id: int,
@@ -133,4 +152,5 @@ def _reg_dict(r: RegisteredCharacter) -> dict:
         "albion_player_name": r.albion_player_name,
         "region": r.region,
         "registered_at": r.registered_at.isoformat() if r.registered_at else None,
+        "is_main": r.is_main,
     }

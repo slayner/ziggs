@@ -24,7 +24,7 @@ from app.db import SessionLocal
 from app.models.battles import (
     Battle, BattleGuild, BattleKillEvent, BattleParticipant, BattleSide, BattleSyncCursor,
 )
-from app.services import battle_sides
+from app.services import battle_sides, search_index
 from app.services.albion_gate import (
     NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, albion_scope, battle_priority, slot,
 )
@@ -120,24 +120,43 @@ def _simplify_inventory(raw: list[dict] | None) -> list[dict] | None:
 
 
 async def fetch_battles(client: httpx.AsyncClient, host: str, limit: int = 51, offset: int = 0) -> list[dict]:
-    async with slot():
-        resp = await client.get(
-            f"https://{host}/api/gameinfo/battles",
-            params={"sort": "recent", "limit": limit, "offset": offset},
-        )
-    resp.raise_for_status()
-    return resp.json()
+    # ponytail: 1 retry — API do Albion dá ReadTimeout transiente com frequência
+    # (mesmo padrão de sync_player_kills e _fetch_deep_data). Sem isso, timeout
+    # numa página do feed descartava-a até o próximo ciclo de 60s.
+    for attempt in range(2):
+        try:
+            async with slot():
+                resp = await client.get(
+                    f"https://{host}/api/gameinfo/battles",
+                    params={"sort": "recent", "limit": limit, "offset": offset},
+                )
+            resp.raise_for_status()
+            return resp.json()
+        except (httpx.ReadTimeout, httpx.ConnectTimeout):
+            if attempt == 1:
+                raise
+            await asyncio.sleep(random.uniform(0.7, 1.3))
 
 
 async def fetch_events(client: httpx.AsyncClient, host: str, albion_battle_id: str) -> list[dict]:
     events: list[dict] = []
     for page in range(EVENTS_MAX_PAGES):
-        async with slot():
-            resp = await client.get(
-                f"https://{host}/api/gameinfo/events/battle/{albion_battle_id}",
-                params={"offset": page * EVENTS_PAGE_LIMIT, "limit": EVENTS_PAGE_LIMIT},
-            )
-        resp.raise_for_status()
+        # ponytail: 1 retry por página — igual fetch_battles. _fetch_deep_data
+        # retry-a a chamada toda, mas isso re-baixaria páginas 0..page-1 de novo
+        # a cada falha; retry isolado evita re-fetch e cobre o timeout transiente.
+        for attempt in range(2):
+            try:
+                async with slot():
+                    resp = await client.get(
+                        f"https://{host}/api/gameinfo/events/battle/{albion_battle_id}",
+                        params={"offset": page * EVENTS_PAGE_LIMIT, "limit": EVENTS_PAGE_LIMIT},
+                    )
+                resp.raise_for_status()
+                break
+            except (httpx.ReadTimeout, httpx.ConnectTimeout):
+                if attempt == 1:
+                    raise
+                await asyncio.sleep(random.uniform(0.7, 1.3))
         page_data = resp.json()
         if not isinstance(page_data, list) or not page_data:
             break
@@ -212,6 +231,13 @@ def upsert_battle_light(db: Session, raw: dict, region: str) -> Battle | None:
                 deaths=g.get("deaths") or 0,
             ))
 
+        gname, aid, aname = g.get("name"), g.get("allianceId") or None, g.get("alliance") or None
+        search_index.safe_upsert_entry(
+            db, entity_type="guild", entity_id=gid, display_name=gname, alliance_name=aname,
+        )
+        if aid:
+            search_index.safe_upsert_entry(db, entity_type="alliance", entity_id=aid, display_name=aname)
+
     db.flush()  # visível pra outras queries NESTA sessão, sem fsync — quem chama comita no fim do laço
     return battle
 
@@ -278,9 +304,40 @@ def _seed_from_summary(raw: dict) -> dict[str, dict]:
     return participants
 
 
-async def _fetch_deep_data(client: httpx.AsyncClient, host: str, battle: Battle) -> tuple[dict | None, list[dict]]:
+async def _fetch_events_with_retry(client: httpx.AsyncClient, host: str, battle: Battle) -> list[dict]:
+    """Busca só os eventos (retry/backoff/jitter — igual _fetch_deep_data antigo).
+    O detail/roster já vem da listagem ou do caller; aqui é só a paginação de
+    kills, que é a parte cara (até 40 páginas por batalha)."""
+    for attempt in range(3):
+        try:
+            events = await fetch_events(client, host, battle.albion_id)
+            return events
+        except (httpx.ReadTimeout, httpx.ConnectTimeout):
+            if attempt == 2:
+                raise
+            await asyncio.sleep(random.uniform(0.7, 1.3) * (2 ** attempt))
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 429 or attempt == 2:
+                raise
+            retry_after = e.response.headers.get("Retry-After")
+            wait = float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit() else 5.0 * (attempt + 1)
+            if not retry_after:
+                wait *= random.uniform(0.7, 1.3)
+            await asyncio.sleep(wait)
+    return []  # unreachable
+
+
+async def _fetch_deep_data(
+    client: httpx.AsyncClient, host: str, battle: Battle, raw: dict | None = None,
+) -> tuple[dict | None, list[dict]]:
     """Só a parte de rede de deep_process (sem toque na DB) — pode ser chamada
     em paralelo pra várias batalhas de uma vez, ver backfill_step.
+
+    `raw` = resposta já conhecida do endpoint de listagem (batalha vem da
+    página de /battles?offset=... junto de outras 50). Passar ela evita o
+    re-fetch do detail (que devolve exatamente o mesmo shape da listagem) —
+    hoje só os events precisam ser buscados por batalha. Se `raw=None` (retry
+    de batalha já no banco, sem a página original em memória), re-busca detail.
 
     429 (rate limit) espera o Retry-After da própria API se vier, senão um
     backoff crescente, antes de tentar de novo — sem isso a batalha falhava
@@ -293,6 +350,10 @@ async def _fetch_deep_data(client: httpx.AsyncClient, host: str, battle: Battle)
     (ver _backfill_deep_fetch_all) podem falhar quase no mesmo instante e,
     sem jitter, todas dormiriam o MESMO tempo e retentariam juntas de novo —
     uma manada sincronizada que reproduz o pico de 429 em vez de se espalhar."""
+    if raw is not None:
+        events = await _fetch_events_with_retry(client, host, battle)
+        return raw, events
+    # raw desconhecido (retry/reprocessor): busca detail + events.
     for attempt in range(3):
         try:
             raw = await fetch_battle_detail(client, host, battle.albion_id)
@@ -411,6 +472,10 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
         )
         db.add(prow)
         participant_rows[pid] = prow
+        search_index.safe_upsert_entry(
+            db, entity_type="player", entity_id=pid, display_name=row["name"],
+            region=battle.region, guild_name=row["guild_name"], alliance_name=row["alliance_name"],
+        )
     db.flush()
 
     is_lethal = True
@@ -533,6 +598,7 @@ _deep_fetch_gate = asyncio.Semaphore(DEEP_FETCH_CONCURRENCY)
 
 async def _backfill_deep_fetch_all(
     client: httpx.AsyncClient, host: str, battles: list[Battle], *, priority_fn,
+    raw_by_battle: dict[int, dict] | None = None,
 ) -> list[tuple[Battle, dict | None, list[dict]] | tuple[Battle, Exception]]:
     """Busca em paralelo (rede só, sem DB) os dados profundos de várias batalhas
     de uma vez — é a paginação de eventos (até 40 páginas/batalha) que faz o
@@ -541,6 +607,12 @@ async def _backfill_deep_fetch_all(
     `priority_fn(battle)` decide o tier do bg pool praquele deep-fetch — o
     `slot()` real vive dentro de fetch_battle_detail/fetch_events e lê o
     contextvar que o scope aqui seta.
+
+    `raw_by_battle` = {battle.id: raw_dict} pra batalhas que já têm o detail
+    da listagem (1 req compartilhado entre 51 batalhas). Passar evita o
+    re-fetch do detail por batalha — só os events são buscados (1 detail +
+    N pages events vira só N pages events). None = batalha sem raw conhecido
+    (retry/reprocessor), re-busca detail.
 
     `_deep_fetch_gate` cap quantas batalhas processam ao mesmo tempo: mesmo
     com slot()/rate limiter serializando as requests de verdade, disparar as
@@ -553,7 +625,8 @@ async def _backfill_deep_fetch_all(
         async with _deep_fetch_gate:
             async with albion_scope(priority_fn(battle)):
                 try:
-                    raw, events = await _fetch_deep_data(client, host, battle)
+                    raw = raw_by_battle.get(battle.id) if raw_by_battle else None
+                    raw, events = await _fetch_deep_data(client, host, battle, raw=raw)
                     return battle, raw, events
                 except Exception as e:
                     return battle, e
@@ -667,12 +740,15 @@ async def _finish_lap(db: Session, cursor: BattleSyncCursor) -> None:
 
 async def _deep_process_batch(
     client: httpx.AsyncClient, db: Session, region: str, host: str, qualifying: list[Battle],
-    *, priority_fn,
+    *, priority_fn, raw_by_battle: dict[int, dict] | None = None,
 ) -> None:
     """Deep-processa em paralelo uma lista de batalhas JÁ qualificadas (ver
     _backfill_deep_fetch_all) e grava. Usado por todo mundo que deep-processa
     (sync_recent, _process_battle_batch) — fonte única do "o que fazer quando
     falha".
+
+    `raw_by_battle` = detail já conhecido da listagem (ver
+    _backfill_deep_fetch_all) — passa adiante pra pular o re-fetch do detail.
 
     Falha em qualquer batalha (rede, 429, o que for) marca reprocess_reason
     nela em vez de só logar e desistir — cai na MESMA fila genérica que
@@ -684,7 +760,9 @@ async def _deep_process_batch(
     alta no bg pool); backfill passa _prio_old; reverse sweep passa _prio_other."""
     if not qualifying:
         return
-    for result in await _backfill_deep_fetch_all(client, host, qualifying, priority_fn=priority_fn):
+    for result in await _backfill_deep_fetch_all(
+        client, host, qualifying, priority_fn=priority_fn, raw_by_battle=raw_by_battle,
+    ):
         battle = result[0]
         if isinstance(result[1], Exception):
             log.warning("battle_tracker: falha no deep-process de %s (%s): %r",
@@ -709,8 +787,14 @@ async def _process_battle_batch(client: httpx.AsyncClient, db: Session, region: 
     filtra quem qualifica pra deep, e deep-processa (ver _deep_process_batch).
     Usado pelo avanço normal do backfill (backfill_step) e pela varredura
     reversa de startup (_reverse_startup_sweep). `priority_fn` repassa pro
-    tier do bg pool de cada deep-fetch (backfill=_prio_old, sweep=_prio_other)."""
+    tier do bg pool de cada deep-fetch (backfill=_prio_old, sweep=_prio_other).
+
+    Passa o `raw` de cada batalha (já conhecido da listagem) pro
+    _deep_process_batch — evita o re-fetch do detail, que devolve o mesmo
+    shape da página de /battles. Só os events precisam ser buscados por
+    batalha (1 req compartilhado entre 51 → vira só events por batalha)."""
     qualifying: list[Battle] = []
+    raw_by_battle: dict[int, dict] = {}
     for raw in batch:
         try:
             battle = upsert_battle_light(db, raw, region)
@@ -721,6 +805,7 @@ async def _process_battle_batch(client: httpx.AsyncClient, db: Session, region: 
         if battle is None or battle.processing_tier == "deep" or battle.players_total < DEEP_PROCESS_MIN_PLAYERS:
             continue
         qualifying.append(battle)
+        raw_by_battle[battle.id] = raw
     try:
         db.commit()
     except Exception as e:
@@ -738,7 +823,7 @@ async def _process_battle_batch(client: httpx.AsyncClient, db: Session, region: 
         log.warning("battle_tracker: falha ao comitar página (%s): %r — recoberta num ciclo depois", region, e)
         return
 
-    await _deep_process_batch(client, db, region, host, qualifying, priority_fn=priority_fn)
+    await _deep_process_batch(client, db, region, host, qualifying, priority_fn=priority_fn, raw_by_battle=raw_by_battle)
 
 
 async def backfill_step(client: httpx.AsyncClient, db: Session, region: str, host: str) -> None:
@@ -883,6 +968,7 @@ async def sync_recent() -> int:
                             break
 
                 qualifying: list[Battle] = []
+                raw_by_battle: dict[int, dict] = {}
                 for raw in battles:
                     try:
                         battle = upsert_battle_light(db, raw, region)
@@ -895,9 +981,13 @@ async def sync_recent() -> int:
                     if battle.players_total < DEEP_PROCESS_MIN_PLAYERS or _is_frozen(battle, now):
                         continue
                     qualifying.append(battle)
+                    raw_by_battle[battle.id] = raw
                 db.commit()
 
-                await _deep_process_batch(client, db, region, host, qualifying, priority_fn=_prio_new)
+                await _deep_process_batch(
+                    client, db, region, host, qualifying,
+                    priority_fn=_prio_new, raw_by_battle=raw_by_battle,
+                )
     finally:
         db.close()
     return count

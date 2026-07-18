@@ -57,6 +57,42 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+# ── Companion: ingest de preços capturados via packet capture (Fase 2) ────────
+
+
+def upsert_companion_prices(db: Session, rows: list[dict[str, Any]]) -> tuple[int, int]:
+    """Insere preços reportados por companions (packet capture do mercado).
+
+    Reaproveita _upsert_latest — mesmo formato de row. Normaliza price_date
+    (string ISO ou datetime) pra o que _upsert_latest espera.
+
+    Retorna (accepted, rejected). rejected = rows sem item_id ou price == 0.
+    """
+    now = datetime.now(timezone.utc)
+    clean: list[dict[str, Any]] = []
+    rejected = 0
+    for r in rows:
+        iid = r.get("item_id")
+        price = r.get("sell_price_min")
+        if not iid or not price:
+            rejected += 1
+            continue
+        pd = r.get("price_date") or r.get("sell_price_min_date") or now.isoformat()
+        if isinstance(pd, datetime):
+            pd = pd.isoformat()
+        clean.append({
+            "item_id": iid,
+            "city": r.get("city", _DEFAULT_CITY),
+            "quality": int(r.get("quality", 1) or 1),
+            "sell_price_min": int(price),
+            "sell_price_min_date": pd,
+        })
+    if clean:
+        _upsert_latest(db, clean, now)
+        db.commit()
+    return (len(clean), rejected)
+
+
 # ── API legado (uma cidade, spot price) ───────────────────────────────────────
 
 
@@ -74,6 +110,12 @@ async def _fetch_from_api(
 
 
 def _upsert_latest(db: Session, data: list[dict[str, Any]], now: datetime) -> None:
+    # Cache do objeto por chave única DENTRO deste lote. O companion manda o
+    # mesmo (item_id, city, quality) várias vezes num lote só (o mercado tem N
+    # ordens do mesmo item); como a sessão é autoflush=False, o select abaixo
+    # não enxerga um add pendente da mesma chave — sem este cache, o 2º vira um
+    # 2º INSERT e estoura o UNIQUE constraint no commit.
+    pending: dict[tuple[str, str, int], ItemPriceLatest] = {}
     for row in data:
         if not row.get("sell_price_min"):
             continue
@@ -87,7 +129,8 @@ def _upsert_latest(db: Session, data: list[dict[str, Any]], now: datetime) -> No
             item_id=item_id, city=city, quality=quality,
             sell_price_min=price, price_date=price_date, recorded_at=now,
         ))
-        existing = db.scalar(
+        key = (item_id, city, quality)
+        existing = pending.get(key) or db.scalar(
             select(ItemPriceLatest).where(
                 ItemPriceLatest.item_id == item_id,
                 ItemPriceLatest.city == city,
@@ -95,14 +138,22 @@ def _upsert_latest(db: Session, data: list[dict[str, Any]], now: datetime) -> No
             )
         )
         if existing:
+            pending[key] = existing
+            # "Age mais próxima vence": a fonte (nossa captura via companion vs.
+            # AODP) não importa — quem tem o price_date mais recente prevalece.
+            # Um preço vindo de dado mais velho não sobrescreve um mais fresco.
+            if price_date < _aware(existing.price_date):
+                continue
             existing.sell_price_min = price
             existing.price_date = price_date
             existing.recorded_at = now
         else:
-            db.add(ItemPriceLatest(
+            obj = ItemPriceLatest(
                 item_id=item_id, city=city, quality=quality,
                 sell_price_min=price, price_date=price_date, recorded_at=now,
-            ))
+            )
+            db.add(obj)
+            pending[key] = obj
     db.flush()
 
 
@@ -643,8 +694,50 @@ def _demo_iqr() -> None:
     print(f"iqr ok: raw={mean_raw:.0f} trim={mean_trim:.0f} kept={trimmed}")
 
 
+def _demo_freshest_wins() -> None:
+    """Afirma que _upsert_latest mantém o preço de dado mais recente, venha da
+    nossa captura (companion) ou do AODP — 'age mais próxima vence'."""
+    from datetime import datetime, timezone
+
+    class _Row:
+        def __init__(self, price, pdate):
+            self.item_id, self.city, self.quality = "T4_BAG", "Martlock", 1
+            self.sell_price_min, self.price_date, self.recorded_at = price, pdate, pdate
+
+    class _FakeDB:
+        def __init__(self, existing):
+            self.row = existing
+            self.added = []
+        def add(self, obj):
+            self.added.append(obj)
+        def scalar(self, _q):
+            return self.row
+        def flush(self):
+            pass
+
+    old = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    new = datetime(2026, 7, 17, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+
+    # Existente é VELHO; chega um preço NOVO → sobrescreve.
+    row = _Row(100, old)
+    db = _FakeDB(row)
+    _upsert_latest(db, [{"item_id": "T4_BAG", "city": "Martlock", "quality": 1,
+                         "sell_price_min": 250, "sell_price_min_date": new.isoformat()}], now)
+    assert row.sell_price_min == 250, "preço mais fresco deveria vencer"
+
+    # Existente é NOVO; chega um preço VELHO → mantém o novo.
+    row = _Row(250, new)
+    db = _FakeDB(row)
+    _upsert_latest(db, [{"item_id": "T4_BAG", "city": "Martlock", "quality": 1,
+                         "sell_price_min": 100, "sell_price_min_date": old.isoformat()}], now)
+    assert row.sell_price_min == 250, "dado velho não deveria sobrescrever o fresco"
+    print("freshest-wins OK")
+
+
 if __name__ == "__main__":
     _demo_iqr()
+    _demo_freshest_wins()
     # item_base_id sanity
     assert item_base_id("T5_HEAD_PLATE_SET1@2") == "HEAD_PLATE_SET1"
     assert item_base_id("T8_MOUNT_OX") == "MOUNT_OX"

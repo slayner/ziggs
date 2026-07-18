@@ -355,11 +355,7 @@ export default function BattleTracker() {
             <button
               onClick={onMultiClick}
               disabled={merging}
-              className={`shrink-0 rounded border px-3 py-1 text-xs font-medium disabled:opacity-40 ${
-                multiMode
-                  ? "border-amber-500 bg-amber-500/10 text-amber-300"
-                  : "border-zinc-700 bg-zinc-800/60 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
-              }`}
+              className={`shrink-0 dash-chip disabled:opacity-40 ${multiMode ? "dash-chip-on" : ""}`}
             >
               {merging ? t("multiCombining") : multiMode ? `${t("multiLabel")} (${selected.size})` : t("multiLabel")}
             </button>

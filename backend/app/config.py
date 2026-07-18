@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     environment: str = "development"
     bot_api_secret: str = "dev-bot-secret-change-me"
+    companion_api_secret: str = "dev-companion-secret-change-me"
 
     # Kill-switch dos fetchers de background (battle/player/price trackers,
     # profile_warmer, claim/registration checker, weapon_stats, snapshots…).
@@ -44,10 +45,10 @@ class Settings(BaseSettings):
         # públicos no repo) e o /bot/* aberto pra qualquer um. Falha no boot
         # em vez de rodar silenciosamente inseguro.
         if self.environment != "development":
-            weak = {"dev-only-change-me", "dev-bot-secret-change-me", ""}
-            if self.secret_key in weak or self.bot_api_secret in weak:
+            weak = {"dev-only-change-me", "dev-bot-secret-change-me", "dev-companion-secret-change-me", ""}
+            if self.secret_key in weak or self.bot_api_secret in weak or self.companion_api_secret in weak:
                 raise RuntimeError(
-                    "SECRET_KEY/BOT_API_SECRET com valor default de dev em ambiente "
+                    "SECRET_KEY/BOT_API_SECRET/COMPANION_API_SECRET com valor default de dev em ambiente "
                     f"{self.environment!r} — defina secrets reais no .env antes de subir."
                 )
 

@@ -73,6 +73,18 @@ def match(query: str, name: str, max_dist: int = 1) -> bool:
     return False
 
 
+def prefix_range(nq: str) -> tuple[str, str]:
+    """Limites [lo, hi) pra busca por prefixo via `col >= lo AND col < hi` em
+    vez de `col LIKE 'nq%'`. Sargável sem pegadinha nenhuma: LIKE com
+    wildcard à direita só vira index range scan no SQLite se
+    `case_sensitive_like` estiver ON (não está, por padrão, e mudar isso é
+    global — afeta todo LIKE do app); `>=`/`<` comparam a coluna direto
+    (BINARY no SQLite) e sempre usam o índice."""
+    if not nq:
+        return "", "￿"
+    return nq, nq[:-1] + chr(ord(nq[-1]) + 1)
+
+
 def norm_sql(col) -> sa.sql.elements.FunctionElement:
     """Expressão SQLAlchemy que normaliza ``col`` igual a ``normalize``:
     ``lower(replace(replace(... col, ' ', ''), '1','i'), ...))``.

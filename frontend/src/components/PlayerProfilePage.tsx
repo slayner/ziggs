@@ -3,6 +3,8 @@ import { navigate } from "../router";
 import { silver, dateUTC, monthYearUTC } from "../lib/format";
 import { itemRenderUrl, NO_WEAPON_ICON_ID } from "../data/albion-items";
 import { useLang, useT, REGION_LABELS } from "../i18n";
+import { Panel } from "./Panel";
+import LoadProgress from "./LoadProgress";
 
 const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 // Inverso de PLAYER_PREFIXES (router.ts) — pra montar o link de perfil do
@@ -87,7 +89,14 @@ type TopWeapon = { weapon_base: string; points: number; builds: BuildBase[] };
 // Personalização do dono verificado do personagem (ver ClaimsPanel →
 // "Personalizar perfil"; desbloqueada só com RegisteredCharacter, não pelo
 // /register do bot). null = personagem não verificado por ninguém no site.
-interface CustomProfile { theme: string; avatar_url: string | null; banner_url: string | null }
+interface CustomProfile {
+  theme: string;
+  avatar_url: string | null;
+  banner_url: string | null;
+  // Presente quando este personagem é alt de outro (workstream D do
+  // PLANO-PERFIL-V2) — null/ausente = é a main ou usuário sem main definida.
+  main_character?: { name: string; region: string } | null;
+}
 
 interface PlayerProfile {
   Id: string;
@@ -570,6 +579,7 @@ function SkeletonBox({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded bg-zinc-800/80 ${className ?? ""}`} />;
 }
 
+
 // Estrutura da página já montada enquanto a única chamada à API ainda não
 // voltou — sensação de progresso em vez de só um "carregando" parado.
 function ProfileSkeleton() {
@@ -647,6 +657,8 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadStage, setLoadStage] = useState<string | null>(null);
+  const [retryAttempt, setRetryAttempt] = useState(0);
   const [activeTab, setActiveTab] = useState<"activity" | "battles" | "history">("activity");
   const [activityPage, setActivityPage] = useState(1);
   const [battlesPage, setBattlesPage] = useState(1);
@@ -714,7 +726,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
   }
 
   function load(silent: boolean) {
-    if (silent) setRefreshing(true); else setLoading(true);
+    if (silent) setRefreshing(true); else { setLoading(true); setRetryAttempt(0); }
     setError(null);
 
     const TRANSIENT = new Set([502, 503, 504]);
@@ -722,7 +734,9 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
       fetch(`${API}/players/by-name/${region}/${encodeURIComponent(name)}`)
         .then(async res => {
           if (TRANSIENT.has(res.status)) {
-            // API do Albion instável — aguarda e retenta silenciosamente
+            // API do Albion instável — aguarda e retenta; na carga inicial o
+            // ProfileLoadProgress mostra o aviso de "tentando novamente"
+            if (!silent) setRetryAttempt(a => a + 1);
             setTimeout(() => attempt(Math.min(delay * 2, 30_000)), delay);
             return null;
           }
@@ -796,6 +810,36 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [region, name]);
 
+  // Polling da etapa da carga fria (ver ProfileLoadProgress) — só enquanto o
+  // fetch inicial está pendente; perfis cacheados resolvem antes do 1º tick.
+  useEffect(() => {
+    if (!loading) { setLoadStage(null); return; }
+    let alive = true;
+    const iv = setInterval(() => {
+      fetch(`${API}/players/load-progress/${region}/${encodeURIComponent(name)}`)
+        .then(r => r.json())
+        .then(d => { if (alive) setLoadStage(d.stage ?? null); })
+        .catch(() => {});
+    }, 1000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [loading, region, name]);
+
+  // Customização editada no dropdown (ClaimsPanel/ProfileCustomize) reflete
+  // aqui sem reload — só quando o perfil aberto é personagem do próprio
+  // usuário (playerIds). Merge preserva campos que o evento não traz
+  // (ex.: main_character).
+  useEffect(() => {
+    const onUpdate = (e: Event) => {
+      const { profile: cp, playerIds } = (e as CustomEvent).detail as
+        { profile: CustomProfile; playerIds: string[] };
+      setProfile(p => p && playerIds.includes(p.Id)
+        ? { ...p, custom_profile: { ...p.custom_profile, ...cp } }
+        : p);
+    };
+    window.addEventListener("ziggs:profile-updated", onUpdate);
+    return () => window.removeEventListener("ziggs:profile-updated", onUpdate);
+  }, []);
+
   const ratio = profile
     ? profile.DeathFame > 0 ? (profile.KillFame / profile.DeathFame).toFixed(2) : "∞"
     : null;
@@ -803,6 +847,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
   const stats = profile?.LifetimeStatistics;
   const gathering = stats?.Gathering;
   const z = profile?._ziggs;
+  const mainChar = profile?.custom_profile?.main_character ?? null;
   const activity: Activity[] = z
     ? [
         ...z.kills.map(ev => ({ ...ev, kind: "kill" as const })),
@@ -826,15 +871,32 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
     <div className="mx-auto w-full max-w-5xl px-4 py-6" data-profile-theme={profile?.custom_profile?.theme}>
       <button onClick={onBack} className="mb-4 text-sm text-zinc-400 hover:text-zinc-200">← {t("back")}</button>
 
-      {loading && <ProfileSkeleton />}
+      {loading && (
+        <>
+          <LoadProgress
+            key={`${region}:${name}`}
+            steps={[
+              { key: "search", label: t("plpStepSearch") },
+              { key: "details", label: t("plpStepDetails") },
+              { key: "kills", label: t("plpStepKills") },
+              { key: "build", label: t("plpStepBuild") },
+            ]}
+            stage={loadStage}
+            retrying={retryAttempt > 0}
+            hint={t("plpFirstVisit")}
+          />
+          <ProfileSkeleton />
+        </>
+      )}
       {error && !loading && (
         <p className="rounded-lg border border-red-800 bg-red-900/20 px-4 py-3 text-sm text-red-400">{error}</p>
       )}
 
       {profile && z && !loading && (
         <div className="space-y-4">
-          {/* Header */}
-          <div className="relative overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60 p-4">
+          {/* Header — sem overflow-hidden: clipa os cantos fixos do Panel (-1px);
+              o banner inset-0 preenche exato, não estoura com radius 0 */}
+          <Panel className="p-4">
             {profile.custom_profile?.banner_url && (
               <>
                 <img src={profile.custom_profile.banner_url} alt="" className="absolute inset-0 h-full w-full object-cover opacity-25" />
@@ -869,6 +931,17 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
                     <span className="text-zinc-600">{t("noGuild")}</span>
                   )}
                 </div>
+                {mainChar && (
+                  <div className="mt-1 flex items-center gap-1 text-[11px] text-zinc-500">
+                    <i className="ti ti-star" style={{ fontSize: 11 }} aria-hidden="true" />
+                    {t("altOf")}{" "}
+                    <button
+                      onClick={() => navigate(`/${REGION_PREFIX[mainChar.region] ?? "am"}/${encodeURIComponent(mainChar.name)}`)}
+                      className="font-medium text-zinc-400 hover:text-amber-400 transition-colors">
+                      {mainChar.name}
+                    </button>
+                  </div>
+                )}
                 <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-600">
                   <button
                     onClick={forceRefresh}
@@ -921,7 +994,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
               </div>
             )}
             </div>
-          </div>
+          </Panel>
 
           {/* Abas */}
           <div className="flex gap-1 border-b border-zinc-800 pb-0">

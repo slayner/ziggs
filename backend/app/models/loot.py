@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import (
+    BigInteger, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, BigInt, Snowflake, TimestampMixin, pk
@@ -63,6 +65,27 @@ class GuildChestEntry(Base, TimestampMixin):
     silver_value: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
 
     snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LootVerification(Base, TimestampMixin):
+    """Marca que um item 'não depositado' de um looter foi CONFERIDO por um admin
+    (o vermelho vira amarelo na tela do reconcile). Chave por (evento, looter,
+    item) — clicar cria, clicar de novo remove (toggle na rota)."""
+    __tablename__ = "loot_verifications"
+    __table_args__ = (
+        UniqueConstraint("event_id", "looted_by", "item_id", name="uq_loot_verif"),
+    )
+
+    id: Mapped[int] = pk()
+    guild_id: Mapped[int] = mapped_column(
+        ForeignKey("guilds.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    looted_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    item_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    verified_by_user_id: Mapped[int | None] = mapped_column(Snowflake)
 
 
 class ItemPriceCache(Base):

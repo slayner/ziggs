@@ -51,6 +51,10 @@ class Battle(Base):
     # um processo separado disputando lock do SQLite com tráfego real).
     # None = nada pendente. Vira None de novo depois que reprocessa com sucesso.
     reprocess_reason: Mapped[str | None] = mapped_column(String(64), index=True)
+    # Nick do jogador cujo companion descobriu esta batalha (só quando o report
+    # do companion CRIOU a batalha — batalhas já conhecidas não re-creditam).
+    # Exibido como agradecimento na página pública da batalha.
+    found_by: Mapped[str | None] = mapped_column(String(64))
 
 
 class ReprocessCampaign(Base):

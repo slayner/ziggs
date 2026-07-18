@@ -8,13 +8,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.rate_limit import RateLimitMiddleware
-from app.api.routes import auth, battles, catalog, claims, comps, craft, events, highscores, loot, lootlog, meta, nodes, players, profiles, regear, render, user_profile
+from app.api.routes import auth, battles, catalog, claims, companion, comps, craft, events, highscores, loot, lootlog, market_history, meta, nodes, players, profiles, regear, render, user_profile
 from app.config import get_settings
 from app.domain.states import EventState, allowed_targets
 from app.services import (
-    battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, dashboard_cache,
-    player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry, small_battle_discovery,
-    weapon_stats,
+    battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, companion_scan, dashboard_cache,
+    gold_price, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
+    search_index, small_battle_discovery, weapon_stats,
 )
 
 
@@ -37,11 +37,15 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(weapon_stats.run_forever()),
             asyncio.create_task(battle_reprocessor.run_forever()),
             asyncio.create_task(battle_sweeper.run_forever()),
+            asyncio.create_task(companion_scan.run_forever()),
             asyncio.create_task(small_battle_discovery.run_forever()),
             asyncio.create_task(player_count_snapshot.run_forever()),
             asyncio.create_task(battle_price_reprocessor.run_forever()),
             asyncio.create_task(regear_retry.run_forever()),
             asyncio.create_task(dashboard_cache.run_forever()),
+            asyncio.create_task(search_index.run_forever()),
+            asyncio.create_task(gold_price.run_forever()),
+            asyncio.create_task(market_snapshot.run_forever()),
         ]
     yield
     for t in tasks:
@@ -71,9 +75,9 @@ app.add_middleware(RateLimitMiddleware, limit=10, window=60, prefix="/auth/disco
 # detecção de presença na call parecerem quebradas (só "funcionavam" logo após
 # reiniciar o bot, quando o bucket ainda estava zerado).
 app.add_middleware(RateLimitMiddleware, limit=600, window=60, methods=("GET", "HEAD"),
-                    exclude_prefix=("/render/item", "/bot/"))
+                    exclude_prefix=("/render/item", "/bot/", "/companion/"))
 app.add_middleware(RateLimitMiddleware, limit=90, window=60, methods=("POST", "PUT", "PATCH", "DELETE"),
-                    exclude_prefix=("/render/item", "/bot/"))
+                    exclude_prefix=("/render/item", "/bot/", "/companion/"))
 
 # Permite que o Vite dev server (localhost:5173) chame a API diretamente.
 # Em produção o frontend e o backend ficam na mesma origem — este middleware é inofensivo.
@@ -90,12 +94,14 @@ app.include_router(auth.router)
 app.include_router(battles.router)
 app.include_router(claims.router)
 app.include_router(catalog.router)
+app.include_router(companion.router)
 app.include_router(comps.router)
 app.include_router(craft.router)
 app.include_router(events.router)
 app.include_router(highscores.router)
 app.include_router(loot.router)
 app.include_router(lootlog.router)
+app.include_router(market_history.router)
 app.include_router(meta.router)
 app.include_router(nodes.router)
 app.include_router(players.router)
@@ -103,6 +109,11 @@ app.include_router(profiles.router)
 app.include_router(regear.router)
 app.include_router(render.router)
 app.include_router(user_profile.router)
+
+# SPA + OG por rota — precisa ser o ÚLTIMO registro (catch-all). Só ativa se
+# frontend/dist existir (build do Vite); em dev com Vite server é no-op.
+from app import spa as _spa  # noqa: E402
+_spa.install(app)
 
 
 @app.get("/health")

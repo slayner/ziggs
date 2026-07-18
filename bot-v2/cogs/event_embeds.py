@@ -921,17 +921,8 @@ def _embed_target(review_room_id: str | None, events_channel_id: str | None) -> 
     return "skip"
 
 
-_tick_n = 0
-
-
 @tasks.loop(seconds=10)
 async def embed_work_loop(cog: "EventEmbeds") -> None:
-    # ponytail: tick sempre imprime algo (mesmo sem trabalho) — sem isto,
-    # silêncio é ambíguo entre "nada pra fazer" e "o loop morreu". Só remover
-    # depois de confirmar que o loop sobrevive entre restarts.
-    global _tick_n
-    _tick_n += 1
-    print(f"[event_embeds] tick #{_tick_n}")
     for guild in cog.bot.guilds:
         try:
             await cog.sync_event_embeds(guild)

@@ -268,7 +268,7 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
             const dg = await api.myDiscordGuilds();
             const found = dg.find(x => x.id === String(guildId));
             if (found) {
-              await api.selectGuild(found.id, found.name, found.icon, found.is_admin);
+              await api.selectGuild(found.id, found.name, found.icon);
               window.location.reload();
               return;
             }

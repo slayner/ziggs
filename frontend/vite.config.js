@@ -13,6 +13,10 @@ export default defineConfig({
             "/players": { target: "http://127.0.0.1:8000", changeOrigin: true },
             "/render": { target: "http://127.0.0.1:8000", changeOrigin: true },
             "/claims": { target: "http://127.0.0.1:8000", changeOrigin: true },
+            "/profile": { target: "http://127.0.0.1:8000", changeOrigin: true },
+            "/craft": { target: "http://127.0.0.1:8000", changeOrigin: true },
+            "/market-history": { target: "http://127.0.0.1:8000", changeOrigin: true },
+            "/health": { target: "http://127.0.0.1:8000", changeOrigin: true },
         },
     },
 });

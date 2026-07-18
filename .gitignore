@@ -20,3 +20,27 @@ dist/
 
 # Cache local de renders de item da Albion (backend/app/api/routes/render.py)
 backend/data/render_cache/
+backend/data/battle_preview_cache/
+
+# Bancos locais — dado de runtime, nunca versionado (o ziggs.db passa de 7 GB)
+*.db
+*.sqlite
+*.sqlite3
+
+# Build do Rust/Tauri (o target/ do companion sozinho passa de 18 GB)
+target/
+target-diag/
+*.pdb
+
+# (o venv embutido em backend/ e o ao-bin-dump já são tratados por
+# backend/.gitignore — não duplicar aqui)
+
+# Worktrees e sessões de ferramenta
+.claude/worktrees/
+.opencode/
+
+# Sujeira de sessão de debug (screenshots, dumps de perfil, scripts soltos)
+backend/_*.png
+backend/_*.mjs
+backend/_*.log
+backend/_profile_images/

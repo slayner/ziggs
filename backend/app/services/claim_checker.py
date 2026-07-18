@@ -57,6 +57,58 @@ async def _sync_pending_players(db, pending: list[CharacterClaim]) -> None:
                     log.debug("claim_checker: falha ao sincronizar %s (%s): %s", claim.albion_player_id, claim.region, e)
 
 
+def register_character(db, claim: CharacterClaim) -> None:
+    """Upsert em registered_characters quando um claim verifica, mantendo a
+    invariante de main: todo usuário com personagens tem exatamente 1
+    `is_main` (ver models/claims.py). Primeiro personagem do usuário vira
+    main; re-verificação pelo MESMO dono não mexe na flag; personagem
+    "roubado" (re-verificado por outro dono) entra como alt — e se era a main
+    do dono anterior, o registro mais antigo restante dele é promovido."""
+    def has_other(user_id: int) -> bool:
+        return db.scalar(
+            select(RegisteredCharacter.id).where(
+                RegisteredCharacter.user_id == user_id,
+                RegisteredCharacter.albion_player_id != claim.albion_player_id,
+            )
+        ) is not None
+
+    existing = db.scalar(
+        select(RegisteredCharacter).where(
+            RegisteredCharacter.albion_player_id == claim.albion_player_id
+        )
+    )
+    if existing is None:
+        db.add(RegisteredCharacter(
+            user_id=claim.user_id,
+            albion_player_id=claim.albion_player_id,
+            albion_player_name=claim.albion_player_name,
+            region=claim.region,
+            claim_id=claim.id,
+            is_main=not has_other(claim.user_id),
+        ))
+        return
+
+    if existing.user_id != claim.user_id:
+        prev_owner, prev_was_main = existing.user_id, existing.is_main
+        existing.is_main = not has_other(claim.user_id)
+        if prev_was_main:
+            leftover = db.scalar(
+                select(RegisteredCharacter)
+                .where(
+                    RegisteredCharacter.user_id == prev_owner,
+                    RegisteredCharacter.albion_player_id != claim.albion_player_id,
+                )
+                .order_by(RegisteredCharacter.registered_at)
+                .limit(1)
+            )
+            if leftover is not None:
+                leftover.is_main = True
+    existing.user_id = claim.user_id
+    existing.albion_player_name = claim.albion_player_name
+    existing.region = claim.region
+    existing.claim_id = claim.id
+
+
 async def _check_once() -> None:
     db = next(get_session())
     try:
@@ -102,25 +154,7 @@ async def _check_once() -> None:
                     claim.verified_at = ev.timestamp.replace(tzinfo=timezone.utc) if ev.timestamp.tzinfo is None else ev.timestamp
                     claim.verified_event_id = ev.albion_event_id
 
-                    # Upsert em registered_characters (sobrescreve registro anterior)
-                    existing = db.scalar(
-                        select(RegisteredCharacter).where(
-                            RegisteredCharacter.albion_player_id == claim.albion_player_id
-                        )
-                    )
-                    if existing:
-                        existing.user_id = claim.user_id
-                        existing.albion_player_name = claim.albion_player_name
-                        existing.region = claim.region
-                        existing.claim_id = claim.id
-                    else:
-                        db.add(RegisteredCharacter(
-                            user_id=claim.user_id,
-                            albion_player_id=claim.albion_player_id,
-                            albion_player_name=claim.albion_player_name,
-                            region=claim.region,
-                            claim_id=claim.id,
-                        ))
+                    register_character(db, claim)
 
                     log.info(
                         "Claim #%d verificado: %s → user_id=%d (evento %s)",

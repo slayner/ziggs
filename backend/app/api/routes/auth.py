@@ -182,19 +182,6 @@ class SelectGuildIn(BaseModel):
     guild_id: str  # string para preservar precisão de IDs Discord (64-bit)
     guild_name: str
     icon: str | None = None
-    is_admin: bool = False
-
-
-def _sync_member_roles(user: User, guild_id: int, member: GuildMember) -> None:
-    """Busca as roles Discord do membro e atualiza o registro (best-effort)."""
-    token = decrypt_token(user.discord_access_token)
-    if not token:
-        return
-    try:
-        data = discord.fetch_guild_member(str(guild_id), token)
-        member.discord_role_ids = data.get("roles", [])
-    except Exception:
-        pass  # roles serão sincronizadas pelo bot futuramente
 
 
 @router.post("/auth/select-guild")
@@ -204,20 +191,20 @@ def select_guild(
     db: Session = Depends(deps.db_session),
 ):
     gid = int(body.guild_id)
+    # Verificação no Discord ANTES de qualquer write — é a fonte de
+    # is_admin/role_ids, nunca o body (evitava escalação: cliente mandava
+    # is_admin=true e virava admin de qualquer guilda). Chamada pura Discord,
+    # sem DB — não segura o write lock do SQLite durante as ~15s da rede.
+    name, icon, is_admin, role_ids = deps.verify_guild_membership(user, gid)
+
     guild = db.scalar(select(Guild).where(Guild.id == gid))
     if guild is None:
-        guild = Guild(id=gid, name=body.guild_name, icon=body.icon)
+        guild = Guild(id=gid, name=name or body.guild_name, icon=icon or body.icon)
         db.add(guild)
     else:
-        guild.name = body.guild_name
-        if body.icon:
-            guild.icon = body.icon
-    # ponytail: NÃO flushar aqui. flush() abriria a transação de escrita e
-    # seguraria o write lock do SQLite durante as ~15s das chamadas Discord
-    # abaixo (_sync_member_roles + fetch_guild) — todo outro writer busy-wait
-    # até 30s (db.py timeout=30) segurando suas conexões, esgota o pool e
-    # congela o site inteiro. O commit() final flusha tudo; os IDs são
-    # explícitos (gid / composite), nenhum flush precoce é necessário.
+        guild.name = name or body.guild_name
+        if icon or body.icon:
+            guild.icon = icon or body.icon
     member = db.scalar(select(GuildMember).where(
         GuildMember.guild_id == gid,
         GuildMember.user_id == user.id,
@@ -225,9 +212,9 @@ def select_guild(
     if member is None:
         member = GuildMember(guild_id=gid, user_id=user.id)
         db.add(member)
-    member.is_guild_admin = body.is_admin
-
-    _sync_member_roles(user, gid, member)
+    member.is_guild_admin = is_admin
+    if role_ids:
+        member.discord_role_ids = role_ids
 
     if not guild.bot_present:
         s = get_settings()
@@ -254,10 +241,26 @@ def switch_guild(
     ))
     if member is None:
         raise HTTPException(403, "sem acesso a essa guilda")
-    _sync_member_roles(user, guild_id, member)
+    try:
+        name, icon, is_admin, role_ids = deps.verify_guild_membership(user, guild_id)
+    except HTTPException as ex:
+        if ex.status_code == 403:
+            # não é mais membro do server Discord — remove o vínculo local
+            db.delete(member)
+            db.commit()
+        raise  # 502 (Discord inalcançável): propaga, flag/row ficam intactas
+
+    member.is_guild_admin = is_admin
+    if role_ids:
+        member.discord_role_ids = role_ids
+    guild = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if guild:
+        if name:
+            guild.name = name
+        if icon:
+            guild.icon = icon
     user.current_guild_id = guild_id
     db.commit()
-    guild = db.scalar(select(Guild).where(Guild.id == guild_id))
     return {"guild_id": str(guild_id), "bot_present": guild.bot_present if guild else False}
 
 
@@ -429,6 +432,12 @@ class GuildSettingsIn(BaseModel):
     # preserva o comportamento de guildas existentes. False faz o bot parar de
     # criar/manter o canal de logs e de postar (ver cogs/audit_log.py).
     bot_logs_enabled: bool | None = None
+    # Canal onde o bot-v2 posta novas batalhas detectadas pelo battle_tracker
+    # (link + imagem de resumo). Ver cogs/battle_feed.py.
+    battle_feed_channel_id: str | None = None
+    # Mínimo de jogadores numa batalha pra ser postada no feed (filtros por
+    # guilda — default 10). Batalhas menores que isso são ignoradas.
+    battle_feed_min_players: int | None = None
 
 
 @router.patch("/auth/guild-settings/{guild_id}")
@@ -577,6 +586,21 @@ async def update_guild_settings(
             settings.pop("logs_channel_id", None)
     if "bot_logs_enabled" in body.model_fields_set:
         settings["bot_logs_enabled"] = bool(body.bot_logs_enabled)
+    if "battle_feed_channel_id" in body.model_fields_set:
+        if body.battle_feed_channel_id:
+            settings["battle_feed_channel_id"] = body.battle_feed_channel_id
+            if "battle_feed_last_id" not in settings:
+                # Inicializa cursor no maior Battle.id existente — senão trocar
+                # de canal despejaria todo o histórico no canal novo.
+                from app.models.battles import Battle
+                settings["battle_feed_last_id"] = db.scalar(select(func.max(Battle.id))) or 0
+        else:
+            settings.pop("battle_feed_channel_id", None)
+    if "battle_feed_min_players" in body.model_fields_set:
+        if body.battle_feed_min_players and body.battle_feed_min_players > 0:
+            settings["battle_feed_min_players"] = body.battle_feed_min_players
+        else:
+            settings.pop("battle_feed_min_players", None)
     g.settings = settings
 
     db.commit()
@@ -933,6 +957,8 @@ def bot_guild_commands(
         "trial_role_id": settings.get("trial_role_id"),
         "logs_channel_id": settings.get("logs_channel_id"),
         "bot_logs_enabled": settings.get("bot_logs_enabled", True),
+        "battle_feed_channel_id": settings.get("battle_feed_channel_id"),
+        "battle_feed_min_players": settings.get("battle_feed_min_players", 10),
     }
 
 
@@ -1014,6 +1040,106 @@ def bot_audit_log_synced(
         raise HTTPException(404)
     settings = dict(g.settings or {})
     settings["logs_last_sent_id"] = body.last_id
+    g.settings = settings
+    db.commit()
+    return {"ok": True}
+
+
+# ── Bot: battle feed (mensageiro de batalhas) ──────────────────────────────
+
+from app.models.battles import Battle, BattleGuild, BattleParticipant
+from app.services import battle_groups
+
+
+_BATTLE_FEED_BATCH = 10
+
+
+@router.get("/bot/guilds/{guild_id}/battle-feed")
+def bot_battle_feed(
+    guild_id: int, authorization: str = Header(...), db: Session = Depends(deps.db_session),
+):
+    """Próximo lote de batalhas ainda não postadas no canal de feed da guilda.
+    Cursor em Guild.settings.battle_feed_last_id. Filtra por mínimo de
+    jogadores da PRÓPRIA guilda (albion_guild_id com >= N participantes) e
+    por região (se configurada).
+
+    Só retorna batalhas deep-processadas (sides analisados) — batalhas "light"
+    não têm factions_summary e o embed ficaria vazio."""
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    settings = g.settings or {}
+    channel_id = settings.get("battle_feed_channel_id")
+    if not channel_id:
+        return {"battles": []}
+    since_id = settings.get("battle_feed_last_id", 0)
+    min_players = settings.get("battle_feed_min_players", 10)
+
+    q = select(Battle).where(
+        Battle.id > since_id,
+        Battle.is_lethal.is_(True),
+    )
+    # Filtro por região: se a guilda tem albion_guild_region configurada, só
+    # posta batalhas daquela região. Sem região configurada = todas.
+    guild_region = settings.get("albion_guild_region")
+    if guild_region and guild_region in HOSTS:
+        q = q.where(Battle.region == guild_region)
+    if min_players > 0:
+        # Filtro pela guilda CONFIGURADA daqui (albion_guild_id) — só posta
+        # batalhas onde a própria guilda teve >= N jogadores, não qualquer
+        # guilda na batalha.
+        albion_guild_id = str(g.albion_guild_id or "") if g else ""
+        if albion_guild_id:
+            guild_battle_ids = (
+                select(BattleParticipant.battle_id)
+                .where(BattleParticipant.guild_id == albion_guild_id)
+                .group_by(BattleParticipant.battle_id)
+                .having(func.count(BattleParticipant.id) >= min_players)
+            )
+            q = q.where(Battle.id.in_(guild_battle_ids))
+
+    battles = db.scalars(q.order_by(Battle.id.asc()).limit(_BATTLE_FEED_BATCH)).all()
+    if not battles:
+        return {"battles": []}
+
+    # Garante que toda batalha tem um public_id (cria em lote se faltar).
+    groups = battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
+
+    out = []
+    for b in battles:
+        from app.api.routes.battles import _factions_summary, _aware
+        out.append({
+            "id": b.id,
+            "public_id": groups[b.id].public_id,
+            "region": b.region,
+            "start_time": _aware(b.start_time).isoformat() if b.start_time else None,
+            "total_fame": b.total_fame,
+            "kill_count": b.kill_count,
+            "cluster": b.cluster,
+            "players_total": b.players_total,
+            "is_zvz": b.is_zvz,
+            "factions": _factions_summary(db, b.id),
+        })
+    return {"battles": out}
+
+
+class BattleFeedSyncedIn(BaseModel):
+    last_id: int
+
+
+@router.post("/bot/guilds/{guild_id}/battle-feed-synced")
+def bot_battle_feed_synced(
+    guild_id: int, body: BattleFeedSyncedIn,
+    authorization: str = Header(...), db: Session = Depends(deps.db_session),
+):
+    """Avança o cursor após o bot postar as batalhas com sucesso."""
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    settings = dict(g.settings or {})
+    settings["battle_feed_last_id"] = body.last_id
     g.settings = settings
     db.commit()
     return {"ok": True}

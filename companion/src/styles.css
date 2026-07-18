@@ -1,0 +1,626 @@
+:root {
+  /* Paleta alinhada ao site v2 (jul/2026) */
+  --bg: #0e0f13;
+  --surface: #161821;
+  --surface-2: #1d2029;
+  --surface-3: #232734;
+  --border: #2a2e3a;
+  --border-strong: #3a3f4d;
+  --text: #e7e9ee;
+  --muted: #9aa1b0;
+  --hint: #6b7280;
+  --gold: #d4a338;
+  --gold-soft: #2a2417;
+  --info: #5b8def;
+  --info-soft: #16223d;
+  --green: #4ade80;
+  --green-soft: #16291b;
+  --red: #f87171;
+  --red-soft: #2c1618;
+  --orange: #d29922;
+  --orange-soft: #2a2417;
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  /* Esquadro total — só o toggle/dot ficam redondos */
+  --radius: 0px;
+  --radius-sm: 0px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+button { font-family: inherit; cursor: pointer; color: inherit; }
+a { color: var(--info); text-decoration: none; }
+input, textarea, select { font-family: inherit; }
+
+/* ── Splash inicial ─────────────────────────────────────────────────────── */
+.splash {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100vh; gap: 14px;
+  animation: fade-in 0.4s ease-out;
+}
+.splash-logo {
+  width: 56px; height: 56px;
+  background: var(--gold-soft); color: var(--gold);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px; font-weight: 700;
+  animation: pulse-logo 1.8s ease-in-out infinite;
+}
+.splash-text { color: var(--muted); font-size: 14px; letter-spacing: 0.5px; }
+
+@keyframes pulse-logo {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212, 163, 56, 0.4); }
+  50% { box-shadow: 0 0 0 10px rgba(212, 163, 56, 0); }
+}
+
+/* ── Layout shell: sidebar + main ──────────────────────────────────────── */
+.app-shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 10px;
+  gap: 16px;
+}
+
+.sidebar-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-brand .logo {
+  width: 28px; height: 28px;
+  background: var(--gold-soft); color: var(--gold);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 700;
+}
+.sidebar-brand .brand-name {
+  font-weight: 600; font-size: 15px; color: var(--text);
+}
+
+.sidebar-nav {
+  display: flex; flex-direction: column; gap: 2px;
+  flex: 1;
+}
+
+.nav-btn {
+  display: flex; align-items: center; gap: 11px;
+  padding: 9px 11px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  position: relative;
+}
+.nav-btn:hover { background: var(--surface-2); color: var(--text); }
+.nav-btn.active {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.nav-btn.active::before {
+  content: "";
+  position: absolute; left: -10px; top: 6px; bottom: 6px;
+  width: 2px; background: var(--gold);
+  animation: slide-in-left 0.2s ease-out;
+}
+.nav-btn.disabled {
+  opacity: 0.35; cursor: not-allowed; pointer-events: none;
+}
+.nav-btn.disabled:hover { background: transparent; }
+.nav-icon {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: inherit; flex-shrink: 0;
+}
+.nav-icon svg { width: 18px; height: 18px; }
+.nav-label { flex: 1; }
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.85); }
+}
+
+/* Status card no fim da sidebar — status do Albion + personagem */
+.sidebar-status {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.status-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 10px 11px;
+  transition: border-color 0.2s, background 0.2s;
+  margin-bottom: 8px;
+}
+.status-card.ok { border-color: var(--green); background: var(--green-soft); }
+.status-card.err { border-color: var(--red); background: var(--red-soft); }
+.status-card-head {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px;
+}
+.status-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+.status-dot.on {
+  background: var(--green);
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.7);
+  animation: dot-pulse 1.6s ease-in-out infinite;
+}
+.status-dot.off { background: var(--hint); }
+.status-card-title {
+  font-size: 11px; font-weight: 600;
+  color: var(--text); letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.status-card-body { padding-left: 17px; }
+.status-name {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.status-sub {
+  font-size: 11px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* (seletor de idioma agora é um <select> na aba Config — sem CSS extra) */
+
+/* ── Main ──────────────────────────────────────────────────────────────── */
+.main {
+  flex: 1;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.topbar-title {
+  font-size: 16px; font-weight: 600;
+  animation: fade-in 0.25s ease-out;
+}
+
+/* ── Content ───────────────────────────────────────────────────────────── */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px 24px;
+}
+
+.tab-fade { animation: fade-in 0.2s ease-out; }
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slide-in-left {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* ── Cards ─────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow);
+  animation: fade-in 0.25s ease-out;
+}
+.card h2 {
+  font-size: 14px; font-weight: 600;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+.card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.card-head h2 { margin-bottom: 0; }
+.card-desc {
+  color: var(--muted); font-size: 12px;
+  margin-bottom: 12px; line-height: 1.55;
+}
+.card .hint { color: var(--hint); font-size: 12px; margin-top: 8px; }
+.hint.ok { color: var(--green); }
+.hint.warn { color: var(--orange); }
+
+/* ── Botões ────────────────────────────────────────────────────────────── */
+.btn {
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  transition: background 0.15s, border-color 0.15s, transform 0.08s;
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: scale(0.97); }
+.btn.primary {
+  background: var(--gold); color: #1a1406;
+  border-color: var(--gold); font-weight: 600;
+}
+.btn.primary:hover { background: #e6b545; }
+.btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.danger:hover { background: #e85d5d; }
+.btn.small { padding: 4px 10px; font-size: 12px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Linhas / forms ─────────────────────────────────────────────────────── */
+.row {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 10px;
+}
+.row:last-child { margin-bottom: 0; }
+.row.col { flex-direction: column; align-items: stretch; gap: 6px; }
+.row.col > label { flex: none; }
+.row.col input, .row.col textarea { width: 100%; }
+.row label {
+  flex: 0 0 180px;
+  color: var(--muted); font-size: 13px;
+}
+.row input[type="text"], .row input[type="number"], .row textarea, .row select {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  color: var(--text); font-size: 13px;
+  transition: border-color 0.15s;
+}
+.row input:focus, .row textarea:focus, .row select:focus {
+  outline: none; border-color: var(--info);
+}
+.row textarea { min-height: 140px; resize: vertical; font-family: monospace; }
+.row-inline { display: flex; gap: 8px; align-items: center; }
+.row-inline input { flex: 1; }
+.toggle-row { padding: 4px 0; }
+.row-hint { font-size: 12px; color: var(--muted); }
+.row-hint.orange { color: var(--orange); }
+.row-hint.warn { color: var(--orange); }
+
+/* ── Toggle ────────────────────────────────────────────────────────────── */
+.toggle {
+  position: relative;
+  width: 38px; height: 22px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  flex-shrink: 0;
+}
+.toggle-knob {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.2s cubic-bezier(0.2, 0.7, 0.3, 1), background 0.2s;
+}
+.toggle.on { background: var(--green); border-color: var(--green); }
+.toggle.on .toggle-knob {
+  transform: translateX(16px);
+  background: #fff;
+}
+
+/* ── Segmented control ─────────────────────────────────────────────────── */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.seg-btn {
+  background: transparent; border: none; color: var(--muted);
+  padding: 6px 14px; font-size: 13px;
+  transition: background 0.15s, color 0.15s;
+}
+.seg-btn:hover { background: var(--surface-2); color: var(--text); }
+.seg-btn.active { background: var(--surface-2); color: var(--text); }
+.seg-btn.active.danger { color: var(--red); }
+
+/* ── Pills/badges ───────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pill.ok { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+.pill.err { color: var(--red); border-color: var(--red); background: var(--red-soft); }
+.pill.warn { color: var(--orange); border-color: var(--orange); background: var(--orange-soft); }
+.pill.idle { color: var(--muted); }
+
+/* ── Stat grid ──────────────────────────────────────────────────────────── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.stat {
+  background: var(--surface-2);
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+}
+.stat-label {
+  color: var(--muted); font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.stat-value {
+  color: var(--text); font-size: 22px; font-weight: 600;
+  margin-top: 4px;
+}
+
+/* ── List ───────────────────────────────────────────────────────────────── */
+.list {
+  font-family: monospace; font-size: 12px; color: var(--muted);
+  margin-top: 8px;
+  border: 1px solid var(--border);
+}
+.list.scroll { max-height: 320px; overflow-y: auto; }
+.list-row {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.list-row:last-child { border-bottom: none; }
+.list-row.muted { color: var(--hint); font-style: italic; }
+
+/* ── Lootlog terminal ──────────────────────────────────────────────────── */
+.terminal {
+  background: #0a0e14;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: "JetBrains Mono", "Cascadia Code", "Consolas", "SF Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.terminal-empty {
+  color: var(--hint);
+  font-style: italic;
+}
+.terminal-line { padding: 1px 0; }
+.terminal-line .t-time { color: #6b7280; }
+.terminal-line .t-player { color: #60a5fa; font-weight: 600; }
+.terminal-line .t-action { color: #9ca3af; }
+.terminal-line .t-item { color: var(--gold); }
+.terminal-line .t-from { color: #9ca3af; }
+.terminal-line .t-source { color: #f97583; }
+.terminal-line .t-err { color: #ef4444; }
+.terminal-line .t-err-tag { color: #ef4444; font-weight: 700; }
+.terminal-line .t-warn { color: #f0ad4e; }
+.terminal-line .t-warn-tag { color: #f0ad4e; font-weight: 700; }
+.terminal-line .t-info-msg { color: #9ca3af; }
+.terminal-line .t-info-tag { color: #60a5fa; font-weight: 700; }
+.terminal-line .t-loot-tag { color: var(--gold); font-weight: 700; }
+.terminal-line .t-ok-tag { color: var(--green); font-weight: 700; }
+.terminal-line .t-ok-msg { color: #9ca3af; }
+
+/* ── DNS row ────────────────────────────────────────────────────────────── */
+.dns-row {
+  display: grid;
+  grid-template-columns: 1fr 80px 80px 80px 60px 60px;
+  gap: 12px; align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.dns-row.header {
+  color: var(--muted); font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.dns-row.best { background: var(--green-soft); }
+.dns-row .score { font-weight: 600; }
+
+/* ── Warnings ───────────────────────────────────────────────────────────── */
+.warning-box {
+  background: var(--red-soft);
+  border: 1px solid var(--red);
+  padding: 10px 14px;
+  color: var(--red); font-size: 12px;
+  margin-bottom: 12px;
+  margin-top: 10px;
+}
+.warning-box.amber {
+  background: var(--orange-soft);
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+/* ── Misc ───────────────────────────────────────────────────────────────── */
+.mono { font-family: monospace; }
+code {
+  background: var(--surface-2);
+  padding: 1px 5px;
+  font-family: monospace;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+}
+
+/* Scrollbars finas escuras */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ── Update toast (sutil, canto inferior) ────────────────────────────────── */
+.update-toast {
+  position: fixed;
+  bottom: 16px; right: 16px;
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  box-shadow: var(--shadow);
+  z-index: 100;
+  animation: fade-in 0.3s ease-out;
+}
+.update-toast-dot {
+  width: 8px; height: 8px;
+  background: var(--info);
+  border-radius: 50%;
+  animation: pulse-logo 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+/* ─── Toggle na sidebar (lootlog/damage on-off) ──────────────────────────── */
+.nav-toggle { margin-left: auto; display: inline-flex; align-items: center; }
+.nav-toggle .toggle { transform: scale(0.82); }
+
+/* ─── Damage meter ─────────────────────────────────────────────────────── */
+.dmg-filters {
+  display: flex; align-items: center; gap: 16px;
+  padding: 8px 0 4px;
+  border-bottom: 1px solid var(--border);
+}
+.dmg-filter { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.dmg-filter input[type="number"] {
+  width: 90px;
+  background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); font-size: 12px; padding: 4px 8px;
+}
+.dmg-filter input:focus { outline: none; border-color: var(--info); }
+.dmg-filter-spacer { flex: 1; }
+.dmg-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+.dmg-entry { border-bottom: 1px solid var(--border); }
+.dmg-entry:last-child { border-bottom: none; }
+/* colunas: caret · rank · nome · barra · dano · dps · % */
+.dmg-row { display: grid; grid-template-columns: 14px 22px 150px 1fr 64px 60px 48px; align-items: center; gap: 8px; padding: 6px 0; }
+.dmg-row.clickable { cursor: pointer; }
+.dmg-row.clickable:hover { background: var(--surface-2); }
+.dmg-row.open { background: var(--surface-2); }
+.dmg-caret { color: var(--hint); font-size: 10px; text-align: center; }
+.dmg-rank { color: var(--hint); font-variant-numeric: tabular-nums; text-align: right; }
+.dmg-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dmg-bar-wrap { height: 10px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
+.dmg-bar { display: block; height: 100%; background: var(--gold); border-radius: 5px; }
+.dmg-val { font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
+.dmg-pct { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; text-align: right; }
+.dmg-dps { font-variant-numeric: tabular-nums; color: var(--info); font-size: 12px; text-align: right; }
+
+/* Bracket expandida: timeline + skills do jogador */
+.dmg-detail { padding: 6px 0 10px 44px; animation: fade-in 0.15s ease-out; }
+
+.dmg-tl { margin-bottom: 10px; }
+.dmg-tl-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  color: var(--muted); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.4px;
+  margin-bottom: 3px;
+}
+.dmg-tl-peak { color: var(--gold); font-variant-numeric: tabular-nums; }
+/* preserveAspectRatio="none" no SVG → a altura aqui manda, a largura estica. */
+.dmg-tl-svg {
+  width: 100%; height: 44px; display: block;
+  background: var(--surface-2); border-radius: 3px;
+}
+.dmg-tl-svg rect { fill: var(--gold); }
+.dmg-tl-axis {
+  display: flex; justify-content: space-between;
+  color: var(--hint); font-size: 10px; margin-top: 2px;
+}
+.dmg-tl-empty { margin-bottom: 8px; font-size: 12px; }
+
+.dmg-skill-row {
+  display: grid; grid-template-columns: 1fr 56px 72px 72px 96px;
+  gap: 8px; padding: 3px 0;
+  font-size: 12px; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+/* Nome da skill com a barra de participação atrás do texto. */
+.dmg-skill-name { position: relative; overflow: hidden; padding: 1px 4px; }
+.dmg-skill-bar {
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--gold-soft, rgba(212, 175, 55, 0.18));
+  border-radius: 2px;
+}
+.dmg-skill-label { position: relative; }
+/* id cru ao lado do nome — é o que se confere na calibração. */
+.dmg-skill-id { color: var(--hint); font-size: 10px; margin-left: 6px; }
+.dmg-skill-total em { color: var(--muted); font-style: normal; font-size: 10px; }
+.dmg-skill-row.header {
+  color: var(--muted); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.dmg-skill-row.muted { color: var(--hint); font-style: italic; }
+
+.status-ally { color: var(--gold); font-weight: 700; }
+
+/* ── Botão de Discord na barra da logo ───────────────────────────────────── */
+.sidebar-brand .brand-name { margin-right: auto; }
+.discord-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 120px; flex-shrink: 0;
+  padding: 5px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px; font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.discord-btn:hover { background: #5865F2; border-color: #5865F2; color: #fff; }
+.discord-btn svg { flex-shrink: 0; }
+.discord-btn-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discord-btn.connected {
+  color: var(--green); border-color: var(--green); background: var(--green-soft);
+}
+.discord-btn.connected:hover { background: var(--red-soft); border-color: var(--red); color: var(--red); }
+.discord-btn.waiting, .discord-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* ── Placeholder da aba Rota/Túnel (aguardando VPS) ──────────────────────── */
+.tunnel-soon {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: 12px;
+  padding: 64px 24px;
+  color: var(--muted);
+  animation: fade-in 0.25s ease-out;
+}
+.tunnel-soon-icon {
+  width: 58px; height: 58px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 16px; color: var(--gold);
+}
+.tunnel-soon-icon svg { width: 28px; height: 28px; }
+.tunnel-soon h2 { font-size: 18px; color: var(--text); margin: 0; }
+.tunnel-soon p { max-width: 400px; font-size: 13px; line-height: 1.65; margin: 0; }

@@ -148,14 +148,8 @@ class LootlogThreads(commands.Cog):
             f"/bot/events/{guild.id}/{event_id}/lootlog-thread-archived", {})
 
 
-_tick_n = 0
-
-
 @tasks.loop(seconds=10)
 async def lootlog_thread_work_loop(cog: "LootlogThreads") -> None:
-    global _tick_n
-    _tick_n += 1
-    print(f"[lootlog_threads] tick #{_tick_n}")
     for guild in cog.bot.guilds:
         try:
             await cog.sync_guild(guild)

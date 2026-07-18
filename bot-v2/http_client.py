@@ -71,7 +71,8 @@ async def close() -> None:
     _session = None
 
 
-async def _on_exception(e: Exception) -> None:
+async def _on_exception(e: Exception, *, method: str = "", path: str = "",
+                        body: dict | None = None) -> None:
     """Erro de CONEXÃO (peer fechou/resetou — ClientOSError/WinError 64 no
     Windows é o caso comum quando o backend reinicia) pode deixar uma conexão
     morta pendurada no pool do TCPConnector sem o aiohttp perceber. Sem
@@ -79,9 +80,15 @@ async def _on_exception(e: Exception) -> None:
     conexão podre e falhava igual — mesmo com o backend saudável de novo,
     "sem resposta" persistia indefinidamente até o processo do bot reiniciar.
     Timeout simples (backend só lento) não entra aqui — não indica conexão
-    podre, só descartaria uma sessão saudável à toa."""
+    podre, só descartaria uma sessão saudável à toa.
+
+    Se method/path foram dados (escrita: POST/PATCH/DELETE), enfileira pra
+    replay quando o backend voltar (ver offline_queue.drain em main.py)."""
     if isinstance(e, aiohttp.ClientConnectionError):
         await close()
+        if method and path:
+            import offline_queue
+            offline_queue.enqueue(method, path, body)
 
 
 # ── helpers (devolvem dict|None: JSON em 200, None caso contrário/exceção) ───
@@ -117,7 +124,7 @@ async def post_json(path: str, body: dict, *, timeout: float = 5, tag: str = "")
     except Exception as e:
         if tag:
             print(f"[{tag}] exceção em POST {path}: {type(e).__name__}: {e}")
-        await _on_exception(e)
+        await _on_exception(e, method="POST", path=path, body=body)
     return None
 
 
@@ -136,7 +143,7 @@ async def patch_json(path: str, body: dict, *, timeout: float = 5, tag: str = ""
     except Exception as e:
         if tag:
             print(f"[{tag}] exceção em PATCH {path}: {type(e).__name__}: {e}")
-        await _on_exception(e)
+        await _on_exception(e, method="PATCH", path=path, body=body)
     return None
 
 
@@ -160,14 +167,17 @@ async def delete_json(path: str, *, timeout: float = 5) -> dict | None:
                 return await r.json()
             await r.read()
     except Exception as e:
-        await _on_exception(e)
+        await _on_exception(e, method="DELETE", path=path)
     return None
 
 
 async def post_form(path: str, form: aiohttp.FormData, *, timeout: float = 20,
                     tag: str = "http") -> dict | None:
     """POST multipart. 200 → JSON (ou {} se o corpo não for JSON); senão loga
-    status+body e devolve None. Exceções são logadas com path."""
+    status+body e devolve None. Exceções são logadas com path.
+
+    NÃO enfileira: FormData pode conter streams/arquivos que não são
+    re-enviáveis depois de consumidos. Fire-and-forget como post_best_effort."""
     if not _ready():
         return None
     try:
@@ -202,13 +212,16 @@ async def request_json(method: str, path: str, *, json: dict | None = None,
                                      timeout=aiohttp.ClientTimeout(total=timeout)) as r:
             return await r.json()
     except Exception as e:
-        await _on_exception(e)
+        await _on_exception(e, method=method if method != "GET" else "",
+                            path=path if method != "GET" else "",
+                            body=json if method != "GET" else None)
         return None
 
 
 async def post_best_effort(path: str, body: dict | None = None, *, timeout: float = 5) -> None:
     """POST fogo-e-esquece: só drena a resposta. Pra heartbeats e hooks de
-    saída onde o resultado não importa."""
+    saída onde o resultado não importa. NÃO enfileira (explicitamente
+    fire-and-forget — heartbeat re-envia a cada 5min de qualquer forma)."""
     if not _ready():
         return
     try:
