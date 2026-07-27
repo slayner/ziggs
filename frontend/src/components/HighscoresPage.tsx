@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useLang, useT, type GameServer, type Lang } from "../i18n";
 import ES_ITEMS from "../i18n/es-items.json";
-import { ALBION_ITEMS, itemRenderUrl, type AlbionItem } from "../data/albion-items";
+import { ALBION_ITEMS, itemRenderUrl, ICON_SIZE_SM, type AlbionItem } from "../data/albion-items";
 import { silverShort } from "../lib/format";
 import { searchMatch } from "../lib/search";
 import { navigate } from "../router";
@@ -34,7 +34,9 @@ function weaponName(base: string, lang: Lang): string {
 }
 
 function weaponIcon(base: string): string {
-  return itemRenderUrl(`T7_${base}`, 4);
+  // Ícones de arma aqui aparecem a 18-32px (destaques, dropdown, linhas) — 64px
+  // é nítido em 2× e ~9.5× mais leve que o full-res.
+  return itemRenderUrl(`T7_${base}`, 4, ICON_SIZE_SM);
 }
 
 interface GuildRef { albion_guild_id: string; name: string; alliance_name: string | null }
@@ -58,7 +60,8 @@ interface RankingRow {
   weapon_base?: string; value: number; rank: number;
 }
 
-const PLAYER_KINDS = new Set(["weapon_scorer"]);
+const PLAYER_KINDS = new Set(["weapon_scorer", "silver_dropped",
+  "gather_total", "gather_wood", "gather_hide", "gather_ore", "gather_rock", "gather_fiber", "fishing", "crafting"]);
 function isPlayerKind(kind: RankingKind): boolean {
   return PLAYER_KINDS.has(kind) || kind.startsWith("weapon:");
 }
@@ -215,7 +218,10 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
   useEffect(() => {
     if (!open) return;
     function onDocMouseDown(ev: MouseEvent) {
-      if (ref.current && !ref.current.contains(ev.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(ev.target as Node)) {
+        setOpen(false);
+        setGatherSubOpen(false);
+      }
     }
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
@@ -227,7 +233,29 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
     { key: "weapon_scorer", label: t("highscoreWeaponScorerLabel") },
     { key: "efficiency", label: t("highscoreEfficiencyLabel") },
     { key: "most_battles", label: t("highscoreMostBattlesLabel") },
+    { key: "silver_dropped", label: t("highscoreSilverDroppedLabel") },
+    { key: "crafting", label: t("highscoreCraftingLabel") },
   ];
+
+  // "Coleta" (total) fica no top-level com seta ▶ sempre visível. Clicar
+  // seleciona o total; hover abre o submenu lateral com os por-recurso.
+  // O total NÃO se repete dentro do submenu — já é o item top-level.
+  const gatherTotalKey: RankingKind = "gather_total";
+  const gatherTotalLabel = t("highscoreGatherTotalLabel");
+
+  // Coleta por recurso — submenu lateral (cascata pra direita). Só os
+  // recursos; crafting/fishing são escalares próprios mas fishing é coleta
+  // (vara de pescar), crafting NÃO é (fica no top-level). Sem o total aqui.
+  const gatherSubEntries: { key: RankingKind; label: string }[] = [
+    { key: "gather_wood", label: t("highscoreGatherWoodLabel") },
+    { key: "gather_hide", label: t("highscoreGatherHideLabel") },
+    { key: "gather_ore", label: t("highscoreGatherOreLabel") },
+    { key: "gather_rock", label: t("highscoreGatherRockLabel") },
+    { key: "gather_fiber", label: t("highscoreGatherFiberLabel") },
+    { key: "fishing", label: t("highscoreFishingLabel") },
+  ];
+  const [gatherSubOpen, setGatherSubOpen] = useState(false);
+  const isGatherSubKind = kind === gatherTotalKey || gatherSubEntries.some(g => g.key === kind);
 
   const weaponEntries = useMemo(() => {
     const named = weapons.map(w => ({ key: `weapon:${w.weapon_base}` as RankingKind, base: w.weapon_base, label: weaponName(w.weapon_base, lang) }));
@@ -241,7 +269,10 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
 
   const currentLabel = kind.startsWith("weapon:")
     ? weaponName(kind.slice(7), lang)
-    : specials.find(s => s.key === kind)?.label ?? kind;
+    : specials.find(s => s.key === kind)?.label
+      ?? (kind === gatherTotalKey ? gatherTotalLabel : undefined)
+      ?? gatherSubEntries.find(g => g.key === kind)?.label
+      ?? kind;
   const currentWeaponBase = kind.startsWith("weapon:") ? kind.slice(7) : null;
 
   function pick(k: RankingKind) { onChange(k); setOpen(false); setQuery(""); }
@@ -252,7 +283,7 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => { setOpen(o => !o); setGatherSubOpen(false); }}
         className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-200 outline-none hover:border-zinc-500 focus:border-amber-500"
       >
         {currentWeaponBase && <img src={weaponIcon(currentWeaponBase)} alt="" width={18} height={18} className="rounded border border-zinc-800" />}
@@ -260,29 +291,69 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
         <i className="ti ti-chevron-down text-zinc-500" aria-hidden="true" />
       </button>
       {open && (
-        <div className="absolute left-0 z-20 mt-1 max-h-96 w-64 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-xs shadow-lg">
-          <div className="px-2 pb-1.5">
-            <input
-              autoFocus
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder={t("highscoreSearchPlaceholder")}
-              className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-500"
-            />
+        <>
+          <div className="absolute left-0 z-20 mt-1 w-64 rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-xs shadow-lg">
+            <div className="px-2 pb-1.5">
+              <input
+                autoFocus
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder={t("highscoreSearchPlaceholder")}
+                className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-amber-500"
+              />
+            </div>
+            {!query.trim() && specials.map(s => (
+              <button key={s.key} onClick={() => pick(s.key)} className={rowCls(kind === s.key)}>{s.label}</button>
+            ))}
+            {/* Coleta — item top-level (total) com submenu lateral aninhado.
+                Wrapper relative + absolute filho: o onMouseLeave do wrapper
+                cobre item E submenu juntos, então mover o mouse entre os dois
+                não dispara leave (mesmo elemento pai). Submenu é absolute
+                (fora do fluxo), não é cortado pela scrollbar do panel. */}
+            {!query.trim() && (
+              <div
+                className="relative"
+                onMouseEnter={() => setGatherSubOpen(true)}
+                onMouseLeave={() => setGatherSubOpen(false)}
+              >
+                <button
+                  onClick={() => pick(gatherTotalKey)}
+                  className={rowCls(isGatherSubKind)}
+                >
+                  <span className="truncate">{t("highscoreGatheringSectionLabel")}</span>
+                  <i
+                    className={`ti ti-chevron-right ml-auto text-zinc-500 transition-transform ${gatherSubOpen ? "rotate-90" : ""}`}
+                    aria-hidden="true"
+                  />
+                </button>
+                {gatherSubOpen && (
+                  <div className="absolute left-full top-0 z-30 ml-0 w-56 rounded-lg border border-zinc-700 bg-zinc-900 py-1 text-xs shadow-lg">
+                    {gatherSubEntries.map(g => (
+                      <button key={g.key} onClick={() => pick(g.key)} className={rowCls(kind === g.key)}>
+                        <span className="truncate">{g.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="mt-1 border-t border-zinc-800 px-3 pt-1.5 text-[10px] uppercase tracking-wide text-zinc-600">
+              {t("highscoreWeaponsSectionLabel")}
+            </div>
+            {/* Só a seção de armas scrolla — pode ter centenas de entradas.
+                specials + coleta são poucas, não scrollam. Antes o panel
+                inteiro era overflow-y-auto, e a scrollbar encostava no
+                submenu lateral criando um gap que disparava onMouseLeave. */}
+            <div className="max-h-72 overflow-y-auto">
+              {filteredWeapons.map(w => (
+                <button key={w.key} onClick={() => pick(w.key)} className={rowCls(kind === w.key)}>
+                  <img src={weaponIcon(w.base)} alt="" width={20} height={20} className="shrink-0 rounded border border-zinc-800 bg-zinc-950" />
+                  <span className="truncate">{w.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
-          {!query.trim() && specials.map(s => (
-            <button key={s.key} onClick={() => pick(s.key)} className={rowCls(kind === s.key)}>{s.label}</button>
-          ))}
-          <div className="mt-1 border-t border-zinc-800 px-3 pt-1.5 text-[10px] uppercase tracking-wide text-zinc-600">
-            {t("highscoreWeaponsSectionLabel")}
-          </div>
-          {filteredWeapons.map(w => (
-            <button key={w.key} onClick={() => pick(w.key)} className={rowCls(kind === w.key)}>
-              <img src={weaponIcon(w.base)} alt="" width={20} height={20} className="shrink-0 rounded border border-zinc-800 bg-zinc-950" />
-              <span className="truncate">{w.label}</span>
-            </button>
-          ))}
-        </div>
+        </>
       )}
     </div>
   );
@@ -290,7 +361,10 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
 
 // ── lista paginada ────────────────────────────────────────────────────────
 
-function RankingRowView({ rank, row, kind }: { rank: number; row: RankingRow; kind: RankingKind }) {
+// memo: a lista de 50 linhas re-renderizava a cada tecla na busca / toggle de
+// loading mesmo com as linhas iguais. Props estáveis (row vem do array de
+// estado, kind/rank primitivos), então memo pula quando nada mudou.
+const RankingRowView = memo(function RankingRowView({ rank, row, kind, highlight }: { rank: number; row: RankingRow; kind: RankingKind; highlight?: boolean }) {
   const player = isPlayerKind(kind);
   // Aliança fica de fora do link (pedido explícito) — só nome/guilda levam
   // pro perfil, cada linha inteira é UM link só: guilda pro perfil da
@@ -320,22 +394,29 @@ function RankingRowView({ rank, row, kind }: { rank: number; row: RankingRow; ki
 
   if (href) {
     return (
-      <button onClick={() => navigate(href)} className="flex w-full items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-800/40">
+      <button onClick={() => navigate(href)} className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-800/40 ${highlight ? "border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/40" : "border-zinc-800 bg-zinc-900/60"}`}>
         {content}
       </button>
     );
   }
   return (
-    <div className="flex w-full items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+    <div className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 ${highlight ? "border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/40" : "border-zinc-800 bg-zinc-900/60"}`}>
       {content}
     </div>
   );
-}
+});
 
-export default function HighscoresPage({ initialWindow = "alltime" }: { initialWindow?: "alltime" | "week" }) {
+export default function HighscoresPage({ initialWindow = "alltime", initialKind, initialRegions, highlightPlayer, initialRank }: {
+  initialWindow?: "alltime" | "week";
+  initialKind?: RankingKind;
+  initialRegions?: string;
+  highlightPlayer?: string;
+  initialRank?: number;
+}) {
   const t = useT();
   const { servers } = useLang();
-  const regions = useMemo(() => servers.map(s => SERVER_TO_REGION[s]).join(","), [servers]);
+  const [initial] = useState(() => ({ initialWindow, initialKind, initialRegions, highlightPlayer, initialRank }));
+  const regions = useMemo(() => initial.initialRegions ?? servers.map(s => SERVER_TO_REGION[s]).join(","), [servers, initial]);
 
   const [weapons, setWeapons] = useState<WeaponDef[]>([]);
   useEffect(() => {
@@ -343,15 +424,20 @@ export default function HighscoresPage({ initialWindow = "alltime" }: { initialW
     fetch(`${API}/highscores/weapons`).then(r => r.json()).then(d => setWeapons(Array.isArray(d) ? d : [])).catch(() => setWeapons([]));
   }, []);
 
-  const [kind, setKind] = useState<RankingKind>("pvp_fame");
-  const [window_, setWindow] = useState<"alltime" | "week">(initialWindow);
+  const [kind, setKind] = useState<RankingKind>(initial.initialKind ?? "pvp_fame");
+  const [window_, setWindow] = useState<"alltime" | "week">(initial.initialWindow);
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState<number>(initial.initialRank != null ? Math.floor((initial.initialRank - 1) / PAGE_SIZE) : 0);
   const [rows, setRows] = useState<RankingRow[] | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { setPage(0); }, [kind, window_, search, regions]);
+  const filtersRef = useRef({ kind, window_, search, regions });
+  useEffect(() => {
+    const previous = filtersRef.current;
+    filtersRef.current = { kind, window_, search, regions };
+    if (previous.kind !== kind || previous.window_ !== window_ || previous.search !== search || previous.regions !== regions) setPage(0);
+  }, [kind, window_, search, regions]);
 
   useEffect(() => {
     setLoading(true);
@@ -408,7 +494,7 @@ export default function HighscoresPage({ initialWindow = "alltime" }: { initialW
         {loading
           ? Array.from({ length: RANKING_SKELETON_ROWS }, (_, i) => <RankingRowSkeleton key={i} />)
           : rows?.map((row, i) => (
-              <RankingRowView key={row.albion_guild_id ?? row.albion_id ?? i} rank={row.rank} row={row} kind={kind} />
+              <RankingRowView key={row.albion_guild_id ?? row.albion_id ?? i} rank={row.rank} row={row} kind={kind} highlight={!!initial.highlightPlayer && row.albion_id === initial.highlightPlayer} />
             ))}
       </div>
 

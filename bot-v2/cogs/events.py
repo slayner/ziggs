@@ -27,7 +27,7 @@ API_SECRET = os.getenv("BOT_API_SECRET", "")
 # dividem a mesma origem, ex.: produção atrás de um proxy reverso).
 PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").rstrip("/") or SITE_URL
 
-MAX_EVENT_BUTTONS = 25   # limite de componentes numa View do Discord
+MAX_EVENT_BUTTONS = 20   # 4 rows; the remaining row belongs to the select
 MAX_PARTY_FIELDS = 3     # não deixa o embed estourar com muito CTA simultâneo
 
 # Funções/categorias por página no dropdown (25 = limite do Discord; reservamos
@@ -38,22 +38,67 @@ CAT_PER_PAGE = 23
 # ponytail: review não aparece no mass-info (só scheduled/in_progress) — sem emoji p/ ele.
 _STATUS_EMOJI = {"scheduled": "🗓️", "in_progress": "🟢"}
 _CATEGORY_EMOJI = {"tank": "🛡️", "healer": "🕊️", "support": "✨", "dps": "⚔️", "pierce": "🏹", "other": "❔"}
+_CATEGORY_ORDER = ("tank", "healer", "support", "dps", "pierce", "other")
 
 
-async def _get(path: str) -> Optional[dict]:
-    return await http_client.get_json(path)
+async def _get(path: str, *, interactive: bool = False) -> Optional[dict]:
+    return await http_client.get_json(
+        path, raise_on_unavailable=interactive,
+    )
 
 
-async def _post(path: str, body: dict) -> Optional[dict]:
-    return await http_client.post_json(path, body)
+async def _post(
+    path: str, body: dict, *, timeout: float = 5, tag: str = "",
+    attempts: int = 1, queue_on_failure: bool = True,
+) -> Optional[dict]:
+    return await http_client.post_json(
+        path, body, timeout=timeout, tag=tag, attempts=attempts,
+        queue_on_failure=queue_on_failure,
+    )
 
 
-async def _delete(path: str) -> Optional[dict]:
-    return await http_client.delete_json(path)
+async def _delete(
+    path: str, *, attempts: int = 1, queue_on_failure: bool = True,
+) -> Optional[dict]:
+    return await http_client.delete_json(
+        path, tag="signup", attempts=attempts, queue_on_failure=queue_on_failure,
+    )
 
 
 def _member_role_ids(user) -> list[int]:
     return [r.id for r in user.roles] if isinstance(user, discord.Member) else []
+
+
+def _signup_matches(data: dict | None, functions: list[str]) -> bool:
+    return bool(
+        data
+        and data.get("exists", data.get("ok", False))
+        and set(data.get("functions") or []) == set(functions)
+    )
+
+
+async def _save_signup(
+    guild_id: int, event_id: int, user, functions: list[str],
+    discord_role_ids: list[int],
+) -> Optional[dict]:
+    """Grava e confirma a inscrição. POST é um upsert, então repetir após uma
+    conexão resetada é seguro; se só a resposta se perdeu, o GET confirma o
+    estado já persistido."""
+    path = f"/bot/events/{guild_id}/{event_id}/signups"
+    result = await _post(
+        path,
+        {
+            "user_id": user.id,
+            "user_name": user.display_name or str(user),
+            "functions": functions,
+            "discord_role_ids": discord_role_ids,
+        },
+        timeout=20, tag="signup", attempts=2, queue_on_failure=False,
+    )
+    if result is not None and result.get("ok") and _signup_matches(result, functions):
+        return result
+    saved = await _get(f"{path}/{user.id}", interactive=True)
+    return saved if _signup_matches(saved, functions) else None
 
 
 async def _purge_bot_messages(channel: discord.TextChannel, *, keep_id: int | None = None) -> int:
@@ -128,8 +173,10 @@ def _build_massinfo_embed(lang: str, guild_id: int, events: list[dict]) -> disco
         else:
             time_disp = f"**{time_str}**"
         comp = e.get("comp_name") or "—"
+        title = (e.get("title") or f"Evento #{e['event_id']}")[:80]
         msg = f" · **{e['message'].upper()}**" if e.get("message") else ""
-        lines.append(f"{emoji} {time_disp}{_rel_ts(e['scheduled_at'])} · `{e['signup_count']}` · {comp}{msg}")
+        signups = "—" if e.get("signup_mode") == "announcement" else str(e["signup_count"])
+        lines.append(f"{emoji} {time_disp}{_rel_ts(e['scheduled_at'])} · **{title}** · `{signups}` · {comp}{msg}")
 
         if e.get("lupa_active") and e.get("parties"):
             header_key = "massinfo_massing_now" if e["state"] == "in_progress" else "massinfo_massing_soon"
@@ -160,7 +207,92 @@ class EventSignupButton(discord.ui.Button):
         self.event_id = event["event_id"]
 
     async def callback(self, interaction: Interaction) -> None:
-        await _open_signup_flow(interaction, self.event_id)
+            await _open_signup_flow(interaction, self.event_id)
+
+
+class FunctionPromptView(discord.ui.View):
+    """DM enviado quando a administração libera a escolha de roles."""
+
+    def __init__(self, guild_id: int, event_id: int, lang: str):
+        super().__init__(timeout=86400)
+        button = discord.ui.Button(
+            label=t(lang, "signup_choose_roles"),
+            style=discord.ButtonStyle.primary,
+            custom_id=f"ziggs:functions:{guild_id}:{event_id}",
+        )
+        button.callback = self._on_click
+        self.guild_id = guild_id
+        self.event_id = event_id
+        self.add_item(button)
+
+    async def _on_click(self, interaction: Interaction) -> None:
+        await _open_signup_flow(interaction, self.event_id, self.guild_id)
+
+
+def _build_function_prompt_embed(lang: str, prompt: dict) -> discord.Embed:
+    event_id = int(prompt["event_id"])
+    title = prompt.get("title") or f"Evento #{event_id}"
+    comp = prompt.get("comp_name") or "—"
+    scheduled_at = prompt.get("scheduled_at")
+    when = f"{_fmt_time(scheduled_at)} UTC{_rel_ts(scheduled_at)}" if scheduled_at else "—"
+    description_key = {
+        "defined": "signup_roles_dm_defined",
+        "changed": "signup_roles_dm_changed",
+        "released": "signup_roles_dm_released",
+    }.get(prompt.get("reason"), "signup_roles_dm_defined")
+    embed = discord.Embed(
+        title=t(lang, "signup_roles_dm_title", eid=event_id),
+        description=t(lang, description_key),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name=t(lang, "signup_roles_dm_event"), value=title[:1024], inline=False)
+    embed.add_field(name=t(lang, "signup_roles_dm_comp"), value=comp[:1024], inline=True)
+    embed.add_field(name=t(lang, "signup_roles_dm_time"), value=when, inline=True)
+    embed.set_footer(text=t(lang, "signup_roles_dm_footer"))
+    return embed
+
+
+class EventDetailsButton(discord.ui.Button):
+    def __init__(self, event: dict):
+        super().__init__(
+            label=_fmt_time(event["scheduled_at"]),
+            emoji=_STATUS_EMOJI.get(event["state"], "🗓️"),
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"ziggs:details:{event['event_id']}",
+        )
+        self.event_id = event["event_id"]
+
+    async def callback(self, interaction: Interaction) -> None:
+        if PUBLIC_URL:
+            await interaction.response.send_message(
+                f"{PUBLIC_URL}/events/{interaction.guild_id}/{self.event_id}/escalation",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message("Site URL is not configured.", ephemeral=True)
+
+
+class MoreEventsSelect(discord.ui.Select):
+    def __init__(self, events: list[dict]):
+        options = []
+        for e in events[:25]:
+            title = e.get("title") or f"Evento #{e['event_id']}"
+            options.append(discord.SelectOption(
+                label=f"{_fmt_time(e['scheduled_at'])} · {title}"[:100],
+                value=str(e["event_id"]),
+            ))
+        super().__init__(placeholder="Ver outro evento…", options=options)
+        self.events = {str(e["event_id"]): e for e in events[:25]}
+
+    async def callback(self, interaction: Interaction) -> None:
+        event = self.events[self.values[0]]
+        if PUBLIC_URL:
+            await interaction.response.send_message(
+                f"{PUBLIC_URL}/events/{interaction.guild_id}/{event['event_id']}/escalation",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message("Site URL is not configured.", ephemeral=True)
 
 
 class MassinfoView(discord.ui.View):
@@ -178,12 +310,24 @@ class MassinfoView(discord.ui.View):
     def __init__(self, events: list[dict]):
         super().__init__(timeout=None)
         for event in events[:MAX_EVENT_BUTTONS]:
-            self.add_item(EventSignupButton(event))
+            self.add_item(
+                EventDetailsButton(event)
+                if event.get("signup_mode") == "announcement"
+                else EventSignupButton(event)
+            )
+        if len(events) > MAX_EVENT_BUTTONS:
+            self.add_item(MoreEventsSelect(events[MAX_EVENT_BUTTONS:]))
 
 
 import ephemeral_guard
 
-async def _replace_ephemeral(interaction: Interaction, content: str, view: Optional[discord.ui.View]) -> None:
+async def _replace_ephemeral(
+    interaction: Interaction,
+    content: str | None,
+    view: Optional[discord.ui.View],
+    *,
+    embed: discord.Embed | None = None,
+) -> None:
     """Reenvia o ephemeral: apaga o velho e manda um novo via followup. Nunca
     edita uma mensagem antiga — a cada passo do wizard nasce um ephemeral
     fresco (timeout renovado), contornando o problema clássico do usuário
@@ -211,19 +355,22 @@ async def _replace_ephemeral(interaction: Interaction, content: str, view: Optio
     except (discord.InteractionResponded, discord.HTTPException):
         pass  # já deferida antes (ex.: _on_done) — segue OK, mensagem original ainda dá pra apagar
     # Cancela o timer da mensagem original — ela vai ser apagada explicitamente.
-    if interaction.token:
-        ephemeral_guard.cleanup(interaction.token)
+    ephemeral_guard.cleanup(interaction)
     try:
         await interaction.delete_original_response()
-    except (discord.NotFound, discord.HTTPException):
-        pass  # best-effort — se já sumiu, tudo bem
+    except discord.NotFound:
+        return  # outro callback já substituiu
+    except discord.HTTPException:
+        if interaction.message is not None:
+            ephemeral_guard.track(interaction, interaction.message.id)
+        return
     try:
-        # discord.py 2.7+ rejeita view=None em webhook.send (followup); None aqui
-        # significa "sem view nesta nova msg" → só omitir o kwarg.
+        kwargs = {"content": content, "ephemeral": True}
+        if embed is not None:
+            kwargs["embed"] = embed
         if view is not None:
-            msg = await interaction.followup.send(content, view=view, ephemeral=True)
-        else:
-            msg = await interaction.followup.send(content, ephemeral=True)
+            kwargs["view"] = view
+        msg = await interaction.followup.send(**kwargs)
         # followup.send patched já agendou o auto-delete, mas o patch usa o
         # token do webhook — garante que track() registrou com a interaction
         # pra que touch() (on_interaction) reset o timer corretamente.
@@ -233,30 +380,62 @@ async def _replace_ephemeral(interaction: Interaction, content: str, view: Optio
         pass
 
 
-async def _open_signup_flow(interaction: Interaction, event_id: int) -> None:
-    lang = await guild_lang_for(interaction.guild_id)
-    role_ids = ",".join(str(i) for i in _member_role_ids(interaction.user))
+async def _open_signup_flow(
+    interaction: Interaction, event_id: int, guild_id: int | None = None,
+) -> None:
+    target_guild_id = guild_id or interaction.guild_id
+    if not target_guild_id:
+        await interaction.response.send_message("Não consegui identificar a guilda deste evento.", ephemeral=True)
+        return
+    lang = await guild_lang_for(target_guild_id)
+    member = interaction.user
+    guild = interaction.client.get_guild(target_guild_id)
+    if guild is not None:
+        member = guild.get_member(interaction.user.id) or member
+    role_ids = ",".join(str(i) for i in _member_role_ids(member))
     data = await _get(
-        f"/bot/events/{interaction.guild_id}/{event_id}/eligible-functions"
-        f"?discord_user_id={interaction.user.id}&discord_role_ids={role_ids}"
+        f"/bot/events/{target_guild_id}/{event_id}/eligible-functions"
+        f"?discord_user_id={interaction.user.id}&discord_role_ids={role_ids}",
+        interactive=True,
     )
     if data is None:
         await interaction.response.send_message(t(lang, "signup_fetch_fail"), ephemeral=True)
         return
+    data["_discord_role_ids"] = _member_role_ids(member)
 
     current = data.get("current_signup")
     if current:
-        view = AlreadyRegisteredView(event_id=event_id, lang=lang)
+        if data.get("functions_released") and not current.get("functions"):
+            await _send_function_pick(
+                interaction, event_id, lang, data,
+                replace_prev=False, guild_id=target_guild_id,
+            )
+            return
+        view = AlreadyRegisteredView(event_id=event_id, guild_id=target_guild_id, lang=lang)
         await interaction.response.send_message(
             t(lang, "signup_already_registered", functions=", ".join(current["functions"]) or "—"),
             view=view, ephemeral=True,
         )
         return
 
-    await _send_function_pick(interaction, event_id, lang, data, replace_prev=False)
+    if not data.get("functions_released") or data.get("assignment_mode") == "admin_assign":
+        await interaction.response.send_message(
+            t(lang, "signup_admin_assign_prompt"),
+            view=AdminSignupView(
+                event_id=event_id, guild_id=target_guild_id, lang=lang,
+                discord_role_ids=data["_discord_role_ids"],
+            ),
+            ephemeral=True,
+        )
+        return
+
+    await _send_function_pick(interaction, event_id, lang, data, replace_prev=False, guild_id=target_guild_id)
 
 
-async def _send_function_pick(interaction: Interaction, event_id: int, lang: str, data: dict, *, replace_prev: bool) -> None:
+async def _send_function_pick(
+    interaction: Interaction, event_id: int, lang: str, data: dict, *,
+    replace_prev: bool, guild_id: int,
+) -> None:
     functions = data.get("functions") or []
     reason = data.get("denial_reason")
     if not functions:
@@ -269,25 +448,62 @@ async def _send_function_pick(interaction: Interaction, event_id: int, lang: str
         return
 
     categories = data.get("categories") or {}
-    flex_names = set(data.get("flex_names") or [])
     view = FunctionPickView(
-        event_id=event_id, lang=lang, functions=functions, categories=categories,
-        max_builds=data.get("signup_max_builds"), min_builds=data.get("signup_min_builds"),
-        flex_names=flex_names,
+        event_id=event_id, guild_id=guild_id, lang=lang, functions=functions, categories=categories,
+        initial_functions=data.get("profile_functions") or [],
+        min_builds=data.get("signup_min_builds"),
+        discord_role_ids=data.get("_discord_role_ids") or [],
     )
-    content = view._initial_content()
+    embed = view._review_embed() if view.chosen else None
+    content = None if embed else view._initial_content()
     if replace_prev:
-        await _replace_ephemeral(interaction, content, view)
+        await _replace_ephemeral(interaction, content, view, embed=embed)
     else:
-        await interaction.response.send_message(content, view=view, ephemeral=True)
+        await interaction.response.send_message(content=content, embed=embed, view=view, ephemeral=True)
+
+
+class AdminSignupView(discord.ui.View):
+    def __init__(
+        self, *, event_id: int, guild_id: int, lang: str,
+        discord_role_ids: list[int],
+    ):
+        super().__init__(timeout=60)
+        self.event_id = event_id
+        self.guild_id = guild_id
+        self.lang = lang
+        self.discord_role_ids = discord_role_ids
+        confirm = discord.ui.Button(label=t(lang, "signup_confirm_presence"), style=discord.ButtonStyle.success)
+        confirm.callback = self._on_confirm
+        cancel = discord.ui.Button(label=t(lang, "cancel_btn"), style=discord.ButtonStyle.secondary)
+        cancel.callback = self._on_cancel
+        self.add_item(confirm)
+        self.add_item(cancel)
+
+    async def _on_confirm(self, interaction: Interaction) -> None:
+        await interaction.response.defer()
+        result = await _save_signup(
+            self.guild_id, self.event_id, interaction.user, [],
+            self.discord_role_ids,
+        )
+        if result is None:
+            await _replace_ephemeral(interaction, t(self.lang, "signup_fail"), None)
+            return
+        await _replace_ephemeral(interaction, t(self.lang, "signup_presence_success"), None)
+        guild = interaction.client.get_guild(self.guild_id)
+        if guild is not None:
+            asyncio.create_task(_trigger_massinfo_refresh(interaction.client, guild))
+
+    async def _on_cancel(self, interaction: Interaction) -> None:
+        await interaction.response.edit_message(content=t(self.lang, "prefix_cancelled"), view=None)
 
 
 class AlreadyRegisteredView(discord.ui.View):
     """Já tem inscrição nesse evento — mudar funções, remover, ou não fazer nada."""
 
-    def __init__(self, *, event_id: int, lang: str):
+    def __init__(self, *, event_id: int, guild_id: int, lang: str):
         super().__init__(timeout=60)
         self.event_id = event_id
+        self.guild_id = guild_id
         self.lang = lang
 
         change_btn = discord.ui.Button(label=t(lang, "signup_change_btn"), style=discord.ButtonStyle.primary)
@@ -301,21 +517,35 @@ class AlreadyRegisteredView(discord.ui.View):
         self.add_item(cancel_btn)
 
     async def _on_change(self, interaction: Interaction) -> None:
-        role_ids = ",".join(str(i) for i in _member_role_ids(interaction.user))
+        member = interaction.user
+        guild = interaction.client.get_guild(self.guild_id)
+        if guild is not None:
+            member = guild.get_member(interaction.user.id) or member
+        role_ids = ",".join(str(i) for i in _member_role_ids(member))
         data = await _get(
-            f"/bot/events/{interaction.guild_id}/{self.event_id}/eligible-functions"
-            f"?discord_user_id={interaction.user.id}&discord_role_ids={role_ids}"
+            f"/bot/events/{self.guild_id}/{self.event_id}/eligible-functions"
+            f"?discord_user_id={interaction.user.id}&discord_role_ids={role_ids}",
+            interactive=True,
         )
         if data is None:
             await _replace_ephemeral(interaction, t(self.lang, "signup_fetch_fail"), None)
             return
-        await _send_function_pick(interaction, self.event_id, self.lang, data, replace_prev=True)
+        data["_discord_role_ids"] = _member_role_ids(member)
+        await _send_function_pick(interaction, self.event_id, self.lang, data, replace_prev=True, guild_id=self.guild_id)
 
     async def _on_remove(self, interaction: Interaction) -> None:
-        await _delete(f"/bot/events/{interaction.guild_id}/{self.event_id}/signups/{interaction.user.id}")
+        path = f"/bot/events/{self.guild_id}/{self.event_id}/signups/{interaction.user.id}"
+        result = await _delete(path, attempts=2, queue_on_failure=False)
+        if result is None:
+            current = await _get(path, interactive=True)
+            if current is None or current.get("exists"):
+                await _replace_ephemeral(interaction, t(self.lang, "signup_fail"), None)
+                return
         await _replace_ephemeral(interaction, t(self.lang, "signup_removed"), None)
         # Refresh imediato — remoção de signup já foi persistida no site.
-        asyncio.create_task(_trigger_massinfo_refresh(interaction.client, interaction.guild))
+        guild = interaction.client.get_guild(self.guild_id)
+        if guild is not None:
+            asyncio.create_task(_trigger_massinfo_refresh(interaction.client, guild))
 
     async def _on_cancel(self, interaction: Interaction) -> None:
         await _replace_ephemeral(interaction, t(self.lang, "prefix_cancelled"), None)
@@ -330,19 +560,24 @@ class FunctionPickView(discord.ui.View):
     interação expirar. E o dropdown pagina com ◀️/▶️ quando a categoria (ou a
     lista de categorias) passa de 25 opções (limite do Discord).
 
-    Cap = `max_builds` (default 3); min = `min_builds` (>1 exige esse tanto de
-    builds NÃO-flex; flex é opcional por cima)."""
+    Não há limite de roles: o usuário declara tudo que sabe fazer."""
 
-    def __init__(self, *, event_id: int, lang: str, functions: list[str],
-                 categories: dict[str, str], max_builds: int | None = None,
-                 min_builds: int | None = None, flex_names: Optional[set[str]] = None):
+    def __init__(
+        self, *, event_id: int, guild_id: int, lang: str, functions: list[str],
+        categories: dict[str, str], initial_functions: Optional[list[str]] = None,
+        min_builds: int | None = None, discord_role_ids: Optional[list[int]] = None,
+    ):
         super().__init__(timeout=600)
         self.event_id = event_id
+        self.guild_id = guild_id
         self.lang = lang
-        self.max_builds = max_builds
+        self.functions = list(dict.fromkeys(functions))
+        self.categories = categories
         self.min_builds = min_builds
-        self.flex_names = flex_names or set()
-        self.chosen: list[str] = []
+        self.discord_role_ids = discord_role_ids or []
+        allowed = set(self.functions)
+        self.chosen: list[str] = [f for f in (initial_functions or []) if f in allowed]
+        self._remove_page = 0
         self._active_category: str = ""
         self._cat_page = 0
         self._fn_page = 0
@@ -351,14 +586,13 @@ class FunctionPickView(discord.ui.View):
         for fn in functions:
             self.by_category.setdefault(categories.get(fn, "other"), []).append(fn)
 
-        if len(self.by_category) <= 1:
+        if self.chosen:
+            self._build_review_step()
+        elif len(self.by_category) <= 1:
             self._active_category = next(iter(self.by_category), "other")
             self._build_function_step()
         else:
             self._build_category_step()
-
-    def _cap(self) -> int:
-        return self.max_builds or 3
 
     def _available(self, cat: str) -> list[str]:
         """Funções da categoria que ainda não foram escolhidas (dedup)."""
@@ -428,10 +662,14 @@ class FunctionPickView(discord.ui.View):
 
     def _build_review_step(self) -> None:
         self.clear_items()
-        if len(self.chosen) < self._cap():
+        if len(self.chosen) < len(self.functions):
             add_btn = discord.ui.Button(label=t(self.lang, "signup_add_more"), style=discord.ButtonStyle.primary)
             add_btn.callback = self._on_add_more
             self.add_item(add_btn)
+        if self.chosen:
+            remove_btn = discord.ui.Button(label=t(self.lang, "signup_remove_roles"), style=discord.ButtonStyle.secondary)
+            remove_btn.callback = self._on_remove_roles_open
+            self.add_item(remove_btn)
         done_btn = discord.ui.Button(label=t(self.lang, "signup_done_btn"), style=discord.ButtonStyle.success)
         done_btn.callback = self._on_done
         self.add_item(done_btn)
@@ -439,11 +677,85 @@ class FunctionPickView(discord.ui.View):
         cancel.callback = self._on_cancel
         self.add_item(cancel)
 
-    def _review_content(self) -> str:
-        body = "\n".join(f"• {c}" for c in self.chosen) or f"*{t(self.lang, 'signup_none_yet')}*"
-        header = t(self.lang, "signup_chosen_header", n=len(self.chosen), cap=self._cap())
-        prompt = t(self.lang, "signup_review_prompt")
-        return f"{header}\n{body}\n\n{prompt}"
+    def _build_remove_step(self) -> None:
+        self.clear_items()
+        pages = max(1, -(-len(self.chosen) // 25))
+        self._remove_page %= pages
+        start = self._remove_page * 25
+        chunk = self.chosen[start:start + 25]
+        select = discord.ui.Select(
+            placeholder=t(self.lang, "signup_remove_roles_ph"),
+            min_values=1, max_values=len(chunk),
+            options=[discord.SelectOption(label=f[:100], value=f) for f in chunk],
+        )
+        select.callback = self._on_remove_roles
+        self.add_item(select)
+        if pages > 1 and self._remove_page > 0:
+            prev = discord.ui.Button(label=t(self.lang, "signup_fn_prev"), style=discord.ButtonStyle.secondary)
+            prev.callback = self._on_remove_prev
+            self.add_item(prev)
+        if pages > 1 and self._remove_page < pages - 1:
+            nxt = discord.ui.Button(label=t(self.lang, "signup_fn_next"), style=discord.ButtonStyle.secondary)
+            nxt.callback = self._on_remove_next
+            self.add_item(nxt)
+        back = discord.ui.Button(label=t(self.lang, "signup_back_to_review"), style=discord.ButtonStyle.secondary)
+        back.callback = self._on_remove_back
+        self.add_item(back)
+
+    def _review_embed(self, error: str | None = None) -> discord.Embed:
+        description = t(self.lang, "signup_review_prompt")
+        if error:
+            description = f"{error}\n\n{description}"
+        embed = discord.Embed(
+            title=t(self.lang, "signup_chosen_header", n=len(self.chosen)),
+            description=description,
+            color=discord.Color.blurple(),
+        )
+        if not self.chosen:
+            embed.add_field(
+                name=t(self.lang, "signup_roles_field"),
+                value=f"*{t(self.lang, 'signup_none_yet')}*",
+                inline=False,
+            )
+        rank = {category: index for index, category in enumerate(_CATEGORY_ORDER)}
+        ordered = sorted(
+            self.chosen,
+            key=lambda function: rank.get(self.categories.get(function, "other"), len(rank)),
+        )
+        lines = [
+            f"{_CATEGORY_EMOJI.get(self.categories.get(function, 'other'), '❔')} {function}"
+            for function in ordered
+        ]
+        column_count = min(3, max(1, -(-len(lines) // 8)))
+        rows_per_column = max(1, -(-len(lines) // column_count))
+        chunks: list[list[str]] = [[]]
+        for line in lines:
+            current = chunks[-1]
+            if current and (
+                len(current) >= rows_per_column
+                or len("\n".join(current)) + len(line) + 1 > 900
+            ):
+                chunks.append([])
+            chunks[-1].append(line)
+        multiple_columns = len(chunks) > 1
+        for chunk in chunks:
+            if not chunk:
+                continue
+            embed.add_field(name="\u200b", value="\n".join(chunk), inline=multiple_columns)
+        if self.min_builds:
+            embed.set_footer(text=t(
+                self.lang,
+                "signup_minimum_footer",
+                n=self.min_builds,
+            ))
+        return embed
+
+    def _minimum_error(self) -> str | None:
+        if not self.min_builds:
+            return None
+        if len(self.chosen) >= self.min_builds:
+            return None
+        return t(self.lang, "signup_min_builds_needed", n=self.min_builds)
 
     # --- callbacks ---
 
@@ -477,9 +789,10 @@ class FunctionPickView(discord.ui.View):
             await _replace_ephemeral(interaction, t(self.lang, "signup_pick_function_prompt"), self)
             return
         # escolheu UMA função → vai pra revisão (adicionar mais ou confirmar).
-        self.chosen.append(val)
+        if val not in self.chosen:
+            self.chosen.append(val)
         self._build_review_step()
-        await _replace_ephemeral(interaction, self._review_content(), self)
+        await _replace_ephemeral(interaction, None, self, embed=self._review_embed())
 
     async def _on_back_to_categories(self, interaction: Interaction) -> None:
         self._cat_page = 0
@@ -495,37 +808,61 @@ class FunctionPickView(discord.ui.View):
             self._build_function_step()
             await _replace_ephemeral(interaction, t(self.lang, "signup_pick_function_prompt"), self)
 
+    async def _on_remove_roles_open(self, interaction: Interaction) -> None:
+        self._remove_page = 0
+        self._build_remove_step()
+        await _replace_ephemeral(interaction, t(self.lang, "signup_remove_roles_prompt"), self)
+
+    async def _on_remove_roles(self, interaction: Interaction) -> None:
+        values = set(self.children[0].values)
+        self.chosen = [f for f in self.chosen if f not in values]
+        self._build_review_step()
+        await _replace_ephemeral(interaction, None, self, embed=self._review_embed())
+
+    async def _on_remove_prev(self, interaction: Interaction) -> None:
+        self._remove_page = max(0, self._remove_page - 1)
+        self._build_remove_step()
+        await _replace_ephemeral(interaction, t(self.lang, "signup_remove_roles_prompt"), self)
+
+    async def _on_remove_next(self, interaction: Interaction) -> None:
+        self._remove_page += 1
+        self._build_remove_step()
+        await _replace_ephemeral(interaction, t(self.lang, "signup_remove_roles_prompt"), self)
+
+    async def _on_remove_back(self, interaction: Interaction) -> None:
+        self._build_review_step()
+        await _replace_ephemeral(interaction, None, self, embed=self._review_embed())
+
     async def _on_done(self, interaction: Interaction) -> None:
-        if not self.chosen:
-            await _replace_ephemeral(interaction, t(self.lang, "signup_pick_at_least_one"), None)
-            return
-        non_flex = [c for c in self.chosen if c not in self.flex_names]
-        if self.min_builds is not None and self.min_builds > 1 and len(non_flex) < self.min_builds:
-            await _replace_ephemeral(interaction, t(self.lang, "signup_min_builds_needed", n=self.min_builds), None)
+        if error := self._minimum_error():
+            self._build_review_step()
+            await _replace_ephemeral(interaction, None, self, embed=self._review_embed(error))
             return
         # acka antes do POST pra não estourar o timeout de 15s do Discord.
         try:
             await interaction.response.defer()
         except (discord.InteractionResponded, discord.HTTPException, discord.NotFound):
             pass
-        result = await _post(
-            f"/bot/events/{interaction.guild_id}/{self.event_id}/signups",
-            {
-                "user_id": interaction.user.id,
-                "user_name": interaction.user.display_name or str(interaction.user),
-                "functions": self.chosen,
-                "discord_role_ids": _member_role_ids(interaction.user),
-            },
+        result = await _save_signup(
+            self.guild_id, self.event_id, interaction.user, self.chosen,
+            self.discord_role_ids,
         )
-        if result is None or not result.get("ok"):
+        if result is None:
             await _replace_ephemeral(interaction, t(self.lang, "signup_fail"), None)
             return
-        applied = result.get("functions") or self.chosen
-        await _replace_ephemeral(interaction, t(self.lang, "signup_success", functions=", ".join(applied)), None)
+        applied = result["functions"] if "functions" in result else self.chosen
+        mode = result.get("assignment_mode")
+        key = "signup_success_self" if mode == "self_select" else "signup_success_hybrid"
+        await _replace_ephemeral(
+            interaction,
+            t(self.lang, key, functions=", ".join(applied)), None,
+        )
         # Refresh imediato do mass-info — o signup já foi persistido no site,
         # não precisa esperar o próximo ciclo do polling (5s) pro embed
         # refletir o novo contador.
-        asyncio.create_task(_trigger_massinfo_refresh(interaction.client, interaction.guild))
+        guild = interaction.client.get_guild(self.guild_id)
+        if guild is not None:
+            asyncio.create_task(_trigger_massinfo_refresh(interaction.client, guild))
 
     async def _on_cancel(self, interaction: Interaction) -> None:
         await _replace_ephemeral(interaction, t(self.lang, "prefix_cancelled"), None)
@@ -575,8 +912,95 @@ class Events(commands.Cog):
         # event_work_loop reedita no primeiro poll bom (force=true ignora o gate
         # de staleness e não consome o outbox de pings — não pingua no rebind).
         self._rebind_pending: set[int] = set()
+        self._massinfo_locks: dict[int, asyncio.Lock] = {}
+        self._function_prompt_sent: dict[
+            tuple[int, int, int], tuple[str, tuple]
+        ] = {}
+
+    async def send_function_prompts(self, guild: discord.Guild, prompts: list[dict]) -> list[dict]:
+        """Entrega as DMs e devolve os IDs que o backend deve rastrear."""
+        if not prompts:
+            return []
+        lang = await guild_lang_for(guild.id)
+        sent: list[dict] = []
+        for prompt in prompts:
+            key = (guild.id, int(prompt["event_id"]), int(prompt["user_id"]))
+            signature = (
+                prompt.get("title"),
+                prompt.get("comp_name"),
+                prompt.get("scheduled_at"),
+                prompt.get("reason"),
+            )
+            cached = self._function_prompt_sent.get(key)
+            if cached and cached[1] == signature:
+                sent.append({
+                    "event_id": key[1],
+                    "user_id": key[2],
+                    "message_id": cached[0],
+                })
+                continue
+            user = guild.get_member(int(prompt["user_id"]))
+            if user is None:
+                try:
+                    user = await self.bot.fetch_user(int(prompt["user_id"]))
+                except (discord.NotFound, discord.HTTPException):
+                    continue
+            if cached:
+                try:
+                    dm = user.dm_channel or await user.create_dm()
+                    old_message = await dm.fetch_message(int(cached[0]))
+                    await old_message.delete()
+                except discord.NotFound:
+                    pass
+                except (discord.Forbidden, discord.HTTPException):
+                    continue
+                self._function_prompt_sent.pop(key, None)
+            try:
+                message = await user.send(
+                    embed=_build_function_prompt_embed(lang, prompt),
+                    view=FunctionPromptView(guild.id, int(prompt["event_id"]), lang),
+                )
+                sent.append({
+                    "event_id": int(prompt["event_id"]),
+                    "user_id": int(prompt["user_id"]),
+                    "message_id": str(message.id),
+                })
+                self._function_prompt_sent[key] = (str(message.id), signature)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        return sent
+
+    async def delete_function_prompts(self, records: list[dict]) -> list[str]:
+        """Apaga DMs de escolha de roles quando o evento deixa de aceitar signup."""
+        deleted: list[str] = []
+        for record in records:
+            try:
+                user = await self.bot.fetch_user(int(record["user_id"]))
+                dm = user.dm_channel or await user.create_dm()
+                message = await dm.fetch_message(int(record["message_id"]))
+                await message.delete()
+                deleted.append(str(record["message_id"]))
+            except (discord.NotFound, discord.Forbidden):
+                deleted.append(str(record["message_id"]))
+            except discord.HTTPException:
+                pass
+            event_user = (int(record["event_id"]), int(record["user_id"]))
+            for key in [key for key in self._function_prompt_sent if key[1:] == event_user]:
+                self._function_prompt_sent.pop(key, None)
+        return deleted
 
     async def sync_massinfo(
+        self, guild: discord.Guild, events: list[dict],
+        ping_triggers: list[dict] | None = None,
+        *, purge_orphans: bool = False,
+    ) -> None:
+        lock = self._massinfo_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            await self._sync_massinfo_unlocked(
+                guild, events, ping_triggers, purge_orphans=purge_orphans,
+            )
+
+    async def _sync_massinfo_unlocked(
         self, guild: discord.Guild, events: list[dict],
         ping_triggers: list[dict] | None = None,
         *, purge_orphans: bool = False,
@@ -658,12 +1082,17 @@ class Events(commands.Cog):
                     return
 
         _massinfo_message_ids[guild.id] = message.id
-        await _post(f"/bot/events/{guild.id}/massinfo-synced", {"message_id": str(message.id)})
-        # Limpa o outbox de pings SÓ quando o bot consumiu gatilhos de verdade
-        # (on_ready com force=True vem sem ping_triggers e não deve limpar —
-        # os pings pendentes ficam pro próximo poll normal disparar).
-        if triggers:
-            await _post(f"/bot/events/{guild.id}/ping-triggers-acked", {})
+        # Persiste a mensagem e confirma os pings na mesma transação. Dois
+        # ACKs separados deixavam uma janela em que o próximo poll bumpava a
+        # mensagem novamente.
+        await _post(
+            f"/bot/events/{guild.id}/massinfo-synced",
+            {
+                "message_id": str(message.id),
+                "ack_ping_triggers": bool(triggers),
+            },
+            tag="massinfo", attempts=2,
+        )
 
     async def refresh_massinfo(self, guild: discord.Guild, *, force: bool = False) -> bool:
         """Sincronização imediata do mass-info após uma mutação que o bot mesmo

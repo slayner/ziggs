@@ -16,6 +16,7 @@ limpa conexões meio-fechadas pelo servidor (importante no Windows).
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Optional
 
@@ -40,6 +41,22 @@ def _api_secret() -> str:
 _session: Optional[aiohttp.ClientSession] = None
 
 
+class BackendUnavailable(RuntimeError):
+    """A chamada não alcançou o backend (config, conexão ou timeout)."""
+
+
+def _ensure_ready(raise_on_unavailable: bool) -> bool:
+    if _ready():
+        return True
+    if raise_on_unavailable:
+        raise BackendUnavailable("backend não configurado")
+    return False
+
+
+def _is_transport_error(error: Exception) -> bool:
+    return isinstance(error, (aiohttp.ClientConnectionError, asyncio.TimeoutError))
+
+
 def _headers() -> dict:
     secret = _api_secret()
     return {"Authorization": f"Bearer {secret}"} if secret else {}
@@ -47,6 +64,58 @@ def _headers() -> dict:
 
 def _ready() -> bool:
     return bool(_site_url() and _api_secret())
+
+
+# ── reachability: log de TRANSIÇÃO, não por-poll ─────────────────────────────
+# Antes, cada poll (regear/lootlog/embed-work × N guildas, a cada 10s) descobria
+# a queda do backend por conta própria e gritava "sem resposta" a cada tick — um
+# único blip (restart do backend, ou request estourando o timeout num burst de
+# socket no loopback do Windows, ver docstring do módulo) virava 3×N linhas por
+# tick, repetindo a cada 10s. Aqui mora o ÚNICO ponto por onde todo request
+# passa: rastreia o estado e loga só a transição (caiu / voltou). _fail_streak
+# evita flap na beira do timeout — só declara "caiu" após N falhas seguidas.
+_reachable = True
+_fail_streak = 0
+_DOWN_AFTER = 3  # ponytail: ~3 polls falhos antes de gritar "caiu"; frouxe se flapar
+
+
+def is_backend_reachable() -> bool:
+    return _reachable
+
+
+def _note_reachable() -> None:
+    """Backend respondeu (qualquer status → transporte OK)."""
+    global _reachable, _fail_streak
+    _fail_streak = 0
+    if not _reachable:
+        _reachable = True
+        print("✓ backend acessível de novo")
+
+
+def _note_unreachable() -> None:
+    """Erro de transporte (peer resetou/timeout) — só loga ao cruzar o limiar."""
+    global _reachable, _fail_streak
+    _fail_streak += 1
+    if _reachable and _fail_streak >= _DOWN_AFTER:
+        _reachable = False
+        print("✗ backend inacessível — silenciando avisos por-poll até voltar")
+
+
+def _make_trace() -> aiohttp.TraceConfig:
+    """Hook nativo do aiohttp: reachability no nível da sessão em vez de
+    instrumentar cada helper. on_request_end = respondeu; on_request_exception =
+    erro de transporte."""
+    trace = aiohttp.TraceConfig()
+
+    async def _end(_s, _ctx, _p) -> None:
+        _note_reachable()
+
+    async def _exc(_s, _ctx, _p) -> None:
+        _note_unreachable()
+
+    trace.on_request_end.append(_end)
+    trace.on_request_exception.append(_exc)
+    return trace
 
 
 def session() -> aiohttp.ClientSession:
@@ -60,7 +129,7 @@ def session() -> aiohttp.ClientSession:
             force_close=False,   # keep-alive ligado (o ponto central do fix)
             enable_cleanup_closed=True,
         )
-        _session = aiohttp.ClientSession(connector=connector)
+        _session = aiohttp.ClientSession(connector=connector, trace_configs=[_make_trace()])
     return _session
 
 
@@ -71,8 +140,7 @@ async def close() -> None:
     _session = None
 
 
-async def _on_exception(e: Exception, *, method: str = "", path: str = "",
-                        body: dict | None = None) -> None:
+async def _on_exception(e: Exception) -> None:
     """Erro de CONEXÃO (peer fechou/resetou — ClientOSError/WinError 64 no
     Windows é o caso comum quando o backend reinicia) pode deixar uma conexão
     morta pendurada no pool do TCPConnector sem o aiohttp perceber. Sem
@@ -82,19 +150,20 @@ async def _on_exception(e: Exception, *, method: str = "", path: str = "",
     Timeout simples (backend só lento) não entra aqui — não indica conexão
     podre, só descartaria uma sessão saudável à toa.
 
-    Se method/path foram dados (escrita: POST/PATCH/DELETE), enfileira pra
-    replay quando o backend voltar (ver offline_queue.drain em main.py)."""
+    O caller decide se uma escrita entra na fila offline. Comandos que precisam
+    devolver um resultado ao usuário não podem ser aplicados depois de terem
+    mostrado "falhou"."""
     if isinstance(e, aiohttp.ClientConnectionError):
         await close()
-        if method and path:
-            import offline_queue
-            offline_queue.enqueue(method, path, body)
 
 
 # ── helpers (devolvem dict|None: JSON em 200, None caso contrário/exceção) ───
 
-async def get_json(path: str, *, timeout: float = 5, tag: str = "") -> dict | None:
-    if not _ready():
+async def get_json(
+    path: str, *, timeout: float = 5, tag: str = "",
+    raise_on_unavailable: bool = False,
+) -> dict | None:
+    if not _ensure_ready(raise_on_unavailable):
         return None
     try:
         async with session().get(f"{_site_url()}{path}", headers=_headers(),
@@ -106,45 +175,92 @@ async def get_json(path: str, *, timeout: float = 5, tag: str = "") -> dict | No
             await r.read()  # drena pra liberar a conexão de volta pro pool
     except Exception as e:
         await _on_exception(e)
+        if raise_on_unavailable and _is_transport_error(e):
+            raise BackendUnavailable(str(e)) from e
     return None
 
 
-async def post_json(path: str, body: dict, *, timeout: float = 5, tag: str = "") -> dict | None:
+async def get_bytes(path: str, *, timeout: float = 20, tag: str = "") -> bytes | None:
     if not _ready():
         return None
     try:
-        async with session().post(f"{_site_url()}{path}", json=body, headers=_headers(),
-                                  timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+        async with session().get(
+            f"{_site_url()}{path}", headers=_headers(),
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as r:
             if r.status == 200:
-                return await r.json()
+                return await r.read()
             if tag:
-                await _log_non200(tag, "POST", path, r)
+                await _log_non200(tag, "GET", path, r)
             else:
                 await r.read()
     except Exception as e:
-        if tag:
-            print(f"[{tag}] exceção em POST {path}: {type(e).__name__}: {e}")
-        await _on_exception(e, method="POST", path=path, body=body)
+        await _on_exception(e)
     return None
 
 
-async def patch_json(path: str, body: dict, *, timeout: float = 5, tag: str = "") -> dict | None:
-    if not _ready():
+async def _write_json(
+    method: str, path: str, body: dict | None, *, timeout: float,
+    tag: str, attempts: int, queue_on_failure: bool,
+    raise_on_unavailable: bool,
+) -> dict | None:
+    if not _ensure_ready(raise_on_unavailable):
         return None
-    try:
-        async with session().patch(f"{_site_url()}{path}", json=body, headers=_headers(),
-                                   timeout=aiohttp.ClientTimeout(total=timeout)) as r:
-            if r.status == 200:
-                return await r.json()
+    attempts = max(1, attempts)
+    for attempt in range(attempts):
+        try:
+            async with session().request(
+                method, f"{_site_url()}{path}", json=body, headers=_headers(),
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as r:
+                if r.status == 200:
+                    return await r.json()
+                if tag:
+                    await _log_non200(tag, method, path, r)
+                else:
+                    await r.read()
+                return None
+        except Exception as e:
             if tag:
-                await _log_non200(tag, "PATCH", path, r)
-            else:
-                await r.read()
-    except Exception as e:
-        if tag:
-            print(f"[{tag}] exceção em PATCH {path}: {type(e).__name__}: {e}")
-        await _on_exception(e, method="PATCH", path=path, body=body)
+                print(f"[{tag}] exceção em {method} {path}: {type(e).__name__}: {e}")
+            await _on_exception(e)
+            # O pool pode entregar uma conexão keep-alive morta. Reabrir e
+            # repetir resolve esse caso; timeout não é repetido porque o
+            # backend pode ter concluído a escrita sem devolver a resposta.
+            if isinstance(e, aiohttp.ClientConnectionError) and attempt + 1 < attempts:
+                await asyncio.sleep(0.2)
+                continue
+            if queue_on_failure and isinstance(e, aiohttp.ClientConnectionError):
+                import offline_queue
+                offline_queue.enqueue(method, path, body)
+            if raise_on_unavailable and _is_transport_error(e):
+                raise BackendUnavailable(str(e)) from e
+            return None
     return None
+
+
+async def post_json(
+    path: str, body: dict, *, timeout: float = 5, tag: str = "",
+    attempts: int = 1, queue_on_failure: bool = True,
+    raise_on_unavailable: bool = False,
+) -> dict | None:
+    return await _write_json(
+        "POST", path, body, timeout=timeout, tag=tag,
+        attempts=attempts, queue_on_failure=queue_on_failure,
+        raise_on_unavailable=raise_on_unavailable,
+    )
+
+
+async def patch_json(
+    path: str, body: dict, *, timeout: float = 5, tag: str = "",
+    attempts: int = 1, queue_on_failure: bool = True,
+    raise_on_unavailable: bool = False,
+) -> dict | None:
+    return await _write_json(
+        "PATCH", path, body, timeout=timeout, tag=tag,
+        attempts=attempts, queue_on_failure=queue_on_failure,
+        raise_on_unavailable=raise_on_unavailable,
+    )
 
 
 async def _log_non200(tag: str, method: str, path: str, r: aiohttp.ClientResponse) -> None:
@@ -157,18 +273,16 @@ async def _log_non200(tag: str, method: str, path: str, r: aiohttp.ClientRespons
     print(f"[{tag}] {method} {path} → {r.status}: {body}")
 
 
-async def delete_json(path: str, *, timeout: float = 5) -> dict | None:
-    if not _ready():
-        return None
-    try:
-        async with session().delete(f"{_site_url()}{path}", headers=_headers(),
-                                    timeout=aiohttp.ClientTimeout(total=timeout)) as r:
-            if r.status == 200:
-                return await r.json()
-            await r.read()
-    except Exception as e:
-        await _on_exception(e, method="DELETE", path=path)
-    return None
+async def delete_json(
+    path: str, *, timeout: float = 5, tag: str = "",
+    attempts: int = 1, queue_on_failure: bool = True,
+    raise_on_unavailable: bool = False,
+) -> dict | None:
+    return await _write_json(
+        "DELETE", path, None, timeout=timeout, tag=tag,
+        attempts=attempts, queue_on_failure=queue_on_failure,
+        raise_on_unavailable=raise_on_unavailable,
+    )
 
 
 async def post_form(path: str, form: aiohttp.FormData, *, timeout: float = 20,
@@ -201,21 +315,29 @@ async def post_form(path: str, form: aiohttp.FormData, *, timeout: float = 20,
 
 
 async def request_json(method: str, path: str, *, json: dict | None = None,
-                       timeout: float = 10) -> dict | None:
+                       timeout: float = 10, attempts: int = 1,
+                       queue_on_failure: bool = True) -> dict | None:
     """Sem gate de status: devolve await r.json() seja qual for o código (pra
     rotas que precisam ler o corpo mesmo em erro, ex.: /bot/register)."""
     if not _ready():
         return None
-    try:
-        async with session().request(method, f"{_site_url()}{path}", json=json,
-                                     headers=_headers(),
-                                     timeout=aiohttp.ClientTimeout(total=timeout)) as r:
-            return await r.json()
-    except Exception as e:
-        await _on_exception(e, method=method if method != "GET" else "",
-                            path=path if method != "GET" else "",
-                            body=json if method != "GET" else None)
-        return None
+    attempts = max(1, attempts)
+    for attempt in range(attempts):
+        try:
+            async with session().request(method, f"{_site_url()}{path}", json=json,
+                                         headers=_headers(),
+                                         timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+                return await r.json()
+        except Exception as e:
+            await _on_exception(e)
+            if isinstance(e, aiohttp.ClientConnectionError) and attempt + 1 < attempts:
+                await asyncio.sleep(0.2)
+                continue
+            if queue_on_failure and method != "GET" and isinstance(e, aiohttp.ClientConnectionError):
+                import offline_queue
+                offline_queue.enqueue(method, path, json)
+            return None
+    return None
 
 
 async def post_best_effort(path: str, body: dict | None = None, *, timeout: float = 5) -> None:
@@ -230,3 +352,23 @@ async def post_best_effort(path: str, body: dict | None = None, *, timeout: floa
             await r.read()
     except Exception as e:
         await _on_exception(e)
+
+
+if __name__ == "__main__":
+    # self-check da máquina de reachability: fica quieta abaixo do limiar,
+    # loga a queda UMA vez, segue quieta caída, loga a volta UMA vez.
+    import io, contextlib
+    _reachable, _fail_streak = True, 0
+    _buf = io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        _note_unreachable(); _note_unreachable()          # 2 < DOWN_AFTER: quieto
+        assert _reachable, "não devia declarar caído antes do limiar"
+        _note_unreachable()                                # 3ª falha: declara caiu
+        assert not _reachable
+        _note_unreachable()                                # segue caído: sem nova linha
+        _note_reachable()                                  # volta
+        assert _reachable
+    _out = _buf.getvalue()
+    assert _out.count("inacessível") == 1, _out
+    assert _out.count("acessível de novo") == 1, _out
+    print("http_client self-check ok:", repr(_out))

@@ -46,6 +46,7 @@ class NodeEvent(Base, TimestampMixin):
     __tablename__ = "node_events"
 
     id: Mapped[int] = pk()
+    bot_request_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     guild_id: Mapped[int] = mapped_column(
         ForeignKey("guilds.id", ondelete="CASCADE"), nullable=False, index=True
     )

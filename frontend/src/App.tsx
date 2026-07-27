@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, lazy, Suspense, Component, type ReactNode } from "react";
-import { useLocation, navigate, goBack, parseBattleRoute, parsePlayerRoute, parseGuildRoute, parseEventRoute, parseRegearRoute, parseRegearEventFilter } from "./router";
+import { useLocation, navigate, navigateReplace, goBack, parseBattleRoute, parsePlayerRoute, parseGuildRoute, parseEventRoute, parseRegearRoute, parseRegearEventFilter } from "./router";
 import { api, setGuild, onBackendDown, setBackendDown, NO_PERMS, type Me, type Permissions, type SiteGuild } from "./api";
-import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, type Lang, type GameServer } from "./i18n";
+import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, REGION_LABELS, type Lang, type GameServer } from "./i18n";
 import AdBanner from "./components/AdBanner";
+import CookieConsent from "./components/CookieConsent";
+import { TermsPage, PrivacyPage, CookiesPage, AboutPage, ContactPage } from "./components/LegalPages";
+import { DOCS_URL } from "./docs-url";
 
 // code-split por página: cada view só baixa seu próprio JS quando é aberta
 // pela primeira vez, em vez de tudo (CompBuilder ~2000 linhas incluso) no bundle inicial.
@@ -13,7 +16,6 @@ const BattleTracker = lazy(() => import("./components/BattleTracker"));
 const HighscoresPage = lazy(() => import("./components/HighscoresPage"));
 const BattlePage = lazy(() => import("./components/BattlePage"));
 const PlayerProfilePage = lazy(() => import("./components/PlayerProfilePage"));
-const PlayerLookup = lazy(() => import("./components/PlayerLookup"));
 const GuildPicker = lazy(() => import("./components/GuildPicker"));
 const GuildConfig = lazy(() => import("./components/GuildConfig"));
 const GuildProfilePage = lazy(() => import("./components/GuildProfilePage"));
@@ -21,10 +23,9 @@ const EscalacaoPage = lazy(() => import("./components/EscalacaoPage"));
 const RegearPage = lazy(() => import("./components/RegearPage"));
 const ManagementPage = lazy(() => import("./components/ManagementPage"));
 const ClaimsPanel = lazy(() => import("./components/ClaimsPanel"));
-const BotDocsPage = lazy(() => import("./components/BotDocsPage"));
 const CompanionPage = lazy(() => import("./components/CompanionPage"));
 
-type PublicView = "dashboard" | "craft" | "market" | "players" | "battles" | "highscores" | "docs";
+type PublicView = "dashboard" | "craft" | "market" | "battles" | "highscores";
 type GuildView = "config" | "management";
 type View = PublicView | GuildView;
 
@@ -81,23 +82,75 @@ function guildIconUrl(guild: SiteGuild) {
   return `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=32`;
 }
 
+const SERVER_TO_REGION: Record<GameServer, string> = { west: "americas", east: "asia", europe: "europe" };
+
+// Delay aproximado da API do Albion (segundos → texto curto). ~5min num dia
+// normal; horas em dia de tráfego alto (a API sobrecarrega e demora a publicar
+// batalha). Cor: verde < 15min, amarelo < 2h, vermelho ≥ 2h.
+function fmtApiDelay(secs: number): string {
+  if (secs < 90) return "~1min";
+  if (secs < 3600) return `~${Math.round(secs / 60)}min`;
+  const h = secs / 3600;
+  return h < 10 ? `~${h.toFixed(1)}h` : `~${Math.round(h)}h`;
+}
+function apiDelayColor(secs: number): string {
+  return secs < 900 ? "var(--success)" : secs < 7200 ? "#e0a23b" : "var(--alert)";
+}
+
+// Footer global — links pra páginas legais + aviso de não-afiliação. AdSense
+// exige que as páginas legais sejam acessíveis de qualquer página do site.
+function SiteFooter({ t }: { t: (k: import("./i18n").TKey) => string }) {
+  return (
+    <footer className="site-footer">
+      <div className="site-footer-inner">
+        <nav className="site-footer-nav">
+          <a href="/terms">{t("footerTerms")}</a>
+          <span className="site-footer-sep">·</span>
+          <a href="/privacy">{t("footerPrivacy")}</a>
+          <span className="site-footer-sep">·</span>
+          <a href="/cookies">{t("footerCookies")}</a>
+          <span className="site-footer-sep">·</span>
+          <a href="/about">{t("footerAbout")}</a>
+          <span className="site-footer-sep">·</span>
+          <a href="/contact">{t("footerContact")}</a>
+        </nav>
+        <p className="site-footer-disclaimer">{t("footerNotAffiliated")}</p>
+      </div>
+    </footer>
+  );
+}
+
 export default function App() {
   const { lang, setLang } = useLang();
   const { server, setServer, servers, toggleServer } = useServer();
   const t = useT();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [view, setView] = useState<View>("dashboard");
+  // Deep link pro Highscores a partir do perfil de um jogador: /highscores?
+  // kind=gather_wood&player=ID&rank=481&regions=americas. Abre na kind certa,
+  // na página certa (calculada do rank) e destaca a linha do jogador. Sem
+  // rota própria (view em memória), então os params vivem em state em vez de
+  // serem lidos toda vez que o componente re-renderiza.
+  const [hsParams, setHsParams] = useState<{ kind: string; player: string; rank: number; regions: string } | null>(null);
   // "Ver todos" no card de ranking semanal do dashboard pula direto pra
   // Highscores já com fama PvP semanal selecionada — HighscoresPage não tem
   // rota própria (view em memória, ver PublicView), então isso é passado
   // como prop em vez de query string.
   const [highscoresInitialWindow, setHighscoresInitialWindow] = useState<"alltime" | "week">("alltime");
   const [siteGuilds, setSiteGuilds] = useState<SiteGuild[]>([]);
-  const [isDiscordAdmin, setIsDiscordAdmin] = useState(false);
   const [perms, setPerms] = useState<Permissions>(NO_PERMS);
   const [pickingGuild, setPickingGuild] = useState(false);
   const [guildDropOpen, setGuildDropOpen] = useState(false);
   const [userDropOpen, setUserDropOpen] = useState(false);
+  const [instabilityOpen, setInstabilityOpen] = useState(false);
+  // Delay de publicação da API do Albion por região (pro dropdown de servidor).
+  const [apiDelay, setApiDelay] = useState<Record<string, { delay_secs: number }>>({});
+  useEffect(() => {
+    const load = () => fetch("/meta/battle-delay").then(r => (r.ok ? r.json() : {})).then(setApiDelay).catch(() => {});
+    load();
+    const id = setInterval(load, 60_000);
+    return () => clearInterval(id);
+  }, []);
   const [userPanel, setUserPanel] = useState<"main" | "lang" | "server" | "claims">("main");
   const [reprocessProgress, setReprocessProgress] = useState<{ percent: number; pending: number } | null>(null);
   // Keep-alive management/config: cada uma monta na primeira visita e fica
@@ -111,6 +164,7 @@ export default function App() {
   const [regearState, setRegearState] = useState<{ guildId: string; initialRequestId?: number; eventId?: number } | null>(null);
   const dropRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
+  const instabilityRef = useRef<HTMLDivElement>(null);
   const loc = useLocation();
 
   const battleRoute = parseBattleRoute(loc);
@@ -121,6 +175,20 @@ export default function App() {
   const regearEventFilter = parseRegearEventFilter(loc);
   // /download (não /companion — esse prefixo é da API do backend em prod).
   const companionActive = loc.split("?")[0] === "/download";
+  // Páginas legais/institucionais — renderizam standalone (sem topbar/nav),
+  // só com o footer. Detectadas aqui, não no router.ts, porque são estáticas.
+  const legalPath = loc.split("?")[0];
+  const legalPage: "terms" | "privacy" | "cookies" | "about" | "contact" | null =
+    legalPath === "/terms" ? "terms" :
+    legalPath === "/privacy" ? "privacy" :
+    legalPath === "/cookies" ? "cookies" :
+    legalPath === "/about" ? "about" :
+    legalPath === "/contact" ? "contact" : null;
+  // /highscores?kind=&player=&rank=&regions= — deep link do perfil. Detecta
+  // aqui (não no router.ts) porque highscores é view em memória, não rota de
+  // URL própria; o App seta a view e os params, e limpa a URL em seguida pra
+  // não ficar presa na barra de endereço.
+  const hsDeep = loc.split("?")[0] === "/highscores";
 
   useEffect(() => {
     // a página de batalha também mostra o topbar (login/idioma/servidor), então
@@ -138,10 +206,6 @@ export default function App() {
       done = true;
       clearTimeout(to);
       setMe(m);
-      if (m) {
-        // menu do bot (docs) só aparece pra quem é admin em algum servidor Discord.
-        api.myDiscordGuilds().then(gs => setIsDiscordAdmin(gs.some(g => g.is_admin))).catch(() => {});
-      }
       if (m?.guild_id) {
         setGuild(m.guild_id);
         Promise.all([api.mySiteGuilds(), api.myPermissions()]).then(([gs, p]) => {
@@ -153,6 +217,27 @@ export default function App() {
     return () => clearTimeout(to);
   }, [loc, me]);
 
+  // Deep link /highscores?... vindo do perfil de um jogador — extrai params,
+  // seta view highscores e limpa a URL (a view é em memória, não rota).
+  useEffect(() => {
+    if (!hsDeep) return;
+    const sp = new URLSearchParams(loc.split("?")[1] ?? "");
+    const kind = sp.get("kind");
+    const player = sp.get("player");
+    const rank = Number(sp.get("rank"));
+    const regions = sp.get("regions");
+    if (kind && player && Number.isFinite(rank) && rank > 0) {
+      setHsParams({ kind, player, rank, regions: regions ?? "" });
+      setView("highscores");
+    }
+    // Limpa a URL pra não ficar presa (back volta pra home, não re-dispara).
+    navigateReplace("/");
+  }, [hsDeep, loc]);
+
+  useEffect(() => {
+    if (view === "highscores" && hsParams) setHsParams(null);
+  }, [view, hsParams]);
+
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       const node = e.target as Node;
@@ -161,6 +246,7 @@ export default function App() {
         setUserDropOpen(false);
         setUserPanel("main");
       }
+      if (instabilityRef.current && !instabilityRef.current.contains(node)) setInstabilityOpen(false);
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -184,7 +270,7 @@ export default function App() {
   // Keep-alive ativo quando estamos mostrando management ou config direto
   // (sem deep link de rota, sem picker aberto, logado com guilda). Fora disso
   // as duas continuam montadas mas escondidas (display:none), preservando estado.
-  const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive;
+  const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive && !legalPage;
   const useKeepAlive = loggedIn && hasGuild && !pickingGuild && noRoute && (view === "management" || view === "config");
   // Deep links escalacao/regear ativos no momento (definem qual keep-alive show).
   const escActive = !!eventRoute;
@@ -221,7 +307,7 @@ export default function App() {
     else if (playerRoute) label = playerRoute.name || t("players");
     else if (!guildRoute) {
       const map: Partial<Record<View, string>> = {
-        battles: t("battles"), players: t("players"),
+        battles: t("battles"),
         highscores: t("highscores"), craft: t("craft"), market: t("market"),
         management: t("management"), config: "Config",
       };
@@ -254,9 +340,32 @@ export default function App() {
   // era a causa da tela branca eterna.
   if (me === undefined) return null;
 
+  // Páginas legais/institucionais — standalone, sem topbar/nav. Renderizam
+  // antes do fluxo principal (não precisam de login nem guilda).
+  if (legalPage) {
+    const page = legalPage === "terms" ? <TermsPage /> :
+      legalPage === "privacy" ? <PrivacyPage /> :
+      legalPage === "cookies" ? <CookiesPage /> :
+      legalPage === "about" ? <AboutPage /> : <ContactPage />;
+    return (
+      <div className="app-shell">
+        <div className="dash-root">
+          <div className="legal-back-bar">
+            <button className="btn" onClick={() => navigate("/")}>
+              <i className="ti ti-arrow-left" /> {t("back")}
+            </button>
+          </div>
+          {page}
+        </div>
+        <SiteFooter t={t} />
+        <CookieConsent />
+      </div>
+    );
+  }
+
   async function logout() {
     await fetch("/auth/logout", { method: "POST", credentials: "include" });
-    setMe(null); setSiteGuilds([]); setPerms(NO_PERMS); setIsDiscordAdmin(false);
+    setMe(null); setSiteGuilds([]); setPerms(NO_PERMS);
     setView("dashboard");
   }
 
@@ -302,6 +411,14 @@ export default function App() {
       ))}
     </div>
   ) : null;
+
+  const unstableApiRegions = Object.entries(apiDelay).filter(([, status]) => status.delay_secs > 15 * 60);
+  const selectedApiUnstable = unstableApiRegions.some(([region]) => region === SERVER_TO_REGION[server]);
+  const instabilityHint = unstableApiRegions.length
+    ? `${t("siteInstabilityApiDelay")}: ${unstableApiRegions.map(([region, status]) =>
+        `${REGION_LABELS[lang][region] ?? region} ${fmtApiDelay(status.delay_secs)}`
+      ).join(" · ")}. ${t("apiDelayHint")}`
+    : "";
 
   const userMenu = (
     <div className="topbar-dropdown" ref={userRef}>
@@ -393,6 +510,17 @@ export default function App() {
                   <i className={"ti " + (selected ? "ti-square-check-filled" : "ti-square")} style={{ fontSize: 15 }} />
                   <span className="user-menu-abbr">{SERVER_LABELS[sv]}</span>
                   {SERVER_FULL[sv]}
+                  {(() => {
+                    const dd = apiDelay[SERVER_TO_REGION[sv]];
+                    return dd ? (
+                      <span
+                        style={{ marginLeft: "auto", fontSize: 11, color: apiDelayColor(dd.delay_secs), fontVariantNumeric: "tabular-nums" }}
+                        title={t("apiDelayHint")}
+                      >
+                        {fmtApiDelay(dd.delay_secs)}
+                      </span>
+                    ) : null;
+                  })()}
                   {isActive && selected && servers.length > 1 && (
                     <span className="user-menu-active-dot" />
                   )}
@@ -422,7 +550,7 @@ export default function App() {
       ? <BattlePage code={battleRoute.code} onBack={() => navigate("/")} />
       : <BattlePage albionIds={battleRoute.albionIds} onBack={() => navigate("/")} />;
   } else if (playerRoute) {
-    content = <PlayerProfilePage region={playerRoute.region} name={playerRoute.name} onBack={goBack} />;
+    content = <PlayerProfilePage region={playerRoute.region} name={playerRoute.name} activityId={playerRoute.activityId} onBack={goBack} />;
   } else if (guildRoute) {
     content = <GuildProfilePage mode={guildRoute.type} albionId={guildRoute.albionId} onBack={goBack} />;
   } else if (pickingGuild && loggedIn) {
@@ -449,11 +577,15 @@ export default function App() {
     );
   }
   else if (view === "battles") { content = <BattleTracker />; }
-  else if (view === "highscores") { content = <HighscoresPage initialWindow={highscoresInitialWindow} />; }
-  else if (view === "players")   { content = <PlayerLookup />; }
+  else if (view === "highscores") { content = <HighscoresPage
+    initialWindow={highscoresInitialWindow}
+    initialKind={hsParams?.kind as never}
+    highlightPlayer={hsParams?.player}
+    initialRank={hsParams?.rank}
+    initialRegions={hsParams?.regions || undefined}
+  />; }
   else if (view === "craft")     { content = <CraftCalculator />; }
   else if (view === "market")    { content = <MarketPage />; }
-  else if (view === "docs")      { content = <BotDocsPage />; }
   else if (view === "management") { content = <ManagementPage guildId={me!.guild_id!} perms={perms} />; }
   else                           { content = <GuildConfig guildId={me!.guild_id!} onSwitch={() => setPickingGuild(true)} />; }
 
@@ -524,7 +656,7 @@ export default function App() {
   const showGuildBox = !loggedIn || !hasGuild || hasAnyGuildPerm;
 
   return (
-    <>
+    <div className="app-shell">
       {backendDown && (
         <div className="backend-down-banner" role="alert">
           <i className="ti ti-plug-connected-x" aria-hidden="true" /> {t("backendDown")}
@@ -539,14 +671,15 @@ export default function App() {
         <nav className="nav nav-public">
           {nb("dashboard", "ti-home",         t("dashboard"))}
           {nb("battles", "ti-shield-bolt",    t("battles"))}
-          {nb("players", "ti-sword",          t("players"))}
           {nb("highscores", "ti-trophy",      t("highscores"))}
           {nb("craft",   "ti-hammer",         t("craft"))}
           {nb("market",  "ti-chart-line",     t("market"))}
           <button className={companionActive ? "active" : ""} onClick={() => navigate("/download")}>
             <i className="ti ti-download" aria-hidden="true" /> {t("companionNav")}
           </button>
-          {loggedIn && isDiscordAdmin && nb("docs", "ti-book-2", t("botDocs"))}
+          <a className="nav-docs-link" href={DOCS_URL}>
+            <i className="ti ti-book-2" aria-hidden="true" /> {t("docsNav")}
+          </a>
         </nav>
 
         <div className="nav-sep" />
@@ -562,19 +695,59 @@ export default function App() {
         )}
 
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          {selectedApiUnstable && (
+            <div className="topbar-status" ref={instabilityRef}>
+              <button type="button" className={`topbar-instability${instabilityOpen ? " active" : ""}`}
+                onClick={() => {
+                  setInstabilityOpen(open => !open);
+                  setUserDropOpen(false); setGuildDropOpen(false);
+                }}
+                aria-label={instabilityHint} aria-expanded={instabilityOpen} aria-haspopup="menu">
+                <i className="ti ti-alert-triangle" aria-hidden="true" />
+              </button>
+              {instabilityOpen && (
+                <div className="status-dropdown" role="menu">
+                  <div className="status-dropdown-head">
+                    <span className="status-dropdown-icon"><i className="ti ti-alert-triangle" aria-hidden="true" /></span>
+                    <span>
+                      <strong>{t("systemStatus")}</strong>
+                      <small>{t("systemStatusDegraded")}</small>
+                    </span>
+                  </div>
+                  <div className="status-dropdown-list">
+                    {unstableApiRegions.map(([region, status]) => (
+                      <div className="status-dropdown-row" key={region}>
+                        <span className="status-pulse" />
+                        <span className="status-region">
+                          <strong>{REGION_LABELS[lang][region] ?? region}</strong>
+                          <small>{t("apiPublishingDelay")}</small>
+                        </span>
+                        <span className="status-delay" style={{ color: apiDelayColor(status.delay_secs) }}>
+                          {fmtApiDelay(status.delay_secs)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="status-dropdown-note">{t("apiDelayHint")}</p>
+                </div>
+              )}
+            </div>
+          )}
           {serverQuickSwitch}
           {userMenu}
         </div>
       </div>
 
+      {/* WS5: dash-root (grid técnico de fundo do design v2) vive no wrapper
+          de conteúdo — TODAS as páginas herdam, só o topbar fica de fora. O ad
+          banner entrou pra dentro (era o único elemento entre topbar e
+          dash-root, então o quadriculado só começava depois dele, deixando
+          --bg liso atrás do próprio ad). O esquadramento em si é global no
+          styles.css (não depende disso). */}
+      <div className="dash-root">
       <div style={{ padding: "10px 16px 0" }}>
         <AdBanner variant="leaderboard" mobileVariant="mobileBanner" />
       </div>
-
-      {/* WS5: dash-root (grid técnico de fundo do design v2) vive no wrapper
-          de conteúdo — TODAS as páginas herdam, o topbar/banner ficam fora.
-          O esquadramento em si é global no styles.css (não depende disso). */}
-      <div className="dash-root">
       <ErrorBoundary>
       {/* Fallback visível: em conexão lenta, trocar de view carrega um chunk
           novo — com fallback null a tela ficava em branco e parecia travada. */}
@@ -628,6 +801,8 @@ export default function App() {
       </Suspense>
       </ErrorBoundary>
       </div>
-    </>
+      <SiteFooter t={t} />
+      <CookieConsent />
+    </div>
   );
 }

@@ -15,17 +15,25 @@ class EventCreate(BaseModel):
     # de mostrar o toggle; % da call sempre calculada a partir dos snapshots).
     participation_mode: str = "voice_percent"  # presence | voice_percent
     message: str | None = None  # texto livre do caller, mostrado no mass-info
+    publish: bool | None = None
+    signup_mode: str = "signup"
+    assignment_mode: str = "hybrid"
+    autofill_mode: str = "manual"
 
 
 class EventUpdate(BaseModel):
     """Edição parcial de um evento (PATCH). Só os campos presentes no body são
     aplicados (caller usa exclude_unset). comp_id=null desvincula a comp; trocar
-    a comp remove os signups existentes (a inscrição era pra função da comp
-    antiga) — o bot avisa os inscritos por DM, do site só são limpos."""
+    a comp preserva as inscrições, limpa as roles do evento e pede nova escolha
+    aos jogadores por DM."""
     title: str | None = None
     scheduled_at: datetime | None = None
     comp_id: int | None = None
     attendance: float | None = None
+    signup_mode: str | None = None
+    assignment_mode: str | None = None
+    autofill_mode: str | None = None
+    confirm_comp_reset: bool = False
 
 
 class EventSummary(BaseModel):
@@ -42,6 +50,10 @@ class EventSummary(BaseModel):
     comp_id: int | None = None
     seriousness: str = "casual"
     participation_mode: str = "presence"
+    signup_mode: str = "signup"
+    assignment_mode: str = "hybrid"
+    autofill_mode: str = "manual"
+    published_at: datetime | None = None
 
 
 class VerificationStepOut(BaseModel):
@@ -138,6 +150,10 @@ class EventDetail(BaseModel):
     battleboard_url: str | None = None
     seriousness: str = "casual"
     participation_mode: str = "presence"
+    signup_mode: str = "signup"
+    assignment_mode: str = "hybrid"
+    autofill_mode: str = "manual"
+    published_at: datetime | None = None
     functions_released: bool = False
     total_snapshots: int = 0
     # Pontos de attendance (economia/leaderboard do bot) — UM valor por evento,
@@ -312,6 +328,7 @@ class AssignmentOut(BaseModel):
     user_id: int
     user_name: str | None
     game_role_id: int | None = None
+    locked: bool = True
 
 
 class EscalationSignupOut(BaseModel):
@@ -329,6 +346,8 @@ class EscalationEventOut(BaseModel):
     comp_id: int | None = None
     comp_name: str | None = None
     functions_released: bool = False
+    assignment_mode: str = "hybrid"
+    autofill_mode: str = "manual"
 
 
 class EscalationOut(BaseModel):

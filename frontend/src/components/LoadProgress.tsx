@@ -8,8 +8,11 @@ import { useT } from "../i18n";
 // O delay de 400ms evita o flash nas cargas que resolvem na hora.
 export type LoadStep = { key: string; label: string };
 
-export default function LoadProgress({ steps, stage, retrying, hint }: {
+export default function LoadProgress({ steps, stage, retrying, hint, queue }: {
   steps: LoadStep[]; stage: string | null; retrying: boolean; hint: string;
+  // Nº de requests esperando um slot do gate da Albion (rate limit 1/5s) — quando
+  // > 0 a carga está PARADA na fila, não travada. Distingue "na fila" de "buscando".
+  queue?: number;
 }) {
   const t = useT();
   const [show, setShow] = useState(false);
@@ -21,6 +24,16 @@ export default function LoadProgress({ steps, stage, retrying, hint }: {
   useEffect(() => {
     const id = setTimeout(() => setShow(true), 400);
     return () => clearTimeout(id);
+  }, []);
+
+  // Tempo decorrido: cargas frias/refresh são lentas (rate limit da Albion),
+  // então um contador visível deixa claro que está trabalhando, não travado.
+  // Conta do mount real (não do `show`), então já mostra o tempo certo.
+  const startRef = useRef(Date.now());
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
+    return () => clearInterval(iv);
   }, []);
 
   const rawIdx = steps.findIndex(s => s.key === stage); // -1 = conectando/carga rápida
@@ -69,10 +82,17 @@ export default function LoadProgress({ steps, stage, retrying, hint }: {
         <p className="mt-2 text-[11px] text-amber-400">
           <i className="ti ti-refresh mr-1 inline-block animate-spin" aria-hidden="true" />
           {t("plpRetrying")}
+          <span className="tabular-nums text-amber-400/60"> · {elapsed}s</span>
         </p>
-      ) : idx >= 0 ? (
-        <p className="mt-2 text-[11px] text-zinc-600">{hint}</p>
-      ) : null}
+      ) : (
+        <p className="mt-2 text-[11px] text-zinc-600">
+          {hint}
+          <span className="tabular-nums text-zinc-500"> · {elapsed}s</span>
+          {queue != null && queue > 0 && (
+            <span className="text-amber-400/70"> · {t("plpAlbionQueue").replace("{n}", String(queue))}</span>
+          )}
+        </p>
+      )}
     </div>
   );
 }

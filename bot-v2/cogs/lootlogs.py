@@ -14,7 +14,7 @@ qualquer msg não-bot na thread (defesa em profundidade — Send Messages negado
 O event_id não vai no botão: a rota ingest resolve pelo thread_id (igual v1 usa
 get_event_by_logger_thread). custom_id fixo → View persistente sobrevive a restart.
 """
-import os
+import asyncio
 import traceback
 
 import aiohttp
@@ -24,9 +24,6 @@ from discord.ext import commands
 import http_client
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
-
-SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
-API_SECRET = os.getenv("BOT_API_SECRET", "")
 
 # custom_id fixo: o event_id é resolvido no backend pelo thread_id (igual v1).
 SUBMIT_CID = "lootlog:submit_v2"
@@ -111,36 +108,22 @@ async def _process_submission(interaction: discord.Interaction,
         await _ephemeral(interaction, t(lang, "ev_lootlog_read_err"))
         return
 
-    form = aiohttp.FormData()
-    form.add_field("file", data, filename=arquivo.filename or "log.csv",
-                   content_type="text/csv")
-    form.add_field("submitter_name", interaction.user.display_name)
-    form.add_field("submitter_user_id", str(interaction.user.id))
-    form.add_field("thread_id", str(thread_id) if thread_id else "")
-
-    out: dict | None = None
-    try:
-        async with http_client.session().post(
-            f"{SITE_URL}/bot/guilds/{interaction.guild.id}/lootlog/ingest",
-            data=form,
-            headers={"Authorization": f"Bearer {API_SECRET}"},
-            timeout=aiohttp.ClientTimeout(total=20),
-        ) as r:
-            if r.status == 200:
-                try:
-                    out = await r.json()
-                except Exception:
-                    out = {}
-            else:
-                body = ""
-                try:
-                    body = (await r.text())[:300]
-                except Exception:
-                    pass
-                print(f"[lootlogs] ingest falhou: HTTP {r.status} "
-                      f"thread={thread_id} body={body!r}")
-    except Exception as e:
-        print(f"[lootlogs] ingest exceção: {type(e).__name__}: {e} thread={thread_id}")
+    out = None
+    for attempt in range(2):
+        form = aiohttp.FormData()
+        form.add_field("file", data, filename=arquivo.filename or "log.csv",
+                       content_type="text/csv")
+        form.add_field("submitter_name", interaction.user.display_name)
+        form.add_field("submitter_user_id", str(interaction.user.id))
+        form.add_field("thread_id", str(thread_id) if thread_id else "")
+        out = await http_client.post_form(
+            f"/bot/guilds/{interaction.guild.id}/lootlog/ingest",
+            form, timeout=20, tag="lootlogs",
+        )
+        if out is not None:
+            break
+        if attempt == 0:
+            await asyncio.sleep(0.2)
 
     if out is None:
         await _ephemeral(interaction, t(lang, "ev_lootlog_ingest_fail"))

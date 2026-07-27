@@ -19,7 +19,8 @@ from app.models.audit import AuditLog
 from app.models.events import Event
 from app.models.regear import RegearRequest
 from app.models.registration import BotRegistration
-from app.models.tenancy import Guild
+from app.models.tenancy import Guild, GuildMember
+from app.auth.permissions import has_permission
 from app.services import regear_config, regear_recognition
 from app.services.prices import suggest_regear_price
 
@@ -30,9 +31,20 @@ _VALID_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 # Mesma ideia do ±30min do near_cta dos nodes.
 _LANDMARK_BUFFER = timedelta(minutes=30)
 
+_REGEAR_STATUS_TRANSITIONS = {
+    "pending": {"pending", "paid", "denied", "removed"},
+    "denied": {"denied", "removed"},
+    "removed": {"removed"},
+    "paid": {"paid"},
+}
+
 
 class RegearServiceError(Exception):
     pass
+
+
+def regear_status_transition_allowed(current: str, new: str) -> bool:
+    return new in _REGEAR_STATUS_TRANSITIONS.get(current, set())
 
 
 def _ext(filename: str, content_type: str | None) -> str:
@@ -166,6 +178,11 @@ async def _apply_recognition(
     req.albion_event_id = rec.get("albion_event_id")
     req.death_timestamp = rec.get("death_timestamp")
     req.recognition_status = rec.get("status") if rec.get("status") in ("recognized", "manual") else "manual"
+    req.recognition_method = rec.get("method") if rec.get("method") in ("death_api", "ocr", "manual") else "manual"
+    req.recognition_confidence = rec.get("confidence") if rec.get("confidence") in ("high", "medium", "low") else "low"
+    req.recognition_candidates = list(rec.get("candidates") or [])
+    req.recognition_window_match = rec.get("window_match")
+    req.recognition_fallback_reason = rec.get("fallback_reason")
 
 
 async def ingest(
@@ -190,6 +207,10 @@ async def ingest(
     # Sem event_id explícito, tenta casar pelo canal (thread do evento).
     if event_id is None:
         event_id = _event_id_for_channel(db, guild.id, channel_id)
+    elif db.scalar(select(Event.id).where(
+        Event.id == event_id, Event.guild_id == guild.id,
+    )) is None:
+        raise RegearServiceError("evento não pertence a esta guilda")
 
     region = (guild.settings or {}).get("albion_guild_region")
     settings = regear_config.get_regear_settings(guild)
@@ -252,37 +273,80 @@ def get_request_row(db: Session, guild_id: int, request_id: int) -> RegearReques
 
 def update_request(
     db: Session, guild_id: int, request_id: int, payload: dict, actor_id: int | None,
+    actor_role_ids: set[int] | None = None, actor_is_admin: bool = False,
 ) -> dict:
-    """Edita final_total/status/notes/detected_items. status=paid debita o banco.
+    """Atualiza um pedido sem permitir mutações financeiras ambíguas.
 
-    final_total editado sobrescreve o sugerido (fonte de verdade do débito).
-    Re-pagar um request já pago não re-debita (idempotente)."""
+    Um pedido pendente pode ser editado e seguir uma única vez para paid,
+    denied ou removed. `paid` é imutável; repetir `status=paid` sem alterações
+    é idempotente e não gera segundo débito.
+    """
     r = get_request_row(db, guild_id, request_id)
     if r is None:
         raise RegearServiceError("pedido de regear não encontrado")
 
-    before = _to_out(r)
-    new_status = payload.get("status")
-    was_paid = r.status == "paid"
+    member = db.scalar(select(GuildMember).where(
+        GuildMember.guild_id == guild_id, GuildMember.user_id == actor_id,
+    )) if actor_id else None
+    has_manage = bool(member and (actor_is_admin or has_permission(db, member, "events.manage")))
+    if set(payload) - {"status"} and not has_manage:
+        raise RegearServiceError("permissão de eventos necessária para editar este pedido")
 
-    if payload.get("final_total") is not None:
-        r.final_total = int(payload["final_total"])
+    new_status = payload.get("status")
+    if new_status == "removed" and not has_manage:
+        raise RegearServiceError("permissão de eventos necessária para remover este pedido")
+    before = _to_out(r)
+    if r.status == "paid":
+        if set(payload) <= {"status"} and new_status in (None, "paid"):
+            return _to_out(r)
+        raise RegearServiceError("pedido pago é imutável")
+
+    if "final_total" in payload:
+        value = payload["final_total"]
+        r.final_total = None if value is None else int(value)
+        if r.final_total is not None and r.final_total < 0:
+            raise RegearServiceError("valor final não pode ser negativo")
     if payload.get("notes") is not None:
         r.notes = payload["notes"]
     if payload.get("detected_items") is not None:
         # Re-soma base/suggested a partir dos itens editados (logística pode
         # corrigir a lista reconhecida manualmente).
         items = list(payload["detected_items"])
+        for item in items:
+            if not isinstance(item, dict):
+                raise RegearServiceError("item detectado inválido")
+            for key in ("unit_price", "total_price"):
+                value = item.get(key, 0)
+                if not isinstance(value, (int, float)) or value < 0:
+                    raise RegearServiceError(f"{key} não pode ser negativo")
         r.detected_items = items
         r.base_total = sum(int(i.get("total_price", 0)) for i in items if i.get("eligible"))
         r.suggested_total = round(r.base_total * r.coverage_pct / 100)
 
+    if new_status is not None and not regear_status_transition_allowed(r.status, new_status):
+        raise RegearServiceError(f"transição de regear inválida: {r.status} -> {new_status}")
+
+    if new_status in ("paid", "denied"):
+        guild = db.get(Guild, guild_id)
+        settings = regear_config.get_regear_settings(guild) if guild else None
+        role_ids = set(actor_role_ids or set())
+        allowed_role = bool(settings and role_ids.intersection(settings.approver_role_ids))
+        if not (has_manage or allowed_role):
+            reason = (
+                "este regear exige aprovação de um cargo autorizado"
+                if settings and settings.require_approval
+                else "permissão de eventos necessária para pagar este regear"
+            )
+            raise RegearServiceError(reason)
+
     if new_status in ("paid", "denied", "pending", "removed"):
         r.status = new_status
-        if new_status == "paid" and not was_paid:
+        if new_status == "paid":
             r.handled_by_user_id = actor_id
             r.handled_at = datetime.now(timezone.utc)
             amount = r.final_total if r.final_total is not None else r.suggested_total
+            if amount < 0:
+                raise RegearServiceError("valor do pagamento não pode ser negativo")
             guild = db.get(Guild, guild_id)
             # Regears vinculados a evento em modos tab (leftover/guild_backed) saem
             # da tab do evento, não do banco — o débito acontece no _calc_payout.
@@ -316,6 +380,8 @@ def remove_request(db: Session, guild_id: int, request_id: int, actor_id: int | 
     r = get_request_row(db, guild_id, request_id)
     if r is None:
         raise RegearServiceError("pedido de regear não encontrado")
+    if r.status == "paid":
+        raise RegearServiceError("pedido pago é imutável; use uma correção contábil")
     r.status = "removed"
     db.add(AuditLog(
         guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
@@ -348,4 +414,9 @@ def _to_out(r: RegearRequest) -> dict:
         "notes": r.notes,
         "created_at": r.created_at,
         "recognition_status": r.recognition_status,
+        "recognition_method": r.recognition_method,
+        "recognition_confidence": r.recognition_confidence,
+        "recognition_candidates": list(r.recognition_candidates or []),
+        "recognition_window_match": r.recognition_window_match,
+        "recognition_fallback_reason": r.recognition_fallback_reason,
     }

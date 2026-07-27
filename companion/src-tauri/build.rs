@@ -8,6 +8,28 @@
 // Se encontrar, adiciona ao LIB path pra o linker achar wpcap.lib.
 
 fn main() {
+    // Gera o ACL de permissões (capabilities/*.json → gen/schemas/) e o resto
+    // do codegen que `tauri::generate_context!()` espera encontrar. SEM isso
+    // o ACL fica CONGELADO no último build em que rodou: qualquer permissão
+    // nova em capabilities/default.json (ex: allow-start-dragging,
+    // allow-maximize) nunca chega ao binário — o comando é negado em runtime,
+    // calado, mesmo com decorations:false tirando a barra de título nativa
+    // (sem chrome nativo E sem drag por JS = janela impossível de mover).
+    // Mordida real em 20-21/07/2026: build.rs foi reescrito pro auto-detect
+    // do Npcap SDK e essa chamada sumiu junto.
+    //
+    // new_without_app_manifest(): o tauri_build padrão embute UM manifest
+    // Windows próprio (windows-app-manifest.xml). Este arquivo JÁ embute o
+    // NOSSO manifest via resource.res (compilado com rc.exe, ver abaixo —
+    // precisa do Common Controls v6 pro TaskDialogIndirect). Os dois manifests
+    // juntos = "CVT1100: duplicate resource type:MANIFEST" no link — o
+    // linker recusa dois RT_MANIFEST no mesmo binário.
+    let attrs = tauri_build::Attributes::new()
+        .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+    if let Err(e) = tauri_build::try_build(attrs) {
+        panic!("tauri_build::try_build falhou: {e:#}");
+    }
+
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
         // Common Controls v6 — TaskDialogIndirect precisa de comctl32.lib
         println!("cargo:rustc-link-lib=dylib=comctl32");

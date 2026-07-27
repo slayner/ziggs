@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.db import SessionLocal
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerSnapshot
 from app.services import search_index
-from app.services.albion_gate import NEW_ELIGIBLE, albion_scope, slot
+from app.services.albion_gate import NEW_ELIGIBLE, albion_scope, observe_response, slot
 
 log = logging.getLogger(__name__)
 
@@ -30,11 +30,21 @@ POLL_INTERVAL = 300  # segundos — o kill feed do Albion atualiza nesse ritmo
 SNAPSHOT_MAX_AGE = timedelta(hours=24)  # resolução do gráfico de crescimento de fama
 
 
+async def _observe_albion(response: httpx.Response) -> None:
+    """Response hook: alimenta o rate limiter adaptativo (albion_gate) com o
+    status de cada resposta do gameinfo — 2xx recupera a taxa, 429/504 recuam.
+    Todo request ao gameinfo usa este cliente, então o feedback é completo sem
+    call site reportar nada. Timeout (sem resposta) não passa por aqui — mas já
+    se auto-limita (o slot fica preso os 40s), então não precisa do sinal."""
+    observe_response(response.status_code)
+
+
 def make_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=TIMEOUT,
         headers={"User-Agent": "ziggs-platform"},
         verify=False,
+        event_hooks={"response": [_observe_albion]},
     )
 
 
@@ -66,9 +76,20 @@ def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
     if has_lifetime:
         pve_fame = ((lifetime.get("PvE") or {}).get("Total") or 0)
         crafting_fame = ((lifetime.get("Crafting") or {}).get("Total") or 0)
-        gathering_fame = (((lifetime.get("Gathering") or {}).get("All") or {}).get("Total") or 0)
+        gathering = lifetime.get("Gathering") or {}
+        gathering_fame = ((gathering.get("All") or {}).get("Total") or 0)
+        # Coleta por recurso (Wood/Hide/Ore/Rock/Fiber).Total — mesma fonte do
+        # gathering_fame total. None no payload não zera o que já tínhamos (o
+        # bloco `if has_lifetime` só roda quando LifetimeStatistics veio).
+        gather = {r: ((gathering.get(r.capitalize()) or {}).get("Total") or 0)
+                  for r in ("wood", "hide", "ore", "rock", "fiber")}
+        # FishingFame — escalar solto no LifetimeStatistics (não dentro de
+        # Gathering), irmão de Gathering.All.Total.
+        fishing_fame = int(lifetime.get("FishingFame") or 0)
     else:
         pve_fame = crafting_fame = gathering_fame = None  # type: ignore[assignment]
+        gather = None  # type: ignore[assignment]
+        fishing_fame = None  # type: ignore[assignment]
 
     now = datetime.now(timezone.utc)
     player = db.query(AlbionPlayer).filter_by(albion_id=albion_id).first()
@@ -83,6 +104,12 @@ def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
             avatar=avatar,
             kill_fame=kill_fame, death_fame=death_fame,
             pve_fame=pve_fame or 0, crafting_fame=crafting_fame or 0, gathering_fame=gathering_fame or 0,
+            gather_wood=gather["wood"] if gather else 0,
+            gather_hide=gather["hide"] if gather else 0,
+            gather_ore=gather["ore"] if gather else 0,
+            gather_rock=gather["rock"] if gather else 0,
+            gather_fiber=gather["fiber"] if gather else 0,
+            fishing_fame=fishing_fame or 0,
             lifetime_statistics=lifetime if has_lifetime else None,
             first_seen_at=now, last_seen_at=now,
         )
@@ -104,6 +131,12 @@ def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
             player.pve_fame = pve_fame
             player.crafting_fame = crafting_fame
             player.gathering_fame = gathering_fame
+            player.gather_wood = gather["wood"]
+            player.gather_hide = gather["hide"]
+            player.gather_ore = gather["ore"]
+            player.gather_rock = gather["rock"]
+            player.gather_fiber = gather["fiber"]
+            player.fishing_fame = fishing_fame
         player.last_seen_at = now
         player.is_deleted = False
 
@@ -160,24 +193,29 @@ def _record_kill_event(db: Session, ev: dict, region: str) -> None:
     victim_row = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == victim_id)) if victim_id else None
 
     participant_count = ev.get("numberOfParticipants") or 1
-    db.add(PlayerKillEvent(
-        region=region, albion_event_id=event_id,
-        timestamp=datetime.fromisoformat(ev["TimeStamp"].replace("Z", "+00:00")),
-        fame=ev.get("TotalVictimKillFame") or 0,
-        killer_player_id=killer_row.id if killer_row else None,
-        victim_player_id=victim_row.id if victim_row else None,
-        participant_count=participant_count,
-        is_solo=participant_count == 1,
-        albion_battle_id=str(ev["BattleId"]) if ev.get("BattleId") else None,
-        kill_area=ev.get("KillArea"),
-        killer_equipment=killer.get("Equipment"),
-        victim_equipment=victim.get("Equipment"),
-        victim_inventory=victim.get("Inventory"),
-        killer_guild_id=killer.get("GuildId") or None,
-        killer_guild_name=killer.get("GuildName") or None,
-        victim_guild_id=victim.get("GuildId") or None,
-        victim_guild_name=victim.get("GuildName") or None,
-    ))
+    row = PlayerKillEvent(region=region, albion_event_id=event_id)
+    row.timestamp = datetime.fromisoformat(ev["TimeStamp"].replace("Z", "+00:00"))
+    row.fame = ev.get("TotalVictimKillFame") or 0
+    row.killer_player_id = killer_row.id if killer_row else None
+    row.victim_player_id = victim_row.id if victim_row else None
+    row.participant_count = participant_count
+    row.participants = [
+        {"name": p.get("Name"), "albion_id": p.get("Id")}
+        for p in (ev.get("Participants") or [])
+        if p and p.get("Name")
+    ]
+    row.group_member_count = ev.get("groupMemberCount")
+    row.is_solo = participant_count == 1
+    row.albion_battle_id = str(ev["BattleId"]) if ev.get("BattleId") else None
+    row.kill_area = ev.get("KillArea")
+    row.killer_equipment = killer.get("Equipment")
+    row.victim_equipment = victim.get("Equipment")
+    row.victim_inventory = victim.get("Inventory")
+    row.killer_guild_id = killer.get("GuildId") or None
+    row.killer_guild_name = killer.get("GuildName") or None
+    row.victim_guild_id = victim.get("GuildId") or None
+    row.victim_guild_name = victim.get("GuildName") or None
+    db.add(row)
     db.commit()
 
 
@@ -235,6 +273,21 @@ async def sync_player_kills(client: httpx.AsyncClient, db: Session, host: str, r
         if not isinstance(events, list):
             continue
         for ev in events:
+            # Dedupe ANTES do trabalho pesado: num refresh de jogador ativo a
+            # maioria das kills recentes JÁ está no ledger (loads anteriores +
+            # feed global). Sem isso, _upsert_event_players re-upsertava
+            # killer/vítima/participantes — CADA um com um db.commit() — pra todo
+            # evento já conhecido: centenas de commits à toa por refresh,
+            # travando o event loop (SQLAlchemy síncrono em código async). Evento
+            # já registrado → pula o upsert dos players E o record.
+            event_id = str(ev.get("EventId") or "")
+            if event_id and db.scalar(
+                select(PlayerKillEvent.id).where(
+                    PlayerKillEvent.region == region,
+                    PlayerKillEvent.albion_event_id == event_id,
+                )
+            ) is not None:
+                continue
             await _upsert_event_players(db, ev, region, skip_id=albion_id)
             try:
                 _record_kill_event(db, ev, region)
@@ -242,6 +295,8 @@ async def sync_player_kills(client: httpx.AsyncClient, db: Session, host: str, r
             except Exception as e:
                 db.rollback()
                 log.debug("player_tracker: skip sync event %s (%s): %s", ev.get("EventId"), region, e)
+        if events:
+            log.info("sync_kills: %s (%s) — %d %s ingeridos", albion_id, region, len(events), kind)
     return count
 
 

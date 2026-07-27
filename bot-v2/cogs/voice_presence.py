@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 import discord
@@ -31,7 +32,9 @@ async def _get(path: str) -> Optional[dict]:
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    return await http_client.post_json(path, body, tag="voice_presence")
+    return await http_client.post_json(
+        path, body, tag="voice_presence", attempts=2, queue_on_failure=False,
+    )
 
 
 _cog_ref: "VoicePresence | None" = None
@@ -99,9 +102,10 @@ class VoicePresence(commands.Cog):
         ]
         print(f"[voice_presence] {guild.id} canal {channel.id} ({channel.name}): "
               f"{len(present)} presentes → eventos {[ev['id'] for ev in data['events']]}")
+        snapshot_at = datetime.now(timezone.utc).isoformat()
         for ev in data["events"]:
             await _post(f"/bot/events/{guild.id}/{ev['id']}/voice-snapshot",
-                        {"present": present})
+                        {"present": present, "at": snapshot_at})
 
 
 @tasks.loop(seconds=30)

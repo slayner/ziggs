@@ -34,7 +34,7 @@ async def _get(path: str) -> Optional[dict]:
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    return await http_client.post_json(path, body)
+    return await http_client.post_json(path, body, tag="audit_log", attempts=2)
 
 
 def _diff_lines(before: Optional[dict], after: Optional[dict]) -> list[str]:
@@ -45,7 +45,7 @@ def _diff_lines(before: Optional[dict], after: Optional[dict]) -> list[str]:
         bv, av = before.get(k), after.get(k)
         if bv == av:
             continue
-        lines.append(f"**{k}**: `{bv}` → `{av}`")
+        lines.append(f"**{k}**: {bv} → {av}")
     return lines
 
 
@@ -78,6 +78,8 @@ _cog_ref: "BotAuditLog | None" = None
 class BotAuditLog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._sent: dict[int, int] = {}
+        self._locks: dict[int, asyncio.Lock] = {}
 
     async def cog_load(self) -> None:
         global _cog_ref
@@ -118,6 +120,11 @@ class BotAuditLog(commands.Cog):
         return channel
 
     async def sync_guild(self, guild: discord.Guild) -> None:
+        lock = self._locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            await self._sync_guild_unlocked(guild)
+
+    async def _sync_guild_unlocked(self, guild: discord.Guild) -> None:
         cfg = await _guild_command_config(guild.id)
         if not cfg["bot_logs_enabled"]:
             return
@@ -125,7 +132,10 @@ class BotAuditLog(commands.Cog):
         if channel is None:
             return
         data = await _get(f"/bot/guilds/{guild.id}/audit-log")
-        entries = (data or {}).get("entries") or []
+        entries = [
+            entry for entry in ((data or {}).get("entries") or [])
+            if entry["id"] > self._sent.get(guild.id, 0)
+        ]
         if not entries:
             return
         lang = await guild_lang_for(guild.id)
@@ -136,6 +146,7 @@ class BotAuditLog(commands.Cog):
             except (discord.Forbidden, discord.HTTPException):
                 break  # para no primeiro erro — ack só até o último enviado com sucesso
             last_id = entry["id"]
+            self._sent[guild.id] = last_id
         if last_id is not None:
             await _post(f"/bot/guilds/{guild.id}/audit-log-synced", {"last_id": last_id})
 

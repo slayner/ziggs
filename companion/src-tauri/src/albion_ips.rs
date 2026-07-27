@@ -3,7 +3,7 @@
 //
 // Cache simples: resolve na primeira chamada e re-resolve a cada 5 min.
 
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -13,6 +13,12 @@ const ALBION_HOSTNAMES: &[&str] = &[
     "gameinfo.albiononline.com",        // Americas
     "gameinfo-ams.albiononline.com",    // Europe
     "gameinfo-sgp.albiononline.com",    // Asia
+];
+
+const ALBION_GAME_NETWORKS: &[[u8; 3]] = &[
+    [5, 188, 125],
+    [5, 45, 187],
+    [193, 169, 238],
 ];
 
 #[derive(Clone)]
@@ -60,6 +66,20 @@ pub async fn albion_server_ips() -> Vec<IpAddr> {
         resolved_at: Instant::now(),
     });
     ips
+}
+
+/// Destinos do split tunnel: gameplay Photon /24 e serviços gameinfo /32.
+pub async fn albion_route_targets() -> Vec<(Ipv4Addr, Ipv4Addr)> {
+    let mut routes = ALBION_GAME_NETWORKS.iter()
+        .map(|p| (Ipv4Addr::new(p[0], p[1], p[2], 0), Ipv4Addr::new(255, 255, 255, 0)))
+        .collect::<Vec<_>>();
+    routes.extend(albion_server_ips().await.into_iter().filter_map(|ip| match ip {
+        IpAddr::V4(ip) => Some((ip, Ipv4Addr::new(255, 255, 255, 255))),
+        IpAddr::V6(_) => None,
+    }));
+    routes.sort();
+    routes.dedup();
+    routes
 }
 
 /// Força refresh do cache.

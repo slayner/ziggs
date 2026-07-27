@@ -22,12 +22,13 @@ import json
 import logging
 import re
 import time
+from collections import defaultdict, deque
 from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -35,9 +36,12 @@ from app.api import deps
 from app.auth.session import make_companion_token
 from app.db import get_session
 from app.models.events import Event, EventSignup
+from app.models.loot import ItemPriceCache
 from app.models.lootlog import LootLogSubmission
-from app.models.tenancy import User
-from app.services import companion_scan, lootlog as lootlog_svc, market_history, prices
+from app.models.tenancy import Guild, User
+from app.services import companion_scan, lootlog as lootlog_svc, market_history, prices, profile_warmer
+from app.domain.states import EventState
+from app.models.companion import RANGE_SIZE
 from app.services.player_tracker import HOSTS
 
 router = APIRouter(tags=["companion"])
@@ -53,6 +57,66 @@ def _install_id(raw: str | None) -> str | None:
     """
     raw = (raw or "").strip().lower()
     return raw if re.fullmatch(r"[0-9a-f]{32}", raw) else None
+
+
+# ── Limite de vazão por instalação ────────────────────────────────────────────
+#
+# Nem o `install_id` nem o IP são confiáveis (o cliente escolhe os dois), então
+# isto NÃO impede um atacante decidido — ele troca de id e continua. O objetivo
+# é outro: cortar o flood barato e, principalmente, tornar o abuso VISÍVEL, já
+# que ultrapassar o teto vira log com id e IP.
+#
+# O teto é por LINHAS, não por request: 200 requests de 1 linha fazem o mesmo
+# estrago que 1 de 200, e o que interessa é quanto dado entra.
+#
+# ponytail: janela em memória, morre com o processo e não é compartilhada entre
+# workers. Serve enquanto o backend é um processo só; com vários, o teto real
+# vira N× o configurado. Sobe pra Redis quando isso importar.
+_RATE_WINDOW_S = 300.0        # 5 min
+_RATE_MAX_ROWS = 5_000        # por instalação, na janela
+_MAX_ROWS_PER_REQUEST = 2_000  # payload absurdo é recusado na entrada
+_rate_log: dict[str, deque[tuple[float, int]]] = defaultdict(deque)
+
+
+def _rate_ok(install: str | None, rows: int) -> bool:
+    """Registra `rows` e diz se a instalação ainda está dentro do teto.
+
+    Sem install_id (companion antigo) todos caem no mesmo balde "anon" — de
+    propósito: quem não se identifica divide a cota com os outros anônimos.
+
+    Revalida o formato em vez de confiar em quem chamou: se um call site passar
+    o header cru, id inventado a cada request criaria um balde novo por request
+    e o teto viraria decoração. Normalizar aqui mata essa classe de erro.
+    """
+    key = _install_id(install) or "anon"
+    now = time.monotonic()
+    win = _rate_log[key]
+    while win and now - win[0][0] > _RATE_WINDOW_S:
+        win.popleft()
+    total = sum(n for _, n in win)
+    if total + rows > _RATE_MAX_ROWS:
+        return False
+    win.append((now, rows))
+    return True
+
+
+# Teto POR CHAMADA das rotas de warm (não por linha): `/warm` porque char
+# desconhecido dispara busca na Albion; `/warm/seen` é refresh-only (barato) mas
+# ainda capado pra não virar flood. Baldes separados pra um não comer o outro.
+_warm_log: dict[str, deque[float]] = defaultdict(deque)
+_seen_log: dict[str, deque[float]] = defaultdict(deque)
+
+
+def _call_ok(bucket: dict[str, deque[float]], install: str | None, window_s: float, max_calls: int) -> bool:
+    key = _install_id(install) or "anon"
+    now = time.monotonic()
+    win = bucket[key]
+    while win and now - win[0] > window_s:
+        win.popleft()
+    if len(win) >= max_calls:
+        return False
+    win.append(now)
+    return True
 
 
 def _client_ip(request: Request) -> str:
@@ -157,24 +221,36 @@ def _expire_old_pairings():
 
 class CompanionEventOut(BaseModel):
     event_id: int
+    guild_id: int
+    guild_name: str | None
     title: str | None
     scheduled_at: str | None
+    # in_progress = rolando; review = fechou e está sendo revisado (é aqui que
+    # o auto-submit dispara).
+    state: str
+
+
+# Estados em que faz sentido o companion mandar loot.
+_LOOTLOG_STATES = ("in_progress", "review")
 
 
 @router.get("/companion/lootlog/active-events")
 def companion_active_events(
-    guild_id: int = Query(...),
     user: User = Depends(deps.require_companion_user),
     db: Session = Depends(get_session),
 ) -> list[CompanionEventOut]:
-    """Eventos em andamento (IN_PROGRESS) onde o usuário está inscrito.
-    O companion lista esses pro user escolher pra onde mandar o lootlog."""
+    """Eventos do usuário em andamento ou em revisão, de TODAS as guildas.
+
+    Sem guild_id: a inscrição (EventSignup) já diz de quais eventos o usuário
+    participa e em qual guilda cada um está — pedir o snowflake da guilda ao
+    usuário era trabalho manual pra descobrir algo que o backend já sabe.
+    """
     rows = db.execute(
-        select(Event, EventSignup)
+        select(Event, Guild.name)
         .join(EventSignup, EventSignup.event_id == Event.id)
+        .outerjoin(Guild, Guild.id == Event.guild_id)
         .where(
-            Event.guild_id == guild_id,
-            Event.state == "in_progress",
+            Event.state.in_(_LOOTLOG_STATES),
             EventSignup.user_id == user.id,
         )
         .order_by(Event.id.desc())
@@ -182,15 +258,17 @@ def companion_active_events(
     return [
         CompanionEventOut(
             event_id=ev.id,
+            guild_id=ev.guild_id,
+            guild_name=guild_name,
             title=ev.title,
             scheduled_at=ev.scheduled_at.isoformat() if ev.scheduled_at else None,
+            state=ev.state.value if hasattr(ev.state, "value") else str(ev.state),
         )
-        for ev, _ in rows
+        for ev, guild_name in rows
     ]
 
 
 class CompanionLootlogIngestIn(BaseModel):
-    guild_id: int
     event_id: int
     csv_text: str
     file_name: str = "companion-lootlog.csv"
@@ -211,9 +289,32 @@ def companion_lootlog_ingest(
 ) -> CompanionLootlogIngestOut:
     """Submete o CSV do lootlog (texto normalizado) pra um evento.
     Mesmo upsert do /guilds/{g}/lootlog/ingest — 1 submissão por
-    (guild_id, event_id, submitter_user_id)."""
+    (guild_id, event_id, submitter_user_id).
+
+    A guilda vem do EVENTO, não do cliente: antes o companion mandava guild_id
+    junto e nada checava se o usuário tinha alguma relação com aquele evento —
+    qualquer conta logada podia despejar lootlog em evento de qualquer guilda.
+    Agora exige inscrição (EventSignup) no evento, que é o mesmo critério que
+    faz o evento aparecer em /active-events.
+    """
+    signup = db.scalar(
+        select(EventSignup).where(
+            EventSignup.event_id == body.event_id,
+            EventSignup.user_id == user.id,
+        )
+    )
+    if signup is None:
+        raise HTTPException(403, "você não está inscrito neste evento")
+    event = db.get(Event, body.event_id)
+    if event is None:
+        raise HTTPException(404, "evento não encontrado")
+    if event.guild_id != signup.guild_id:
+        raise HTTPException(403, "inscrição não pertence à guilda do evento")
+    if event.state != EventState.REVIEW:
+        raise HTTPException(409, "lootlog só pode ser enviado durante revisão")
+
     result = lootlog_svc.ingest(
-        db, body.guild_id, body.event_id, user.id,
+        db, signup.guild_id, body.event_id, user.id,
         user.global_name or user.username,
         body.file_name, body.csv_text.encode("utf-8"),
     )
@@ -221,6 +322,46 @@ def companion_lootlog_ingest(
         id=result.id, row_count=result.row_count,
         silver_total=result.silver_total, is_update=result.is_update,
     )
+
+
+class SilverEstimateItemIn(BaseModel):
+    item_id: str = Field(min_length=1, max_length=128)
+    quantity: int = Field(default=1, gt=0, le=1_000_000)
+
+
+class SilverEstimateIn(BaseModel):
+    items: list[SilverEstimateItemIn] = Field(max_length=200)
+
+
+class SilverEstimateOut(BaseModel):
+    silver_total: int
+
+
+@router.post("/companion/lootlog/silver-estimate", response_model=SilverEstimateOut)
+def companion_lootlog_silver_estimate(
+    body: SilverEstimateIn,
+    db: Session = Depends(get_session),
+) -> SilverEstimateOut:
+    """Estimativa ILUSTRATIVA do valor em prata dos loots capturados nesta
+    sessão. Só pra alimentar o badge da aba Lootlog no companion — não é
+    usado em payout/reconcile (o ingest não precifica de propósito, ver
+    lootlog.ingest).
+
+    Usa somente preços já presentes no cache local. Itens sem preço são
+    ignorados; esta rota pública nunca dispara HTTP por linha."""
+    quantities: dict[str, int] = defaultdict(int)
+    for item in body.items:
+        quantities[item.item_id] += item.quantity
+    prices_by_id = {
+        row.item_type: row.silver_value
+        for row in db.scalars(
+            select(ItemPriceCache).where(ItemPriceCache.item_type.in_(quantities))
+        )
+    }
+    return SilverEstimateOut(silver_total=sum(
+        prices_by_id.get(item_id, 0) * quantity
+        for item_id, quantity in quantities.items()
+    ))
 
 
 # ─── Scan distribuído (sem auth) ─────────────────────────────────────────────
@@ -242,12 +383,15 @@ def scan_claim(
 
     X-Ziggs-Install identifica a INSTALAÇÃO (1 por PC): a mesma instalação
     pedindo de novo recebe o range que já tem, em vez de acumular ranges."""
-    task = companion_scan.claim_task(db, _install_id(x_ziggs_install))
+    install = _install_id(x_ziggs_install)
+    if install is None:
+        raise HTTPException(400, "X-Ziggs-Install inválido")
+    task = companion_scan.claim_task(db, install)
     if task is None:
         log.info("companion/scan/claim [%s] sem trabalho", _client_ip(request))
         raise HTTPException(204)  # No Content
     log.info("companion/scan/claim [%s] install=%s region=%s range=%d-%d (task=%d)",
-             _client_ip(request), _install_id(x_ziggs_install) or "?", task.region,
+             _client_ip(request), install, task.region,
              task.battle_id_start, task.battle_id_end, task.id)
     return ScanClaimOut(
         task_id=task.id,
@@ -260,9 +404,9 @@ def scan_claim(
 class ScanReportIn(BaseModel):
     task_id: int
     region: str
-    found: list[dict] = []
-    missing: list[int] = []
-    errors: list[int] = []
+    found: list[int] = Field(default_factory=list, max_length=RANGE_SIZE)
+    missing: list[int] = Field(default_factory=list, max_length=RANGE_SIZE)
+    errors: list[int] = Field(default_factory=list, max_length=RANGE_SIZE)
     # Nick configurado no companion — crédito (found_by) nas batalhas novas.
     character_name: str | None = None
 
@@ -273,20 +417,31 @@ class ScanReportOut(BaseModel):
 
 
 @router.post("/companion/scan/report")
-def scan_report(
+async def scan_report(
     payload: ScanReportIn,
     request: Request,
+    x_ziggs_install: str | None = Header(None),
     db: Session = Depends(get_session),
 ) -> ScanReportOut:
+    install = _install_id(x_ziggs_install)
+    if install is None:
+        raise HTTPException(400, "X-Ziggs-Install inválido")
     nick = payload.character_name or "anônimo"
     log.info("companion/scan/report [%s] nick=%s region=%s found=%d missing=%d errors=%d (task=%d)",
              _client_ip(request), nick, payload.region,
              len(payload.found), len(payload.missing), len(payload.errors),
              payload.task_id)
-    accepted, rejected = companion_scan.report_task(
-        db, payload.task_id, payload.found, payload.missing, payload.errors,
-        character_name=payload.character_name,
-    )
+    try:
+        accepted, rejected = await companion_scan.report_task(
+            db, payload.task_id, payload.found, payload.missing, payload.errors,
+            install, payload.region, character_name=payload.character_name,
+        )
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     log.info("companion/scan/report [%s] task=%d aceito=%d rejeitado=%d",
              _client_ip(request), payload.task_id, accepted, rejected)
     return ScanReportOut(accepted=accepted, rejected=rejected)
@@ -320,6 +475,20 @@ def companion_spells(response: Response) -> list[dict]:
     return _spell_names()
 
 
+@router.get("/companion/items")
+def companion_items(response: Response) -> list[dict]:
+    """Itens por índice do jogo, pro lootlog do companion virar id + nome.
+
+    O índice (`i`) é a numeração de documento do `formatted/items.txt` do
+    ao-data — o MESMO índice que o pacote de loot carrega e que o
+    `ao-loot-logger` usa. NÃO é o campo `Index` do `items.json` (numeração
+    interna diferente, com delta que cresce — dava item errado no lootlog).
+    Ver `market_history._index_to_name`. Inclui variantes `@enchant`.
+    """
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    return market_history.get_index_catalog()
+
+
 class CompanionStatsOut(BaseModel):
     active: int
 
@@ -328,6 +497,54 @@ class CompanionStatsOut(BaseModel):
 def companion_stats(db: Session = Depends(get_session)) -> CompanionStatsOut:
     """Quantos companions ativos agora (instalações distintas, não processos)."""
     return CompanionStatsOut(active=companion_scan.count_active_companions(db))
+
+
+class WarmIn(BaseModel):
+    name: str
+    region: str
+
+
+@router.post("/companion/warm")
+async def companion_warm(body: WarmIn, x_ziggs_install: str | None = Header(default=None)):
+    """Companion nomeia um personagem (o próprio do usuário) pra manter o perfil
+    quente — útil pra quem raramente cai em ZvZ rastreada (gatherer/solo) e por
+    isso nunca era aquecido pelo fluxo de batalhas.
+
+    NOMEAÇÃO só: o backend busca o dado na API pública da Albion, nunca confia
+    em stats vindos do cliente (doutrina do battle scan). Teto por install
+    porque char desconhecido dispara uma busca na Albion."""
+    install = _install_id(x_ziggs_install)
+    name = (body.name or "").strip()
+    region = (body.region or "").strip().lower()
+    if not name or region not in HOSTS:
+        raise HTTPException(400, "name/region inválidos")
+    if not _call_ok(_warm_log, install, 3600.0, 12):  # ~1×/20min sobra
+        raise HTTPException(429, "muitos pedidos de warm")
+    return await profile_warmer.warm_by_name(name, region)
+
+
+class WarmSeenIn(BaseModel):
+    region: str
+    names: list[str]
+
+
+@router.post("/companion/warm/seen")
+def companion_warm_seen(body: WarmSeenIn, x_ziggs_install: str | None = Header(default=None)):
+    """Fase 2: companion reporta players que VÊ em jogo pra mantê-los quentes —
+    cobre quem aparece em briga sub-limiar/roaming que o battle tracker pula.
+
+    REFRESH-ONLY de propósito: só enfileira refresh de quem JÁ conhecemos e está
+    velho. NÃO faz bootstrap de nome desconhecido (evita amplificar busca na
+    Albion com nome aleatório — bootstrap fica só pro próprio char, `/warm`).
+    Nome que não casa é ignorado, então lixo do cliente não custa nada."""
+    install = _install_id(x_ziggs_install)
+    region = (body.region or "").strip().lower()
+    names = (body.names or [])[:100]  # teto de tamanho; resto ignorado
+    if region not in HOSTS or not names:
+        raise HTTPException(400, "region/names inválidos")
+    if not _call_ok(_seen_log, install, 3600.0, 20):  # 1×/5min = 12/h, folga
+        raise HTTPException(429, "muitos pedidos de warm/seen")
+    return profile_warmer.queue_refresh_seen(names, region)
 
 
 # ─── DNS targets ─────────────────────────────────────────────────────────────
@@ -391,16 +608,32 @@ class MarketHistorySubmitOut(BaseModel):
 def market_history_submit(
     payload: MarketHistorySubmitIn,
     request: Request,
+    x_ziggs_install: str | None = Header(default=None),
     db: Session = Depends(get_session),
 ) -> MarketHistorySubmitOut:
     """Ingere histórico de mercado capturado pelo companion (dado público do
-    jogo, sem auth). Cada row é um bucket do gráfico do próprio jogo."""
+    jogo, sem auth). Cada row é um bucket do gráfico do próprio jogo.
+
+    Mesmo teto de vazão dos preços — os dois compartilham a cota por
+    instalação, senão bastaria alternar entre as rotas pra dobrar o limite.
+    """
+    install = _install_id(x_ziggs_install)
+    n = len(payload.rows)
+    if n > _MAX_ROWS_PER_REQUEST:
+        log.warning("companion/market-history/submit [%s] install=%s payload absurdo: %d rows",
+                    _client_ip(request), install or "?", n)
+        raise HTTPException(413, "payload grande demais")
+    if not _rate_ok(install, n):
+        log.warning("companion/market-history/submit [%s] install=%s ESTOUROU o limite (%d rows)",
+                    _client_ip(request), install or "?", n)
+        raise HTTPException(429, "limite de envio excedido")
+
     sample = next(iter(payload.rows), None)
     sample_str = ""
     if sample:
         sample_str = f" item_id={getattr(sample, 'albion_id', '?')} loc={getattr(sample, 'location', '') or '?'}"
-    log.info("companion/market-history/submit [%s] rows=%d%s",
-             _client_ip(request), len(payload.rows), sample_str)
+    log.info("companion/market-history/submit [%s] install=%s rows=%d%s",
+             _client_ip(request), install or "?", n, sample_str)
     rows = [r.model_dump() for r in payload.rows]
     accepted, rejected = market_history.ingest_history(db, rows)
     log.info("companion/market-history/submit [%s] aceito=%d rejeitado=%d",
@@ -412,6 +645,7 @@ def market_history_submit(
 def prices_submit(
     payload: PriceSubmitIn,
     request: Request,
+    x_ziggs_install: str | None = Header(default=None),
     db: Session = Depends(get_session),
 ) -> PriceSubmitOut:
     """Ingere preços de mercado capturados por companions via packet capture.
@@ -419,15 +653,31 @@ def prices_submit(
     Sem auth — preços de marketplace são dados públicos. Cada row é validada
     (item_id + price não-vazio) e upsertada em item_prices/item_prices_latest
     pela mesma lógica do sync_prices.
+
+    A instalação de origem é gravada em `item_prices.source_install` pra dado
+    ruim ser rastreável e expurgável. Não é auth: o cliente escolhe o próprio
+    id. A defesa real contra preço mentiroso é estatística (mediana + corte de
+    outlier por IQR no pipeline de leitura), não este campo.
     """
+    install = _install_id(x_ziggs_install)
+    n = len(payload.rows)
+    if n > _MAX_ROWS_PER_REQUEST:
+        log.warning("companion/prices/submit [%s] install=%s payload absurdo: %d rows",
+                    _client_ip(request), install or "?", n)
+        raise HTTPException(413, "payload grande demais")
+    if not _rate_ok(install, n):
+        log.warning("companion/prices/submit [%s] install=%s ESTOUROU o limite (%d rows)",
+                    _client_ip(request), install or "?", n)
+        raise HTTPException(429, "limite de envio excedido")
+
     sample = next(iter(payload.rows), None)
     sample_str = ""
     if sample:
         sample_str = f" item_id={getattr(sample, 'item_id', '?')} city={getattr(sample, 'city', '') or '?'}"
-    log.info("companion/prices/submit [%s] rows=%d%s",
-             _client_ip(request), len(payload.rows), sample_str)
+    log.info("companion/prices/submit [%s] install=%s rows=%d%s",
+             _client_ip(request), install or "?", n, sample_str)
     rows = [r.model_dump() for r in payload.rows]
-    accepted, rejected = prices.upsert_companion_prices(db, rows)
+    accepted, rejected = prices.upsert_companion_prices(db, rows, source_install=install)
     log.info("companion/prices/submit [%s] aceito=%d rejeitado=%d",
              _client_ip(request), accepted, rejected)
     return PriceSubmitOut(accepted=accepted, rejected=rejected)

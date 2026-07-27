@@ -8,6 +8,7 @@ from app.models.catalog import Weapon, GameRole, WeaponSpell  # noqa: F401
 from app.models.comps import (  # noqa: F401
     Comp, CompParty, CompSlot, CompSlotRole,
 )
+from app.models.comp_preferences import CompRolePreference  # noqa: F401
 from app.models.events import (  # noqa: F401
     Event, EventParticipant, EventVerificationStep, EventStateTransition, EventSignup,
     EventAssignment,
@@ -34,12 +35,15 @@ from app.models.nodes import (  # noqa: F401
 from app.models.companion import (  # noqa: F401
     CompanionScanTask,
 )
+from app.models.guild_profiles import GuildProfile, AllianceProfile  # noqa: F401
+from app.models.profile_media import ProfileMediaSubmission  # noqa: F401
 
 __all__ = [
     "Base",
     "Guild", "User", "GuildMember", "PremiumTier",
     "Weapon", "GameRole", "WeaponSpell",
     "Comp", "CompParty", "CompSlot", "CompSlotRole",
+    "CompRolePreference",
     "Event", "EventParticipant", "EventVerificationStep", "EventStateTransition", "EventSignup", "EventAssignment",
     "AuditLog",
     "EventLootEntry", "GuildChestEntry", "ItemPriceCache", "LootVerification",
@@ -55,4 +59,6 @@ __all__ = [
     "LootLogSubmission",
     "NodeDef", "NodeEvent", "NodeEventLog", "NodeMap", "NodeMapExclusion", "NodeCalendar",
     "CompanionScanTask",
+    "GuildProfile", "AllianceProfile",
+    "ProfileMediaSubmission",
 ]

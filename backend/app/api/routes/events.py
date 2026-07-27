@@ -19,6 +19,7 @@ from app.services import regear as regear_svc
 from app.config import get_settings
 from app.models.prices import ItemPriceLatest
 from app.models.tenancy import Guild, User
+from app.domain.states import EventState
 from app.services import events as svc
 from app.services import event_escalation as esc_svc
 from app.services.prices import _AVG_SENTINEL, sync_5city_prices
@@ -71,9 +72,8 @@ def update_event(
     user: User | None = Depends(deps.optional_user),
     _member=Depends(deps.require_permission("events.manage")),
 ):
-    """Edição parcial: só campos presentes (exclude_unset). Trocar a comp remove
-    os signups (inscrição era pra função da comp antiga) — o bot DMa os inscritos
-    quando a troca vem do /event; do site os signups só são limpos."""
+    """Edição parcial: só campos presentes (exclude_unset). Trocar a comp preserva
+    as inscrições, limpa apenas as roles e pede uma nova escolha por DM."""
     data = payload.model_dump(exclude_unset=True)
     try:
         svc.update_event(
@@ -82,6 +82,10 @@ def update_event(
             scheduled_at=data.get("scheduled_at", svc._UNSET),
             comp_id=data.get("comp_id", svc._UNSET),
             attendance=data.get("attendance", svc._UNSET),
+            signup_mode=data.get("signup_mode", svc._UNSET),
+            assignment_mode=data.get("assignment_mode", svc._UNSET),
+            autofill_mode=data.get("autofill_mode", svc._UNSET),
+            confirm_comp_reset=data.get("confirm_comp_reset", False),
             actor_id=user.id if user else None,
         )
     except svc.ServiceError as e:
@@ -135,6 +139,44 @@ def transition(
         raise HTTPException(status_code=400, detail=str(e))
     db.commit()
     return detail
+
+
+@router.post("/{event_id}/publish", response_model=EventDetail)
+def publish_event(
+    event_id: int,
+    guild: Guild = Depends(deps.tenant_guild),
+    db: Session = Depends(deps.db_session),
+    user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
+):
+    try:
+        detail = svc.transition(
+            db, guild.id, event_id, EventState.SCHEDULED.value,
+            actor_id=user.id if user else None, reason="publish", actor_source="site",
+        )
+        db.commit()
+        return detail
+    except svc.ServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{event_id}/unpublish", response_model=EventDetail)
+def unpublish_event(
+    event_id: int,
+    guild: Guild = Depends(deps.tenant_guild),
+    db: Session = Depends(deps.db_session),
+    user: User | None = Depends(deps.optional_user),
+    _member=Depends(deps.require_permission("events.manage")),
+):
+    try:
+        detail = svc.transition(
+            db, guild.id, event_id, EventState.DRAFT.value,
+            actor_id=user.id if user else None, reason="unpublish", actor_source="site",
+        )
+        db.commit()
+        return detail
+    except svc.ServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/{event_id}/nodes/{node_log_id}/claim", response_model=EventDetail)
@@ -439,8 +481,52 @@ def assign_escalacao(
     db.commit()
     return AssignmentOut(
         slot_id=row.comp_slot_id, user_id=row.user_id,
-        user_name=row.user_name, game_role_id=row.game_role_id,
+        user_name=row.user_name, game_role_id=row.game_role_id, locked=row.locked,
     )
+
+
+@router.post("/{event_id}/escalacao/autofill")
+def autofill_escalacao(
+    event_id: int,
+    guild_id: int = Path(...),
+    db: Session = Depends(deps.db_session),
+    member=Depends(deps.require_permission_provisioning("escalacao.manage")),
+):
+    try:
+        result = esc_svc.autofill_event(db, guild_id, event_id, actor_id=member.user_id)
+    except esc_svc.ServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    return result
+
+
+@router.get("/{event_id}/escalacao/autofill/preview")
+def preview_autofill_escalacao(
+    event_id: int,
+    guild_id: int = Path(...),
+    db: Session = Depends(deps.db_session),
+    _member=Depends(deps.require_permission_provisioning("escalacao.manage")),
+):
+    try:
+        return {"assignments": esc_svc.preview_autofill(db, guild_id, event_id)}
+    except esc_svc.ServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{event_id}/escalacao/autofill/undo")
+def undo_autofill_escalacao(
+    event_id: int,
+    run_id: str,
+    guild_id: int = Path(...),
+    db: Session = Depends(deps.db_session),
+    member=Depends(deps.require_permission_provisioning("escalacao.manage")),
+):
+    try:
+        removed = esc_svc.undo_autofill(db, guild_id, event_id, run_id, member.user_id)
+    except esc_svc.ServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    return {"removed": removed}
 
 
 @router.delete("/{event_id}/escalacao/slot/{slot_id}")

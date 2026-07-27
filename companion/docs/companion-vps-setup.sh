@@ -107,6 +107,11 @@ for ip in "${ips[@]}"; do
   iptables -A "$CHAIN" -i wg0 -d "$ip" -j ACCEPT
 done
 
+# Gameplay Photon: os mesmos /24 reconhecidos pelo sniffer do companion.
+iptables -A "$CHAIN" -i wg0 -d 5.188.125.0/24 -p udp -m multiport --dports 5055,5056,4535 -j ACCEPT
+iptables -A "$CHAIN" -i wg0 -d 5.45.187.0/24 -p udp -m multiport --dports 5055,5056,4535 -j ACCEPT
+iptables -A "$CHAIN" -i wg0 -d 193.169.238.0/24 -p udp -m multiport --dports 5055,5056,4535 -j ACCEPT
+
 # Loga o que foi droppado (com rate-limit pra não encher o log)
 iptables -A "$CHAIN" -i wg0 -m limit --limit 5/min -j LOG --log-prefix "ZIGGS_DROP " --log-level 4
 # Drop default

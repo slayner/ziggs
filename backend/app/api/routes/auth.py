@@ -22,6 +22,8 @@ from app.config import get_settings
 from app.models.audit import AuditLog
 from app.models.battles import BattleGuild
 from app.models.economy import EconomyBalance, EconomyTransaction
+from app.models.events import Event, EventSignup
+from app.models.nodes import NodeEvent
 from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildMember, GuildRolePermission, User
 from app.services import economy as economy_svc
@@ -94,6 +96,9 @@ def discord_callback(
     user.username    = profile.get("username") or user.username or str(uid)
     user.global_name = profile.get("global_name")
     user.avatar      = profile.get("avatar")
+    if profile.get("email"):
+        user.email = profile["email"]
+        user.email_verified = bool(profile.get("verified"))
     access_token = token.get("access_token")
     user.discord_access_token = encrypt_token(access_token) if access_token else None
 
@@ -395,10 +400,9 @@ class GuildSettingsIn(BaseModel):
     # {nome_da_funcao_minusculo: [discord_role_id, ...]} — substitui a tabela
     # role_gates do bot antigo (ver app/services/event_gates.py).
     event_role_gates: dict[str, list[str]] | None = None
-    # Mín/máx de builds (funções) que um inscrito deve/pode escolher. Min>1
-    # conta só builds não-flex; max conta tudo (flex incluído).
+    # Mínimo de roles que um inscrito deve escolher. Toda role conta e não
+    # existe limite máximo.
     signup_min_builds: int | None = None
-    signup_max_builds: int | None = None
     # Canal onde o bot-v2 posta o calendário de nodes (embed persistente).
     nodes_calendar_channel_id: str | None = None
     # Canal de voz "CTA" — o snapshot loop do bot-v2 mede presença aqui p/ o
@@ -438,6 +442,15 @@ class GuildSettingsIn(BaseModel):
     # Mínimo de jogadores numa batalha pra ser postada no feed (filtros por
     # guilda — default 10). Batalhas menores que isso são ignoradas.
     battle_feed_min_players: int | None = None
+    # ── Juicy kills: kills com silver_dropped >= min postadas numa sala do
+    # Discord. O admin escolhe a sala, os servidores (regiões) pra monitorar,
+    # e o threshold de prata (default 50M) e/ou fama. O worker precifica
+    # player_kill_events em background (silver_dropped); o bot-v2 faz poll no
+    # /bot/guilds/{id}/juicy-kill/queue e posta os que cruzam o threshold.
+    juicy_kill_channel_id: str | None = None
+    juicy_kill_min_silver: int | None = None       # default 50_000_000
+    juicy_kill_min_fame: int | None = None         # 0 = não filtra por fama
+    juicy_kill_regions: list[str] | None = None     # [] ou null = todas
 
 
 @router.patch("/auth/guild-settings/{guild_id}")
@@ -527,11 +540,7 @@ async def update_guild_settings(
             settings["signup_min_builds"] = body.signup_min_builds
         else:
             settings.pop("signup_min_builds", None)
-    if "signup_max_builds" in body.model_fields_set:
-        if body.signup_max_builds and body.signup_max_builds > 0:
-            settings["signup_max_builds"] = body.signup_max_builds
-        else:
-            settings.pop("signup_max_builds", None)
+    settings.pop("signup_max_builds", None)
     if "nodes_calendar_channel_id" in body.model_fields_set:
         if body.nodes_calendar_channel_id:
             settings["nodes_calendar_channel_id"] = body.nodes_calendar_channel_id
@@ -601,6 +610,29 @@ async def update_guild_settings(
             settings["battle_feed_min_players"] = body.battle_feed_min_players
         else:
             settings.pop("battle_feed_min_players", None)
+    if "juicy_kill_channel_id" in body.model_fields_set:
+        if body.juicy_kill_channel_id:
+            settings["juicy_kill_channel_id"] = body.juicy_kill_channel_id
+            if "juicy_kill_last_id" not in settings:
+                # Inicializa cursor no maior PlayerKillEvent.id existente —
+                # senão trocar de canal despejaria histórico no canal novo.
+                from app.models.players import PlayerKillEvent
+                settings["juicy_kill_last_id"] = db.scalar(select(func.max(PlayerKillEvent.id))) or 0
+        else:
+            settings.pop("juicy_kill_channel_id", None)
+    if "juicy_kill_min_silver" in body.model_fields_set:
+        if body.juicy_kill_min_silver and body.juicy_kill_min_silver > 0:
+            settings["juicy_kill_min_silver"] = body.juicy_kill_min_silver
+        else:
+            settings.pop("juicy_kill_min_silver", None)
+    if "juicy_kill_min_fame" in body.model_fields_set:
+        if body.juicy_kill_min_fame and body.juicy_kill_min_fame > 0:
+            settings["juicy_kill_min_fame"] = body.juicy_kill_min_fame
+        else:
+            settings.pop("juicy_kill_min_fame", None)
+    if "juicy_kill_regions" in body.model_fields_set:
+        regs = [r for r in (body.juicy_kill_regions or []) if r in HOSTS]
+        settings["juicy_kill_regions"] = regs  # [] = todas
     g.settings = settings
 
     db.commit()
@@ -959,6 +991,10 @@ def bot_guild_commands(
         "bot_logs_enabled": settings.get("bot_logs_enabled", True),
         "battle_feed_channel_id": settings.get("battle_feed_channel_id"),
         "battle_feed_min_players": settings.get("battle_feed_min_players", 10),
+        "juicy_kill_channel_id": settings.get("juicy_kill_channel_id"),
+        "juicy_kill_min_silver": settings.get("juicy_kill_min_silver", 50_000_000),
+        "juicy_kill_min_fame": settings.get("juicy_kill_min_fame", 0),
+        "juicy_kill_regions": settings.get("juicy_kill_regions", []),
     }
 
 
@@ -1039,7 +1075,7 @@ def bot_audit_log_synced(
     if g is None:
         raise HTTPException(404)
     settings = dict(g.settings or {})
-    settings["logs_last_sent_id"] = body.last_id
+    settings["logs_last_sent_id"] = max(int(settings.get("logs_last_sent_id", 0)), body.last_id)
     g.settings = settings
     db.commit()
     return {"ok": True}
@@ -1139,7 +1175,7 @@ def bot_battle_feed_synced(
     if g is None:
         raise HTTPException(404)
     settings = dict(g.settings or {})
-    settings["battle_feed_last_id"] = body.last_id
+    settings["battle_feed_last_id"] = max(int(settings.get("battle_feed_last_id", 0)), body.last_id)
     g.settings = settings
     db.commit()
     return {"ok": True}
@@ -1171,6 +1207,21 @@ async def bot_register(
 
     name = body.albion_player_name.strip()
     nl = name.lower()
+    # Resposta perdida depois do commit: reaplica o cargo sem depender de uma
+    # segunda consulta à API da Albion (que pode estar instável justamente
+    # durante a repetição).
+    previous = db.scalar(select(BotRegistration).where(
+        BotRegistration.guild_id == guild_id,
+        BotRegistration.discord_user_id == int(body.discord_user_id),
+        func.lower(BotRegistration.albion_player_name) == nl,
+        BotRegistration.active.is_(True),
+    ))
+    if previous:
+        return {
+            "ok": True,
+            "role_id": str(previous.role_id),
+            "albion_player_name": previous.albion_player_name,
+        }
     found: dict | None = None
     region: str | None = None
     any_host_ok = False
@@ -1240,6 +1291,15 @@ async def bot_register(
         BotRegistration.albion_player_id == albion_player_id,
     ))
     if existing and existing.active:
+        # Idempotente: se a resposta do primeiro registro se perdeu, a nova
+        # tentativa precisa devolver os dados necessários para o bot aplicar o
+        # cargo no Discord. Outro usuário continua sem poder tomar o registro.
+        if existing.discord_user_id == int(body.discord_user_id):
+            return {
+                "ok": True,
+                "role_id": str(existing.role_id),
+                "albion_player_name": existing.albion_player_name,
+            }
         return {"ok": False, "reason": "already_registered"}
 
     if existing:
@@ -1281,7 +1341,7 @@ def bot_unregister(
     pelo nick do Albion, já que o bot aceita os dois. Devolve role_ids e
     discord_user_ids pra o bot remover a tag de quem perdeu o registro."""
     _require_bot_secret(authorization)
-    conditions = [BotRegistration.guild_id == guild_id, BotRegistration.active.is_(True)]
+    conditions = [BotRegistration.guild_id == guild_id]
     if body.discord_user_id:
         conditions.append(BotRegistration.discord_user_id == int(body.discord_user_id))
     elif body.albion_player_name:
@@ -1427,6 +1487,7 @@ class EconomyPayIn(BaseModel):
     from_user_id: int
     to_user_id: int
     amount: int
+    request_id: str | None = None
 
 
 @router.post("/bot/economy/pay/{guild_id}")
@@ -1439,6 +1500,18 @@ def bot_economy_pay(
     _require_bot_secret(authorization)
     if body.amount <= 0:
         raise HTTPException(400, "amount deve ser positivo")
+    if body.request_id:
+        previous = db.scalar(select(EconomyTransaction).where(
+            EconomyTransaction.request_id == body.request_id,
+            EconomyTransaction.guild_id == guild_id,
+        ))
+        if previous:
+            sender = _get_or_create_balance(db, guild_id, body.from_user_id)
+            receiver = _get_or_create_balance(db, guild_id, body.to_user_id)
+            return {
+                "ok": True, "from_balance": sender.balance,
+                "to_balance": receiver.balance, "transaction_id": previous.id,
+            }
     sender = _get_or_create_balance(db, guild_id, body.from_user_id)
     if sender.balance < body.amount:
         return {"ok": False, "from_balance": sender.balance}
@@ -1447,6 +1520,7 @@ def bot_economy_pay(
     receiver.balance += body.amount
     receiver.total_earned += body.amount
     tx = EconomyTransaction(
+        request_id=body.request_id,
         guild_id=guild_id, kind="pay", actor_discord_id=body.from_user_id,
         from_user_id=body.from_user_id, to_user_id=body.to_user_id,
         total_earned_user_id=body.to_user_id, amount=body.amount,
@@ -1461,6 +1535,7 @@ class EconomyAddIn(BaseModel):
     discord_user_id: int
     amount: int
     actor_discord_id: int
+    request_id: str | None = None
 
 
 @router.post("/bot/economy/add/{guild_id}")
@@ -1473,10 +1548,22 @@ def bot_economy_add(
     _require_bot_secret(authorization)
     if body.amount <= 0:
         raise HTTPException(400, "amount deve ser positivo")
+    if body.request_id:
+        previous = db.scalar(select(EconomyTransaction).where(
+            EconomyTransaction.request_id == body.request_id,
+            EconomyTransaction.guild_id == guild_id,
+        ))
+        if previous:
+            bal = _get_or_create_balance(db, guild_id, body.discord_user_id)
+            return {
+                "balance": bal.balance, "total_earned": bal.total_earned,
+                "transaction_id": previous.id,
+            }
     bal = _get_or_create_balance(db, guild_id, body.discord_user_id)
     bal.balance += body.amount
     bal.total_earned += body.amount
     tx = EconomyTransaction(
+        request_id=body.request_id,
         guild_id=guild_id, kind="add", actor_discord_id=body.actor_discord_id,
         from_user_id=None, to_user_id=body.discord_user_id,
         total_earned_user_id=body.discord_user_id, amount=body.amount,
@@ -1496,6 +1583,7 @@ class EconomyRemoveIn(BaseModel):
     # ao bot legado (remove_user_money).
     allow_negative: bool = False
     actor_discord_id: int
+    request_id: str | None = None
 
 
 @router.post("/bot/economy/remove/{guild_id}")
@@ -1508,12 +1596,24 @@ def bot_economy_remove(
     _require_bot_secret(authorization)
     if body.amount <= 0:
         raise HTTPException(400, "amount deve ser positivo")
+    if body.request_id:
+        previous = db.scalar(select(EconomyTransaction).where(
+            EconomyTransaction.request_id == body.request_id,
+            EconomyTransaction.guild_id == guild_id,
+        ))
+        if previous:
+            bal = _get_or_create_balance(db, guild_id, body.discord_user_id)
+            return {
+                "removed": previous.amount, "balance": bal.balance,
+                "transaction_id": previous.id,
+            }
     bal = _get_or_create_balance(db, guild_id, body.discord_user_id)
     actual = body.amount if body.allow_negative else min(bal.balance, body.amount)
     bal.balance -= actual
     transaction_id = None
     if actual > 0:
         tx = EconomyTransaction(
+            request_id=body.request_id,
             guild_id=guild_id, kind="remove", actor_discord_id=body.actor_discord_id,
             from_user_id=body.discord_user_id, to_user_id=None,
             total_earned_user_id=None, amount=actual,
@@ -1527,10 +1627,15 @@ def bot_economy_remove(
     return {"removed": actual, "balance": bal.balance, "transaction_id": transaction_id}
 
 
+class EconomyUndoIn(BaseModel):
+    request_id: str | None = None
+
+
 @router.post("/bot/economy/undo/{guild_id}/{transaction_id}")
 def bot_economy_undo(
     guild_id: int,
     transaction_id: int,
+    body: EconomyUndoIn,
     authorization: str = Header(...),
     db: Session = Depends(deps.db_session),
 ):
@@ -1544,6 +1649,11 @@ def bot_economy_undo(
     if tx is None:
         return {"ok": False, "reason": "not_found"}
     if tx.undone:
+        if body.request_id and tx.undo_request_id == body.request_id:
+            return {
+                "ok": True, "kind": tx.kind, "amount": tx.amount,
+                "from_user_id": tx.from_user_id, "to_user_id": tx.to_user_id,
+            }
         return {"ok": False, "reason": "already_undone"}
 
     if tx.from_user_id is not None:
@@ -1554,6 +1664,7 @@ def bot_economy_undo(
         _get_or_create_balance(db, guild_id, tx.total_earned_user_id).total_earned -= tx.amount
 
     tx.undone = True
+    tx.undo_request_id = body.request_id
     db.commit()
     return {
         "ok": True, "kind": tx.kind, "amount": tx.amount,
@@ -1639,12 +1750,25 @@ def bot_events_pending_work(
     g = db.scalar(select(Guild).where(Guild.id == guild_id))
     settings = (g.settings or {}) if g else {}
     ping_triggers = [] if force else event_signups_svc.get_pending_ping_triggers(settings)
+    function_prompts = [] if force else event_signups_svc.get_pending_function_prompts(settings)
+    function_prompt_deletes = (
+        [] if force else event_signups_svc.get_pending_function_prompt_deletes(settings)
+    )
     # force=True ignora o gate de dirty/staleness — usado só no catch-up de
     # on_ready do bot-v2: um restart invalida os bindings de View em memória
     # (botões do mass-info) independente de o conteúdo ter mudado, então o
     # embed precisa ser reeditado mesmo "fresco" pra religar os botões.
-    if not force and not event_signups_svc.has_pending_work(db, guild_id, events) and not ping_triggers:
-        return {"events": [], "ping_triggers": []}
+    if (
+        not force
+        and not event_signups_svc.has_pending_work(db, guild_id, events)
+        and not ping_triggers
+        and not function_prompts
+        and not function_prompt_deletes
+    ):
+        return {
+            "events": [], "ping_triggers": [], "function_prompts": [],
+            "function_prompt_deletes": [],
+        }
     # needs_rebuild sinaliza ao bot pra reeditar o embed MESMO quando events é
     # vazio — caso do último evento ativo ter sido cancelado/finalizado/excluído:
     # o dirty mora num evento terminal (fora de ACTIVE_STATES), has_pending_work
@@ -1653,11 +1777,14 @@ def bot_events_pending_work(
     payload = event_signups_svc.build_pending_work(db, guild_id, events)
     payload["needs_rebuild"] = True
     payload["ping_triggers"] = ping_triggers
+    payload["function_prompts"] = function_prompts
+    payload["function_prompt_deletes"] = function_prompt_deletes
     return payload
 
 
 class MassinfoSyncedIn(BaseModel):
     message_id: str
+    ack_ping_triggers: bool = False
 
 
 @router.post("/bot/events/{guild_id}/massinfo-synced")
@@ -1675,6 +1802,8 @@ def bot_events_massinfo_synced(
     settings["massinfo_message_id"] = body.message_id
     g.settings = settings
     event_signups_svc.mark_massinfo_synced(db, guild_id)
+    if body.ack_ping_triggers:
+        event_signups_svc.ack_ping_triggers(db, guild_id)
     db.commit()
     return {"ok": True}
 
@@ -1696,6 +1825,53 @@ def bot_events_ping_triggers_acked(
     return {"ok": True}
 
 
+@router.post("/bot/events/{guild_id}/function-prompts-acked")
+def bot_events_function_prompts_acked(
+    guild_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    event_signups_svc.ack_function_prompts(db, guild_id)
+    db.commit()
+    return {"ok": True}
+
+
+class FunctionPromptMessagesIn(BaseModel):
+    messages: list[dict]
+
+
+@router.post("/bot/events/{guild_id}/function-prompt-messages")
+def bot_events_function_prompt_messages(
+    guild_id: int,
+    body: FunctionPromptMessagesIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    event_signups_svc.record_function_prompt_messages(db, guild_id, body.messages)
+    event_signups_svc.ack_function_prompts(db, guild_id)
+    db.commit()
+    return {"ok": True}
+
+
+class FunctionPromptDeletesAckIn(BaseModel):
+    message_ids: list[str]
+
+
+@router.post("/bot/events/{guild_id}/function-prompt-deletes-acked")
+def bot_events_function_prompt_deletes_acked(
+    guild_id: int,
+    body: FunctionPromptDeletesAckIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    _require_bot_secret(authorization)
+    event_signups_svc.ack_function_prompt_deletes(db, guild_id, set(body.message_ids))
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/bot/events/{guild_id}/{event_id}/eligible-functions")
 def bot_events_eligible_functions(
     guild_id: int,
@@ -1708,25 +1884,30 @@ def bot_events_eligible_functions(
     _require_bot_secret(authorization)
     g = db.scalar(select(Guild).where(Guild.id == guild_id))
     event_role_gates = ((g.settings or {}) if g else {}).get("event_role_gates", {})
+    event = db.scalar(select(Event).where(Event.id == event_id, Event.guild_id == guild_id))
     try:
-        functions, reason, current, categories, min_builds, max_builds, flex_names = event_signups_svc.get_eligible_functions(
+        functions, reason, current, categories, min_builds = event_signups_svc.get_eligible_functions(
             db, guild_id, event_id, discord_user_id, _parse_role_ids(discord_role_ids), event_role_gates,
         )
     except ServiceError as e:
         raise HTTPException(404, str(e))
+    profile_functions = event_signups_svc.get_role_profile(
+        db, guild_id, event.comp_id if event else None, discord_user_id,
+    )
     return {
         "functions": functions,
         "categories": {f: categories.get(f, "other") for f in functions},
         "denial_reason": reason,
         "signup_min_builds": min_builds,
-        "signup_max_builds": max_builds,
-        "flex_names": sorted(flex_names),
+        "assignment_mode": event.assignment_mode if event else "hybrid",
+        "functions_released": bool(event and event.functions_released),
         "current_signup": (
             {
                 "functions": list(current.functions or []),
             }
             if current else None
         ),
+        "profile_functions": profile_functions,
     }
 
 
@@ -1755,10 +1936,40 @@ def bot_events_upsert_signup(
         )
     except ServiceError as e:
         raise HTTPException(404, str(e))
+    event = db.get(Event, event_id)
     db.commit()
     return {
         "ok": True,
         "functions": list(row.functions or []),
+        "assignment_mode": event.assignment_mode if event else "hybrid",
+    }
+
+
+@router.get("/bot/events/{guild_id}/{event_id}/signups/{user_id}")
+def bot_events_get_signup(
+    guild_id: int,
+    event_id: int,
+    user_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Confirmação read-after-write usada pelo bot quando a resposta do POST
+    pode ter se perdido depois do commit."""
+    _require_bot_secret(authorization)
+    event = db.scalar(select(Event).where(
+        Event.id == event_id, Event.guild_id == guild_id,
+    ))
+    if event is None:
+        raise HTTPException(404, "evento não encontrado")
+    row = db.scalar(select(EventSignup).where(
+        EventSignup.event_id == event_id,
+        EventSignup.guild_id == guild_id,
+        EventSignup.user_id == user_id,
+    ))
+    return {
+        "exists": row is not None,
+        "functions": list(row.functions or []) if row else [],
+        "assignment_mode": event.assignment_mode,
     }
 
 
@@ -1839,6 +2050,11 @@ def bot_events_transition(
     db: Session = Depends(deps.db_session),
 ):
     _require_bot_secret(authorization)
+    current = db.scalar(select(Event).where(
+        Event.id == event_id, Event.guild_id == guild_id,
+    ))
+    if current is not None and current.state.value == body.to:
+        return events_svc.get_event(db, guild_id, event_id)
     try:
         detail = events_svc.transition(
             db, guild_id, event_id, body.to,
@@ -1880,8 +2096,13 @@ class BotEventCreateIn(BaseModel):
     scheduled_at: str | None = None      # ISO UTC (o bot manda datetime.isoformat())
     comp_id: int | None = None
     message: str | None = None
+    publish: bool | None = None
+    signup_mode: str = "signup"
+    assignment_mode: str = "hybrid"
+    autofill_mode: str = "manual"
     actor_id: int | None = None
     actor_name: str | None = None
+    request_id: str | None = None
 
 
 @router.post("/bot/events/{guild_id}")
@@ -1891,6 +2112,13 @@ def bot_events_create(
     db: Session = Depends(deps.db_session),
 ):
     _require_bot_secret(authorization)
+    if body.request_id:
+        previous = db.scalar(select(Event).where(
+            Event.bot_request_id == body.request_id,
+            Event.guild_id == guild_id,
+        ))
+        if previous:
+            return {"id": previous.id}
     from datetime import datetime
     scheduled_at = None
     if body.scheduled_at:
@@ -1902,11 +2130,16 @@ def bot_events_create(
         eid = events_svc.create_event(
             db, guild_id,
             EventCreate(title=body.title, scheduled_at=scheduled_at,
-                        comp_id=body.comp_id, message=body.message),
+                        comp_id=body.comp_id, message=body.message,
+                        publish=body.publish, signup_mode=body.signup_mode,
+                        assignment_mode=body.assignment_mode,
+                        autofill_mode=body.autofill_mode),
             actor_id=body.actor_id, caller_name=body.actor_name,
         )
     except events_svc.ServiceError as e:
         raise HTTPException(400, str(e))
+    if body.request_id:
+        db.get(Event, eid).bot_request_id = body.request_id
     db.commit()
     return {"id": eid}
 
@@ -1922,6 +2155,7 @@ class BotEventUpdateIn(BaseModel):
     set_scheduled_at: bool = False
     set_comp: bool = False
     set_attendance: bool = False
+    confirm_comp_reset: bool = False
 
 
 @router.patch("/bot/events/{guild_id}/{event_id}")
@@ -1931,7 +2165,7 @@ def bot_events_update(
     db: Session = Depends(deps.db_session),
 ):
     """Edição por campo do /event editar. Devolve notified_signups quando a comp
-    trocou e havia inscritos — o bot manda a DM pedindo reping."""
+    trocou e havia inscritos — o bot pede as novas roles por DM."""
     _require_bot_secret(authorization)
     from datetime import datetime
     scheduled_at = events_svc._UNSET
@@ -1950,6 +2184,7 @@ def bot_events_update(
             scheduled_at=scheduled_at,
             comp_id=body.comp_id if body.set_comp else events_svc._UNSET,
             attendance=body.attendance if body.set_attendance else events_svc._UNSET,
+            confirm_comp_reset=body.confirm_comp_reset,
             actor_id=body.actor_id,
         )
     except events_svc.ServiceError as e:
@@ -1966,6 +2201,11 @@ def bot_events_delete(
     db: Session = Depends(deps.db_session),
 ):
     _require_bot_secret(authorization)
+    current = db.scalar(select(Event).where(
+        Event.id == event_id, Event.guild_id == guild_id,
+    ))
+    if current is not None and current.state.value == "deleted":
+        return {"ok": True}
     try:
         events_svc.delete_event(db, guild_id, event_id, actor_id, actor_source="bot")
     except events_svc.ServiceError as e:
@@ -2399,6 +2639,7 @@ class BotNodeEventIn(BaseModel):
     added_by_id: int | None = None
     added_by_name: str | None = None
     allow_duplicate: bool = False
+    request_id: str | None = None
 
 
 @router.get("/bot/guilds/{guild_id}/nodes/calendar")
@@ -2447,6 +2688,13 @@ def bot_nodes_add(guild_id: int, body: BotNodeEventIn,
                   authorization: str = Header(...),
                   db: Session = Depends(deps.db_session)):
     _require_bot_secret(authorization)
+    if body.request_id:
+        previous = db.scalar(select(NodeEvent).where(
+            NodeEvent.bot_request_id == body.request_id,
+            NodeEvent.guild_id == guild_id,
+        ))
+        if previous:
+            return {"ok": True, "id": previous.id}
     from datetime import datetime as _dt
     try:
         spawn = _dt.fromisoformat(body.spawn_at)
@@ -2461,6 +2709,7 @@ def bot_nodes_add(guild_id: int, body: BotNodeEventIn,
         )
     except nodes_svc.ServiceError as e:
         raise HTTPException(400, str(e))
+    e.bot_request_id = body.request_id
     db.commit()
     return {"ok": True, "id": e.id}
 
@@ -2469,9 +2718,9 @@ def bot_nodes_add(guild_id: int, body: BotNodeEventIn,
 def bot_nodes_delete(guild_id: int, event_id: int, authorization: str = Header(...),
                      db: Session = Depends(deps.db_session)):
     _require_bot_secret(authorization)
-    ok = nodes_svc.delete_event(db, guild_id, event_id)
+    nodes_svc.delete_event(db, guild_id, event_id)
     db.commit()
-    return {"ok": ok}
+    return {"ok": True}
 
 
 @router.get("/bot/guilds/{guild_id}/nodes/removable")
@@ -2581,6 +2830,151 @@ def logout():
 
 
 # ── Helpers internos ──────────────────────────────────────────────────────────
+
+# ── Bot: juicy kills (kills com silver_dropped >= threshold) ────────────────
+#
+# O admin configura sala + regiões + threshold no site (GuildConfig). O bot-v2
+# faz poll neste endpoint, pega kills que cruzaram o threshold desde o último
+# poll, posta na sala (embed + imagem), e avança o cursor com /juicy-kill/synced.
+# Mesmo pattern do battle-feed. silver_dropped é precificado pelo worker
+# silver_dropped (services/silver_dropped.py) — kills sem preço ainda ficam
+# NULL e não entram no queue (o bot não posta kill sem valor calculado).
+
+_JUICY_KILL_BATCH = 25
+
+
+@router.get("/bot/guilds/{guild_id}/juicy-kill/queue")
+def bot_juicy_kill_queue(
+    guild_id: int, authorization: str = Header(...), db: Session = Depends(deps.db_session),
+):
+    """Próximo lote de juicy kills (silver_dropped >= min) ainda não postados.
+    Cursor em Guild.settings.juicy_kill_last_id."""
+    _require_bot_secret(authorization)
+    from app.models.players import PlayerKillEvent
+    from app.services.lethality import is_likely_lethal
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    settings = g.settings or {}
+    channel_id = settings.get("juicy_kill_channel_id")
+    if not channel_id:
+        return {"kills": []}
+    min_silver = settings.get("juicy_kill_min_silver", 50_000_000)
+    min_fame = settings.get("juicy_kill_min_fame", 0)
+    regions = settings.get("juicy_kill_regions") or []
+    since_id = settings.get("juicy_kill_last_id", 0)
+
+    q = select(PlayerKillEvent).where(
+        PlayerKillEvent.id > since_id,
+        PlayerKillEvent.silver_dropped >= min_silver,
+        PlayerKillEvent.fame > 0,
+    )
+    if min_fame > 0:
+        q = q.where(PlayerKillEvent.fame >= min_fame)
+    if regions:
+        q = q.where(PlayerKillEvent.region.in_(regions))
+    candidates = db.scalars(q.order_by(PlayerKillEvent.id.asc()).limit(_JUICY_KILL_BATCH * 4)).all()
+    events = []
+    dirty = False
+    for ev in candidates:
+        if not is_likely_lethal(ev.fame, ev.victim_equipment, ev.group_member_count):
+            # Segunda barreira para ledger legado/manual: tira o falso positivo
+            # da fila em vez de deixá-lo bloquear o cursor para sempre.
+            ev.silver_dropped = 0
+            dirty = True
+            continue
+        events.append(ev)
+        if len(events) == _JUICY_KILL_BATCH:
+            break
+    if dirty:
+        db.commit()
+    if not events:
+        return {"kills": []}
+
+    out = []
+    for ev in events:
+        out.append(_juicy_kill_payload(db, ev))
+    return {"kills": out}
+
+
+def _juicy_kill_payload(db: Session, ev) -> dict:
+    """Payload de uma juicy kill pro bot — tudo que ele precisa pra montar o
+    embed e a imagem: killer/victim (nome, guilda, aliança), equipamento,
+    inventário, fama, silver_dropped, região, timestamp."""
+    from app.models.players import AlbionPlayer
+    from app.services.battle_tracker import publish_delay_status
+    killer = db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.killer_player_id)) if ev.killer_player_id else None
+    victim = db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.victim_player_id)) if ev.victim_player_id else None
+    delay = publish_delay_status().get(ev.region, {})
+    return {
+        "id": ev.id,
+        "region": ev.region,
+        "api_delay_secs": delay.get("delay_secs"),
+        "albion_event_id": ev.albion_event_id,
+        "timestamp": ev.timestamp.isoformat() if ev.timestamp else None,
+        "fame": ev.fame,
+        "silver_dropped": ev.silver_dropped or 0,
+        "is_solo": ev.is_solo,
+        "participant_count": ev.participant_count,
+        "participants": ev.participants or [],
+        "group_member_count": ev.group_member_count,
+        "albion_battle_id": ev.albion_battle_id,
+        "kill_area": ev.kill_area,
+        "killer": {
+            "name": killer.name if killer else None,
+            "albion_id": killer.albion_id if killer else None,
+            "guild_name": killer.guild_name if killer else None,
+            "alliance_name": killer.alliance_name if killer else None,
+        } if killer else None,
+        "victim": {
+            "name": victim.name if victim else None,
+            "albion_id": victim.albion_id if victim else None,
+            "guild_name": victim.guild_name if victim else None,
+            "alliance_name": victim.alliance_name if victim else None,
+        } if victim else None,
+        "killer_equipment": ev.killer_equipment,
+        "victim_equipment": ev.victim_equipment,
+        "victim_inventory": ev.victim_inventory,
+    }
+
+
+class JuicyKillSyncedIn(BaseModel):
+    last_id: int
+
+
+@router.post("/bot/guilds/{guild_id}/juicy-kill/synced")
+def bot_juicy_kill_synced(
+    guild_id: int, body: JuicyKillSyncedIn,
+    authorization: str = Header(...), db: Session = Depends(deps.db_session),
+):
+    """Avança o cursor após o bot postar as kills com sucesso."""
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    settings = dict(g.settings or {})
+    settings["juicy_kill_last_id"] = max(int(settings.get("juicy_kill_last_id", 0)), body.last_id)
+    g.settings = settings
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/bot/guilds/{guild_id}/juicy-kill/{kill_id}/image")
+async def bot_juicy_kill_image(
+    guild_id: int, kill_id: int, authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    from fastapi.responses import FileResponse
+    from app.services.juicy_kill_image import render_juicy_kill_image
+
+    _require_bot_secret(authorization)
+    if db.scalar(select(Guild.id).where(Guild.id == guild_id)) is None:
+        raise HTTPException(404)
+    path = await render_juicy_kill_image(db, kill_id)
+    if path is None:
+        raise HTTPException(404, "juicy kill não encontrada")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
 
 def _require_member(db: Session, user: User, guild_id: int) -> GuildMember:
     m = db.scalar(select(GuildMember).where(

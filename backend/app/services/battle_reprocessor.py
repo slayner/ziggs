@@ -74,6 +74,7 @@ async def _reprocess_batch(client, db) -> int:
             priority_fn = lambda b: battle_priority(b, is_new=not _is_frozen(b, now))
         for result in await _backfill_deep_fetch_all(client, host, region_battles, priority_fn=priority_fn):
             battle = result[0]
+            battle_id = battle.id
             if isinstance(result[1], Exception):
                 log.warning("battle_reprocessor: falha ao buscar %s (%s): %r", battle.albion_id, region, result[1])
                 continue
@@ -90,8 +91,12 @@ async def _reprocess_batch(client, db) -> int:
             # batalha saía da fila mesmo sem nunca ter sido processada de
             # verdade, e ficava perdida pra sempre sem sinal de erro.
             if ok:
-                battle.reprocess_reason = None
-                db.commit()
+                # Batalha não-lethal é deletada dentro de _write_deep_data.
+                # Não acesse o objeto expirado depois desse DELETE.
+                remaining = db.get(Battle, battle_id)
+                if remaining is not None:
+                    remaining.reprocess_reason = None
+                    db.commit()
                 processed += 1
 
     return processed

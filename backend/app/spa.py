@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -32,8 +32,8 @@ _REGION_NAME = {"am": "Americas", "as": "Asia", "eu": "Europe"}
 def _og_for_path(path: str) -> tuple[str, str, str | None]:
     """(title, description, image_url|None) da rota — só com a URL, sem DB.
 
-    Batalha por código busca o resumo no banco (é o link mais colado no
-    Discord e o PNG de preview já existe); o resto deriva título da URL.
+    Batalha por código busca o resumo no banco: /{code} é tanto a URL pública
+    da página quanto a URL que o Discord lê para montar o embed.
     """
     m = _PLAYER_RE.match(path)
     if m:
@@ -61,7 +61,7 @@ def _og_for_path(path: str) -> tuple[str, str, str | None]:
 
 
 def _battle_summary(public_id: str) -> tuple[str, str | None]:
-    """Título + URL do PNG de preview (mesma lógica do /battles/embed/)."""
+    """Título + URL do PNG de preview da batalha."""
     try:
         from app.config import get_settings
         from app.db import SessionLocal
@@ -112,12 +112,22 @@ def install(app: FastAPI) -> None:
         return  # sem build → backend segue API-only (dev com Vite server)
 
     index_html = index_file.read_text(encoding="utf-8")
+    docs_file = _DIST / "docs.html"
 
     @app.get("/{full_path:path}", include_in_schema=False)
-    async def spa(full_path: str):  # noqa: ANN202
+    async def spa(full_path: str, request: Request):  # noqa: ANN202
         # Arquivo estático real do dist (assets/, data/, favicon…)?
         if full_path:
             f = (_DIST / full_path).resolve()
             if f.is_file() and _DIST in f.parents:
                 return FileResponse(f)
+        # O mesmo processo pode servir o site e docs.*. Não inferimos o host
+        # por prefixo: o valor explícito evita capturar staging ou outro
+        # subdomínio por acidente. Assets já retornaram acima; qualquer rota
+        # restante do host de docs cai no entrypoint correto.
+        from app.config import get_settings
+        docs_host = get_settings().docs_host.strip().lower()
+        request_host = request.headers.get("host", "").split(":", 1)[0].lower()
+        if docs_file.is_file() and docs_host and request_host == docs_host:
+            return FileResponse(docs_file)
         return HTMLResponse(_inject_og(index_html, full_path))

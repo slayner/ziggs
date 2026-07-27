@@ -4,8 +4,15 @@
 //
 // Zone-aware: se o jogador estiver em zona PvP (e pvp_pause_transfer=true),
 // o report vai pra fila local em vez do backend. Flush quando voltar pra zona azul.
+//
+// Throttle adaptativo: o delay entre sondagens sobe/desce conforme a API do
+// Albion responde. 429 → recua multiplicativo (×2, teto 5s). 200 sustentado →
+// recupera aditivo (-50ms por sondagem, piso 150ms). Mesma filosofia AIMD do
+// albion_gate no backend, mas no client — porque o companion fala direto com
+// a API pública, não passa pelo rate limiter do servidor.
 
 use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -13,6 +20,14 @@ use std::sync::Arc;
 
 use crate::api::{ApiClient, ScanClaim, ScanReportIn};
 use crate::transfer::TransferQueue;
+
+/// Delay entre sondagens — adaptativo. Começa em 150ms (cortesia mínima).
+/// 429 dobra (teto 5s). 200 sustentado recupera -50ms por sondagem (piso 150ms).
+/// Atômico pra não precisar de lock no hot loop do scan.
+const THROTTLE_MIN_MS: u64 = 150;
+const THROTTLE_MAX_MS: u64 = 5_000;
+const THROTTLE_START_MS: u64 = 150;
+const THROTTLE_RECOVER_MS: u64 = 50;  // -50ms por 200 sustentado
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScanStats {
@@ -25,6 +40,7 @@ pub struct ScanStats {
     pub last_error: Option<String>,
     pub queued_reports: usize,
     pub zone: String,               // "blue" | "pvp" | "unknown"
+    pub throttle_ms: u64,           // delay adaptativo entre sondagens (transparência)
 }
 
 impl Default for ScanStats {
@@ -39,13 +55,14 @@ impl Default for ScanStats {
             last_error: None,
             queued_reports: 0,
             zone: "blue".into(),
+            throttle_ms: THROTTLE_START_MS,
         }
     }
 }
 
 pub struct Scanner {
     pub stats: Arc<Mutex<ScanStats>>,
-    shutdown: Arc<Mutex<bool>>,
+    shutdown: Arc<AtomicBool>,
     /// Zona atual — lida por commands da UI (set_zone). Default: blue (envia direto).
     pub zone: Arc<Mutex<crate::transfer::ZoneType>>,
     /// Fila de transferência — compartilhada com AppState.
@@ -55,17 +72,21 @@ pub struct Scanner {
     /// Nick do jogador — vai no report pro backend creditar batalhas novas
     /// (agradecimento na página pública). Mutável via set_config.
     pub character_name: Arc<Mutex<Option<String>>>,
+    /// Delay entre sondagens (ms), adaptativo. 429 dobra, 200 sustentado recupera.
+    /// Atômico: lido/escrito no hot loop do cycle sem lock.
+    pub throttle_ms: Arc<AtomicU64>,
 }
 
 impl Scanner {
     pub fn new() -> Self {
         Self {
             stats: Arc::new(Mutex::new(ScanStats::default())),
-            shutdown: Arc::new(Mutex::new(false)),
+            shutdown: Arc::new(AtomicBool::new(false)),
             zone: Arc::new(Mutex::new(crate::transfer::ZoneType::Blue)),
             queue: None,
             pvp_pause: Arc::new(Mutex::new(true)),
             character_name: Arc::new(Mutex::new(None)),
+            throttle_ms: Arc::new(AtomicU64::new(THROTTLE_START_MS)),
         }
     }
 
@@ -75,24 +96,29 @@ impl Scanner {
     }
 
     /// Clona os Arcs internos pra criar um scanner que roda numa task separada
-    /// mas compartilha stats/zone/queue/pvp_pause com o original.
+    /// mas compartilha stats/zone/queue/pvp_pause/throttle com o original.
     pub fn clone_for_spawn(&self) -> Scanner {
         Scanner {
             stats: Arc::clone(&self.stats),
-            shutdown: Arc::new(Mutex::new(false)),
+            shutdown: Arc::clone(&self.shutdown),
             zone: Arc::clone(&self.zone),
             queue: self.queue.as_ref().map(Arc::clone),
             pvp_pause: Arc::clone(&self.pvp_pause),
             character_name: Arc::clone(&self.character_name),
+            throttle_ms: Arc::clone(&self.throttle_ms),
         }
     }
 
     pub async fn stop(&self) {
-        *self.shutdown.lock().await = true;
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+
+    pub fn prepare_start(&self) {
+        self.shutdown.store(false, Ordering::Relaxed);
     }
 
     /// Define a zona atual. Se mudar de PvP→Blue, dispara flush da fila.
-    pub async fn set_zone(&self, zone: crate::transfer::ZoneType, api: &ApiClient) {
+    pub async fn set_zone(&self, zone: crate::transfer::ZoneType, _api: &ApiClient) {
         let was_pvp = matches!(self.zone.lock().await.clone(), crate::transfer::ZoneType::PvP);
         *self.zone.lock().await = zone.clone();
         let zone_str = match zone {
@@ -102,15 +128,12 @@ impl Scanner {
         };
         self.stats.lock().await.zone = zone_str.to_string();
 
-        // Flush quando volta pra zona azul e estava em PvP
+        // Voltou pra zona azul: só atualiza o contador. O envio é do uploader
+        // único, aos poucos — despejar a fila inteira aqui era uma rajada de
+        // rede logo depois da luta, o pior momento possível.
         if was_pvp && matches!(zone, crate::transfer::ZoneType::Blue) {
             if let Some(q) = &self.queue {
-                let (sent, failed) = q.flush_all(api).await;
-                if sent > 0 || failed > 0 {
-                    tracing::info!("scanner: flush zona azul — {} enviados, {} falharam", sent, failed);
-                }
-                let pending = q.pending_count().await;
-                self.stats.lock().await.queued_reports = pending;
+                self.stats.lock().await.queued_reports = q.pending_count().await;
             }
         }
     }
@@ -122,7 +145,6 @@ impl Scanner {
             self.stats.lock().await.status = "disabled".into();
             return;
         }
-        *self.shutdown.lock().await = false;
         {
             let mut s = self.stats.lock().await;
             s.status = "running".into();
@@ -130,7 +152,7 @@ impl Scanner {
         }
 
         loop {
-            if *self.shutdown.lock().await {
+            if self.shutdown.load(Ordering::Relaxed) {
                 self.stats.lock().await.status = "idle".into();
                 break;
             }
@@ -181,7 +203,7 @@ impl Scanner {
             .timeout(Duration::from_secs(15))
             .build()?;
 
-        let mut found: Vec<serde_json::Value> = Vec::new();
+        let mut found: Vec<i64> = Vec::new();
         let mut missing: Vec<i64> = Vec::new();
         let mut errors: Vec<i64> = Vec::new();
 
@@ -190,13 +212,21 @@ impl Scanner {
             match client.get(&url).send().await {
                 Ok(resp) if resp.status().as_u16() == 200 => {
                     match resp.json::<serde_json::Value>().await {
-                        Ok(v) if v.get("id").is_some() => found.push(v),
-                        _ => missing.push(id),
+                        Ok(v) if valid_battle_payload(&v) => found.push(id),
+                        _ => errors.push(id),
+                    }
+                    // 200 sustentado → recupera throttle (-50ms, piso 150ms).
+                    let cur = self.throttle_ms.load(Ordering::Relaxed);
+                    if cur > THROTTLE_MIN_MS {
+                        self.throttle_ms.store(
+                            cur.saturating_sub(THROTTLE_RECOVER_MS),
+                            Ordering::Relaxed,
+                        );
                     }
                 }
                 Ok(resp) if resp.status().as_u16() == 404 => missing.push(id),
                 Ok(resp) if resp.status().as_u16() == 429 => {
-                    // rate limit: espera Retry-After ou 5s e segue
+                    // rate limit: espera Retry-After ou 5s e segue.
                     let wait = resp
                         .headers()
                         .get("Retry-After")
@@ -205,11 +235,16 @@ impl Scanner {
                         .unwrap_or(5.0);
                     tokio::time::sleep(Duration::from_secs_f64(wait)).await;
                     errors.push(id);
+                    // 429 → recua multiplicativo (×2, teto 5s). Ganância detectada.
+                    let cur = self.throttle_ms.load(Ordering::Relaxed);
+                    let next = (cur * 2).min(THROTTLE_MAX_MS);
+                    self.throttle_ms.store(next, Ordering::Relaxed);
                 }
                 _ => errors.push(id),
             }
-            // throttle mínimo entre sondagens (cortesia à API pública)
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            // throttle adaptativo entre sondagens (cortesia à API pública).
+            let ms = self.throttle_ms.load(Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(ms)).await;
         }
 
         let report = ScanReportIn {
@@ -244,15 +279,8 @@ impl Scanner {
             return Ok(true);
         }
 
-        // Zona azul: flush fila primeiro, depois envia este report direto
-        if let Some(q) = &self.queue {
-            let pending = q.pending_count().await;
-            if pending > 0 {
-                let _ = q.flush_all(api).await;
-                self.stats.lock().await.queued_reports = q.pending_count().await;
-            }
-        }
-
+        // Zona azul: manda ESTE report direto. A fila acumulada fica com o
+        // uploader único — misturar as duas coisas aqui recriava a rajada.
         let out = api.report_scan(&report).await?;
         {
             let mut s = self.stats.lock().await;
@@ -281,4 +309,42 @@ fn chrono_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     format!("{}", secs)
+}
+
+fn valid_battle_payload(value: &serde_json::Value) -> bool {
+    value.get("id").is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn clone_compartilha_shutdown() {
+        let scanner = Scanner::new();
+        let clone = scanner.clone_for_spawn();
+        clone.stop().await;
+        assert!(scanner.shutdown.load(Ordering::Relaxed));
+    }
+
+
+    #[test]
+    fn resposta_200_malformada_nao_e_batalha() {
+        assert!(!valid_battle_payload(&serde_json::json!({"players": []})));
+        assert!(valid_battle_payload(&serde_json::json!({"id": 42})));
+    }
+
+    #[test]
+    fn report_envia_somente_ids_de_batalha() {
+        let report = ScanReportIn {
+            task_id: 1,
+            region: "americas".into(),
+            found: vec![42],
+            missing: vec![43],
+            errors: vec![],
+            character_name: None,
+        };
+        let json = serde_json::to_value(report).unwrap();
+        assert_eq!(json["found"], serde_json::json!([42]));
+    }
 }

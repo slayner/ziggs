@@ -8,7 +8,7 @@ transação:
   3. insere uma linha em `event_state_transitions`
   4. escreve no audit log append-only
 
-Fluxo novo (4 estados): scheduled → in_progress → review → finalized
+Fluxo novo: draft → scheduled → in_progress → review → finalized
 (+ cancelled/deleted terminais). O botão concluir (review → finalized) está
 sempre disponível: sem guard, sem checklist obrigatório. Se finalizado sem
 valor de tab ou nodes capturados, assume tudo 0.

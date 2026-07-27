@@ -296,6 +296,14 @@ def claim_node(
     """Marca um NodeEventLog como capturado (ou não) pelo evento e grava o
     valor vendido. Vincula o log ao evento (event_id) na primeira captura —
     é o que liga o node ao evento pro scout payout."""
+    if sold_value < 0:
+        raise ServiceError("valor vendido não pode ser negativo")
+    from app.models.events import Event
+    from app.services.events import _mark_dirty, _require_mutable
+    ev = db.scalar(select(Event).where(Event.id == event_id, Event.guild_id == guild_id))
+    if ev is None:
+        raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
     row = db.scalar(select(NodeEventLog).where(
         NodeEventLog.id == node_log_id, NodeEventLog.guild_id == guild_id
     ))
@@ -304,12 +312,7 @@ def claim_node(
     row.event_id = event_id if captured else None
     row.captured = captured
     row.sold_value = int(sold_value) if captured else 0
-    # Import tardio evita ciclo (events importa nodes só dentro de _calc_payout).
-    from app.models.events import Event
-    from app.services.events import _mark_dirty
-    ev = db.scalar(select(Event).where(Event.id == event_id, Event.guild_id == guild_id))
-    if ev is not None:
-        _mark_dirty(ev)
+    _mark_dirty(ev)
     db.flush()
     return row
 

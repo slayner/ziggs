@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
@@ -51,6 +52,7 @@ BELOW_MIN_WINDOW = 100        # quanto estender abaixo do menor ID conhecido, po
 MAX_CANDIDATES_PER_CYCLE = 1200
 CYCLE_INTERVAL = 180          # segundos entre ciclos
 MAX_429_RETRIES = 3
+DB_LOCK_RETRIES = 3
 
 # ponytail: taxa agregada = 1200 candidatos × 1 host / 180s ≈ 6.7 req/s — o
 # MESMO budget da versão anterior (400 × 3 hosts), só que 100% dele gasto na
@@ -119,7 +121,7 @@ def generate_candidates(db: Session) -> list[tuple[str, int]]:
 async def _probe_detail(client: httpx.AsyncClient, host: str, albion_id: str) -> tuple[str, dict | None]:
     """Sonda UM host. Retorna:
       ("found", data)    — 200 com batalha válida
-      ("missing", None)  — 404 (não existe nesse host) ou payload sem id
+      ("missing", None)  — 404 (não existe nesse host)
       ("error", None)    — 429 esgotado, 5xx, ou erro de rede (NÃO grava probe;
                           retry no ciclo seguinte)
     429 respeita Retry-After se presente, senão backoff 5*(attempt+1) — mesmo
@@ -132,10 +134,13 @@ async def _probe_detail(client: httpx.AsyncClient, host: str, albion_id: str) ->
         except httpx.RequestError:
             return "error", None
         if resp.status_code == 200:
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError:
+                return "error", None
             if isinstance(data, dict) and data.get("id"):
                 return "found", data
-            return "missing", None
+            return "error", None
         if resp.status_code == 404:
             return "missing", None
         if resp.status_code == 429:
@@ -155,7 +160,10 @@ async def _probe_detail(client: httpx.AsyncClient, host: str, albion_id: str) ->
     return "error", None
 
 
-async def _probe_and_capture(client: httpx.AsyncClient, db: Session, region: str, albion_id: int) -> bool:
+async def _probe_and_capture(
+    client: httpx.AsyncClient, db: Session, db_lock: asyncio.Lock,
+    region: str, albion_id: int,
+) -> bool:
     """Sonda o candidato no host da SUA região (o número só faz sentido na
     sequência dela). Found → light-capture + reprocess_reason='sweeper' pro
     battle_reprocessor deep-processar. Grava BattleIdProbe (found/missing;
@@ -165,40 +173,61 @@ async def _probe_and_capture(client: httpx.AsyncClient, db: Session, region: str
     if status == "error":
         return False  # não grava probe; re-tenta no próximo ciclo
 
-    battle: Battle | None = None
-    if status == "found" and raw is not None:
-        battle = upsert_battle_light(db, raw, region)
-        if battle is not None:
-            battle.reprocess_reason = REPROCESS_REASON_SWEEPER
-            db.commit()
-        else:
-            status = "missing"
+    async with db_lock:
+        for attempt in range(DB_LOCK_RETRIES):
+            try:
+                battle: Battle | None = None
+                if status == "found" and raw is not None:
+                    battle = upsert_battle_light(db, raw, region)
+                    if battle is not None:
+                        battle.reprocess_reason = REPROCESS_REASON_SWEEPER
+                    else:
+                        status = "missing"
 
-    existing = db.get(BattleIdProbe, aid)
-    if existing is None:
-        db.add(BattleIdProbe(
-            albion_id=aid, status=status,
-            region=region, battle_id=battle.id if battle else None,
-            probed_at=datetime.now(timezone.utc),
-        ))
-    else:
-        existing.status = status
-        existing.region = region
-        existing.battle_id = battle.id if battle else None
-        existing.probed_at = datetime.now(timezone.utc)
-    db.commit()
-    return battle is not None
+                existing = db.get(BattleIdProbe, aid)
+                if existing is None:
+                    db.add(BattleIdProbe(
+                        albion_id=aid, status=status,
+                        region=region, battle_id=battle.id if battle else None,
+                        probed_at=datetime.now(timezone.utc),
+                    ))
+                else:
+                    existing.status = status
+                    existing.region = region
+                    existing.battle_id = battle.id if battle else None
+                    existing.probed_at = datetime.now(timezone.utc)
+                db.commit()
+                return battle is not None
+            except OperationalError as e:
+                db.rollback()
+                if "database is locked" not in str(e).lower() or attempt == DB_LOCK_RETRIES - 1:
+                    raise
+                await asyncio.sleep(2 ** attempt)
+            except Exception:
+                db.rollback()
+                raise
+        raise AssertionError("unreachable")
+
+
+def _generate_candidates_sync() -> list[tuple[str, int]]:
+    db = SessionLocal()
+    try:
+        return generate_candidates(db)
+    finally:
+        db.close()
 
 
 async def sweep_cycle(client: httpx.AsyncClient, db: Session) -> dict:
-    candidates = generate_candidates(db)
+    candidates = await asyncio.to_thread(_generate_candidates_sync)
     if not candidates:
         log.info("battle_sweeper: sem candidatos novos (tudo sondado ou base vazia)")
         return {"candidates": 0, "found": 0, "probed": 0}
 
+    db_lock = asyncio.Lock()
+
     async def _one(region: str, aid: int) -> bool:
         try:
-            return await _probe_and_capture(client, db, region, aid)
+            return await _probe_and_capture(client, db, db_lock, region, aid)
         except Exception as e:
             log.warning("battle_sweeper: falha ao sondar %s (%s): %r", aid, region, e)
             # Uma falha no commit (ex.: "database is locked" de outro bg task
@@ -207,10 +236,6 @@ async def sweep_cycle(client: httpx.AsyncClient, db: Session) -> dict:
             # ciclo — que compartilha esta mesma `db` — quebra com
             # PendingRollbackError em vez do erro real, mascarando a causa e
             # perdendo o ciclo inteiro por causa de UMA sondagem.
-            try:
-                db.rollback()
-            except Exception:
-                pass
             return False
 
     results = await asyncio.gather(*(_one(r, c) for r, c in candidates))

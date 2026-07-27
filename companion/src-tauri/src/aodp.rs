@@ -59,15 +59,33 @@ struct PowChallenge {
     wanted: String,
 }
 
+/// Desafio absurdo o bastante pra desistir em vez de fritar CPU?
+///
+/// `wanted` é a expansão ASCII do hex do digest: cada 8 chars prendem UM char
+/// hex, que vale 4 bits de entropia. Ou seja `entropia ≈ want_len / 2` bits —
+/// contar `want_len` como se fosse bits superestima o custo pela metade.
+///
+/// Medido (release, 3,2M hash/s): o desafio real do servidor tem want_len=41
+/// (~20 bits ≈ 1M tentativas) e resolve em **123 ms**.
+///
+/// A trava anterior era `want_len > 40` e rejeitava exatamente esse desafio —
+/// `solve_pow` devolvia None em 2µs e TODO upload ao AODP falhava. O feed
+/// nunca funcionou; o custo que a gente temia nunca existiu.
+///
+/// 56 chars ≈ 28 bits ≈ 268M tentativas ≈ 1,5 min: aí sim vale desistir.
+fn too_hard(want_len: usize) -> bool {
+    want_len > 56
+}
+
 /// Resolve o PoW: acha um nonce hex tal que os primeiros `wanted.len()` bits
 /// da representação binária (ASCII) do hex do SHA-256 batam com `wanted`.
 /// Replica bit-a-bit o algoritmo do albiondata-client pra o servidor aceitar.
-/// Retorna None se estourar o limite (desafio absurdo → desiste em vez de travar).
+/// Retorna None se estourar o limite (ver `too_hard`).
 fn solve_pow(key: &str, wanted: &str) -> Option<String> {
     let want = wanted.as_bytes();
     let want_len = want.len();
-    if want_len == 0 || want_len > 40 {
-        return None; // proteção: >40 bits levaria minutos/horas
+    if want_len == 0 || too_hard(want_len) {
+        return None;
     }
     let mut rng = rand::thread_rng();
     let mut nonce = [0u8; 16];
@@ -153,6 +171,22 @@ mod tests {
         assert_eq!(server_for_ip([5, 188, 125, 42]).unwrap().id, 1);
         assert_eq!(server_for_ip([193, 169, 238, 7]).unwrap().id, 3);
         assert!(server_for_ip([8, 8, 8, 8]).is_none());
+    }
+
+    /// O desafio REAL do servidor tem `wanted` de 41 chars. A trava antiga era
+    /// `> 40`: rejeitava justamente ele, `solve_pow` devolvia None em 2µs e o
+    /// feed ao AODP nunca subiu nada — falha silenciosa, porque o erro só
+    /// aparecia como "PoW não resolvido" numa linha de debug.
+    #[test]
+    fn dificuldade_real_do_servidor_nao_pode_ser_rejeitada() {
+        // Colhido de pow.{west,east,europe}.albion-online-data.com.
+        for wanted_len in [41usize, 41, 41] {
+            assert!(!too_hard(wanted_len),
+                    "want_len={wanted_len} é o que o servidor manda de verdade");
+        }
+        // ~20 bits de entropia: medido em 123ms num release.
+        assert!(!too_hard(48), "48 chars = 24 bits, ainda segundos");
+        assert!(too_hard(80), "80 chars = 40 bits: aí sim desiste");
     }
 
     #[test]

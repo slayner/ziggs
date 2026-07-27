@@ -15,7 +15,7 @@ def test_authorize_url_tem_os_parametros():
     assert q["response_type"] == ["code"]
     assert q["state"] == ["xyz-state"]
     assert q["client_id"][0]            # veio do .env
-    assert "identify" in q["scope"][0] and "guilds" in q["scope"][0]
+    assert {"identify", "guilds", "email"} <= set(q["scope"][0].split())
     assert q["redirect_uri"][0].endswith("/auth/discord/callback")
 
 

@@ -1,8 +1,20 @@
 import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+
+const rootDir = fileURLToPath(new URL(".", import.meta.url));
+
 export default defineConfig({
     plugins: [react(), tailwindcss()],
+    build: {
+        rollupOptions: {
+            input: {
+                site: `${rootDir}/index.html`,
+                docs: `${rootDir}/docs.html`,
+            },
+        },
+    },
     server: {
         port: 5173,
         // Encaminha /api e /auth pro backend FastAPI em dev (evita problema de CORS).

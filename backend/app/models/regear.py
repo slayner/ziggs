@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, BigInt, Snowflake, TimestampMixin, json_type, pk
@@ -59,6 +59,11 @@ class RegearRequest(Base, TimestampMixin):
     albion_event_id: Mapped[str | None] = mapped_column(String(64))
     death_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     recognition_status: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
+    recognition_method: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
+    recognition_confidence: Mapped[str] = mapped_column(String(16), default="low", nullable=False)
+    recognition_candidates: Mapped[list] = mapped_column(json_type(), default=list, nullable=False)
+    recognition_window_match: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    recognition_fallback_reason: Mapped[str | None] = mapped_column(Text)
     # Nº de tentativas de reconhecimento ( ingest + fila de retry ). Capa a fila
     # pra não martelar a API de killboard indefinidamente em pedidos sem morte
     # casável (morte PvE/antiga fora da janela).

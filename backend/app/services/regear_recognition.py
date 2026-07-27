@@ -93,7 +93,7 @@ def _pick_best_death(
     return scored[0][2]
 
 
-def _result_from_event(ev: dict) -> dict:
+def _result_from_event(ev: dict, method: str = "death_api") -> dict:
     victim = ev.get("Victim") or {}
     items = albion_events.equipment_items(ev)
     return {
@@ -103,6 +103,10 @@ def _result_from_event(ev: dict) -> dict:
         "death_timestamp": _parse_time(ev.get("Time")),
         "items": items,
         "candidates": [],
+        "method": method,
+        "confidence": "high" if method == "death_api" else "medium",
+        "window_match": None,
+        "fallback_reason": None,
     }
 
 
@@ -178,7 +182,9 @@ async def recognize(image_bytes: bytes, region: str | None = None) -> dict:
     candidates = _ocr_names(image_bytes)
     if not candidates:
         return {"status": "manual", "ocr_name": None, "albion_event_id": None,
-                "death_timestamp": None, "items": [], "candidates": []}
+                "death_timestamp": None, "items": [], "candidates": candidates,
+                "method": "ocr", "confidence": "low",
+                "fallback_reason": "no OCR candidate"}
 
     async def _deaths_for(name: str) -> list[dict]:
         pid = await albion_events.search_player(name, region)
@@ -214,8 +220,12 @@ async def recognize(image_bytes: bytes, region: str | None = None) -> dict:
 
     if best is None:
         return {"status": "manual", "ocr_name": candidates[0], "albion_event_id": None,
-                "death_timestamp": None, "items": [], "candidates": candidates}
-    return _result_from_event(best) | {"candidates": candidates}
+                "death_timestamp": None, "items": [], "candidates": candidates,
+                "method": "ocr", "confidence": "low",
+                "fallback_reason": "no unique death match"}
+    return _result_from_event(best, "ocr") | {
+        "candidates": candidates, "confidence": "medium",
+    }
 
 
 # ── Self-checks ──────────────────────────────────────────────────────────────

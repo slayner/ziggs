@@ -18,8 +18,8 @@ from app.api.schemas.events import (
 )
 from app.domain import state_machine
 from app.domain.states import (
-    REQUIRED_VERIFICATION_STEPS, EventSeriousness, EventState,
-    ParticipationMode, VerificationStep, allowed_targets,
+    EventSeriousness, EventState,
+    ParticipationMode, TERMINAL, VerificationStep, allowed_targets,
 )
 from app.models.audit import AuditLog
 from app.models.battles import Battle, BattleGuild, BattleParticipant
@@ -35,9 +35,9 @@ _UNSET = object()
 
 
 # Estados em que o evento ainda pode ser gerenciado (editado/deletado/adiado) pelo
-# bot — anything não-terminal. Espelho de TERMINAL invertido, em valores string.
+# bot — inclui rascunhos, que ainda não entram no mass-info.
 _MANAGEABLE_STATES = (
-    EventState.SCHEDULED, EventState.IN_PROGRESS, EventState.REVIEW,
+    EventState.DRAFT, EventState.SCHEDULED, EventState.IN_PROGRESS, EventState.REVIEW,
 )
 from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildMember
@@ -70,8 +70,43 @@ def _audit(
 def _mark_dirty(ev: Event) -> None:
     """Marca que o mass-info E o embed por evento precisam ser reconstruídos pelo
     bot-v2 (outbox). Toda mutação de evento chama isto."""
+    if ev.state is EventState.DRAFT:
+        return
     ev.signup_message_dirty = True
     ev.event_embed_dirty = True
+
+
+def _enqueue_function_prompts(
+    db: Session, guild_id: int, ev: Event, comp_id: int | None, reason: str,
+) -> None:
+    if comp_id is None:
+        return
+    guild = db.get(Guild, guild_id)
+    comp = db.get(Comp, comp_id)
+    if guild is None or comp is None:
+        return
+    settings = dict(guild.settings or {})
+    prompts = list(settings.get("pending_function_prompts") or [])
+    existing = {
+        (p.get("event_id"), p.get("user_id")): index
+        for index, p in enumerate(prompts)
+    }
+    for signup in ev.signups:
+        key = (ev.id, signup.user_id)
+        payload = {
+            "event_id": ev.id,
+            "user_id": signup.user_id,
+            "title": ev.title,
+            "comp_name": comp.name,
+            "scheduled_at": ev.scheduled_at.isoformat() if ev.scheduled_at else None,
+            "reason": reason,
+        }
+        if key in existing:
+            prompts[existing[key]] = payload
+        else:
+            prompts.append(payload)
+    settings["pending_function_prompts"] = prompts
+    guild.settings = settings
 
 
 def _regear_summary(db: Session, ev: Event) -> RegearSummary:
@@ -111,6 +146,20 @@ def _get(db: Session, guild_id: int, event_id: int) -> Event | None:
             selectinload(Event.assignments),
         )
     )
+
+
+def _validate_comp(db: Session, guild_id: int, comp_id: int | None) -> None:
+    """Impede que um evento aponte para a composição de outra guilda."""
+    if comp_id is None:
+        return
+    comp = db.get(Comp, comp_id)
+    if comp is None or comp.guild_id != guild_id:
+        raise ServiceError("composição não pertence a esta guilda")
+
+
+def _require_mutable(ev: Event) -> None:
+    if ev.state in TERMINAL:
+        raise ServiceError("evento finalizado/encerrado não aceita mutações")
 
 
 def _participant_valid(ev: Event, p) -> bool:
@@ -445,6 +494,8 @@ def _detail(ev: Event, db: Session) -> EventDetail:
         tab_value=ev.tab_value, tab_image_url=ev.tab_image_url,
         battleboard_url=ev.battleboard_url,
         seriousness=ev.seriousness.value, participation_mode=ev.participation_mode.value,
+        signup_mode=ev.signup_mode, assignment_mode=ev.assignment_mode,
+        autofill_mode=ev.autofill_mode, published_at=ev.published_at,
         functions_released=ev.functions_released, total_snapshots=ev.total_snapshots,
         attendance=ev.attendance,
         allowed_transitions=sorted(t.value for t in allowed_targets(ev.state)),
@@ -524,6 +575,15 @@ def create_event(
     db: Session, guild_id: int, payload: EventCreate,
     actor_id: int | None, caller_name: str | None,
 ) -> int:
+    if payload.signup_mode not in ("signup", "announcement"):
+        raise ServiceError(f"signup_mode inválido: {payload.signup_mode}")
+    if payload.assignment_mode not in ("self_select", "admin_assign", "hybrid"):
+        raise ServiceError(f"assignment_mode inválido: {payload.assignment_mode}")
+    if payload.autofill_mode not in ("off", "manual", "on_signup"):
+        raise ServiceError(f"autofill_mode inválido: {payload.autofill_mode}")
+    publish = payload.publish
+    if publish is None:
+        publish = True
     try:
         seriousness = EventSeriousness(payload.seriousness)
     except ValueError:
@@ -539,12 +599,15 @@ def create_event(
     # assume UTC; se chegar aware, normaliza pra UTC. (SQLite descarta o tzinfo
     # no storage — a leitura normaliza de volta em event_signups._ensure_utc.)
     scheduled_at = payload.scheduled_at
+    if scheduled_at is None:
+        raise ServiceError("horário do evento é obrigatório")
     if scheduled_at is not None:
         scheduled_at = scheduled_at.astimezone(timezone.utc) if scheduled_at.tzinfo else scheduled_at.replace(tzinfo=timezone.utc)
+    _validate_comp(db, guild_id, payload.comp_id)
 
     ev = Event(
         guild_id=guild_id,
-        state=EventState.SCHEDULED,
+        state=EventState.SCHEDULED if publish else EventState.DRAFT,
         title=payload.title,
         message=payload.message,
         scheduled_at=scheduled_at,
@@ -553,10 +616,14 @@ def create_event(
         participation_mode=participation_mode,
         caller_id=actor_id,
         caller_name=caller_name,
+        signup_mode=payload.signup_mode,
+        assignment_mode=payload.assignment_mode,
+        autofill_mode=payload.autofill_mode,
+        published_at=_now() if publish else None,
     )
-    # Já nasce pronto pro mass-info se tiver comp — o polling do bot-v2 posta
-    # assim que existir um events_channel_id configurado pra guilda.
-    if payload.comp_id:
+    # Já nasce pronto pro mass-info — composição é opcional e pode ser definida
+    # depois sem remover quem já confirmou presença.
+    if publish:
         ev.signup_message_dirty = True
         # (sem embed thread ainda — event_embed_dirty fica False até o callout)
     db.add(ev)
@@ -570,7 +637,8 @@ def create_event(
     # faz o bump (+ @everyone se a guilda deixou esse gatilho ligado). Import
     # tardio: event_signups importa events (ServiceError), evita ciclo no load.
     from app.services import event_signups as event_signups_svc
-    event_signups_svc._enqueue_ping(db, guild_id, ev, event_signups_svc.PING_TRIGGER_CREATED)
+    if publish:
+        event_signups_svc._enqueue_ping(db, guild_id, ev, event_signups_svc.PING_TRIGGER_CREATED)
     return ev.id
 
 
@@ -587,6 +655,8 @@ def list_events(db: Session, guild_id: int) -> list[EventSummary]:
             started_at=e.started_at, ended_at=e.ended_at,
             comp_id=e.comp_id, seriousness=e.seriousness.value,
             participation_mode=e.participation_mode.value,
+            signup_mode=e.signup_mode, assignment_mode=e.assignment_mode,
+            autofill_mode=e.autofill_mode, published_at=e.published_at,
         )
         for e in rows
     ]
@@ -598,7 +668,11 @@ def set_functions_released(
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
+    was_released = ev.functions_released
     ev.functions_released = released
+    if released and not was_released:
+        _enqueue_function_prompts(db, guild_id, ev, ev.comp_id, "released")
     _mark_dirty(ev)
     db.add(AuditLog(
         guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
@@ -618,6 +692,7 @@ def set_attendance(
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
     before = ev.attendance
     ev.attendance = payload.value
     db.add(AuditLog(
@@ -673,17 +748,20 @@ def delete_event(
 def update_event(
     db: Session, guild_id: int, event_id: int, *,
     title=_UNSET, scheduled_at=_UNSET, comp_id=_UNSET, attendance=_UNSET,
+    signup_mode=_UNSET, assignment_mode=_UNSET, autofill_mode=_UNSET,
+    confirm_comp_reset: bool = False,
     actor_id: int | None = None,
 ) -> dict:
     """Edita campos soltos de um evento (objetivo/horário/comp/pontos de
     attendance). `_UNSET` = não tocar; `comp_id=None` = desvincular a comp.
 
-    Trocar a comp QUANDO há signups remove todos os signups (a inscrição foi feita
-    pra função da comp antiga) e devolve a lista de users notificados — o bot manda
-    a DM pedindo pra repingar. Sem signups, só troca a comp."""
+    Trocar a comp preserva quem já se inscreveu, limpa apenas as roles daquele
+    evento e a escalação, e enfileira uma DM para cada jogador escolher de novo.
+    O perfil da composição antiga continua intacto."""
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
 
     comp_changed = False
     notified_signups: list[dict] = []
@@ -712,22 +790,33 @@ def update_event(
             ))
 
     if comp_id is not _UNSET and comp_id != ev.comp_id:
+        _validate_comp(db, guild_id, comp_id)
         comp_changed = True
-        # Inscrições referenced funções da comp antiga — trocar a comp invalida
-        # cada uma. Coleta quem precisa ser avisado (o bot manda a DM) e limpa.
+        # A nova solicitação de roles só pode aparecer depois que a anterior
+        # tiver sido removida do PM do jogador.
+        from app.services import event_signups as event_signups_svc
+        event_signups_svc.queue_function_prompt_deletes(db, guild_id, ev.id)
+        # A presença continua válida; apenas o snapshot de roles da comp antiga
+        # é invalidado. O perfil persistente é por comp e não é tocado aqui.
         if ev.signups:
-            notified_signups = [
-                {"user_id": s.user_id, "user_name": s.user_name}
-                for s in ev.signups
-            ]
-            ev.signups.clear()  # cascade delete-orphan remove os signups
+            for signup in ev.signups:
+                signup.functions = []
+            if comp_id is not None:
+                notified_signups = [
+                    {"user_id": s.user_id, "user_name": s.user_name}
+                    for s in ev.signups
+                ]
+                reason = "defined" if ev.comp_id is None else "changed"
+                _enqueue_function_prompts(db, guild_id, ev, comp_id, reason)
+        ev.assignments.clear()
         before = ev.comp_id
         ev.comp_id = comp_id
+        ev.functions_released = comp_id is not None
         db.add(AuditLog(
             guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
             action="event.update_comp", entity="event", entity_id=str(ev.id),
             before={"comp_id": before},
-            after={"comp_id": comp_id, "signups_cleared": len(notified_signups)},
+            after={"comp_id": comp_id, "signup_roles_cleared": len(notified_signups)},
         ))
 
     if attendance is not _UNSET and attendance != ev.attendance:
@@ -738,6 +827,19 @@ def update_event(
             action="event.set_attendance", entity="event", entity_id=str(ev.id),
             before={"attendance": before}, after={"attendance": attendance},
         ))
+
+    for name, value, allowed in (
+        ("signup_mode", signup_mode, ("signup", "announcement")),
+        ("assignment_mode", assignment_mode, ("self_select", "admin_assign", "hybrid")),
+        ("autofill_mode", autofill_mode, ("off", "manual", "on_signup")),
+    ):
+        if value is _UNSET or value == getattr(ev, name):
+            continue
+        if value not in allowed:
+            raise ServiceError(f"{name} inválido: {value}")
+        if name == "signup_mode" and value == "announcement" and ev.signups:
+            raise ServiceError("não é possível virar anúncio enquanto há inscrições")
+        setattr(ev, name, value)
 
     _mark_dirty(ev)
     db.flush()
@@ -796,6 +898,17 @@ def transition(
         raise ServiceError(f"estado inválido: {to}")
 
     actor = state_machine.Actor(id=actor_id, source=actor_source)
+    if ev.state is EventState.DRAFT and target is EventState.SCHEDULED:
+        _validate_comp(db, guild_id, ev.comp_id)
+        ev.published_at = _now()
+    elif ev.state is EventState.SCHEDULED and target is EventState.DRAFT:
+        if ev.signups or ev.assignments:
+            raise ServiceError("não é possível despublicar um evento com inscrições ou assignments")
+        if db.scalar(select(func.count()).select_from(RegearRequest).where(
+            RegearRequest.event_id == ev.id,
+        )):
+            raise ServiceError("não é possível despublicar um evento com regears vinculados")
+        ev.published_at = None
     # Gate de finalize em modos tab: regears da thread pendentes bloqueiam
     # (alguns podem ser negados, e negados não puxam da tab). Antes do
     # state_machine.transition pra não deixar o evento meio-finalizado.
@@ -807,6 +920,9 @@ def transition(
                 raise ServiceError(
                     "evento tem regears da thread pendentes; julgue todos antes de finalizar"
                 )
+        missing = _missing_checklist(db, ev)
+        if missing:
+            raise ServiceError("checklist pendente: " + ", ".join(missing))
     try:
         state_machine.transition(db, ev, target, actor, reason)
     except (state_machine.TransitionDenied,) as e:
@@ -816,6 +932,10 @@ def transition(
 
     if target is EventState.IN_PROGRESS and ev.started_at is None:
         ev.started_at = _now()
+    if target is EventState.DRAFT:
+        # Drafts stay out of mass-info; this dirty flag only tells the bot to
+        # remove the previously published row during its next sync.
+        ev.signup_message_dirty = True
     if target is EventState.IN_PROGRESS and not ev.regear_thread_id:
         # Bot cria a thread de regear no canal dedicado (outbox, espelho do
         # embed-dirty). Limpo quando o bot posta /regear-thread-synced.
@@ -848,17 +968,39 @@ def transition(
     if target is EventState.IN_PROGRESS:
         event_signups_svc._enqueue_ping(db, guild_id, ev, event_signups_svc.PING_TRIGGER_IN_PROGRESS)
     elif target is EventState.REVIEW:
+        event_signups_svc.queue_function_prompt_deletes(db, guild_id, ev.id)
         event_signups_svc._enqueue_ping(db, guild_id, ev, event_signups_svc.PING_TRIGGER_REVIEW)
     return _detail(ev, db)
 
 
 def _ensure_steps(db: Session, ev: Event) -> None:
     existing = {s.step for s in ev.verification_steps}
-    for step in REQUIRED_VERIFICATION_STEPS:
+    for step in _required_steps(db, ev):
         if step not in existing:
             db.add(EventVerificationStep(event_id=ev.id, step=step, completed=False))
     db.flush()
     db.refresh(ev)
+
+
+def _required_steps(db: Session, ev: Event) -> set[VerificationStep]:
+    # Every event needs an explicit tab value, including zero for "sem split".
+    required = {VerificationStep.TAB_VALUE}
+    from app.models.nodes import NodeEventLog
+    has_captured_nodes = db.scalar(select(NodeEventLog.id).where(
+        NodeEventLog.event_id == ev.id,
+        NodeEventLog.captured.is_(True),
+    ).limit(1)) is not None
+    if has_captured_nodes:
+        required.add(VerificationStep.NODES)
+    return required
+
+
+def _missing_checklist(db: Session, ev: Event) -> list[str]:
+    _ensure_steps(db, ev)
+    return sorted(
+        step.value for step in _required_steps(db, ev)
+        if not any(s.step is step and s.completed for s in ev.verification_steps)
+    )
 
 
 def set_step(
@@ -868,6 +1010,7 @@ def set_step(
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
     try:
         step = VerificationStep(step_str)
     except ValueError:
@@ -914,15 +1057,18 @@ def add_participant(
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
     existing = {p.user_id for p in ev.participants}
     if payload.user_id in existing:
-        raise ServiceError("participante já registrado")
+        return _detail(ev, db)
+    assignment = next((a for a in ev.assignments if a.user_id == payload.user_id), None)
     db.add(EventParticipant(
         event_id=event_id, guild_id=guild_id,
         user_id=payload.user_id, user_name=payload.user_name,
         percent=payload.percent, base_percent=payload.base_percent,
         is_trial=payload.is_trial,
         is_valid=payload.is_valid,
+        game_role_id=assignment.game_role_id if assignment else None,
     ))
     _audit(db, guild_id, actor_id, "event.add_participant", "event_participant", None,
            after={"event_id": event_id, "user_id": payload.user_id, "percent": payload.percent},
@@ -940,6 +1086,7 @@ def remove_participant(
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
     row = db.scalar(
         select(EventParticipant).where(
             EventParticipant.id == participant_id,
@@ -947,7 +1094,7 @@ def remove_participant(
         )
     )
     if row is None:
-        raise ServiceError("participante não encontrado")
+        return _detail(ev, db)
     before = {"user_id": row.user_id, "percent": row.percent}
     db.delete(row)
     _audit(db, guild_id, actor_id, "event.remove_participant", "event_participant", participant_id,
@@ -964,6 +1111,7 @@ def update_participant(
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
     row = db.scalar(
         select(EventParticipant).where(
             EventParticipant.id == participant_id,
@@ -1004,6 +1152,7 @@ def add_death(
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
     db.add(EventDeath(
         event_id=event_id, guild_id=guild_id,
         user_id=payload.user_id,
@@ -1028,6 +1177,7 @@ def update_death(
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
     death = db.scalar(
         select(EventDeath).where(
             EventDeath.id == death_id, EventDeath.event_id == event_id
@@ -1056,6 +1206,7 @@ def remove_death(
     ev = _get(db, guild_id, event_id)
     if ev is None:
         raise ServiceError("evento não encontrado")
+    _require_mutable(ev)
     death = db.scalar(
         select(EventDeath).where(
             EventDeath.id == death_id, EventDeath.event_id == event_id
@@ -1158,6 +1309,24 @@ def voice_snapshot(
     if ev.state is not EventState.IN_PROGRESS:
         return {"ok": False, "reason": "not_in_progress", "total_snapshots": ev.total_snapshots}
 
+    snapshot_at = at or _now()
+    snapshot_at = (
+        snapshot_at.astimezone(timezone.utc)
+        if snapshot_at.tzinfo else snapshot_at.replace(tzinfo=timezone.utc)
+    )
+    last_at = ev.last_voice_snapshot_at
+    if last_at is not None:
+        last_at = (
+            last_at.astimezone(timezone.utc)
+            if last_at.tzinfo else last_at.replace(tzinfo=timezone.utc)
+        )
+        if snapshot_at <= last_at:
+            return {
+                "ok": True, "duplicate": True,
+                "total_snapshots": ev.total_snapshots,
+                "present_count": len(present),
+            }
+    ev.last_voice_snapshot_at = snapshot_at
     ev.total_snapshots += 1
     existing = {p.user_id: p for p in ev.participants}
     for entry in present:

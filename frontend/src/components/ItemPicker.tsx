@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ALBION_ITEMS, itemRenderUrl, type ItemSlot } from "../data/albion-items";
+import { ALBION_ITEMS, itemRenderUrl, ICON_SIZE_SM, type ItemSlot } from "../data/albion-items";
 import { imgRetry } from "../api";
 import { useLang, useT, itemLocalName } from "../i18n";
 
@@ -171,7 +171,7 @@ export function ItemPicker({ slot, valueId, valueName, onChange, placeholder, di
                 onMouseDown={e => { e.preventDefault(); select(item.id, item.name, item); }}
               >
                 <img
-                  src={itemRenderUrl(item)}
+                  src={itemRenderUrl(item, 0, ICON_SIZE_SM)}
                   alt=""
                   loading="lazy"
                   onError={imgRetry(img => { img.style.opacity = "0.15"; })}

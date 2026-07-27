@@ -32,9 +32,11 @@ interface ZiggsKill {
   event_id: string;
   timestamp: string;
   fame: number;
+  silver_dropped?: number;
   is_solo: boolean;
   participant_count: number;
   other_name: string | null;
+  other_albion_id?: string | null;
   other_guild_name: string | null;
   other_alliance_name: string | null;
   equipment: Equipment;
@@ -45,6 +47,30 @@ interface ZiggsKill {
 }
 
 type Activity = ZiggsKill & { kind: "kill" | "death" };
+
+// Resultado do /players/{id}/versus — histórico de confrontos contra jogador
+// ou guilda. target_type diz se resolveu como "player" ou "guild".
+interface VersusResult {
+  target_name: string;
+  target_type: "player" | "guild" | "unknown";
+  kills: VersusEvent[];
+  deaths: VersusEvent[];
+  kills_count?: number;
+  deaths_count?: number;
+  kills_silver?: number;
+  deaths_silver?: number;
+}
+interface VersusEvent {
+  event_id: string;
+  timestamp: string;
+  fame: number;
+  silver_dropped: number;
+  is_solo: boolean;
+  participant_count: number;
+  albion_battle_id: string | null;
+  victim_guild_name: string | null;
+  killer_guild_name: string | null;
+}
 
 interface ZiggsBattle {
   public_id: string;
@@ -65,6 +91,10 @@ interface ZiggsData {
   region: string;
   first_seen_at: string;
   last_seen_at: string;
+  // Estado de refresh compartilhado — vem do backend (refresh_requested_at do
+  // AlbionPlayer). Enquanto não é null, TODOS os visitantes do perfil vêem o
+  // botão em "atualizando" — não é mais estado local só de quem clicou.
+  refresh_requested_at: string | null;
   guild_history: {
     guild_id: string | null; guild_name: string | null;
     alliance_id: string | null; alliance_tag: string | null;
@@ -78,6 +108,10 @@ interface ZiggsData {
   kills: ZiggsKill[];
   deaths: ZiggsKill[];
   silver_dropped: number;
+  // Rank do jogador em cada kind de coleta — top500 só (0/ausente =
+  // fora). Chave = kind do highscore (gather_wood, fishing, ...).
+  // Exibido como "MADEIRA (#481)" clicável no perfil.
+  gather_ranks?: Record<string, number>;
 }
 
 type BuildBase = {
@@ -113,6 +147,12 @@ interface PlayerProfile {
   custom_profile: CustomProfile | null;
   _ziggs: ZiggsData;
   _is_deleted?: boolean;
+  // Cold load em andamento (primeira visita): o backend disparou a task em
+  // background e retornou um stub. O front continua mostrando a barra de
+  // progresso (polling de /load-progress) e re-tenta a leitura até o perfil
+  // estar pronto no DB — sem recomeçar do zero, porque a task sobrevive ao
+  // reload (asyncio.create_task, não atrelada à request HTTP).
+  _cold_load?: boolean;
 }
 
 /* ── Helpers ────────────────────────────────────────────────── */
@@ -139,6 +179,20 @@ function timeAgo(ts: string): string {
   const d = Math.floor(h / 24);
   if (d < 30) return `${d}d`;
   return monthYearUTC(ts);
+}
+
+// "agora" cobre os primeiros 10min — mesmo tempo que o cooldown de refresh
+// (POST /refresh rejeita dentro disso, ver REFRESH_COOLDOWN em players.py).
+// Mantém "atualizado agora" visível até que o usuário possa pedir refresh de
+// novo; senão "0m" apareceria logo após um refresh e o botão parecia
+// quebrado por não responder.
+const JUST_NOW_MS = 10 * 60_000;
+// O sufixo "atrás" só faz sentido junto de um tempo real (5m atrás, 3h
+// atrás) — "agora atrás" não é frase em nenhum dos 3 idiomas (nem "now ago"
+// em EN). Decide aqui, uma vez só, em vez de deixar o caller colar o sufixo
+// incondicionalmente por fora.
+function ageLabel(ts: string, justNow: string, suffix: string): string {
+  return Date.now() - new Date(ts).getTime() < JUST_NOW_MS ? justNow : `${timeAgo(ts)} ${suffix}`;
 }
 
 /* ── Sub-components ─────────────────────────────────────────── */
@@ -218,13 +272,22 @@ function FameRow({ label, value, isGlowing, onGlowEnd }: {
 // Fama de coleta não é uma contagem útil de exibir direto — divide por 200
 // como estimativa "quantos recursos esse jogador já coletou" (abaixo de 200
 // de fama vira 0). Não usa fameColor: não é uma escala de fama, é contagem.
-function ResourceCountRow({ label, fame }: { label: string; fame: number }) {
+// `rank` (>0) e `onRankClick` fazem o "MADEIRA (#481)" virar link pro highscores
+// na posição do jogador — top500 só (ver _gather_ranks no backend).
+function ResourceCountRow({ label, fame, rank, onRankClick }: { label: string; fame: number; rank?: number; onRankClick?: () => void }) {
   const count = Math.floor(fame / 200);
   return (
-    <div className="flex flex-col items-center justify-center gap-0.5">
+    <button
+      disabled={!onRankClick}
+      onClick={onRankClick}
+      className={`flex flex-col items-center justify-center gap-0.5 ${onRankClick ? "cursor-pointer hover:text-amber-400" : "cursor-default"}`}
+    >
       <span className="text-[10px] uppercase tracking-wide text-zinc-500">{label}</span>
       <span className="text-sm font-bold tabular-nums text-zinc-100">{count < 1 ? 0 : count}</span>
-    </div>
+      {rank != null && rank > 0 && (
+        <span className="text-[9px] text-amber-400/70 tabular-nums">#{rank}</span>
+      )}
+    </button>
   );
 }
 
@@ -289,7 +352,7 @@ function TopWeaponsWidget({ weapons }: { weapons: TopWeapon[] }) {
             title={w.weapon_base}
             width={40}
             height={40}
-            className="cursor-pointer rounded border border-zinc-800 bg-zinc-950"
+            className="cursor-pointer"
             onMouseEnter={ev => setOpen(o => (o?.pinned ? o : { x: ev.clientX, y: ev.clientY, weapon: w, pinned: false }))}
             onMouseMove={ev => setOpen(o => (o && o.weapon === w && !o.pinned ? { ...o, x: ev.clientX, y: ev.clientY } : o))}
             onMouseLeave={() => setOpen(o => (o?.pinned ? o : null))}
@@ -336,7 +399,7 @@ function EquipMini({ equipment, label }: { equipment: Equipment; label?: string 
           // em vez de célula vazia — mesma convenção usada nas brackets.
           const iconId = item?.Type ?? (slot === "MainHand" ? NO_WEAPON_ICON_ID : null);
           return (
-            <div key={i} className="w-[54px] h-[54px] rounded border border-zinc-800 bg-zinc-950/60 flex items-center justify-center overflow-hidden">
+            <div key={i} className="w-[54px] h-[54px] flex items-center justify-center overflow-hidden">
               {iconId && <img src={itemRenderUrl(iconId, item?.Quality ?? 0)} alt="" width={48} height={48} />}
             </div>
           );
@@ -383,12 +446,18 @@ function NameGuildBlock({ name, guild, alliance, onClick }: {
 
 const albionKillboardUrl = (eventId: string) => `https://albiononline.com/en/killboard/kill/${eventId}`;
 
-function ActivityRow({ ev, profileName, profileGuild, region, isNew, onGlowEnd }: {
+// Threshold padrão do juicy kill (prata) — mesmo default do backend
+// (Guild.settings.juicy_kill_min_silver). Kills com silver_dropped >= isto
+// ganham destaque visual na lista de atividades.
+const JUICY_SILVER_THRESHOLD = 50_000_000;
+
+function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, onGlowEnd }: {
   ev: Activity; profileName: string; profileGuild: string | null; region: string;
-  isNew?: boolean; onGlowEnd?: () => void;
+  forceOpen?: boolean; isNew?: boolean; onGlowEnd?: () => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen]);
   const isKill = ev.kind === "kill";
   const color = isKill ? "text-blue-400" : "text-red-400";
   const borderColor = isKill ? "#60a5fa" : "#f87171";
@@ -397,6 +466,8 @@ function ActivityRow({ ev, profileName, profileGuild, region, isNew, onGlowEnd }
   const ownWeaponId = ownWeapon?.Type ?? NO_WEAPON_ICON_ID;
   const otherWeaponId = otherWeapon?.Type ?? NO_WEAPON_ICON_ID;
   const [time, date] = timeOverDate(ev.timestamp);
+  const silverDropped = ev.silver_dropped ?? 0;
+  const isJuicy = silverDropped >= JUICY_SILVER_THRESHOLD;
 
   const prefix = REGION_PREFIX[region];
   const goToOther = ev.other_name && prefix
@@ -404,7 +475,11 @@ function ActivityRow({ ev, profileName, profileGuild, region, isNew, onGlowEnd }
     : undefined;
 
   return (
-    <div className={`bg-zinc-900/60 border-l-2${isNew ? " dash-glow" : ""}`} style={{ borderLeftColor: borderColor }} onAnimationEnd={onGlowEnd}>
+    <div
+      className={`bg-zinc-900/60 border-l-2${isNew ? " dash-glow" : ""}${isJuicy ? " juicy-kill" : ""}`}
+      style={{ borderLeftColor: isJuicy ? "#fbbf24" : borderColor }}
+      onAnimationEnd={onGlowEnd}
+    >
       {/* div (não button) porque o nome do oponente já é um botão clicável aninhado */}
       <div role="button" tabIndex={0} onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-3 px-3 py-2.5 text-left cursor-pointer">
         <img src={itemRenderUrl(ownWeaponId, ownWeapon?.Quality ?? 0)} alt="" title={ownWeapon ? ownWeapon.Type : t("noWeaponEquipped")} width={28} height={28} className="shrink-0" />
@@ -424,12 +499,18 @@ function ActivityRow({ ev, profileName, profileGuild, region, isNew, onGlowEnd }
         />
 
         <img src={itemRenderUrl(otherWeaponId, otherWeapon?.Quality ?? 0)} alt="" title={otherWeapon ? otherWeapon.Type : t("noWeaponEquipped")} width={28} height={28} className="shrink-0" />
+        {isJuicy && <span className="shrink-0 text-[10px] font-bold text-amber-400">JUICY</span>}
       </div>
       {open && (
         <div className="flex items-center justify-between gap-4 border-t border-zinc-800 px-3 py-3">
           <EquipMini equipment={ev.equipment} />
           <div className="flex shrink-0 flex-col items-center gap-1.5 text-center">
             <div className={`text-sm font-semibold tabular-nums ${color}`}>{silver(ev.fame)}</div>
+            {silverDropped > 0 && (
+              <div className={`text-xs tabular-nums ${isJuicy ? "text-amber-400 font-bold" : "text-zinc-500"}`}>
+                {silver(silverDropped)} <span className="text-[10px] text-zinc-600">prata</span>
+              </div>
+            )}
             {ev.battle_public_id ? (
               <button onClick={() => navigate(`/${ev.battle_public_id}`)} className="hover:opacity-80 transition-opacity">
                 {(ev.battle_factions ?? []).length > 0
@@ -650,19 +731,35 @@ function Pagination({ page, totalPages, onPage }: { page: number; totalPages: nu
 const PROFILE_REFRESH_MS = 60_000;
 const STAGGER_MS = 350;
 
-export default function PlayerProfilePage({ region, name, onBack }: { region: string; name: string; onBack: () => void }) {
+export default function PlayerProfilePage({ region, name, activityId, onBack }: {
+  region: string; name: string; activityId?: string; onBack: () => void;
+}) {
   const t = useT();
   const { lang } = useLang();
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Stage do refresh em andamento (ver /players/refresh-progress). null quando
+  // não tem refresh ou já terminou. Vem do profile_warmer via polling paralelo
+  // ao de leitura — mostra "na fila" / "buscando perfil" / etc em vez de só
+  // "atualizando…", dando feedback real do que está acontecendo.
+  const [refreshStage, setRefreshStage] = useState<string | null>(null);
   const [loadStage, setLoadStage] = useState<string | null>(null);
+  // Nº de requests aguardando um slot do gate da Albion (do /load-progress e
+  // /refresh-progress) — a barra mostra "na fila da Albion" nas pausas do rate limit.
+  const [loadQueue, setLoadQueue] = useState(0);
+  const [refreshQueue, setRefreshQueue] = useState(0);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [activeTab, setActiveTab] = useState<"activity" | "battles" | "history">("activity");
   const [activityPage, setActivityPage] = useState(1);
   const [battlesPage, setBattlesPage] = useState(1);
   const [historyPage, setHistoryPage] = useState(1);
+  // Barra de pesquisa "X matou Y?" na aba Atividade.
+  const [versusQuery, setVersusQuery] = useState("");
+  const [versusKind, setVersusKind] = useState<"both" | "kills" | "deaths">("both");
+  const [versusResult, setVersusResult] = useState<VersusResult | null>(null);
+  const [versusLoading, setVersusLoading] = useState(false);
 
   // live update: glow no que mudou
   const prevStatsRef = useRef<{ killFame: number; deathFame: number; silver: number } | null>(null);
@@ -748,6 +845,16 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
         })
         .then((data: PlayerProfile | null) => {
           if (data === null) return; // retry agendado, não processa
+          // Cold load em andamento: backend disparou task em background e
+          // retornou stub. NÃO resolve — mantém loading=true e re-tenta em
+          // 2s. A barra de progresso continua de onde estava (o stage vem do
+          // /load-progress, que é alimentado pela task em background, não por
+          // esta request). Quando a task termina, o perfil está no DB e a
+          // próxima leitura retorna o perfil completo.
+          if (data._cold_load) {
+            setTimeout(() => attempt(2_000), 2_000);
+            return;
+          }
           resolve(data);
         })
         .catch(e => setError(e instanceof Error ? e.message : String(e)))
@@ -765,34 +872,146 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
     attempt(3_000);
   }
 
-  // Botão ⟳: só enfileira no backend (POST /refresh) e faz polling da leitura
-  // normal até last_seen_at mudar — nunca bloqueia esperando o fetch pesado
-  // na Albion (ver profile_warmer.sync_refresh_requests).
+  // Botão ⟳: enfileira no backend (POST /refresh) e faz polling da leitura
+  // normal até refresh_requested_at sumir — não tem deadline de 15s como
+  // antes (o warmer pode demorar minutos com a fila cheia). O estado é
+  // COMPARTILHADO: enquanto refresh_requested_at != null, qualquer outro
+  // usuário olhando o mesmo perfil também vê "atualizando" e não consegue
+  // clicar de novo. O backend aplica cooldown de 5min pós-atualização.
+  const refreshPollRef = useRef<object | null>(null);
+  const refreshIdentityRef = useRef("");
+  refreshIdentityRef.current = `${region}\0${name}`;
+  const refreshingRef = useRef(false);
+  useEffect(() => { refreshingRef.current = refreshing; }, [refreshing]);
   function forceRefresh() {
     if (!profile || refreshing) return;
+    const identity = `${region}\0${name}`;
     setRefreshing(true);
-    const beforeLastSeen = profile._ziggs.last_seen_at;
-    fetch(`${API}/players/${encodeURIComponent(profile.Id)}/refresh`, { method: "POST" }).catch(() => {});
+    setRefreshStage("queued");
+    fetch(`${API}/players/${encodeURIComponent(profile.Id)}/refresh`, { method: "POST" })
+      .then(r => r.json())
+      .then((res: { queued?: boolean; refreshing?: boolean; cooldown_seconds?: number }) => {
+        if (refreshIdentityRef.current !== identity) return;
+        // Backend recusou por cooldown — perfil acabou de ser atualizado há
+        // menos de 5min. Restaura o estado e não inicia polling.
+        if (!res.queued) {
+          setRefreshing(false);
+          setRefreshStage(null);
+          // Atualiza a view com o perfil atual (last_seen_at pode ter mudado)
+          load(true);
+          return;
+        }
+        startRefreshPoll();
+      })
+      .catch(() => {
+        if (refreshIdentityRef.current !== identity) return;
+        // POST falhou (rede/502) — ainda assim tenta polling do estado, o
+        // backend pode ter recebido. Se nem o polling roda, restaura o botão.
+        startRefreshPoll();
+      });
+  }
 
-    const deadline = Date.now() + 15_000;
+  function startRefreshPoll() {
+    const identity = `${region}\0${name}`;
+    if (refreshIdentityRef.current !== identity) return;
+    const run = {};
+    refreshPollRef.current = run;
+    const active = () => refreshPollRef.current === run && refreshIdentityRef.current === identity;
+    // Polling da leitura: busca o perfil até refresh_requested_at sumir.
     const poll = () => {
+      if (!active()) return;
       fetch(`${API}/players/by-name/${region}/${encodeURIComponent(name)}`)
         .then(res => (res.ok ? res.json() : null))
         .then((data: PlayerProfile | null) => {
-          const changed = !!data && data._ziggs.last_seen_at !== beforeLastSeen;
-          if (!changed && Date.now() < deadline) { setTimeout(poll, 2_000); return; }
-          setRefreshing(false);
-          if (data) applyProfile(data, true);
+          if (!active()) return;
+          if (!data) { setTimeout(poll, 2_000); return; }
+          const stillRefreshing = data._ziggs.refresh_requested_at != null;
+          applyProfile(data, true);
+          if (stillRefreshing) {
+            setTimeout(poll, 2_000);
+          } else {
+            // Refresh terminou — busca o stage final uma última vez pra pegar
+            // error:timeout (o warmer limpa refresh_requested_at mas deixa o
+            // stage por alguns segundos). Sem isso, o usuário não veria a
+            // mensagem de "tempo esgotado" — o polling de stage já teria parado.
+            fetch(`${API}/players/refresh-progress/${encodeURIComponent(data.Id)}`)
+              .then(r => (r.ok ? r.json() : null))
+              .then((d: { stage?: string | null } | null) => {
+                if (!active()) return;
+                if (d?.stage?.startsWith("error:")) setRefreshStage(d.stage);
+                else setRefreshStage(null);
+                setRefreshing(false);
+                refreshPollRef.current = null;
+              })
+              .catch(() => { if (active()) { setRefreshStage(null); setRefreshing(false); refreshPollRef.current = null; } });
+          }
         })
-        .catch(() => {
-          if (Date.now() < deadline) setTimeout(poll, 2_000); else setRefreshing(false);
-        });
+        .catch(() => { if (active()) setTimeout(poll, 3_000); });  // rede falhou — tenta de novo, sem desistir
+    };
+    // Polling do stage: mais rápido (1s) pra o usuário ver a etapa mudar em
+    // tempo real. Roda em paralelo ao de leitura — são independentes.
+    const stagePoll = () => {
+      if (!active()) return;
+      fetch(`${API}/players/refresh-progress/${encodeURIComponent(profile!.Id)}`)
+        .then(res => (res.ok ? res.json() : null))
+        .then((d: { stage?: string | null; albion_queue?: number } | null) => {
+          if (!active()) return;
+          if (d?.stage) setRefreshStage(d.stage);
+          if (d) setRefreshQueue(d.albion_queue ?? 0);
+        })
+        .catch(() => {})
+        .finally(() => { if (active() && refreshingRef.current) setTimeout(stagePoll, 1_000); });
     };
     setTimeout(poll, 2_000);
+    setTimeout(stagePoll, 500);
   }
+
+  // Status do refresh como TEXTO único (sem a barra de etapas da carga fria):
+  // na fila (esperando o warmer/slot da Albion) → atualizando… (chegou a vez,
+  // buscando o perfil) → etapas nomeadas (sincronizando kills) → fim. A fila da
+  // Albion (requests à frente) tem prioridade no rótulo enquanto > 0.
+  function refreshStatusLabel(): string {
+    if (refreshStage === "error:timeout") return t("refreshStageTimeout");
+    if (refreshQueue > 0) return t("plpAlbionQueue").replace("{n}", String(refreshQueue));
+    const map: Record<string, string> = {
+      queued: t("refreshStageQueued"),   // "na fila"
+      fetching: t("refreshingLabel"),    // "atualizando…" (chegou a vez, buscando)
+      kills: t("refreshStageKills"),     // "sincronizando kills"
+    };
+    return (refreshStage && map[refreshStage]) || t("refreshingLabel");
+  }
+
+  // Barra de pesquisa "X matou Y?" — o backend resolve se `target` é jogador
+  // ou guilda (ilike no nome do oponente, depois no snapshot de guilda do
+  // evento). `kind` filtra só kills, só deaths, ou ambos.
+  async function searchVersus(target: string, kind: "both" | "kills" | "deaths") {
+    if (!profile || !target.trim()) return;
+    setVersusLoading(true);
+    setVersusResult(null);
+    try {
+      const res = await fetch(`${API}/players/${encodeURIComponent(profile.Id)}/versus?region=${region}&kind=${kind}&target=${encodeURIComponent(target.trim())}`);
+      if (res.ok) setVersusResult(await res.json());
+    } catch { /* silencioso — barra de pesquisa, não bloqueia */ }
+    finally { setVersusLoading(false); }
+  }
+
+  // Se o perfil chegou com refresh_requested_at != null (outro usuário pediu),
+  // entra no polling automaticamente — todo mundo vê "atualizando" desde o
+  // início, mesmo sem ter clicado.
+  useEffect(() => {
+    if (profile?._ziggs.refresh_requested_at && !refreshing && !refreshPollRef.current) {
+      setRefreshing(true);
+      setRefreshStage("queued");
+      startRefreshPoll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?._ziggs.refresh_requested_at]);
 
   useEffect(() => {
     setProfile(null);
+    setRefreshing(false);
+    setRefreshStage(null);
+    refreshPollRef.current = null;  // cancela polling do perfil anterior
     prevStatsRef.current = null;
     knownActivityRef.current = new Set();
     knownBattlesRef.current = new Set();
@@ -805,6 +1024,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
     const timer = setInterval(() => load(true), PROFILE_REFRESH_MS);
     return () => {
       clearInterval(timer);
+      refreshPollRef.current = null;
       staggerTimersRef.current.forEach(clearTimeout);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -818,7 +1038,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
     const iv = setInterval(() => {
       fetch(`${API}/players/load-progress/${region}/${encodeURIComponent(name)}`)
         .then(r => r.json())
-        .then(d => { if (alive) setLoadStage(d.stage ?? null); })
+        .then(d => { if (alive) { setLoadStage(d.stage ?? null); setLoadQueue(d.albion_queue ?? 0); } })
         .catch(() => {});
     }, 1000);
     return () => { alive = false; clearInterval(iv); };
@@ -848,12 +1068,23 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
   const gathering = stats?.Gathering;
   const z = profile?._ziggs;
   const mainChar = profile?.custom_profile?.main_character ?? null;
-  const activity: Activity[] = z
+  // Merge+sort de até 100 kills/mortes — só recomputa quando o perfil muda (z),
+  // não a cada re-render de troca de aba/página ou animação de glow do poll.
+  const activity: Activity[] = useMemo(() => z
     ? [
         ...z.kills.map(ev => ({ ...ev, kind: "kill" as const })),
         ...z.deaths.map(ev => ({ ...ev, kind: "death" as const })),
       ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-    : [];
+    : [],
+    [z]);
+
+  useEffect(() => {
+    if (!activityId || !activity.length) return;
+    const index = activity.findIndex(ev => ev.event_id === activityId);
+    if (index < 0) return;
+    setActiveTab("activity");
+    setActivityPage(Math.floor(index / PROFILE_PAGE_SIZE) + 1);
+  }, [activityId, activity]);
 
   const activityTotalPages = Math.max(1, Math.ceil(activity.length / PROFILE_PAGE_SIZE));
   const activityPageClamped = Math.min(activityPage, activityTotalPages);
@@ -884,6 +1115,7 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
             stage={loadStage}
             retrying={retryAttempt > 0}
             hint={t("plpFirstVisit")}
+            queue={loadQueue}
           />
           <ProfileSkeleton />
         </>
@@ -892,6 +1124,9 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
         <p className="rounded-lg border border-red-800 bg-red-900/20 px-4 py-3 text-sm text-red-400">{error}</p>
       )}
 
+      {/* Refresh (botão ⟳): o status vive INLINE como texto (ver
+          refreshStatusLabel), ao lado do ⟳ que gira — a barra de etapas fica só
+          pra carga fria (perfil nunca carregado). */}
       {profile && z && !loading && (
         <div className="space-y-4">
           {/* Header — sem overflow-hidden: clipa os cantos fixos do Panel (-1px);
@@ -951,7 +1186,13 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
                   >
                     <i className={`ti ti-refresh inline-block${refreshing ? " animate-spin" : ""}`} aria-hidden="true" />
                   </button>
-                  {timeAgo(z.last_seen_at)} {t("justAgoSuffix")}
+                  {/* Status do refresh como texto único, progredindo na fila →
+                      atualizando… → etapas → fim (ver refreshStatusLabel). */}
+                  {refreshing ? (
+                    <span className="text-amber-400/80">{refreshStatusLabel()}</span>
+                  ) : (
+                    <>{ageLabel(z.last_seen_at, t("justNowLabel"), t("justAgoSuffix"))}</>
+                  )}
                 </div>
               </div>
               <TopWeaponsWidget weapons={z.top_weapons} />
@@ -978,18 +1219,40 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
               {!!stats?.PvE?.Total && <FameRow label="PvE Fame" value={stats.PvE.Total} />}
             </div>
 
-            {/* Coleta por recurso — contagem aproximada, não fama */}
-            {gathering && !!gathering.All?.Total && (
+            {/* Coleta por recurso — contagem aproximada, não fama. Pesca
+                entra como tipo de coleta (vara de pescar). Cada recurso mostra
+                o rank (#N) quando o jogador está no top500 do highscores;
+                clicável leva pro ranking na página dele. */}
+            {((gathering && !!gathering.All?.Total) || !!stats?.FishingFame) && (
               <div className="relative mt-3 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
                 <i
                   className="ti ti-info-circle absolute right-2 top-2 text-zinc-600"
                   title={t("gatheringEstimateTooltip")}
                 />
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(90px,1fr))] gap-2">
-                  {([[t("resourceWood"), gathering.Wood], [t("resourceHide"), gathering.Hide], [t("resourceOre"), gathering.Ore],
-                    [t("resourceRock"), gathering.Rock], [t("resourceFiber"), gathering.Fiber]] as const).map(([label, g]) =>
-                    g?.Total ? <ResourceCountRow key={label} label={label} fame={g.Total} /> : null
-                  )}
+                  {([
+                    [t("resourceWood"), gathering?.Wood, "gather_wood"] as const,
+                    [t("resourceHide"), gathering?.Hide, "gather_hide"] as const,
+                    [t("resourceOre"), gathering?.Ore, "gather_ore"] as const,
+                    [t("resourceRock"), gathering?.Rock, "gather_rock"] as const,
+                    [t("resourceFiber"), gathering?.Fiber, "gather_fiber"] as const,
+                    [t("resourceFish"), { Total: stats?.FishingFame ?? 0 }, "fishing"] as const,
+                  ]).map(([label, g, kindKey]) => {
+                    if (!g?.Total) return null;
+                    const rank = z?.gather_ranks?.[kindKey];
+                    const hasRank = rank != null && rank > 0;
+                    return (
+                      <ResourceCountRow
+                        key={label}
+                        label={label}
+                        fame={g.Total}
+                        rank={hasRank ? rank : undefined}
+                        onRankClick={hasRank && profile ? () => navigate(
+                          `/highscores?kind=${kindKey}&player=${encodeURIComponent(profile.Id)}&rank=${rank}&regions=${z.region}`
+                        ) : undefined}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1014,19 +1277,89 @@ export default function PlayerProfilePage({ region, name, onBack }: { region: st
 
           <div className="space-y-2">
             {activeTab === "activity" && (
-              activity.length === 0
-                ? <p className="py-8 text-center text-sm text-zinc-600">{t("noActivityYet")}</p>
-                : <>
-                  {activityItems.map((ev, i) => (
-                    <ActivityRow
-                      key={i} ev={ev} profileName={profile.Name}
-                      profileGuild={profile.GuildName ?? null} region={z.region}
-                      isNew={newActivityIds.has(ev.event_id)}
-                      onGlowEnd={() => setNewActivityIds(p => { const n = new Set(p); n.delete(ev.event_id); return n; })}
-                    />
-                  ))}
-                  <Pagination page={activityPageClamped} totalPages={activityTotalPages} onPage={setActivityPage} />
-                </>
+              <>
+                {/* Barra de pesquisa "X matou Y?" + filtro kills/deaths */}
+                <div className="flex gap-2 pb-2">
+                  <input
+                    type="text"
+                    value={versusQuery}
+                    onChange={e => setVersusQuery(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") searchVersus(versusQuery, versusKind); }}
+                    placeholder={t("versusPlaceholder")}
+                    className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-amber-500 focus:outline-none"
+                  />
+                  <select
+                    value={versusKind}
+                    onChange={e => setVersusKind(e.target.value as "both" | "kills" | "deaths")}
+                    className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-300 focus:border-amber-500 focus:outline-none"
+                  >
+                    <option value="both">{t("versusFilterBoth")}</option>
+                    <option value="kills">{t("versusFilterKills")}</option>
+                    <option value="deaths">{t("versusFilterDeaths")}</option>
+                  </select>
+                  <button
+                    onClick={() => searchVersus(versusQuery, versusKind)}
+                    disabled={versusLoading || !versusQuery.trim()}
+                    className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500 disabled:opacity-40"
+                  >
+                    {versusLoading ? "…" : t("versusBtn")}
+                  </button>
+                </div>
+                {versusResult && (
+                  <div className="rounded-lg border border-zinc-700 bg-zinc-900/80 px-4 py-3 text-sm">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="font-medium text-zinc-200">
+                        {versusResult.target_type === "guild" ? (
+                          <span className="text-amber-400">[{versusResult.target_name}]</span>
+                        ) : versusResult.target_name}
+                        {" — "}
+                        <span className="text-blue-400">{versusResult.kills_count ?? 0}</span> {t("versusKills")} · <span className="text-red-400">{versusResult.deaths_count ?? 0}</span> {t("versusDeaths")}
+                      </span>
+                      <button onClick={() => { setVersusResult(null); setVersusQuery(""); }} className="text-xs text-zinc-500 hover:text-zinc-300">✕</button>
+                    </div>
+                    {((versusResult.kills_silver ?? 0) > 0 || (versusResult.deaths_silver ?? 0) > 0) && (
+                      <div className="mb-2 text-xs text-zinc-500">
+                        {silver(versusResult.kills_silver ?? 0)} {t("versusSilverGained")} · {silver(versusResult.deaths_silver ?? 0)} {t("versusSilverLost")}
+                      </div>
+                    )}
+                    {versusResult.kills.length === 0 && versusResult.deaths.length === 0 && (
+                      <p className="text-xs text-zinc-600">{t("versusNoHistory")}</p>
+                    )}
+                    {([
+                      ...versusResult.kills.map(e => ({ ...e, kind: "kill" as const })),
+                      ...versusResult.deaths.map(e => ({ ...e, kind: "death" as const })),
+                    ] as (VersusEvent & { kind: "kill" | "death" })[])
+                      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                      .slice(0, 10)
+                      .map((e, i) => (
+                        <div key={i} className="flex items-center gap-2 border-t border-zinc-800 py-1.5 text-xs">
+                          <span className={`font-medium ${e.kind === "kill" ? "text-blue-400" : "text-red-400"}`}>
+                            {e.kind === "kill" ? "↑" : "↓"}
+                          </span>
+                          <span className="tabular-nums text-zinc-500">{dateUTC(e.timestamp)}</span>
+                          <span className="flex-1 text-zinc-400">{silver(e.fame)}</span>
+                          {e.silver_dropped >= JUICY_SILVER_THRESHOLD && <span className="text-amber-400 font-bold">JUICY</span>}
+                          {e.silver_dropped > 0 && <span className="text-zinc-600">{silver(e.silver_dropped)}</span>}
+                        </div>
+                      ))}
+                  </div>
+                )}
+                {activity.length === 0
+                  ? <p className="py-8 text-center text-sm text-zinc-600">{t("noActivityYet")}</p>
+                  : <>
+                    {activityItems.map(ev => (
+                      <ActivityRow
+                        key={`${ev.kind}:${ev.event_id}`} ev={ev} profileName={profile.Name}
+                        profileGuild={profile.GuildName ?? null} region={z.region}
+                        forceOpen={activityId === ev.event_id}
+                        isNew={newActivityIds.has(ev.event_id)}
+                        onGlowEnd={() => setNewActivityIds(p => { const n = new Set(p); n.delete(ev.event_id); return n; })}
+                      />
+                    ))}
+                    <Pagination page={activityPageClamped} totalPages={activityTotalPages} onPage={setActivityPage} />
+                  </>
+                }
+              </>
             )}
             {activeTab === "battles" && (
               z.battle_history.length === 0

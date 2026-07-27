@@ -29,7 +29,9 @@ async def _get(path: str) -> dict | None:
 
 
 async def _post(path: str, body: dict) -> dict | None:
-    return await http_client.post_json(path, body)
+    return await http_client.post_json(
+        path, body, tag="lootlog_threads", attempts=2,
+    )
 
 
 _cog_ref: "LootlogThreads | None" = None
@@ -38,6 +40,8 @@ _cog_ref: "LootlogThreads | None" = None
 class LootlogThreads(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._guild_locks: dict[int, asyncio.Lock] = {}
+        self._thread_ids: dict[tuple[int, int], int] = {}
 
     async def cog_load(self) -> None:
         global _cog_ref
@@ -53,12 +57,16 @@ class LootlogThreads(commands.Cog):
     # catch-up roda em main.py depois de _wait_for_backend() (ver on_ready lá).
 
     async def sync_guild(self, guild: discord.Guild) -> None:
+        lock = self._guild_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            await self._sync_guild_unlocked(guild)
+
+    async def _sync_guild_unlocked(self, guild: discord.Guild) -> None:
         cfg = await _guild_command_config(guild.id)
         channel_id = cfg.get("lootlog_thread_channel_id")
         if not channel_id:
-            print(f"[lootlog_threads] {guild.id}: lootlog_thread_channel_id não veio na config do bot "
-                  f"(feature off ou /bot/guild-commands não devolveu)")
-            return  # sem canal dedicado configurado → feature off
+            return  # feature off (sem canal) ou backend fora — não logar por-tick
+                    # (queda do backend já é logada 1× por http_client)
         try:
             cid = int(channel_id)
         except (TypeError, ValueError):
@@ -78,9 +86,7 @@ class LootlogThreads(commands.Cog):
 
         work = await _get(f"/bot/events/{guild.id}/lootlog-thread-work")
         if work is None:
-            print(f"[lootlog_threads] {guild.id}: lootlog-thread-work sem resposta "
-                  f"(backend fora do ar ou 401) — BOT_SITE_URL={SITE_URL or '(vazio)'}")
-            return
+            return  # backend fora/401 já logado 1× (http_client / tag) — próximo tick cobre
 
         create = work.get("create") or []
         if create:
@@ -98,28 +104,34 @@ class LootlogThreads(commands.Cog):
         if not event_id:
             return
         name = t(lang, "ev_lootlog_thread_title", n=event_id, title=title)[:100]
-        print(f"[lootlog_threads] criando thread '{name}' p/ evento {event_id} no canal {channel.id}")
-        try:
-            thread = await channel.create_thread(
-                name=name, type=discord.ChannelType.public_thread,
+        key = (guild.id, int(event_id))
+        thread = guild.get_thread(self._thread_ids.get(key, 0))
+        if thread is None:
+            thread = next((item for item in channel.threads if item.name == name), None)
+        if thread is None:
+            print(f"[lootlog_threads] criando thread '{name}' p/ evento {event_id} no canal {channel.id}")
+            try:
+                thread = await channel.create_thread(
+                    name=name, type=discord.ChannelType.public_thread,
+                )
+            except Exception as e:
+                print(f"[lootlog_threads] falhou criar thread p/ evento {event_id} "
+                      f"em {channel.id}: {type(e).__name__}: {e}")
+                return
+            print(f"[lootlog_threads] ✓ thread {thread.id} criada p/ evento {event_id}")
+            # Embed com o botão '📤 Enviar log' (submissão anônima via modal FileUpload).
+            from cogs.lootlogs import LootlogSubmitView
+            embed = discord.Embed(
+                title=t(lang, "ev_lootlog_thread_title", n=event_id, title=title),
+                description=t(lang, "ev_lootlog_thread_header", n=event_id),
+                color=0x2b2d31,
             )
-        except Exception as e:
-            print(f"[lootlog_threads] falhou criar thread p/ evento {event_id} "
-                  f"em {channel.id}: {type(e).__name__}: {e}")
-            return
-        print(f"[lootlog_threads] ✓ thread {thread.id} criada p/ evento {event_id}")
-        # Embed com o botão '📤 Enviar log' (submissão anônima via modal FileUpload).
-        from cogs.lootlogs import LootlogSubmitView
-        embed = discord.Embed(
-            title=t(lang, "ev_lootlog_thread_title", n=event_id, title=title),
-            description=t(lang, "ev_lootlog_thread_header", n=event_id),
-            color=0x2b2d31,
-        )
-        try:
-            await thread.send(embed=embed, view=LootlogSubmitView(lang))
-        except (discord.Forbidden, discord.HTTPException) as e:
-            print(f"[lootlog_threads] falhou postar embed-botão na thread "
-                  f"{thread.id}: {type(e).__name__}: {e}")
+            try:
+                await thread.send(embed=embed, view=LootlogSubmitView(lang))
+            except (discord.Forbidden, discord.HTTPException) as e:
+                print(f"[lootlog_threads] falhou postar embed-botão na thread "
+                      f"{thread.id}: {type(e).__name__}: {e}")
+        self._thread_ids[key] = thread.id
         await _post(
             f"/bot/events/{guild.id}/{event_id}/lootlog-thread-synced",
             {"lootlog_thread_id": str(thread.id), "clear_dirty": True},

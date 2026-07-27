@@ -37,9 +37,11 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 
-async def _post(path: str, body: dict | None = None) -> None:
-    """Envia uma requisição POST ao site (best-effort)."""
-    await http_client.post_best_effort(path, body)
+async def _post(path: str, body: dict | None = None) -> dict | None:
+    """Confirma escritas de outbox; se o backend cair, a fila tenta novamente."""
+    return await http_client.post_json(
+        path, body or {}, tag="worker", attempts=2, queue_on_failure=True,
+    )
 
 
 async def _get(path: str) -> dict | None:
@@ -52,7 +54,7 @@ async def heartbeat(guild: discord.Guild) -> None:
         "guild_name": guild.name,
         "guild_icon": guild.icon.key if guild.icon else None,
     }
-    await _post(f"/bot/heartbeat/{guild.id}", body)
+    await http_client.post_best_effort(f"/bot/heartbeat/{guild.id}", body)
 
 
 @tasks.loop(minutes=5)
@@ -99,6 +101,26 @@ async def event_work_loop() -> None:
             return  # site fora do ar — rebind fica pendente pro próximo tick
         if rebind:
             cog._rebind_pending.discard(guild.id)
+        prompt_deletes = data.get("function_prompt_deletes") or []
+        prompt_deletes_done = True
+        if prompt_deletes and not rebind:
+            deleted = await cog.delete_function_prompts(prompt_deletes)
+            if deleted:
+                await _post(
+                    f"/bot/events/{guild.id}/function-prompt-deletes-acked",
+                    {"message_ids": deleted},
+                )
+            prompt_deletes_done = len(deleted) == len(prompt_deletes)
+        prompts = data.get("function_prompts") or []
+        if prompts and not rebind and prompt_deletes_done:
+            sent = await cog.send_function_prompts(guild, prompts)
+            # O endpoint grava os IDs enviados e limpa o outbox na mesma
+            # transação. Lista vazia também confirma tentativas impossíveis
+            # (DM fechada), evitando reenviar para sempre.
+            await _post(
+                f"/bot/events/{guild.id}/function-prompt-messages",
+                {"messages": sent},
+            )
         if data.get("events") or data.get("needs_rebuild"):
             await cog.sync_massinfo(
                 guild, data.get("events") or [],
@@ -265,7 +287,7 @@ async def on_guild_join(guild: discord.Guild) -> None:
 
 @bot.event
 async def on_guild_remove(guild: discord.Guild) -> None:
-    await _post(f"/bot/goodbye/{guild.id}")
+    await http_client.post_best_effort(f"/bot/goodbye/{guild.id}")
     print(f"✗ Saí de: {guild.name} ({guild.id})")
 
 
@@ -274,7 +296,10 @@ async def on_interaction(interaction: discord.Interaction) -> None:
     """Hook global: roda antes de qualquer dispatch de componente. Reseta
     o timer de auto-delete da ephemeral ativa dessa interação — qualquer
     clique de botão/select conta como 'atividade' e renova os 60s."""
-    if interaction.type is discord.InteractionType.component:
+    if interaction.type in (
+        discord.InteractionType.component,
+        discord.InteractionType.modal_submit,
+    ):
         ephemeral_guard.touch(interaction)
 
 
@@ -303,6 +328,8 @@ async def main() -> None:
         await bot.load_extension("cogs.event_cmd")
         await bot.load_extension("cogs.audit_log")
         await bot.load_extension("cogs.battle_feed")
+        await bot.load_extension("cogs.juicy_kills")
+        await bot.load_extension("cogs.profile_moderation")
         try:
             await bot.start(TOKEN)
         finally:

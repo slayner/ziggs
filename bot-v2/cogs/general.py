@@ -42,6 +42,9 @@ async def _guild_command_config(guild_id: int) -> dict:
         "regear_thread_channel_id": None,
         "lootlog_thread_channel_id": None,
         "bot_logs_enabled": True,
+        "battle_feed_channel_id": None, "battle_feed_min_players": 10,
+        "juicy_kill_channel_id": None, "juicy_kill_min_silver": 50_000_000,
+        "juicy_kill_min_fame": 0, "juicy_kill_regions": [],
     }
     if not SITE_URL or not API_SECRET:
         return empty
@@ -69,6 +72,12 @@ async def _guild_command_config(guild_id: int) -> dict:
                     "regear_thread_channel_id": data.get("regear_thread_channel_id"),
                     "lootlog_thread_channel_id": data.get("lootlog_thread_channel_id"),
                     "bot_logs_enabled": data.get("bot_logs_enabled", True),
+                    "battle_feed_channel_id": data.get("battle_feed_channel_id"),
+                    "battle_feed_min_players": data.get("battle_feed_min_players", 10),
+                    "juicy_kill_channel_id": data.get("juicy_kill_channel_id"),
+                    "juicy_kill_min_silver": data.get("juicy_kill_min_silver", 50_000_000),
+                    "juicy_kill_min_fame": data.get("juicy_kill_min_fame", 0),
+                    "juicy_kill_regions": data.get("juicy_kill_regions", []),
                 }
                 _cmd_cache[guild_id] = (cfg, now)
                 return cfg

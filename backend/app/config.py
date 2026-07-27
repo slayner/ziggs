@@ -16,11 +16,15 @@ class Settings(BaseSettings):
     discord_client_id: str = ""
     discord_client_secret: str = ""
     discord_redirect_uri: str = "http://localhost:8000/auth/discord/callback"
-    discord_scopes: str = "identify guilds"
+    discord_scopes: str = "identify guilds email"
     discord_bot_token: str = ""
 
     # Front-end (destino do redirect pós-login).
     frontend_url: str = "http://localhost:5173"
+    # Host público da documentação. Vazio = o backend só serve a SPA principal;
+    # em produção, apontar docs.example.com para este processo e definir
+    # DOCS_HOST=docs.example.com faz o catch-all entregar docs.html.
+    docs_host: str = ""
 
     # Sessão do site (cookie assinado).
     secret_key: str = "dev-only-change-me"
