@@ -57,10 +57,12 @@ const selectAllText = (e: React.MouseEvent<HTMLElement>) => {
   sel.addRange(range);
 };
 
-const CITIES = ["Caerleon", "Bridgewatch", "Martlock", "Thetford", "Fort Sterling", "Lymhurst", "Brecilien", "Black Market"];
+const CITIES = ["Caerleon", "Bridgewatch", "Martlock", "Thetford", "Fort Sterling", "Lymhurst", "Brecilien", "Arthur's Rest", "Merlyn's Rest", "Morgana's Rest", "Smuggler's Den", "Black Market"];
 const CITY_ABBR: Record<string, string> = {
   Lymhurst: "LH", "Fort Sterling": "FS", Thetford: "TF", Caerleon: "CN",
   "Black Market": "BM", Brecilien: "BC", Bridgewatch: "BW", Martlock: "ML",
+  "Arthur's Rest": "AR", "Merlyn's Rest": "MR", "Morgana's Rest": "MG",
+  "Smuggler's Den": "SD",
 };
 const cityAbbr = (city?: string) => (city ? CITY_ABBR[city] ?? city : "");
 const CITY_COLOR: Record<string, string> = {
@@ -71,6 +73,10 @@ const CITY_COLOR: Record<string, string> = {
   Bridgewatch: "#e6c79c",
   Caerleon: "#e0a9a3",
   Brecilien: "#a3d8d0",
+  "Arthur's Rest": "#e6c79c",
+  "Merlyn's Rest": "#a7c5e6",
+  "Morgana's Rest": "#c3b0e0",
+  "Smuggler's Den": "#b8b8bd",
   "Black Market": "#b8b8bd",
 };
 const cityColor = (city?: string) => (city ? CITY_COLOR[city] : undefined);
@@ -84,7 +90,7 @@ function useCityBiome(): Record<string, string> {
     Thetford: t("biomeSwamp"),
   };
 }
-const DEMAND_CITIES = ["Lymhurst", "Fort Sterling", "Bridgewatch", "Martlock", "Thetford"];
+const DEMAND_CITIES = ["Lymhurst", "Fort Sterling", "Bridgewatch", "Martlock", "Thetford", "Arthur's Rest", "Merlyn's Rest", "Morgana's Rest", "Smuggler's Den"];
 const SELL_QUALITIES = [1, 2, 3, 4];
 const ALL_QUALITIES = [1, 2, 3, 4, 5];
 const TIERS = [4, 5, 6, 7, 8];
@@ -350,7 +356,7 @@ export default function CraftCalculator() {
   const hideoutEligible = !!family && !isCityBonusKind(family);
   // Bônus derivado da cidade real, não de um toggle abstrato:
   // cajados de gelo em Thetford = sem bônus; em Martlock = +15.
-  const autoSpecialized = isSpecialized(productionLocation, family?.bonusCity, hideoutEligible);
+  const autoSpecialized = isSpecialized(productionLocation, family?.bonusCity, hideoutEligible, family?.craftCategory);
   const bonusBiome = hideoutEligible ? cityBiome(family?.bonusCity ?? undefined) : undefined;
   const location: LocationConfig = {
     place,

@@ -32,9 +32,14 @@ use crate::aodp::{self, AodpBatch, AodpServer};
 
 /// Cidades com marketplace real — só reportamos preço quando o jogador está
 /// numa delas (o nome do mapa vira a cidade do report).
-const MARKET_CITIES: [&str; 8] = [
+/// Inclui os 3 Rests (Arthur's/Merlyn's/Morgana's) que têm estações de craft
+/// próprias e shareiam o Smuggler's Network. Smuggler's Den em si é mercado
+/// mas não é local de craft.
+const MARKET_CITIES: [&str; 12] = [
     "Martlock", "Bridgewatch", "Lymhurst", "Fort Sterling",
     "Thetford", "Caerleon", "Brecilien", "Black Market",
+    "Arthur's Rest", "Merlyn's Rest", "Morgana's Rest",
+    "Smuggler's Den",
 ];
 
 /// Janela de dedup de pacote. `open_all` escuta TODAS as interfaces de propósito
@@ -770,9 +775,15 @@ impl Sniffer {
                                 if self.feed_aodp.load(Ordering::Relaxed) {
                                     let server = self.aodp_server.lock().await.clone();
                                     let numeric_loc = raw_map.trim_start_matches('0');
-                                    // Só envia se sabemos a região E o local é um cluster numérico.
+                                    // Aceita clusters numéricos (cidades reais,
+                                    // Rests) E BLACKBANK-* (Smuggler's Den) — o
+                                    // AODP client oficial aceita ambos.
+                                    let is_valid_loc = !numeric_loc.is_empty() && (
+                                        numeric_loc.chars().all(|c| c.is_ascii_digit()) ||
+                                        numeric_loc.starts_with("BLACKBANK-")
+                                    );
                                     if let Some(server) = server {
-                                        if !numeric_loc.is_empty() && numeric_loc.chars().all(|c| c.is_ascii_digit()) {
+                                        if is_valid_loc {
                                             let orders: Vec<serde_json::Value> = cap.raw_orders.iter().map(|o| {
                                                 let mut o = o.clone();
                                                 let empty = o.get("LocationId")
@@ -796,7 +807,7 @@ impl Sniffer {
                                             if len > 50 { buf.drain(..len - 50); }
                                         } else {
                                             self.debug_log("warn", &format!(
-                                                "AODP: local não numérico ({}), pulando envio", map_name
+                                                "AODP: local inválido ({}), pulando envio", map_name
                                             )).await;
                                         }
                                     }
