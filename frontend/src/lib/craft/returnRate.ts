@@ -50,6 +50,8 @@ export const EVENT_BONUS = [
 
 export interface LocationConfig {
   place: CraftPlace;
+  /** Cidade real onde o usuário está produzindo (city/island). */
+  city?: string;
   /** Item is specialized in this city/biome (the +15 / hideout spec bonus). */
   specialized: boolean;
   /** Event/daily bonus fraction (0, 0.1, 0.2). */

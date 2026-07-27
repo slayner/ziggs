@@ -17,6 +17,14 @@ import {
   type CraftPlace,
 } from "../lib/craft/returnRate";
 import {
+  PRODUCTION_CITIES,
+  type ProductionCity,
+  type ProductionLocation,
+  isSpecialized,
+  loadLocation,
+  saveLocation,
+} from "../lib/craft/location";
+import {
   loadCatalog,
   loadNames,
   loadWeights,
@@ -176,10 +184,10 @@ interface Order {
   focusEfficiency: number;
 }
 
-function placeLabel(loc: LocationConfig, t: (key: TKey) => string): string {
-  if (loc.place === "city") return t("placeCity");
-  if (loc.place === "island") return t("placeIsland");
-  return `HO Q${loc.hideoutQuality}/Nv${loc.hideoutLevel}`;
+function placeLabel(loc: ProductionLocation, t: (key: TKey) => string): string {
+  if (loc.kind === "city") return loc.city;
+  if (loc.kind === "island") return `${t("placeIsland")} ${loc.city}`;
+  return `HO Q${loc.quality}/Nv${loc.power}`;
 }
 
 export default function CraftCalculator() {
@@ -200,7 +208,14 @@ export default function CraftCalculator() {
   const [batchQty, setBatchQty] = useState(30);
   const useFocus = true;
 
-  const [place, setPlace] = useState<CraftPlace>("city");
+  // Local de produção real — persiste no localStorage. Default: null (exige escolha).
+  const [productionLocation, setProductionLocation] = useState<ProductionLocation>(() => {
+    return loadLocation() ?? { kind: "city", city: "Caerleon" };
+  });
+  const place: CraftPlace = productionLocation.kind;
+  const craftCity: ProductionCity | undefined =
+    productionLocation.kind !== "hideout" ? productionLocation.city : undefined;
+
   const [eventBonus, setEventBonus] = useState(0);
   const [hoQuality, setHoQuality] = useState(6);
   const [hoLevel, setHoLevel] = useState(8);
@@ -267,6 +282,9 @@ export default function CraftCalculator() {
     fetchAdpGold(server).then(setGoldPrice).catch(() => {});
   }, [server]);
 
+  // Persiste a localização de produção no localStorage a cada mudança.
+  useEffect(() => { saveLocation(productionLocation); }, [productionLocation]);
+
   // Atualiza sempre (funciona sem login); só persiste no blur, e só se
   // logado, pra não disparar um PUT por tecla digitada.
   function setFocusEff(key: string, value: number) {
@@ -329,14 +347,24 @@ export default function CraftCalculator() {
   const baseFamily = siblings[0];
   const baseVar = baseFamily ? baseFamily.variations.find((v) => v.tier === 8 && v.enchant === 0) ?? null : null;
 
-  const hasBonusCity = !!family?.bonusCity;
   const hideoutEligible = !!family && !isCityBonusKind(family);
-  const autoSpecialized = place === "city" ? hasBonusCity : place === "hideout" ? hideoutEligible : false;
+  // Bônus derivado da cidade real, não de um toggle abstrato:
+  // cajados de gelo em Thetford = sem bônus; em Martlock = +15.
+  const autoSpecialized = isSpecialized(productionLocation, family?.bonusCity, hideoutEligible);
   const bonusBiome = hideoutEligible ? cityBiome(family?.bonusCity ?? undefined) : undefined;
-  const location: LocationConfig = { place, specialized: autoSpecialized, eventBonus, hideoutQuality: hoQuality, hideoutLevel: hoLevel };
+  const location: LocationConfig = {
+    place,
+    city: craftCity,
+    specialized: autoSpecialized,
+    eventBonus,
+    hideoutQuality: hoQuality,
+    hideoutLevel: hoLevel,
+  };
   useEffect(() => {
-    if (place === "hideout" && family && !hideoutEligible) setPlace("city");
-  }, [place, hideoutEligible, family]);
+    if (productionLocation.kind === "hideout" && family && !hideoutEligible) {
+      setProductionLocation({ kind: "city", city: "Caerleon" });
+    }
+  }, [productionLocation, hideoutEligible, family]);
   const rrNoFocus = returnRateNoFocus(location);
   const rrFocus = returnRateFocus(location);
   // ponytail: spec é 0..100 por arma; FCE real vem da árvore (irmãs + mastery)
@@ -418,7 +446,7 @@ export default function CraftCalculator() {
         qty: batchQty,
         useFocus,
         rr: useFocus ? rrFocus : rrNoFocus,
-        placeLabel: placeLabel(location, t),
+        placeLabel: placeLabel(productionLocation, t),
         journalId: prof ? journalId(v.tier, prof) : null,
         focusEfficiency: focusFce,
       },
@@ -651,9 +679,12 @@ export default function CraftCalculator() {
       {/* Main grid: config | lista | carrinho */}
       <div className="grid items-start gap-5 min-[1500px]:grid-cols-[300px_1fr_300px]">
         <SettingsPanel
-          place={place} setPlace={setPlace} hideoutEligible={hideoutEligible}
+          productionLocation={productionLocation} setProductionLocation={setProductionLocation}
+          hideoutEligible={hideoutEligible}
           hoQuality={hoQuality} setHoQuality={setHoQuality} hoLevel={hoLevel} setHoLevel={setHoLevel}
           eventBonus={eventBonus} setEventBonus={setEventBonus}
+          bonusCity={family?.bonusCity ?? null} autoSpecialized={autoSpecialized}
+          craftCity={craftCity}
           sellCity={sellCity} setSellCity={setSellCity}
           minSpf={minSpf}
           groups={groups} groupLabel={groupLabel} cityForGroup={cityForGroup} setGroupMarket={setGroupMarket}
@@ -697,9 +728,11 @@ export default function CraftCalculator() {
 /* ---------------- SettingsPanel (coluna esquerda) ---------------- */
 
 function SettingsPanel({
-  place, setPlace, hideoutEligible,
+  productionLocation, setProductionLocation, hideoutEligible,
   hoQuality, setHoQuality, hoLevel, setHoLevel,
   eventBonus, setEventBonus,
+  bonusCity, autoSpecialized,
+  craftCity,
   sellCity, setSellCity, minSpf,
   groups, groupLabel, cityForGroup, setGroupMarket, orderForGroup, setGroupOrder,
   baseVar,
@@ -707,9 +740,11 @@ function SettingsPanel({
   focusEfficiencyByFamily, setFocusEff, commitFocusEfficiency,
   ignoredJournalTiers, toggleJournalTier,
 }: {
-  place: CraftPlace; setPlace: (p: CraftPlace) => void; hideoutEligible: boolean;
+  productionLocation: ProductionLocation; setProductionLocation: (l: ProductionLocation) => void; hideoutEligible: boolean;
   hoQuality: number; setHoQuality: (v: number) => void; hoLevel: number; setHoLevel: (v: number) => void;
   eventBonus: number; setEventBonus: (v: number) => void;
+  bonusCity: string | null; autoSpecialized: boolean;
+  craftCity: ProductionCity | undefined;
   sellCity: string; setSellCity: (v: string) => void; minSpf: number;
   groups: string[]; groupLabel: (g: string) => string; cityForGroup: (g: string) => string;
   setGroupMarket: React.Dispatch<React.SetStateAction<Record<string, string>>>;
@@ -721,13 +756,22 @@ function SettingsPanel({
 }) {
   const t = useT();
   const [marketOpen, setMarketOpen] = useState(false);
+  const place = productionLocation.kind;
+  const setPlace = (p: "city" | "island" | "hideout") => {
+    if (p === "hideout") {
+      setProductionLocation({ kind: "hideout", quality: hoQuality, power: hoLevel });
+    } else {
+      const city = productionLocation.kind !== "hideout" ? productionLocation.city : "Caerleon";
+      setProductionLocation({ kind: p, city });
+    }
+  };
   return (
     <aside className="flex flex-col gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-      {/* Local & Bônus — mesma linha, design compacto em selects */}
+      {/* Local & Bônus — cidade real determina o bônus */}
       <div className="space-y-1.5">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("craftLocationHeader")} & {t("bonusLabel")}</h3>
         <div className="flex gap-1.5">
-          <select value={place} onChange={(e) => setPlace(e.target.value as CraftPlace)} className={`${selectCls} h-9 min-w-0 flex-1`}>
+          <select value={place} onChange={(e) => setPlace(e.target.value as "city" | "island" | "hideout")} className={`${selectCls} h-9 min-w-0 flex-1`}>
             <option value="city">🏛️ {t("placeCity")}</option>
             <option value="island">🏝️ {t("placeIsland")}</option>
             {hideoutEligible && <option value="hideout">🏠 Hideout</option>}
@@ -738,12 +782,35 @@ function SettingsPanel({
             <option value={0.2}>20%</option>
           </select>
         </div>
+        {place !== "hideout" && (
+          <select
+            value={craftCity ?? "Caerleon"}
+            onChange={(e) => setProductionLocation({ kind: place, city: e.target.value as ProductionCity })}
+            className={`${selectCls} h-9 w-full`}
+          >
+            {PRODUCTION_CITIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
         {place === "hideout" && hideoutEligible && (
           <div className="flex gap-1.5">
             <select value={hoQuality} onChange={(e) => setHoQuality(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1`} title={t("hoZoneQualityTitle")}>{HIDEOUT_QUALITY.map((_, i) => <option key={i} value={i + 1}>{`Q${i + 1}`}</option>)}</select>
             <select value={hoLevel} onChange={(e) => setHoLevel(+e.target.value)} className={`${selectCls} h-9 min-w-0 flex-1`} title={t("hoPowerLevelTitle")}>{HIDEOUT_LEVEL.map((_, i) => <option key={i} value={i + 1}>{`Nv${i + 1}`}</option>)}</select>
           </div>
         )}
+        {/* Bônus local: derivado da cidade + receita */}
+        <div className="text-xs">
+          {autoSpecialized ? (
+            <span className="text-emerald-400">
+              ✓ {t("craftBonusActive")}: {bonusCity} +15%
+            </span>
+          ) : bonusCity ? (
+            <span className="text-zinc-500">
+              {t("craftBonusNoBonus")} {t("craftBonusInCity")} <span style={{ color: cityColor(bonusCity) }}>{bonusCity}</span>
+            </span>
+          ) : (
+            <span className="text-zinc-500">{t("craftBonusNoCity")}</span>
+          )}
+        </div>
       </div>
 
       {/* Mercado (venda + por material, colapsável) */}
