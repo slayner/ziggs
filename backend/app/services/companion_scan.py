@@ -234,6 +234,10 @@ async def report_task(
     if character_name and re.fullmatch(r"[A-Za-z0-9]{3,16}", character_name.strip()):
         nick = character_name.strip()
 
+    # Libera read tx antes do HTTP (gather de _probe_detail faz N chamadas
+    # concorrentes à API do Albion — read tx aberta impede wal_checkpoint).
+    db.commit()
+
     accepted = 0
     region = task.region
     async with make_client() as client:

@@ -241,7 +241,7 @@ class EventDeath(Base, TimestampMixin):
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     # Valor de prata do regear aprovado.
     silver_value: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"), default=0, nullable=False
+        BigInteger, default=0, nullable=False
     )
     notes: Mapped[str | None] = mapped_column(Text)
     approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

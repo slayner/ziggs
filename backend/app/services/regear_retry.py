@@ -49,8 +49,16 @@ async def _retry_once() -> None:
         if not rows:
             return
 
+        # Materializa IDs e commit antes do HTTP — read tx aberta durante await
+        # (recognize_by_player bate na API do Albion) impede wal_checkpoint.
+        req_ids = [r.id for r in rows]
+        db.commit()
+
         # Cacheia settings/region/cta por guild_id neste ciclo.
-        for req in rows:
+        for req_id in req_ids:
+            req = db.get(RegearRequest, req_id)
+            if req is None:
+                continue
             req.recognition_attempts += 1
             guild = db.get(Guild, req.guild_id)
             if guild is None:
@@ -61,6 +69,9 @@ async def _retry_once() -> None:
                 continue  # sem registro, OCR já tentou na ingest → não adianta
             cta_times = _cta_times(db, guild.id)
             landmark = _landmark_window(db, guild.id, req.event_id)
+            # Libera read tx antes do HTTP (recognize_by_player chama Albion).
+            # recognition_attempts já foi incrementado — comita pra persistir.
+            db.commit()
             try:
                 rec = await regear_recognition.recognize_by_player(names, cta_times, region, landmark)
             except Exception as e:

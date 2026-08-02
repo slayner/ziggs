@@ -126,7 +126,10 @@ export function refiningFocusCost(
   outputCount: number,
   efficiency: number,
 ): number {
-  return outputCount * baseFocus * refiningFocusMultiplier(efficiency);
+  // ponytail: ceil é conservador — o jogo arredonda o foco final pra inteiro,
+  // e arredondar pra baixo poderia subestimar o custo. Validado contra a
+  // planilha de referência (Base focus cost / 2^((specs)/10000)).
+  return Math.ceil(outputCount * baseFocus * refiningFocusMultiplier(efficiency));
 }
 
 // ─── Testes canônicos ───────────────────────────────────────────────────────

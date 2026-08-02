@@ -14,14 +14,17 @@ Funções legacy (sync_prices / get_price) mantidas para compatibilidade.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import statistics
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as _pg_insert
 from sqlalchemy.orm import Session
 
 log = logging.getLogger(__name__)
@@ -30,6 +33,57 @@ from app.models.catalog import GameRole
 from app.models.prices import ItemPrice, ItemPriceLatest
 
 from .awakened import awakened_value
+
+# ── mapeamento UniqueName ↔ game_name ─────────────────────────────────────────
+# O game_name é o ID canônico do sistema de preços (nome em inglês do jogo).
+# Carregado uma vez do seed. Se o arquivo não existir, as funções devolvem
+# o input sem conversão (fallback — quebra silenciosa, não crash).
+
+def _load_item_names() -> dict[str, str]:
+    p = Path(__file__).resolve().parent.parent.parent / "data" / "item_names.json"
+    if not p.exists():
+        log.warning("item_names.json não encontrado — conversão de IDs desativada")
+        return {}
+    return json.loads(p.read_bytes())
+
+
+_ITEM_NAMES: dict[str, str] = {}
+_GAME_NAMES: dict[str, str] = {}  # reverso: game_name → unique_name
+
+
+def _ensure_maps() -> None:
+    global _ITEM_NAMES, _GAME_NAMES
+    if _ITEM_NAMES:
+        return
+    _ITEM_NAMES = _load_item_names()
+    # Reverso: quando há colisão (235 game_names mapeiam pra >1 UniqueName,
+    # ex: "Rare Hemp" ← T4_FIBER_LEVEL2 e T4_FIBER_LEVEL2@2), prefere a versão
+    # COM @enchant — é o que a AODB usa. Sem isto, encantados viravam flat
+    # e a AODB devolvia vazio.
+    for uid, gname in _ITEM_NAMES.items():
+        existing = _GAME_NAMES.get(gname)
+        if existing is None or ("@" in uid and "@" not in existing):
+            _GAME_NAMES[gname] = uid
+
+
+def _unique_to_game(uid: str) -> str:
+    """UniqueName → game_name. Ex: T4_FIBER_LEVEL2@2 → 'Rare Hemp'."""
+    _ensure_maps()
+    return _ITEM_NAMES.get(uid, uid)
+
+
+def _game_to_unique(gname: str) -> str:
+    """game_name → UniqueName. Ex: 'Rare Hemp' → T4_FIBER_LEVEL2@2."""
+    _ensure_maps()
+    return _GAME_NAMES.get(gname, gname)
+
+
+def _is_unconverted(uid: str) -> bool:
+    """True se o id ainda parece UniqueName (não foi convertido pra game_name).
+    Formato: T<n>_<...>. Usado pra REJEITAR writes de ids que falharam a
+    conversão — gravar T_ no latest cria órfãos que nenhuma rota de leitura
+    encontra (leitores buscam por game_name)."""
+    return uid.startswith("T") and "_" in uid and uid[1:2].isdigit()
 
 # ── constantes ────────────────────────────────────────────────────────────────
 
@@ -70,13 +124,16 @@ def upsert_companion_prices(
 ) -> tuple[int, int]:
     """Insere preços reportados por companions (packet capture do mercado).
 
-    Reaproveita _upsert_latest — mesmo formato de row. Normaliza price_date
-    (string ISO ou datetime) pra o que _upsert_latest espera.
+    Bulk SQL nativo (Postgres): 1 INSERT append-only no histórico + 1
+    ON CONFLICT DO UPDATE no latest por chunk — NÃO faz N SELECTs + N INSERTs
+    ORM (o caminho legado em _upsert_latest). Semântica "age mais próxima vence"
+    preservada via WHERE no conflict (price_date mais recente prevalece).
 
     Retorna (accepted, rejected). rejected = rows sem item_id ou price == 0.
     """
     now = datetime.now(timezone.utc)
-    clean: list[dict[str, Any]] = []
+    history_rows: list[dict[str, Any]] = []
+    latest_by_key: dict[tuple[str, str, int], dict[str, Any]] = {}
     rejected = 0
     for r in rows:
         iid = r.get("item_id")
@@ -84,25 +141,55 @@ def upsert_companion_prices(
         if not iid or not price:
             rejected += 1
             continue
-        pd = r.get("price_date") or r.get("sell_price_min_date") or now.isoformat()
-        if isinstance(pd, datetime):
-            pd = pd.isoformat()
-        clean.append({
-            "item_id": iid,
-            "city": r.get("city", _DEFAULT_CITY),
-            "quality": int(r.get("quality", 1) or 1),
-            "sell_price_min": int(price),
-            "sell_price_min_date": pd,
+        # Guarda: id que não foi convertido pra game_name (ainda T_xxx) cria
+        # órfão no latest — leitores buscam por game_name e nunca encontram.
+        if _is_unconverted(iid):
+            rejected += 1
+            continue
+        pd_raw = r.get("price_date") or r.get("sell_price_min_date") or now.isoformat()
+        if isinstance(pd_raw, datetime):
+            pd_raw = pd_raw.isoformat()
+        pd_dt = _parse_dt(pd_raw)
+        city = r.get("city", _DEFAULT_CITY)
+        quality = int(r.get("quality", 1) or 1)
+        history_rows.append({
+            "item_id": iid, "city": city, "quality": quality,
+            "sell_price_min": int(price), "price_date": pd_dt, "recorded_at": now,
+            "source_install": source_install,
         })
-    if clean:
-        _upsert_latest(db, clean, now, source_install=source_install)
-        db.commit()
-        # Loga cada preço ingerido — fluxo distribuído, usuário quer ver o spam.
-        for r in clean:
-            log.info("preço: %s @ %s q%d — %d prata (install=%s)",
-                     r["item_id"], r["city"], r["quality"], r["sell_price_min"],
-                     source_install or "?")
-    return (len(clean), rejected)
+        # Dedup por (item_id, city, quality): fica o de price_date mais recente
+        # (mesma regra do _upsert_latest). O companion manda N ordens do mesmo
+        # item num lote; sem isto o ON CONFLICT teria que desempatar no SQL.
+        key = (iid, city, quality)
+        prev = latest_by_key.get(key)
+        if prev is None or pd_dt > prev["price_date"]:
+            latest_by_key[key] = {
+                "item_id": iid, "city": city, "quality": quality,
+                "sell_price_min": int(price), "price_date": pd_dt, "recorded_at": now,
+            }
+    if not history_rows:
+        return (0, rejected)
+
+    # Histórico append-only: 1 INSERT multi-values (bulk_insert_mappings).
+    db.bulk_insert_mappings(ItemPrice, history_rows)
+
+    # Latest: 1 upsert nativo por chunk. WHERE preserva "age mais próxima vence"
+    # — só sobrescreve se o novo price_date for estritamente mais recente que o
+    # existente. Sem o SELECT por row do caminho legado.
+    latest_rows = list(latest_by_key.values())
+    stmt = _pg_insert(ItemPriceLatest).values(latest_rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[ItemPriceLatest.item_id, ItemPriceLatest.city, ItemPriceLatest.quality],
+        set_={"sell_price_min": stmt.excluded.sell_price_min,
+              "price_date": stmt.excluded.price_date,
+              "recorded_at": stmt.excluded.recorded_at},
+        where=ItemPriceLatest.price_date < stmt.excluded.price_date,
+    )
+    db.execute(stmt)
+    db.commit()
+    log.info("upsert_companion_prices: %d rows (%d chaves únicas) install=%s",
+             len(history_rows), len(latest_rows), source_install or "?")
+    return (len(history_rows), rejected)
 
 
 # ── API legado (uma cidade, spot price) ───────────────────────────────────────
@@ -137,6 +224,8 @@ def _upsert_latest(
         if not row.get("sell_price_min"):
             continue
         item_id: str = row["item_id"]
+        if _is_unconverted(item_id):
+            continue
         city: str = row["city"]
         quality: int = row["quality"]
         price: int = row["sell_price_min"]
@@ -202,6 +291,8 @@ async def sync_prices(
         to_fetch = list(item_ids)
     if not to_fetch:
         return
+    # Libera read tx antes do HTTP (gather de _fetch_from_api chama AODP).
+    db.commit()
     tasks = [
         _fetch_from_api(to_fetch[i:i + _BATCH_SIZE], city, quality)
         for i in range(0, len(to_fetch), _BATCH_SIZE)
@@ -233,8 +324,12 @@ async def get_price(
 
 
 async def _fetch_history(item_ids: list[str]) -> list[dict]:
-    """Busca histórico diário das 5 cidades para uma lista de itens (qualidades 1-4)."""
-    ids_str = ",".join(item_ids)
+    """Busca histórico diário das 5 cidades para uma lista de itens (qualidades 1-4).
+
+    item_ids vêm em game_name; ADP usa UniqueName. Converte antes de chamar.
+    """
+    adp_ids = [_game_to_unique(i) for i in item_ids]
+    ids_str = ",".join(adp_ids)
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.get(
             f"{_HISTORY_URL}/{ids_str}.json",
@@ -286,6 +381,10 @@ def _compute_5city_avg(history_data: list[dict]) -> dict[tuple[str, int], int]:
         q = rec.get("quality", 1)
         if not iid:
             continue
+        # ADP devolve UniqueName; converte pra game_name (formato do banco)
+        iid = _unique_to_game(iid)
+        if _is_unconverted(iid):
+            continue
 
         recent = [
             d for d in (rec.get("data") or [])
@@ -334,9 +433,14 @@ async def sync_5city_prices(
     quality: int = 1,  # kept for compat but ignored — always fetches q1-4
     force: bool = False,
 ) -> None:
-    """Garante que todos os item_ids têm média 5 cidades recente (< _HISTORY_TTL) no banco."""
+    """Garante que todos os item_ids têm média 5 cidades recente (< _HISTORY_TTL) no banco.
+
+    item_ids pode vir em UniqueName (callers legacy: regear, events) ou game_name
+    (callers novos: companion). Converte tudo pra game_name antes de operar."""
     if not item_ids:
         return
+    # Normaliza pra game_name (formato do DB). Se já é game_name, passa direto.
+    item_ids = [_unique_to_game(i) for i in item_ids]
 
     now = datetime.now(timezone.utc)
     stale_before = now - _HISTORY_TTL
@@ -358,6 +462,8 @@ async def sync_5city_prices(
     if not to_fetch:
         return
 
+    # Libera read tx antes do HTTP (gather de _fetch_history chama AODP).
+    db.commit()
     tasks = [
         _fetch_history(to_fetch[i:i + _BATCH_SIZE])
         for i in range(0, len(to_fetch), _BATCH_SIZE)
@@ -375,12 +481,16 @@ async def sync_5city_prices(
 
 
 _BATTLE_SENTINEL = "_battle_spot_"
+BATTLE_PRICE_TTL = timedelta(hours=8)  # preços de loot de batalha: reusar cache < 8h, re-buscar se mais velho
 
 
 async def _fetch_spot_prices(item_ids: list[str]) -> list[dict[str, Any]]:
     """Preço atual (não histórico) — aceita id com @enchant direto, diferente
-    de /stats/history (que devolve [] pra qualquer id com @enchant)."""
-    ids_str = ",".join(item_ids)
+    de /stats/history (que devolve [] pra qualquer id com @enchant).
+
+    Materiais brutos/refinados também usam UniqueName no ADP."""
+    adp_ids = [_game_to_unique(i) for i in item_ids]
+    ids_str = ",".join(adp_ids)
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
             f"{_BASE_URL}/{ids_str}.json",
@@ -406,27 +516,51 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
     unique = list(dict.fromkeys(item_ids))
     if not unique:
         return {}
-    # Awakened (@4) não tem preço de marketplace (item intradeável) — a API
-    # externa devolveria nada e o cache gravaria 0 pra sempre. Valorizamos por
-    # heurística de tier aqui mesmo, sem bater na API e sem persistir no cache
-    # (computação local O(1), não dado externo). Override também de qualquer
-    # @4 que já esteja no cache como 0 de antes desta mudança.
-    awake = {iid: v for iid in unique if (v := awakened_value(iid))}
-    market_ids = [iid for iid in unique if iid not in awake]
-    if not market_ids:
+    # Callers mandam UniqueNames (Type da API de batalhas). Converte pra
+    # game_name pra bater com o cache do DB. Devolve o dict com as chaves
+    # ORIGINAIS (UniqueNames) pra manter compatibilidade com os callers.
+    # Ids que não converteram (item fora do mapa) ficam como T_xxx — não
+    # buscamos nem gravamos, só devolvem 0 pro caller.
+    game_ids = [_unique_to_game(i) for i in unique]
+    awake = {uid: v for uid, gid in zip(unique, game_ids) if (v := awakened_value(uid))}
+    market_game_ids = [gid for uid, gid in zip(unique, game_ids)
+                       if uid not in awake and not _is_unconverted(gid)]
+    if not market_game_ids:
         return awake
+    # Lê do cache e FECHA a transação antes do HTTP — uma read transaction aberta
+    # durante o fetch bloqueia o auto-checkpoint do WAL e contentiona com outros
+    # writers. Copiar pra dict e commitar solta a tx antes da rede.
+    # Age: preços com < BATTLE_PRICE_TTL (8h) são reusados; o resto é re-buscado
+    # no AODP e re-gravado. Antes era cache permanente (nunca reconsultado), o
+    # que deixava preços stale pra sempre e causava fetches de 50 itens a cada
+    # ciclo do battle_price_reprocessor (5s) — 10 req/min no AODP só pra
+    # reprocessar o mesmo lote.
+    now = datetime.now(timezone.utc)
+    ttl_before = now - BATTLE_PRICE_TTL
     rows = db.scalars(
         select(ItemPriceLatest).where(
-            ItemPriceLatest.item_id.in_(market_ids),
+            ItemPriceLatest.item_id.in_(market_game_ids),
             ItemPriceLatest.city == _BATTLE_SENTINEL,
         )
     ).all()
-    cached = {r.item_id: r.sell_price_min for r in rows}
-    missing = [i for i in market_ids if i not in cached]
+    cached = {}
+    stale_ids = set()
+    for r in rows:
+        cached[r.item_id] = r.sell_price_min
+        ra = _aware(r.recorded_at)
+        if ra is None or ra < ttl_before:
+            stale_ids.add(r.item_id)
+    db.commit()  # fecha a read-only tx antes do HTTP
+    # Dedup: vários UniqueNames podem mapear pro mesmo game_name.
+    # Sem isto, o ON CONFLICT DO UPDATE recebe chaves duplicadas no mesmo
+    # INSERT e estoura CardinalityViolation.
+    missing = list(dict.fromkeys(i for i in market_game_ids if i not in cached or i in stale_ids))
     if missing:
         now = datetime.now(timezone.utc)
+        t_fetch0 = time.monotonic()
         tasks = [_fetch_spot_prices(missing[i:i + _BATCH_SIZE]) for i in range(0, len(missing), _BATCH_SIZE)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        t_fetch = time.monotonic() - t_fetch0
         by_item: dict[str, list[int]] = {}
         for result in results:
             if not isinstance(result, list):
@@ -434,7 +568,12 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
             for row in result:
                 if not row.get("sell_price_min"):
                     continue
-                by_item.setdefault(row["item_id"], []).append(row["sell_price_min"])
+                # Qualities 1 e 5 descartadas da mediana: 1 (Normal) tem preço
+                # inflacionado, 5 (Masterpiece) é raríssima. Ambas interferem.
+                q = row.get("quality", 1)
+                if q not in (2, 3, 4):
+                    continue
+                by_item.setdefault(_unique_to_game(row["item_id"]), []).append(row["sell_price_min"])
         rows = []
         for item_id in missing:
             vals = by_item.get(item_id, [])
@@ -442,18 +581,41 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
             # reais entre as ~28 combinações (cidade × qualidade) e o resto
             # zero/ausente; uma única listagem "troll" (vendedor sem
             # concorrência pedendo um preço absurdo) já bastava pra puxar a
-            # MÉDIA pra um valor completamente fora da realidade — e como
-            # esse cache é permanente (nunca reconsultado), ficava errado
-            # pra sempre. Mediana ignora esse tipo de outlier isolado.
+            # MÉDIA pra um valor completamente fora da realidade. Mediana
+            # ignora esse tipo de outlier isolado.
             price = round(statistics.median(vals)) if vals else 0
             cached[item_id] = price
             rows.append({"item_id": item_id, "city": _BATTLE_SENTINEL, "quality": 1,
                          "sell_price_min": price, "price_date": now, "recorded_at": now})
         if rows:
-            db.execute(_sqlite_insert(ItemPriceLatest).on_conflict_do_nothing(), rows)
+            t_c0 = time.monotonic()
+            # ON CONFLICT DO UPDATE (não DO NOTHING): preços stale re-buscados
+            # precisam sobrescrever o cache antigo. Antes era DO NOTHING, que
+            # mantinha o preço stale pra sempre mesmo após re-buscar.
+            stmt = _pg_insert(ItemPriceLatest).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[ItemPriceLatest.item_id, ItemPriceLatest.city, ItemPriceLatest.quality],
+                set_={"sell_price_min": stmt.excluded.sell_price_min,
+                      "price_date": stmt.excluded.price_date,
+                      "recorded_at": stmt.excluded.recorded_at},
+            )
+            db.execute(stmt)
             db.commit()
-    cached.update(awake)
-    return cached
+            t_commit = time.monotonic() - t_c0
+            if t_fetch > 2.0 or t_commit > 1.0:
+                log.warning("get_battle_prices: LENTO — %d itens, fetch=%.1fs commit=%.1fs",
+                            len(missing), t_fetch, t_commit)
+            else:
+                log.debug("get_battle_prices: %d itens, fetch=%.1fs commit=%.1fs",
+                           len(missing), t_fetch, t_commit)
+    # Mapeia de volta: game_name → UniqueName (chaves que os callers esperam)
+    game_to_uid = dict(zip(game_ids, unique))
+    result = {}
+    for gid, price in cached.items():
+        uid = game_to_uid.get(gid, gid)
+        result[uid] = price
+    result.update(awake)
+    return result
 
 
 async def get_5city_avg_price(db: Session, item_id: str, quality: int = 1) -> int:
@@ -550,6 +712,8 @@ async def estimate_regear(
     ]
 
     if item_ids:
+        # Libera read tx antes do HTTP (sync_5city_prices chama AODP).
+        db.commit()
         await sync_5city_prices(db, item_ids)
 
     results: list[RegearItemEstimate] = []
@@ -681,6 +845,8 @@ async def suggest_regear_price(
             need_spot.append(rec["item_id"])
 
     if need_spot:
+        # Libera read tx antes do HTTP (get_battle_prices chama AODP).
+        db.commit()
         spot = await get_battle_prices(db, list(dict.fromkeys(need_spot)))
         for rec in out_items:
             if rec["eligible"] and rec["unit_price"] == 0 and rec["item_id"] in spot:

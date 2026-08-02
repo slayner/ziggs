@@ -52,9 +52,17 @@ async def _reprocess_batch(client, db) -> int:
     if not battles:
         return 0
 
+    # Materializa IDs + reasons antes do HTTP — read tx aberta durante await
+    # (deep fetch pode levar minutos) impede wal_checkpoint.
+    battle_specs = [(b.id, b.albion_id, b.region, b.reprocess_reason,
+                     b.start_time, b.players_total) for b in battles]
+    db.commit()
+
     by_region: dict[str, list[Battle]] = {}
-    for b in battles:
-        by_region.setdefault(b.region, []).append(b)
+    for bid, albion_id, region, reason, start_time, players_total in battle_specs:
+        b = db.get(Battle, bid)
+        if b is not None:
+            by_region.setdefault(b.region, []).append(b)
 
     now = datetime.now(timezone.utc)
     processed = 0

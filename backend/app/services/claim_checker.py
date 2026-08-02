@@ -119,6 +119,16 @@ async def _check_once() -> None:
         if not pending:
             return
 
+        # Materializa dados necessários e commit antes do HTTP — read tx aberta
+        # durante await impede wal_checkpoint.
+        pending_data = [(c.id, c.region, c.albion_player_id) for c in pending]
+        db.commit()
+        # Reanexa os ORM objects na sessão (foram commited/expirados):
+        pending = db.scalars(
+            select(CharacterClaim).where(CharacterClaim.id.in_([c[0] for c in pending_data]))
+        ).all()
+        db.commit()  # libera read tx antes do HTTP
+
         await _sync_pending_players(db, pending)
 
         # Resolve albion_player_id → AlbionPlayer.id de uma vez

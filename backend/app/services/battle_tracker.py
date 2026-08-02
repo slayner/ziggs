@@ -402,8 +402,17 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
     tratar False como falha e marcar reprocess_reason, senão a batalha fica
     travada em "light" pra sempre, sem nenhum sinal de erro (foi exatamente
     isso que deixava batalha nova com "zona desconhecida" e detalhe vazio)."""
+    import time as _t
+    _t0 = _t.monotonic()
     if not events and not raw:
         return False
+
+    # Fecha qualquer read transaction aberta (a sessão carregou Battle e fez
+    # HTTP fetches antes de chegar aqui). Em WAL, upgrade read→write com
+    # snapshot stale dá SQLITE_BUSY_SNAPSHOT que busy_timeout NÃO resolve —
+    # fica preso até 130s+. Commitar fecha a read tx e os DELETEs abaixo
+    # abrem uma write tx nova, sem snapshot obsoleto.
+    db.commit()
 
     # Reconstrói do zero a cada poll: batalhas ZvZ têm no máx. ~2000 eventos,
     # é mais simples e idempotente do que fazer merge incremental.
@@ -411,6 +420,7 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
     db.query(BattleParticipant).filter(BattleParticipant.battle_id == battle.id).delete()
     db.query(BattleSide).filter(BattleSide.battle_id == battle.id).delete()
     db.flush()
+    _t_flush1 = _t.monotonic()
 
     participants: dict[str, dict] = _seed_from_summary(raw) if raw else {}
     kills_between: dict[tuple[str, str], int] = {}
@@ -477,6 +487,7 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
         db.add(side)
         side_rows[label] = side
     db.flush()
+    _t_flush2 = _t.monotonic()
 
     participant_rows: dict[str, BattleParticipant] = {}
     for pid, row in participants.items():
@@ -498,6 +509,7 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
             region=battle.region, guild_name=row["guild_name"], alliance_name=row["alliance_name"],
         )
     db.flush()
+    _t_flush3 = _t.monotonic()
 
     has_large_group = False
     small_group_failed = False
@@ -560,16 +572,34 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
                 probed_at=datetime.now(timezone.utc),
             ))
         db.delete(battle)
+        _t_c0 = _t.monotonic()
         db.commit()
+        _t_commit = _t.monotonic() - _t_c0
+        _dt = _t.monotonic() - _t0
+        if _dt > 1.0:
+            log.warning("_write_deep_data: LENTO — %s (%d eventos, %.1fs, não-lethal) flush1=%.1fs flush2=%.1fs flush3=%.1fs mid=%.1fs commit=%.1fs",
+                        battle.albion_id, len(events), _dt,
+                        _t_flush1 - _t0, _t_flush2 - _t_flush1, _t_flush3 - _t_flush2,
+                        _t_c0 - _t_flush3, _t_commit)
         return True  # deep-processou de verdade (e descartou)
 
+    _t_c0 = _t.monotonic()
     db.commit()
+    _t_commit = _t.monotonic() - _t_c0
+    _dt = _t.monotonic() - _t0
+    if _dt > 1.0:
+        log.warning("_write_deep_data: LENTO — %s (%d eventos, %.1fs) flush1=%.1fs flush2=%.1fs flush3=%.1fs mid=%.1fs commit=%.1fs",
+                    battle.albion_id, len(events), _dt,
+                    _t_flush1 - _t0, _t_flush2 - _t_flush1, _t_flush3 - _t_flush2,
+                    _t_c0 - _t_flush3, _t_commit)
     return True
 
 
 async def deep_process(client: httpx.AsyncClient, db: Session, battle: Battle, host: str) -> None:
     raw, events = await _fetch_deep_data(client, host, battle)
-    if not _write_deep_data(db, battle, raw, events):
+    # ponytail: SQL síncrono offloaded — sem to_thread trava o event loop inteiro
+    ok = await asyncio.to_thread(_write_deep_data, db, battle, raw, events)
+    if not ok:
         battle.reprocess_reason = battle.reprocess_reason or REPROCESS_REASON_EMPTY
         db.commit()
 
@@ -593,6 +623,9 @@ async def resolve_by_albion_id(client: httpx.AsyncClient, db: Session, albion_id
     ).all()
     battle = existing[0] if existing else None
     host = HOSTS.get(battle.region) if battle else None
+    # Libera read tx antes do HTTP — read tx aberta durante await impede
+    # wal_checkpoint, cresce o WAL, commit futuro fsync-o inteiro.
+    db.commit()
 
     if battle is None:
         for region, candidate_host in HOSTS.items():
@@ -716,6 +749,10 @@ async def _retry_stuck_battles(client: httpx.AsyncClient, db: Session, region: s
     if not stuck:
         return 0
 
+    # Libera read tx antes do HTTP (_backfill_deep_fetch_all faz N chamadas
+    # concorrentes à API do Albion — read tx aberta impede wal_checkpoint).
+    db.commit()
+
     now = datetime.now(timezone.utc)
     # retry_stuck: batalha nova (não-frozen) que falhou → NEW_*; antiga → OLD_*.
     def _prio(b: Battle) -> int: return battle_priority(b, is_new=not _is_frozen(b, now))
@@ -730,7 +767,7 @@ async def _retry_stuck_battles(client: httpx.AsyncClient, db: Session, region: s
             continue
         _, raw, events = result
         try:
-            ok = _write_deep_data(db, battle, raw, events)
+            ok = await asyncio.to_thread(_write_deep_data, db, battle, raw, events)
         except Exception as e:
             db.rollback()
             log.warning("battle_tracker: falha ao salvar retry de %s (%s): %r",
@@ -823,7 +860,7 @@ async def _deep_process_batch(
             continue
         _, raw, events = result
         try:
-            ok = _write_deep_data(db, battle, raw, events)
+            ok = await asyncio.to_thread(_write_deep_data, db, battle, raw, events)
         except Exception as e:
             db.rollback()
             log.warning("battle_tracker: falha ao salvar %s (%s): %r", battle.albion_id, region, e)
@@ -1060,8 +1097,9 @@ async def sync_recent() -> int:
                     if battle is None:
                         continue
                     count += 1
-                    log.info("battle: %s (%s) — %d jogadores, is_zvz=%s",
-                             battle.albion_id, region, battle.players_total or 0, battle.is_zvz)
+                    if battle.is_zvz:
+                        log.info("battle: %s (%s) — %d jogadores, is_zvz=%s",
+                                 battle.albion_id, region, battle.players_total or 0, battle.is_zvz)
                     if battle.players_total < DEEP_PROCESS_MIN_PLAYERS or _is_frozen(battle, now):
                         continue
                     qualifying.append(battle)

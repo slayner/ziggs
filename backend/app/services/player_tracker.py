@@ -11,9 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerSnapshot
+from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerSnapshot, KillSyncCursor
 from app.services import search_index
-from app.services.albion_gate import NEW_ELIGIBLE, albion_scope, observe_response, slot
+from app.services.albion_gate import NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, albion_scope, observe_response, slot
 
 log = logging.getLogger(__name__)
 
@@ -26,8 +26,10 @@ HOSTS = {
 }
 
 TIMEOUT = httpx.Timeout(20.0, read=40.0)  # ponytail: read 40s — API do Albion (Américas) estoura 20s sob carga; connect/pool/write ficam em 20s
-POLL_INTERVAL = 300  # segundos — o kill feed do Albion atualiza nesse ritmo
+POLL_INTERVAL = 120  # 2 min — kill feed atualiza rápido; antes era 300s (5min) e kills demoravam 5x mais que batalhas pra serem descobertas
 SNAPSHOT_MAX_AGE = timedelta(hours=24)  # resolução do gráfico de crescimento de fama
+FEED_LIMIT = 51  # máximo que a API devuelve por página
+FEED_MAX_PAGES = 8  # até 8 páginas (408 events) por poll — cobre rajadas grandes sem exceder rate limit
 
 
 async def _observe_albion(response: httpx.Response) -> None:
@@ -48,11 +50,16 @@ def make_client() -> httpx.AsyncClient:
     )
 
 
-def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
+def upsert_player(db: Session, data: dict, region: str, *, commit: bool = True) -> AlbionPlayer:
     """Salva/atualiza jogador e tira snapshot quando a guilda muda (ou quando
     o último snapshot já passou de SNAPSHOT_MAX_AGE — dá resolução pro
     gráfico de crescimento de fama sem precisar de um job dedicado, já que
-    o polling reativo toca em qualquer jogador ativo a cada POLL_INTERVAL)."""
+    o polling reativo toca em qualquer jogador ativo a cada POLL_INTERVAL).
+
+    `commit=False` deixa o commit pro caller (poll_once/sync_player_kills fazem
+    commit por evento, não por jogador — antes eram ~765 commits síncronos no
+    event loop por ciclo, wedging o backend inteiro; SQLite serializa writers
+    e cada commit é um fsync bloqueante no loop)."""
     albion_id = data.get("Id") or data.get("id", "")
     if not albion_id:
         raise ValueError("dados sem Id de jogador")
@@ -164,7 +171,8 @@ def upsert_player(db: Session, data: dict, region: str) -> AlbionPlayer:
         region=region, guild_name=guild_name, alliance_name=alliance_name,
     )
 
-    db.commit()
+    if commit:
+        db.commit()
     return player
 
 
@@ -172,10 +180,12 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _record_kill_event(db: Session, ev: dict, region: str) -> None:
+def _record_kill_event(db: Session, ev: dict, region: str, *, commit: bool = True) -> None:
     """Registra o kill no ledger (PlayerKillEvent), dedupe por
     region+albion_event_id — chamado depois de upsert_player do killer/vítima,
-    então killer_player_id/victim_player_id já existem."""
+    então killer_player_id/victim_player_id já existem.
+
+    `commit=False` deixa o commit pro caller (ver upsert_player)."""
     event_id = str(ev.get("EventId") or "")
     if not event_id:
         return
@@ -216,7 +226,8 @@ def _record_kill_event(db: Session, ev: dict, region: str) -> None:
     row.victim_guild_id = victim.get("GuildId") or None
     row.victim_guild_name = victim.get("GuildName") or None
     db.add(row)
-    db.commit()
+    if commit:
+        db.commit()
 
 
 PLAYER_SYNC_LIMIT = 50  # kills/mortes buscados por sincronização ativa, sem paginar mais que isso
@@ -233,13 +244,13 @@ async def _upsert_event_players(db: Session, ev: dict, region: str, skip_id: str
         p = ev.get(role)
         if p and p.get("Id") and p.get("Id") != skip_id:
             try:
-                upsert_player(db, p, region)
+                upsert_player(db, p, region, commit=False)
             except Exception as e:
                 log.debug("player_tracker: skip %s (%s): %s", p.get("Id"), region, e)
     for participant in (ev.get("Participants") or []):
         if participant and participant.get("Id") and participant.get("Id") != skip_id:
             try:
-                upsert_player(db, participant, region)
+                upsert_player(db, participant, region, commit=False)
             except Exception as e:
                 log.debug("player_tracker: skip participant %s (%s): %s", participant.get("Id"), region, e)
 
@@ -287,10 +298,15 @@ async def sync_player_kills(client: httpx.AsyncClient, db: Session, host: str, r
                     PlayerKillEvent.albion_event_id == event_id,
                 )
             ) is not None:
+                # Commit libera read tx do SELECT de dedup antes da próxima
+                # iteração (que faz HTTP no topo do loop). Sem isto, a read tx
+                # fica aberta durante o await do próximo evento.
+                db.commit()
                 continue
             await _upsert_event_players(db, ev, region, skip_id=albion_id)
             try:
-                _record_kill_event(db, ev, region)
+                _record_kill_event(db, ev, region, commit=False)
+                db.commit()  # batch: 1 commit por evento, não por jogador/kill
                 count += 1
             except Exception as e:
                 db.rollback()
@@ -301,48 +317,72 @@ async def sync_player_kills(client: httpx.AsyncClient, db: Session, host: str, r
 
 
 async def poll_once() -> int:
-    """Busca o kill feed das 3 regiões uma vez, upserta jogadores e registra
-    cada kill no ledger. Retorna contagem de jogadores upsertados."""
+    """Busca o kill feed das 3 regiões uma vez, paginando até não achar eventos
+    novos (ou atingir FEED_MAX_PAGES). Upserta jogadores e registra cada kill
+    no ledger. Retorna contagem de jogadores upsertados."""
     count = 0
     db = SessionLocal()
     try:
         async with make_client() as c:
             for region, host in HOSTS.items():
-                try:
-                    async with albion_scope(NEW_ELIGIBLE):
-                        async with slot():
-                            resp = await c.get(f"https://{host}/api/gameinfo/events", params={"limit": 51})
-                    resp.raise_for_status()
-                    events = resp.json()
-                except Exception as e:
-                    log.warning("player_tracker: falha ao buscar kill feed (%s): %s", region, e)
-                    continue
-                if not isinstance(events, list):
-                    continue
-
-                for ev in events:
-                    for role in ("Killer", "Victim"):
-                        p = ev.get(role)
-                        if p and p.get("Id"):
-                            try:
-                                upsert_player(db, p, region)
-                                count += 1
-                            except Exception as e:
-                                log.debug("player_tracker: skip %s (%s): %s", p.get("Id"), region, e)
-                    # "Participants" = quem ganhou crédito de assist nesse kill
-                    # (nome do campo na API atual — versões antigas usavam "Assists").
-                    for assist in (ev.get("Participants") or []):
-                        if assist and assist.get("Id"):
-                            try:
-                                upsert_player(db, assist, region)
-                                count += 1
-                            except Exception as e:
-                                log.debug("player_tracker: skip assist %s (%s): %s", assist.get("Id"), region, e)
+                seen_event_ids: set[str] = set()
+                for page in range(FEED_MAX_PAGES):
+                    offset = page * FEED_LIMIT
                     try:
-                        _record_kill_event(db, ev, region)
+                        async with albion_scope(NEW_ELIGIBLE):
+                            async with slot():
+                                resp = await c.get(
+                                    f"https://{host}/api/gameinfo/events",
+                                    params={"limit": FEED_LIMIT, "offset": offset},
+                                )
+                        resp.raise_for_status()
+                        events = resp.json()
                     except Exception as e:
-                        db.rollback()
-                        log.debug("player_tracker: skip kill event %s (%s): %s", ev.get("EventId"), region, e)
+                        log.warning("player_tracker: falha ao buscar kill feed (%s, offset=%d): %s", region, offset, e)
+                        break
+                    if not isinstance(events, list) or not events:
+                        break
+
+                    new_count = 0
+                    for ev in events:
+                        event_id = str(ev.get("EventId") or "")
+                        if not event_id or event_id in seen_event_ids:
+                            continue
+                        seen_event_ids.add(event_id)
+
+                        # Dedupe contra o banco: se já temos este event_id,
+                        # pula o upsert pesado (igual sync_player_kills faz).
+                        if db.scalar(
+                            select(PlayerKillEvent.id).where(
+                                PlayerKillEvent.region == region,
+                                PlayerKillEvent.albion_event_id == event_id,
+                            )
+                        ) is not None:
+                            continue
+
+                        try:
+                            for role in ("Killer", "Victim"):
+                                p = ev.get(role)
+                                if p and p.get("Id"):
+                                    upsert_player(db, p, region, commit=False)
+                                    count += 1
+                            for assist in (ev.get("Participants") or []):
+                                if assist and assist.get("Id"):
+                                    upsert_player(db, assist, region, commit=False)
+                                    count += 1
+                            _record_kill_event(db, ev, region, commit=False)
+                            db.commit()
+                            new_count += 1
+                        except Exception as e:
+                            db.rollback()
+                            log.debug("player_tracker: skip event %s (%s): %s", event_id, region, e)
+
+                    # Se esta página não teve eventos novos, não vale a pena
+                    # paginar mais — as próximas páginas são tudo já conhecido.
+                    if new_count == 0:
+                        break
+
+                log.debug("player_tracker: %s — %d eventos novos em %d páginas", region, len(seen_event_ids), page + 1)
     finally:
         db.close()
 
@@ -359,3 +399,121 @@ async def run_forever() -> None:
         except Exception as e:
             log.error("player_tracker: erro inesperado: %s", e)
         await asyncio.sleep(POLL_INTERVAL)
+
+
+# ─── Backfill histórico de kills (varre a janela de ~1k da API) ───────────────
+# Igual ao backfill de batalhas: o poll recente (poll_once) só pega as 8
+# primeiras páginas (~408 events). Se >408 kills acontecem entre ciclos, as do
+# meio somem da janela recente. Este backfill varre offset 0→999 numa volta
+# perpétua, processando os events que o poll não alcançou.
+
+KILL_BACKFILL_PAGE_SIZE = 51
+KILL_BACKFILL_PAGES_PER_CYCLE = 3
+KILL_BACKFILL_CYCLE_INTERVAL = 20  # segundos entre ciclos (mesmo ritmo do battle backfill)
+KILL_BACKFILL_OFFSET_LIMIT = 999  # teto duro da API de events (offset+limit > 1000 → 500)
+
+
+async def _get_kill_cursor(db: Session, region: str) -> KillSyncCursor:
+    cursor = db.get(KillSyncCursor, region)
+    if cursor is None:
+        cursor = KillSyncCursor(region=region, next_offset=0, done=False)
+        db.add(cursor)
+        db.flush()
+    return cursor
+
+
+async def backfill_kills_step(client: httpx.AsyncClient, db: Session, region: str, host: str) -> None:
+    """Avança a paginação de events da região dentro da janela de ~1000.
+    Processa events que o poll recente não pegou (dedup por event_id).
+    Ao completar uma volta, reseta o cursor e recomeça."""
+    cursor = await _get_kill_cursor(db, region)
+
+    async with albion_scope(OLD_ELIGIBLE):
+        for _ in range(KILL_BACKFILL_PAGES_PER_CYCLE):
+            if cursor.next_offset + KILL_BACKFILL_PAGE_SIZE > KILL_BACKFILL_OFFSET_LIMIT:
+                cursor.done = True
+                cursor.next_offset = 0
+                db.commit()
+                return
+
+            try:
+                async with slot():
+                    resp = await client.get(
+                        f"https://{host}/api/gameinfo/events",
+                        params={"limit": KILL_BACKFILL_PAGE_SIZE, "offset": cursor.next_offset},
+                    )
+                resp.raise_for_status()
+                events = resp.json()
+            except Exception as e:
+                log.warning("player_tracker: falha no backfill de kills (%s, offset=%d): %s",
+                            region, cursor.next_offset, e)
+                return
+
+            if not isinstance(events, list) or not events:
+                cursor.done = True
+                cursor.next_offset = 0
+                db.commit()
+                return
+
+            new_count = 0
+            for ev in events:
+                event_id = str(ev.get("EventId") or "")
+                if not event_id:
+                    continue
+                if db.scalar(
+                    select(PlayerKillEvent.id).where(
+                        PlayerKillEvent.region == region,
+                        PlayerKillEvent.albion_event_id == event_id,
+                    )
+                ) is not None:
+                    continue
+                try:
+                    for role in ("Killer", "Victim"):
+                        p = ev.get(role)
+                        if p and p.get("Id"):
+                            upsert_player(db, p, region, commit=False)
+                    for assist in (ev.get("Participants") or []):
+                        if assist and assist.get("Id"):
+                            upsert_player(db, assist, region, commit=False)
+                    _record_kill_event(db, ev, region, commit=False)
+                    db.commit()
+                    new_count += 1
+                except Exception as e:
+                    db.rollback()
+                    log.debug("player_tracker: skip backfill event %s (%s): %s", event_id, region, e)
+
+            cursor.next_offset += len(events)
+            if len(events) < KILL_BACKFILL_PAGE_SIZE:
+                cursor.done = True
+                cursor.next_offset = 0
+                db.commit()
+                return
+            db.commit()
+
+    if new_count:
+        log.info("player_tracker: backfill kills %s offset=%d — %d events novos", region, cursor.next_offset, new_count)
+
+
+async def backfill_kills_cycle() -> None:
+    """Um ciclo de backfill de kills das 3 regiões."""
+    db = SessionLocal()
+    try:
+        async with make_client() as client:
+            for region, host in HOSTS.items():
+                try:
+                    await backfill_kills_step(client, db, region, host)
+                except Exception as e:
+                    log.warning("player_tracker: falha no backfill de kills (%s): %s", region, e)
+    finally:
+        db.close()
+
+
+async def run_backfill_forever() -> None:
+    """Backfill de kills roda no seu próprio loop, separado do poll recente."""
+    log.info("player_tracker: backfill de kills iniciado (interval=%ds)", KILL_BACKFILL_CYCLE_INTERVAL)
+    while True:
+        try:
+            await backfill_kills_cycle()
+        except Exception as e:
+            log.error("player_tracker: erro no backfill de kills: %s", e)
+        await asyncio.sleep(KILL_BACKFILL_CYCLE_INTERVAL)

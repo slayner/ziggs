@@ -18,8 +18,20 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use std::sync::Arc;
 
-use crate::api::{ApiClient, ScanClaim, ScanReportIn};
+use crate::api::{ApiClient, ScanClaim, ScanReportIn, KillScanClaim, KillScanReportIn};
 use crate::transfer::TransferQueue;
+use crate::sniffer::DebugLine;
+
+/// Empurra linha pro buffer de debug (terminal da UI), se presente.
+/// Cap em 500 linhas (mesmo teto dos outros pushers).
+async fn emit_debug(debug: &Option<Arc<Mutex<Vec<DebugLine>>>>, level: &str, msg: String) {
+    if let Some(d) = debug {
+        let line = DebugLine { ts: crate::photon_parser::now_iso_utc(), level: level.into(), msg };
+        let mut g = d.lock().await;
+        g.push(line);
+        if g.len() > 500 { let ex = g.len() - 500; g.drain(..ex); }
+    }
+}
 
 /// Delay entre sondagens — adaptativo. Começa em 150ms (cortesia mínima).
 /// 429 dobra (teto 5s). 200 sustentado recupera -50ms por sondagem (piso 150ms).
@@ -41,6 +53,11 @@ pub struct ScanStats {
     pub queued_reports: usize,
     pub zone: String,               // "blue" | "pvp" | "unknown"
     pub throttle_ms: u64,           // delay adaptativo entre sondagens (transparência)
+    // Kill scan — roda em paralelo ao battle scan, mesmo throttle/zone.
+    pub kill_cycles: u64,
+    pub kill_events_found: u64,
+    pub kill_events_missing: u64,
+    pub kill_events_errors: u64,
 }
 
 impl Default for ScanStats {
@@ -56,6 +73,10 @@ impl Default for ScanStats {
             queued_reports: 0,
             zone: "blue".into(),
             throttle_ms: THROTTLE_START_MS,
+            kill_cycles: 0,
+            kill_events_found: 0,
+            kill_events_missing: 0,
+            kill_events_errors: 0,
         }
     }
 }
@@ -75,6 +96,10 @@ pub struct Scanner {
     /// Delay entre sondagens (ms), adaptativo. 429 dobra, 200 sustentado recupera.
     /// Atômico: lido/escrito no hot loop do cycle sem lock.
     pub throttle_ms: Arc<AtomicU64>,
+    /// Buffer de debug (terminal da UI). Opcional — ausente quando o scanner
+    /// roda sem UI (testes). Linhas por ciclo mantêm o usuário ciente do que
+    /// o nó distribuído está fazendo.
+    pub debug: Option<Arc<Mutex<Vec<DebugLine>>>>,
 }
 
 impl Scanner {
@@ -87,6 +112,7 @@ impl Scanner {
             pvp_pause: Arc::new(Mutex::new(true)),
             character_name: Arc::new(Mutex::new(None)),
             throttle_ms: Arc::new(AtomicU64::new(THROTTLE_START_MS)),
+            debug: None,
         }
     }
 
@@ -95,8 +121,13 @@ impl Scanner {
         self
     }
 
+    pub fn with_debug(mut self, debug: Arc<Mutex<Vec<DebugLine>>>) -> Self {
+        self.debug = Some(debug);
+        self
+    }
+
     /// Clona os Arcs internos pra criar um scanner que roda numa task separada
-    /// mas compartilha stats/zone/queue/pvp_pause/throttle com o original.
+    /// mas compartilha stats/zone/queue/pvp_pause/throttle/debug com o original.
     pub fn clone_for_spawn(&self) -> Scanner {
         Scanner {
             stats: Arc::clone(&self.stats),
@@ -106,6 +137,7 @@ impl Scanner {
             pvp_pause: Arc::clone(&self.pvp_pause),
             character_name: Arc::clone(&self.character_name),
             throttle_ms: Arc::clone(&self.throttle_ms),
+            debug: self.debug.as_ref().map(Arc::clone),
         }
     }
 
@@ -263,6 +295,7 @@ impl Scanner {
         );
 
         if in_pvp {
+            let n_found = report.found.len();
             if let Some(q) = &self.queue {
                 q.enqueue_scan_report(report).await;
                 let pending = q.pending_count().await;
@@ -276,6 +309,10 @@ impl Scanner {
             let mut s = self.stats.lock().await;
             s.cycles += 1;
             s.last_cycle_at = Some(chrono_now());
+            emit_debug(&self.debug, "info", format!(
+                "scan: range {}-{} {} em PvP → {} encontradas enfileiradas",
+                claim.battle_id_start, claim.battle_id_end, claim.server, n_found,
+            )).await;
             return Ok(true);
         }
 
@@ -291,6 +328,11 @@ impl Scanner {
                 s.queued_reports = q.pending_count().await;
             }
         }
+        emit_debug(&self.debug, "info", format!(
+            "scan: range {}-{} {} → {} encontradas, {} 404, {} erros",
+            claim.battle_id_start, claim.battle_id_end, claim.server,
+            out.accepted, report.missing.len(), report.errors.len(),
+        )).await;
         Ok(true)
     }
 }
@@ -313,6 +355,183 @@ fn chrono_now() -> String {
 
 fn valid_battle_payload(value: &serde_json::Value) -> bool {
     value.get("id").is_some()
+}
+
+fn valid_kill_payload(value: &serde_json::Value) -> bool {
+    value.get("EventId").is_some()
+}
+
+// ─── Kill Scanner ────────────────────────────────────────────────────────────
+// Mesmo padrão do battle Scanner, mas sonda /api/gameinfo/events/{id} em vez
+// de /battles/{id}. Roda em paralelo, compartilha throttle e zone-awareness.
+
+pub struct KillScanner {
+    pub stats: Arc<Mutex<ScanStats>>,
+    shutdown: Arc<AtomicBool>,
+    pub zone: Arc<Mutex<crate::transfer::ZoneType>>,
+    pub pvp_pause: Arc<Mutex<bool>>,
+    pub throttle_ms: Arc<AtomicU64>,
+    pub debug: Option<Arc<Mutex<Vec<DebugLine>>>>,
+}
+
+impl KillScanner {
+    pub fn new() -> Self {
+        Self {
+            stats: Arc::new(Mutex::new(ScanStats::default())),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            zone: Arc::new(Mutex::new(crate::transfer::ZoneType::Blue)),
+            pvp_pause: Arc::new(Mutex::new(true)),
+            throttle_ms: Arc::new(AtomicU64::new(THROTTLE_START_MS)),
+            debug: None,
+        }
+    }
+
+    /// Clona os Arcs pra spawnar numa task separada, compartilhando stats com
+    /// o Scanner de batalhas (mesmo throttle, mesma zona).
+    pub fn from_scanner(scanner: &Scanner) -> Self {
+        Self {
+            stats: Arc::clone(&scanner.stats),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            zone: Arc::clone(&scanner.zone),
+            pvp_pause: Arc::clone(&scanner.pvp_pause),
+            throttle_ms: Arc::clone(&scanner.throttle_ms),
+            debug: scanner.debug.as_ref().map(Arc::clone),
+        }
+    }
+
+    pub async fn stop(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+
+    /// Clona os Arcs pra spawnar numa task separada, compartilhando stats com
+    /// o Scanner de batalhas.
+    pub fn clone_for_spawn(&self) -> KillScanner {
+        KillScanner {
+            stats: Arc::clone(&self.stats),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            zone: Arc::clone(&self.zone),
+            pvp_pause: Arc::clone(&self.pvp_pause),
+            throttle_ms: Arc::clone(&self.throttle_ms),
+            debug: self.debug.as_ref().map(Arc::clone),
+        }
+    }
+
+    pub async fn run(&self, api: ApiClient, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        loop {
+            if self.shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+            let in_pvp = *self.pvp_pause.lock().await && matches!(
+                self.zone.lock().await.clone(),
+                crate::transfer::ZoneType::PvP
+            );
+            if in_pvp {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            }
+            match self.cycle(&api).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tokio::time::sleep(Duration::from_secs(15)).await;
+                }
+                Err(e) => {
+                    let msg = format!("{:#}", e);
+                    {
+                        let mut s = self.stats.lock().await;
+                        s.last_error = Some(msg);
+                    }
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                }
+            }
+        }
+    }
+
+    async fn cycle(&self, api: &ApiClient) -> Result<bool> {
+        let claim: KillScanClaim = match api.claim_kill_scan().await {
+            Ok(c) => c,
+            Err(e) if e.to_string().contains("sem trabalho") => return Ok(false),
+            Err(e) => return Err(e),
+        };
+
+        let host = host_for(&claim.region);
+        let client = reqwest::Client::builder()
+            .user_agent("ziggs-companion/0.1")
+            .timeout(Duration::from_secs(15))
+            .build()?;
+
+        let mut found: Vec<i64> = Vec::new();
+        let mut missing: Vec<i64> = Vec::new();
+        let mut errors: Vec<i64> = Vec::new();
+
+        for id in claim.event_id_start..=claim.event_id_end {
+            let url = format!("https://{}/api/gameinfo/events/{}", host, id);
+            match client.get(&url).send().await {
+                Ok(resp) if resp.status().as_u16() == 200 => {
+                    match resp.json::<serde_json::Value>().await {
+                        Ok(v) if valid_kill_payload(&v) => found.push(id),
+                        _ => errors.push(id),
+                    }
+                    let cur = self.throttle_ms.load(Ordering::Relaxed);
+                    if cur > THROTTLE_MIN_MS {
+                        self.throttle_ms.store(
+                            cur.saturating_sub(THROTTLE_RECOVER_MS),
+                            Ordering::Relaxed,
+                        );
+                    }
+                }
+                Ok(resp) if resp.status().as_u16() == 404 => missing.push(id),
+                Ok(resp) if resp.status().as_u16() == 429 => {
+                    let wait = resp
+                        .headers()
+                        .get("Retry-After")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(5.0);
+                    tokio::time::sleep(Duration::from_secs_f64(wait)).await;
+                    errors.push(id);
+                    let cur = self.throttle_ms.load(Ordering::Relaxed);
+                    let next = (cur * 2).min(THROTTLE_MAX_MS);
+                    self.throttle_ms.store(next, Ordering::Relaxed);
+                }
+                _ => errors.push(id),
+            }
+            let ms = self.throttle_ms.load(Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+        }
+
+        let report = KillScanReportIn {
+            region: claim.region.clone(),
+            event_id_start: claim.event_id_start,
+            event_id_end: claim.event_id_end,
+            found,
+            missing: missing.clone(),
+            errors: errors.clone(),
+        };
+
+        // Kill scan é mais leve — não enfileira em PvP, só descarta e re-claim.
+        // O backend revalida tudo de qualquer forma.
+        match api.report_kill_scan(&report).await {
+            Ok(out) => {
+                let mut s = self.stats.lock().await;
+                s.kill_cycles += 1;
+                s.kill_events_found += out.accepted as u64;
+                s.kill_events_missing += report.missing.len() as u64;
+                s.kill_events_errors += report.errors.len() as u64;
+            }
+            Err(e) => {
+                tracing::warn!("kill-scan report falhou: {:#}", e);
+            }
+        }
+        emit_debug(&self.debug, "info", format!(
+            "kill-scan: {}-{} {} → {} encontrados, {} 404, {} erros",
+            claim.event_id_start, claim.event_id_end, claim.region,
+            report.found.len(), report.missing.len(), report.errors.len(),
+        )).await;
+        Ok(true)
+    }
 }
 
 #[cfg(test)]

@@ -44,6 +44,29 @@ pub struct ScanReportOut {
     pub rejected: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KillScanClaim {
+    pub region: String,
+    pub event_id_start: i64,
+    pub event_id_end: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KillScanReportIn {
+    pub region: String,
+    pub event_id_start: i64,
+    pub event_id_end: i64,
+    pub found: Vec<i64>,
+    pub missing: Vec<i64>,
+    pub errors: Vec<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct KillScanReportOut {
+    pub accepted: usize,
+    pub rejected: usize,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DnsTarget {
     pub region: String,
@@ -130,7 +153,7 @@ impl ApiClient {
         let client = Client::builder()
             .user_agent("ziggs-companion/0.1")
             .default_headers(headers)
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(60))
             .build()
             .unwrap_or_default();
         Self {
@@ -170,6 +193,27 @@ impl ApiClient {
         }
         let out: ScanReportOut = resp.json().await?;
         Ok(out)
+    }
+
+    pub async fn claim_kill_scan(&self) -> Result<KillScanClaim> {
+        let url = format!("{}/companion/kill-scan/claim", self.base_url);
+        let resp = self.client.post(&url).send().await?;
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Err(anyhow!("sem trabalho"));
+        }
+        if !resp.status().is_success() {
+            return Err(anyhow!("kill-scan claim falhou: HTTP {}", resp.status()));
+        }
+        Ok(resp.json().await?)
+    }
+
+    pub async fn report_kill_scan(&self, payload: &KillScanReportIn) -> Result<KillScanReportOut> {
+        let url = format!("{}/companion/kill-scan/report", self.base_url);
+        let resp = self.client.post(&url).json(payload).send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("kill-scan report falhou: HTTP {}", resp.status()));
+        }
+        Ok(resp.json().await?)
     }
 
     /// Nomeia um personagem (o próprio do usuário) pra manter o perfil quente no
@@ -225,6 +269,16 @@ impl ApiClient {
         Ok(resp.json().await?)
     }
 
+    /// Mapeamento UniqueName → game_name (nome em inglês do jogo).
+    /// Usado pelo sniffer pra converter ItemTypeId do pacote em game_name
+    /// antes de mandar pro backend. ~500 KB.
+    pub async fn items_map(&self) -> Result<std::collections::HashMap<String, String>> {
+        let url = format!("{}/companion/items-map", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        ensure_json(&resp, "items-map")?;
+        Ok(resp.json().await?)
+    }
+
     pub async fn submit_prices(&self, rows: &[serde_json::Value]) -> Result<()> {
         let url = format!("{}/companion/prices/submit", self.base_url);
         let body = serde_json::json!({ "rows": rows });
@@ -250,18 +304,24 @@ impl ApiClient {
     /// payout/reconcile. Preço vem do cache DB do backend (1h, mediana 6
     /// cidades); item novo = 1 HTTP, depois cacheado.
     pub async fn loot_silver_estimate(&self, items: &[(String, i64)]) -> Result<i64> {
-        let url = format!("{}/companion/lootlog/silver-estimate", self.base_url);
-        let body = serde_json::json!({
-            "items": items.iter().map(|(id, q)| serde_json::json!({
-                "item_id": id, "quantity": q,
-            })).collect::<Vec<_>>()
-        });
-        let resp = self.client.post(&url).json(&body).send().await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("silver-estimate falhou: HTTP {}", resp.status()));
+        // Backend limita 200 itens por request — chunka em 190 (margem) e soma.
+        let chunk_size = 190;
+        let mut total: i64 = 0;
+        for chunk in items.chunks(chunk_size) {
+            let url = format!("{}/companion/lootlog/silver-estimate", self.base_url);
+            let body = serde_json::json!({
+                "items": chunk.iter().map(|(id, q)| serde_json::json!({
+                    "item_id": id, "quantity": q,
+                })).collect::<Vec<_>>()
+            });
+            let resp = self.client.post(&url).json(&body).send().await?;
+            if !resp.status().is_success() {
+                return Err(anyhow!("silver-estimate falhou: HTTP {}", resp.status()));
+            }
+            let out: serde_json::Value = resp.json().await?;
+            total += out.get("silver_total").and_then(|v| v.as_i64()).unwrap_or(0);
         }
-        let out: serde_json::Value = resp.json().await?;
-        Ok(out.get("silver_total").and_then(|v| v.as_i64()).unwrap_or(0))
+        Ok(total)
     }
 
     // ── Discord OAuth pairing ──────────────────────────────────────────────

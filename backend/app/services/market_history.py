@@ -20,8 +20,6 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
-
 from sqlalchemy.orm import Session
 
 from app.models.prices import ItemPriceHistory
@@ -275,10 +273,9 @@ def ingest_history(db: Session, rows: list[dict[str, Any]]) -> tuple[int, int]:
         obj.albion_id = int(albion_id)
         obj.recorded_at = now
         accepted += 1
-        log.info("market_history: %s q%d @ %s ts%d — %d itens, %d prata",
-                 item_id, quality, location, bucket_ts, item_count, silver_amount)
     if accepted:
         db.commit()
+        log.info("market_history: %d linhas upsertadas (%d rejeitadas)", accepted, rejected)
     return (accepted, rejected)
 
 

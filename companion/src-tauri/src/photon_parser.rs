@@ -1034,6 +1034,18 @@ pub struct MarketCapture {
     pub raw_orders: Vec<serde_json::Value>,
 }
 
+/// Normaliza o ItemTypeId do jogo pro formato do ADP/banco:
+/// "T7_FIBER_LEVEL2" + ench=2 → "T7_FIBER@2"
+/// "T4_CLOTH_LEVEL1" + ench=1 → "T4_CLOTH@1"
+/// "T4_FIBER" + ench=0 → "T4_FIBER" (sem mudança)
+/// "T4_BAG@1" + ench=1 → "T4_BAG@1" (já normalizado)
+fn normalize_item_id(base_id: &str, _ench: i32) -> String {
+    // O ItemTypeId do jogo já é o UniqueName (ex: T4_FIBER_LEVEL2@2, T4_BAG@1).
+    // A conversão pra game_name (nome do jogo) acontece no sniffer via to_game_name,
+    // que usa o mapeamento baixado do backend. Aqui só passamos direto.
+    base_id.to_string()
+}
+
 /// Lê uma resposta de marketplace (AuctionGetOffers = venda, AuctionGetRequests
 /// = compra).
 ///
@@ -1048,8 +1060,8 @@ pub fn extract_market(op: &ParsedOperation) -> MarketCapture {
     for v in op.parameters.values() {
         let PhotonValue::Array(arr) = v else { continue };
         for item in arr {
-            let PhotonValue::String(s) = item else { break };
-            if !s.starts_with('{') || !s.contains("UnitPriceSilver") { break; }
+            let PhotonValue::String(s) = item else { continue };
+            if !s.starts_with('{') || !s.contains("UnitPriceSilver") { continue; }
             let Ok(j) = serde_json::from_str::<serde_json::Value>(s) else { continue };
             let atype = j.get("AuctionType").and_then(|a| a.as_str()).unwrap_or("");
             if atype != "offer" && atype != "request" { continue; }
@@ -1060,10 +1072,11 @@ pub fn extract_market(op: &ParsedOperation) -> MarketCapture {
             cap.raw_orders.push(j.clone());
             // Nosso banco só guarda venda (id com @enchant, preco/10000).
             if atype == "offer" {
-                let ench = j.get("EnchantmentLevel").and_then(|x| x.as_i64()).unwrap_or(0);
-                let item_id = if ench > 0 && !base_id.contains('@') {
-                    format!("{}@{}", base_id, ench)
-                } else { base_id };
+                let ench = j.get("EnchantmentLevel").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+                // Normaliza _LEVELn → @n: o jogo envia "T7_FIBER_LEVEL2" como
+                // ItemTypeId, mas o ADP e o CraftCalculator usam "T7_FIBER@2".
+                // Sem isso, o banco grava T7_FIBER_LEVEL2@2 e ninguém encontra.
+                let item_id = normalize_item_id(&base_id, ench);
                 let quality = j.get("QualityLevel").and_then(|x| x.as_i64()).unwrap_or(1) as i32;
                 cap.offers.push(MarketOffer { item_id, quality, unit_price_silver: raw_price / 10_000 });
             }
@@ -1193,6 +1206,16 @@ fn epoch_to_ymd_hms(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_item_id_passthrough() {
+        // normalize_item_id agora é passthrough — a conversão pra game_name
+        // acontece no sniffer via to_game_name (mapeamento do backend).
+        assert_eq!(normalize_item_id("T4_FIBER", 0), "T4_FIBER");
+        assert_eq!(normalize_item_id("T4_FIBER_LEVEL2@2", 2), "T4_FIBER_LEVEL2@2");
+        assert_eq!(normalize_item_id("T4_BAG@1", 1), "T4_BAG@1");
+        assert_eq!(normalize_item_id("T4_2H_CURSEDSTAFF", 0), "T4_2H_CURSEDSTAFF");
+    }
 
     /// O bug real: o mesmo jogador ganha entity id novo ao reentrar na tua
     /// visão, virava várias linhas com o dano picado, e como o React usa o

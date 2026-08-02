@@ -320,7 +320,7 @@ impl Sniffer {
                                 Err(pcap::Error::TimeoutExpired) => { /* sem pacote */ }
                                 Err(e) => {
                                     let _ = tx_clone.send(CaptureMsg::Dead(desc.clone()));
-                                    eprintln!("pcap erro em {}: {}", desc, e);
+                                    tracing::warn!("pcap erro em {}: {}", desc, e);
                                     break;
                                 }
                             }
@@ -756,8 +756,12 @@ impl Sniffer {
                                         let ts = crate::photon_parser::now_iso_utc();
                                         let mut buf = self.prices.lock().await;
                                         for o in &cap.offers {
+                                            // Converte UniqueName (ItemTypeId do jogo)
+                                            // → game_name (nome em inglês do jogo) que é
+                                            // o ID canônico do nosso banco de preços.
+                                            let game_name = crate::to_game_name(&o.item_id).await;
                                             buf.push(serde_json::json!({
-                                                "item_id": o.item_id,
+                                                "item_id": game_name,
                                                 "city": city,
                                                 "quality": o.quality,
                                                 "sell_price_min": o.unit_price_silver,

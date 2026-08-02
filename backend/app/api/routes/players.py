@@ -576,6 +576,11 @@ async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -
         factions_cache=factions_cache,
     )
 
+    # Pré-calcula silver_dropped antes do dict — precisa de HTTP (get_battle_prices).
+    # Commit libera read tx antes do await.
+    db.commit()
+    silver_dropped_val = await _silver_dropped(db, death_rows_for_activity)
+
     return {
         **raw,
         "_is_deleted": player.is_deleted,
@@ -595,7 +600,7 @@ async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -
             "top_weapons": _top_weapons(db, player),
             "kills": [_serialize_kill(db, ev, "kills", weapon_fn_map, battle_links, other_players) for ev in kill_rows_for_activity],
             "deaths": [_serialize_kill(db, ev, "deaths", weapon_fn_map, battle_links, other_players) for ev in death_rows_for_activity],
-            "silver_dropped": await _silver_dropped(db, death_rows_for_activity),
+            "silver_dropped": silver_dropped_val,
             # Kill/morte mais valiosa do jogador (por silver e por fame) —
             # highlights pro perfil, não precisa abrir o ledger inteiro.
             "kill_highlights": _kill_highlights(db, player),
@@ -660,6 +665,8 @@ async def search_players(q: str = Query(min_length=2), region: str = "americas",
         local = sorted(local, key=lambda p: (not p.name.lower().startswith(qlow), p.name.lower()))
         return {"players": [_player_to_search_result(p) for p in local]}
 
+    # Libera read tx antes do HTTP (busca na API do Albion).
+    db.commit()
     async with make_client() as c:
         async with albion_scope(PROFILE):
             try:
@@ -852,6 +859,8 @@ async def get_player_by_name(region: str, name: str, db: Session = Depends(deps.
     )
     if cached is not None:
         _queue_refresh_if_stale(db, cached)
+        # Libera read tx antes do await (_build_profile_payload faz HTTP).
+        db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
 
     # Cold load: dispara task em background (ou junta-se a uma em andamento).
@@ -906,6 +915,8 @@ async def get_player(albion_id: str, region: str | None = None, db: Session = De
     cached = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
     if cached is not None:
         _queue_refresh_if_stale(db, cached)
+        # Libera read tx antes do await (_build_profile_payload faz HTTP).
+        db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
 
     async with make_client() as c:

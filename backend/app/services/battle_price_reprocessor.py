@@ -21,8 +21,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.prices import ItemPriceLatest
@@ -36,9 +35,9 @@ log = logging.getLogger(__name__)
 ready = asyncio.Event()
 
 BATCH_SIZE = 50      # igual ao _BATCH_SIZE interno do prices.py — 1 lote aqui = 1 lote de requisições lá
-BUSY_INTERVAL = 5    # subiu de 30/10s pra 50/5s (usuário batendo em preços errados na hora de navegar,
-# vale acelerar a migração) — ainda devagar de propósito,
-# soma à taxa agregada de requisição de todo o resto dos serviços de fundo (ver battle_tracker.py)
+BUSY_INTERVAL = 60   # a cada 60s (era 5s): com TTL de 8h no get_battle_prices, a maioria dos itens
+# já está em cache e não precisa re-buscar; 5s só servia pra refluxar a AODP
+# com os mesmos 50 itens que já tinham sido cacheados há segundos.
 IDLE_INTERVAL = 300  # segundos entre ciclos depois que a migração terminou
 
 # Só reprocessa o que já existia ANTES do processo subir — preços recém-
@@ -48,6 +47,9 @@ _CUTOFF = datetime.now(timezone.utc)
 
 
 async def _reprocess_batch(db) -> int:
+    # Itens cacheados ANTES do processo subir (potencial bug da média antiga).
+    # get_battle_prices agora tem TTL de 8h e faz ON CONFLICT DO UPDATE, então
+    # só chamar nos IDs stale re-busca e sobrescreve — não precisa mais DELETE.
     item_ids = db.scalars(
         select(ItemPriceLatest.item_id)
         .where(ItemPriceLatest.city == _BATTLE_SENTINEL, ItemPriceLatest.recorded_at < _CUTOFF)
@@ -55,26 +57,8 @@ async def _reprocess_batch(db) -> int:
     ).all()
     if not item_ids:
         return 0
-    # Contenção passageira com outro serviço de fundo escrevendo no mesmo
-    # instante (mesma classe de "database is locked" já tratada em
-    # battle_groups.py) — 2 tentativas curtas em vez de perder o lote
-    # inteiro e cair pro IDLE_INTERVAL (5min) mesmo com a migração longe de
-    # terminar. asyncio.sleep (não time.sleep): isto roda no loop de
-    # eventos, um sleep bloqueante travaria toda a API junto.
-    for attempt in range(2):
-        try:
-            db.execute(delete(ItemPriceLatest).where(
-                ItemPriceLatest.city == _BATTLE_SENTINEL,
-                ItemPriceLatest.item_id.in_(item_ids),
-            ))
-            db.commit()
-            break
-        except OperationalError:
-            db.rollback()
-            if attempt == 1:
-                raise
-            await asyncio.sleep(1.0)
-    await get_battle_prices(db, item_ids)  # refaz + re-cacheia (mediana, ver prices.py)
+    db.commit()  # fecha a read tx antes do HTTP (ver _write_deep_data fix)
+    await get_battle_prices(db, item_ids)
     return len(item_ids)
 
 

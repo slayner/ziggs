@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import func, select
-from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as _pg_insert
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
@@ -70,7 +70,7 @@ def _insert_rows(db: Session, region: str, raw: list[dict]) -> int:
     # on_conflict_do_nothing: idempotente por construção — reprocessar uma
     # janela já coberta (retomada após crash, ou overlap do poll com o fim
     # do backfill) nunca duplica, só ignora o que já existe.
-    db.execute(_sqlite_insert(GoldPriceSnapshot).on_conflict_do_nothing(), rows)
+    db.execute(_pg_insert(GoldPriceSnapshot).on_conflict_do_nothing(), rows)
     db.commit()
     return len(rows)
 
@@ -83,6 +83,9 @@ async def backfill(db: Session) -> None:
     now = datetime.now(timezone.utc)
     for region in HOSTS:
         cursor = _region_cursor(db, region)
+        # Libera read tx antes do HTTP — read tx aberta durante await impede
+        # wal_checkpoint, cresce o WAL, commit futuro fsync-o inteiro.
+        db.commit()
         while cursor < now:
             window_end = min(cursor + _BACKFILL_WINDOW, now)
             try:

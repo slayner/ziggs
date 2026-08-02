@@ -31,6 +31,7 @@ export interface TransmutationRecipe {
   sourceId: string;
   targetId: string;
   silverCost: number;
+  itemValue: number;
 }
 
 export interface HeartConversion {

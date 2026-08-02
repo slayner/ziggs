@@ -89,6 +89,8 @@ async def ingest_screenshot(
     guild = db.get(Guild, guild_id)
     if guild is None:
         raise HTTPException(404, "guilda não encontrada")
+    # Libera read tx antes do await (file.read + regear.ingest faz HTTP).
+    db.commit()
     image = await file.read(10 * 1024 * 1024 + 1)
     if len(image) > 10 * 1024 * 1024:
         raise HTTPException(413, "imagem excede o limite de 10 MB")

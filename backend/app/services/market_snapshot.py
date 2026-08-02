@@ -24,10 +24,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
@@ -207,7 +209,18 @@ async def _process_batch(client: httpx.AsyncClient, region: str, batch: list[str
                 filled += 1
             else:
                 empty += 1
-        db.commit()
+        try:
+            t_c0 = time.monotonic()
+            db.commit()
+            t_commit = time.monotonic() - t_c0
+            if t_commit > 1.0:
+                log.warning("market_snapshot: commit lento — %s/%d em %.1fs", region, len(batch), t_commit)
+        except OperationalError as e:
+            if "database is locked" in str(e).lower():
+                log.warning("market_snapshot: db locked — lote %s reprocessado próximo ciclo", region)
+                db.rollback()
+            else:
+                raise
     finally:
         db.close()
     return (filled, empty)

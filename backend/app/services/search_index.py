@@ -20,7 +20,7 @@ import threading
 import time
 
 from sqlalchemy import func, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -59,7 +59,7 @@ def upsert_entry(
     if not entity_id or not display_name:
         return
     norm = normalize(display_name)
-    stmt = sqlite_insert(SearchEntry).values(
+    stmt = pg_insert(SearchEntry).values(
         entity_type=entity_type, entity_id=entity_id,
         display_name=display_name, norm_name=norm, name_len=len(norm),
         region=region, guild_name=guild_name, alliance_name=alliance_name,
@@ -111,40 +111,60 @@ def _flush_chunk(db: Session, rows: list[dict]) -> None:
 
 
 def rebuild(db: Session) -> dict[str, int]:
-    db.query(SearchEntry).delete()
-    db.commit()
+    # Delete em batches por PK (evita DELETE ALL segurando o write lock
+    # por muito tempo — mesma doutrina do weapon_stats batch fix).
+    # Batch de 500: SQLite tem limite de ~999 variáveis por query.
+    while True:
+        ids = db.scalars(select(SearchEntry.id).limit(500)).all()
+        if not ids:
+            break
+        db.query(SearchEntry).filter(SearchEntry.id.in_(ids)).delete(synchronize_session=False)
+        db.commit()
     counts = {"player": 0, "guild": 0, "alliance": 0}
 
     # ── Jogadores ────────────────────────────────────────────────────────
-    # Nome/contagem vêm de battle_participants — cobre todo mundo que já
-    # apareceu numa luta rastreada (não só quem foi upsertado pelo
-    # player_tracker), igual à fonte do _search antigo.
-    p_agg: dict[str, dict] = {}
-    for pid, name, battles in db.execute(
+    # Materializa todos os SELECTs com .all() e fecha a read tx ANTES de
+    # processar — iterar cursor lazy mantém a tx aberta por minutos,
+    # bloqueando WAL checkpoint (mesmo fix do weapon_stats).
+    p_rows = db.execute(
         select(BattleParticipant.albion_player_id, BattleParticipant.name, func.count(BattleParticipant.id))
         .group_by(BattleParticipant.albion_player_id, BattleParticipant.name)
-    ):
+    ).all()
+
+    # Raw execute (não ORM) pra não acumular objetos na identity map da
+    # sessão — 100k AlbionPlayer na identity map mantém a conexão pesada
+    # mesmo depois do commit.
+    tracker_rows = db.execute(
+        select(AlbionPlayer.albion_id, AlbionPlayer.guild_name, AlbionPlayer.alliance_name, AlbionPlayer.region)
+    ).all()
+
+    fb_rows = db.execute(
+        select(BattleParticipant.albion_player_id, BattleParticipant.guild_name, BattleParticipant.alliance_name)
+        .join(Battle, Battle.id == BattleParticipant.battle_id)
+        .order_by(BattleParticipant.albion_player_id, Battle.start_time.desc())
+    ).all()
+
+    # Fecha a read tx ANTES do processamento em Python.
+    db.commit()
+
+    p_agg: dict[str, dict] = {}
+    for pid, name, battles in p_rows:
         cur = p_agg.get(pid)
         if cur is None or battles > cur["battles"]:
             p_agg[pid] = {"name": name, "battles": battles}
 
-    tracker_map = {ap.albion_id: ap for ap in db.scalars(select(AlbionPlayer)).yield_per(2000)}
+    tracker_map = {r[0]: r for r in tracker_rows}
 
-    # Afiliação mais recente pra quem não está no tracker (fallback — mesma
-    # ideia do _latest_affil antigo, mas pré-computada de uma vez só).
+    # Afiliação mais recente pra quem não está no tracker (fallback).
     fallback_affil: dict[str, tuple[str | None, str | None]] = {}
-    for pid, gname, aname in db.execute(
-        select(BattleParticipant.albion_player_id, BattleParticipant.guild_name, BattleParticipant.alliance_name)
-        .join(Battle, Battle.id == BattleParticipant.battle_id)
-        .order_by(BattleParticipant.albion_player_id, Battle.start_time.desc())
-    ):
+    for pid, gname, aname in fb_rows:
         fallback_affil.setdefault(pid, (gname, aname))
 
     rows: list[dict] = []
     for pid, agg in p_agg.items():
-        ap = tracker_map.get(pid)
-        if ap is not None:
-            guild_name, alliance_name, region = ap.guild_name, ap.alliance_name, ap.region
+        tr = tracker_map.get(pid)
+        if tr is not None:
+            guild_name, alliance_name, region = tr[1], tr[2], tr[3]
         else:
             guild_name, alliance_name = fallback_affil.get(pid, (None, None))
             region = "americas"
@@ -161,29 +181,28 @@ def rebuild(db: Session) -> dict[str, int]:
     _flush_chunk(db, rows)
 
     # ── Guildas ──────────────────────────────────────────────────────────
-    # Mesma (guild_id, nome, aliança) que mais aparece vence — igual ao dedup
-    # do _search antigo (guilda pode ter trocado de nome/aliança ao longo do
-    # tempo, a variante mais comum é a exibida). Região = a mais frequente
-    # entre as batalhas onde a guilda apareceu (guildas da Albion existem em
-    # UMA região só — servidores separados; a mais frequente é a correta).
-    g_best: dict[str, dict] = {}
-    for gid, name, aname, battles in db.execute(
+    g_rows = db.execute(
         select(BattleGuild.albion_guild_id, BattleGuild.guild_name, BattleGuild.alliance_name,
                func.count(func.distinct(BattleGuild.battle_id)))
         .group_by(BattleGuild.albion_guild_id, BattleGuild.guild_name, BattleGuild.alliance_name)
-    ):
+    ).all()
+
+    g_region_rows = db.execute(
+        select(BattleGuild.albion_guild_id, Battle.region)
+        .join(Battle, Battle.id == BattleGuild.battle_id)
+    ).all()
+
+    # Fecha a read tx ANTES de processar.
+    db.commit()
+
+    g_best: dict[str, dict] = {}
+    for gid, name, aname, battles in g_rows:
         cur = g_best.get(gid)
         if cur is None or battles > cur["battles"]:
             g_best[gid] = {"name": name, "alliance_name": aname, "battles": battles}
 
-    # Região mais frequente por guilda (uma guilda = uma região; mas pode
-    # aparecer em batalha de outra região por bug/migração rara — moda resolve).
     g_region: dict[str, str] = {}
-    for gid, region in db.execute(
-        select(BattleGuild.albion_guild_id, Battle.region)
-        .join(Battle, Battle.id == BattleGuild.battle_id)
-    ):
-        # count manual — moda simples: a primeira que aparece mais vezes.
+    for gid, region in g_region_rows:
         g_region.setdefault(gid, {})
         g_region[gid][region] = g_region[gid].get(region, 0) + 1
 
@@ -203,30 +222,38 @@ def rebuild(db: Session) -> dict[str, int]:
     _flush_chunk(db, rows)
 
     # ── Alianças ─────────────────────────────────────────────────────────
-    a_guild_ids: dict[str, set[str]] = {}
-    for aid, gid in db.execute(
+    ag_rows = db.execute(
         select(BattleGuild.alliance_id, BattleGuild.albion_guild_id).where(BattleGuild.alliance_id.isnot(None))
-    ):
-        a_guild_ids.setdefault(aid, set()).add(gid)
+    ).all()
 
-    a_best: dict[str, dict] = {}
-    for aid, aname, battles in db.execute(
+    a_rows = db.execute(
         select(BattleGuild.alliance_id, BattleGuild.alliance_name,
                func.count(func.distinct(BattleGuild.battle_id)))
         .where(BattleGuild.alliance_id.isnot(None))
         .group_by(BattleGuild.alliance_id, BattleGuild.alliance_name)
-    ):
+    ).all()
+
+    ar_rows = db.execute(
+        select(BattleGuild.alliance_id, Battle.region)
+        .join(Battle, Battle.id == BattleGuild.battle_id)
+        .where(BattleGuild.alliance_id.isnot(None))
+    ).all()
+
+    # Fecha a read tx ANTES de processar.
+    db.commit()
+
+    a_guild_ids: dict[str, set[str]] = {}
+    for aid, gid in ag_rows:
+        a_guild_ids.setdefault(aid, set()).add(gid)
+
+    a_best: dict[str, dict] = {}
+    for aid, aname, battles in a_rows:
         cur = a_best.get(aid)
         if cur is None or battles > cur["battles"]:
             a_best[aid] = {"name": aname, "battles": battles}
 
-    # Região mais frequente por aliança (mesma lógica de guilda).
     a_region: dict[str, dict[str, int]] = {}
-    for aid, region in db.execute(
-        select(BattleGuild.alliance_id, Battle.region)
-        .join(Battle, Battle.id == BattleGuild.battle_id)
-        .where(BattleGuild.alliance_id.isnot(None))
-    ):
+    for aid, region in ar_rows:
         a_region.setdefault(aid, {})
         a_region[aid][region] = a_region[aid].get(region, 0) + 1
 

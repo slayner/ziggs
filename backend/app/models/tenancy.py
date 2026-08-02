@@ -59,7 +59,7 @@ class Guild(Base, TimestampMixin):
     # Saldo do banco da guilda em prata. Pode ficar negativo (ex.: regear pago sem
     # tab suficiente). Debitado automaticamente ao finalizar eventos com regear.
     bank_balance: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"), default=0, nullable=False
+        BigInteger, default=0, nullable=False
     )
 
     # Configurações por servidor (cargos, canais, % de tax/scout/logger, etc.).

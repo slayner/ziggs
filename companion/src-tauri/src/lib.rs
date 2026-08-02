@@ -16,10 +16,11 @@ pub mod sniffer;
 pub mod transfer;
 pub mod tunnel;
 pub mod zone_detect;
+pub mod winutil;
 
 pub use config::CompanionConfig;
 pub use lootlog::LootlogStatus;
-pub use scanner::{ScanStats, Scanner};
+pub use scanner::{ScanStats, Scanner, KillScanner};
 pub use sniffer::{SniffStats, Sniffer, DebugLine};
 pub use transfer::TransferQueue;
 pub use tunnel::{Tunnel, TunnelStatus};
@@ -72,6 +73,8 @@ pub struct AppState {
     pub config: Arc<Mutex<CompanionConfig>>,
     pub scanner: Scanner,
     pub scanner_running: Arc<Mutex<bool>>,
+    pub kill_scanner: KillScanner,
+    pub kill_scanner_running: Arc<Mutex<bool>>,
     pub tunnel: Tunnel,
     pub tunnel_running: Arc<Mutex<bool>>,
     pub transfer_queue: Arc<TransferQueue>,
@@ -354,6 +357,59 @@ static SPELL_TABLE: std::sync::OnceLock<Mutex<Vec<api::SpellName>>> = std::sync:
 
 fn spell_table() -> &'static Mutex<Vec<api::SpellName>> {
     SPELL_TABLE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+static ITEM_NAMES_MAP: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+
+fn item_names_map() -> &'static Mutex<std::collections::HashMap<String, String>> {
+    ITEM_NAMES_MAP.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn item_names_cache_path() -> std::path::PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| ".".into())
+        .join("ziggs-companion")
+        .join("item_names_map_v1.json")
+}
+
+/// Carrega UniqueName → game_name do cache em disco, ou baixa do backend.
+/// Mesmo padrão do load_spell_names: retry até conseguir (autostart antes da rede).
+async fn load_item_names_map() {
+    if let Ok(bytes) = std::fs::read(item_names_cache_path()) {
+        if let Ok(v) = serde_json::from_slice::<std::collections::HashMap<String, String>>(&bytes) {
+            if !v.is_empty() {
+                *item_names_map().lock().await = v;
+                return;
+            }
+        }
+    }
+    let api = api::ApiClient::new(config::API_BASE_URL);
+    loop {
+        match api.items_map().await {
+            Ok(v) if !v.is_empty() => {
+                if let Ok(bytes) = serde_json::to_vec(&v) {
+                    let _ = std::fs::write(item_names_cache_path(), bytes);
+                }
+                *item_names_map().lock().await = v;
+                return;
+            }
+            Ok(_) => {
+                tracing::info!("items-map vazio no backend (não seedado)");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("items-map download falhou: {e:#}, retry em 60s");
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            }
+        }
+    }
+}
+
+/// Converte UniqueName (ItemTypeId do jogo) → game_name usando o mapa carregado.
+/// Se o mapa não tem a chave, devolve o UniqueName cru (fallback).
+pub async fn to_game_name(unique_name: &str) -> String {
+    let map = item_names_map().lock().await;
+    map.get(unique_name).cloned().unwrap_or_else(|| unique_name.to_string())
 }
 
 fn spell_cache_path() -> std::path::PathBuf {
@@ -892,7 +948,7 @@ fn set_autostart(enable: bool) -> Result<(), String> {
             );
             let tmp = std::env::temp_dir().join("ziggs-companion-task.xml");
             std::fs::write(&tmp, &xml).map_err(|e| format!("write xml: {e}"))?;
-            let out = std::process::Command::new("schtasks")
+            let out = crate::winutil::no_window(std::process::Command::new("schtasks"))
                 .args([
                     "/Create", "/TN", "ZiggsCompanion",
                     "/XML", tmp.to_str().unwrap_or(""),
@@ -905,7 +961,7 @@ fn set_autostart(enable: bool) -> Result<(), String> {
                 return Err(format!("schtasks: {}", String::from_utf8_lossy(&out.stderr)));
             }
         } else {
-            let _ = std::process::Command::new("schtasks")
+            let _ = crate::winutil::no_window(std::process::Command::new("schtasks"))
                 .args(["/Delete", "/TN", "ZiggsCompanion", "/F"])
                 .output();
         }
@@ -1118,6 +1174,10 @@ async fn auto_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
 }
 
 pub fn run() {
+    // Em release (windows_subsystem = "windows") não há console — tracing
+    // pra stderr cai no vazio e em alguns setups o Windows aloca um console
+    // pra escrever. Só ativa em debug.
+    #[cfg(debug_assertions)]
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1200,15 +1260,21 @@ pub fn run() {
     let autostart_on = cfg.autostart;
     let start_minimized = std::env::args().any(|a| a == "--minimized");
     let transfer_queue = Arc::new(TransferQueue::new());
-    let scanner = Scanner::new().with_queue(Arc::clone(&transfer_queue));
+    let sniffer = Sniffer::new();
+    let scanner = Scanner::new()
+        .with_queue(Arc::clone(&transfer_queue))
+        .with_debug(Arc::clone(&sniffer.debug));
+    let kill_scanner = KillScanner::from_scanner(&scanner);
     let state = AppState {
         config: Arc::new(Mutex::new(cfg)),
         scanner,
         scanner_running: Arc::new(Mutex::new(false)),
+        kill_scanner,
+        kill_scanner_running: Arc::new(Mutex::new(false)),
         tunnel: Tunnel::new(),
         tunnel_running: Arc::new(Mutex::new(false)),
         transfer_queue,
-        sniffer: Sniffer::new(),
+        sniffer,
         sniffer_running: Arc::new(Mutex::new(false)),
         lootlog: Arc::new(Mutex::new(lootlog::LootlogStatus::default())),
     };
@@ -1254,6 +1320,7 @@ pub fn run() {
             // Tabela de nomes de feitiço do damage meter: cache em disco, senão
             // baixa. Em background — o meter funciona sem ela (fallback pro id).
             tauri::async_runtime::spawn(load_spell_names());
+            tauri::async_runtime::spawn(load_item_names_map());
             tauri::async_runtime::spawn(lootlog::load_item_names());
 
             // Auto-submit do lootlog: fica de olho nos eventos do usuário e
@@ -1369,6 +1436,20 @@ pub fn run() {
                     });
                 }
             }
+            // Kill scan roda em paralelo — mesmo throttle/zone do battle scan.
+            {
+                let mut running = state.kill_scanner_running.blocking_lock();
+                if !*running {
+                    *running = true;
+                    let api = api::ApiClient::new(config::API_BASE_URL);
+                    let ks = state.kill_scanner.clone_for_spawn();
+                    let running_flag = Arc::clone(&state.kill_scanner_running);
+                    tauri::async_runtime::spawn(async move {
+                        ks.run(api, true).await;
+                        *running_flag.lock().await = false;
+                    });
+                }
+            }
             // ── Uploader ÚNICO da fila de transferência ───────────────────
             //
             // Antes cada produtor dava seu próprio `flush_all`, e a volta pra
@@ -1380,8 +1461,8 @@ pub fn run() {
             // Nada some — em zona de risco a fila só engorda e é drenada
             // devagar depois. Produtor novo deve apenas ENFILEIRAR.
             {
-                const TICK_SECS: u64 = 5;
-                const CHUNK: usize = 3;
+                const TICK_SECS: u64 = 3;
+                const CHUNK: usize = 20;
                 let q = Arc::clone(&state.transfer_queue);
                 let up_sniffer = state.sniffer.clone_shared();
                 let up_zone = Arc::clone(&state.scanner.zone);
@@ -1449,9 +1530,15 @@ pub fn run() {
                             if cur.map_or(true, |c| price < c) { best.insert(key, row); }
                         }
                         let n_rows = best.len();
-                        q.enqueue_prices(best.into_values().collect()).await;
+                        // Chunka em 1900 (backend limita 2000 por request) —
+                        // payload gigante num único POST dá timeout 30s e fica
+                        // preso na fila pra sempre. Pedaços pequenos sobem rápido.
+                        let aggregated: Vec<serde_json::Value> = best.into_values().collect();
+                        for chunk in aggregated.chunks(1900) {
+                            q.enqueue_prices(chunk.to_vec()).await;
+                        }
                         push_debug(&debug, "info",
-                            &format!("prices: enfileiradas {n_rows} rows (agregadas p/ backend)"));
+                            &format!("prices: enfileiradas {n_rows} rows ({} chunks)", (n_rows + 1899) / 1900));
                         // Só enfileira. Quem envia é o uploader único, no
                         // ritmo dele — produtor não decide política de rede.
                     }
@@ -1472,7 +1559,10 @@ pub fn run() {
                             b.drain(..).collect()
                         };
                         let n_rows = rows.len();
-                        q.enqueue_market_history(rows).await;
+                        // Backend limita 2000 rows por request — chunka em 1900.
+                        for chunk in rows.chunks(1900) {
+                            q.enqueue_market_history(chunk.to_vec()).await;
+                        }
                         push_debug(&debug, "info",
                             &format!("market_history: enfileirados {n_rows} buckets"));
                         // Só enfileira — ver comentário do uploader único.

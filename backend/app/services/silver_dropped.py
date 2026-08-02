@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -32,6 +34,10 @@ log = logging.getLogger(__name__)
 BATCH_SIZE = 50      # eventos por ciclo — get_battle_prices agrupa todos os itens do lote em poucas chamadas de API
 BUSY_INTERVAL = 5    # ainda devagar de propósito (soma à taxa agregada dos outros serviços)
 IDLE_INTERVAL = 300  # entre ciclos quando o backlog acabou
+# Só precifica eventos recentes — kills antigas sem preço ficam NULL e são
+# precificadas on-demand ao abrir o perfil. Sem isso o worker cava 600k de
+# backlog histórico antes de chegar na kill que acabou de acontecer.
+RECENT_WINDOW = timedelta(hours=6)
 
 # silver_dropped NULL = pendente (ainda não precificado). 0 = já precificado e
 # deu zero (vítima sem gear, ou gear sem cotação), >0 = prata real. O worker só
@@ -63,7 +69,9 @@ async def _price_events(db: Session, events: list[PlayerKillEvent]) -> int:
         # Sem gear — não devia chegar aqui (filtro _has_gear), mas defesa.
         return 0
     item_ids = list({iid for iid, _ in pairs})
+    t0 = time.monotonic()
     price_by_id = await get_battle_prices(db, item_ids)
+    t_fetch = time.monotonic() - t0
 
     updated = 0
     for ev in events:
@@ -76,7 +84,15 @@ async def _price_events(db: Session, events: list[PlayerKillEvent]) -> int:
                 total += price_by_id.get(inv["Type"], 0) * (inv.get("Count") or 1)
         ev.silver_dropped = total
         updated += 1
+    t1 = time.monotonic()
     db.commit()
+    t_commit = time.monotonic() - t1
+    if t_fetch > 2.0 or t_commit > 1.0:
+        log.warning("silver_dropped: LENTO — %d eventos, fetch=%.1fs commit=%.1fs (%d itens)",
+                    len(events), t_fetch, t_commit, len(item_ids))
+    else:
+        log.info("silver_dropped: %d eventos, fetch=%.1fs commit=%.1fs (%d itens)",
+                 len(events), t_fetch, t_commit, len(item_ids))
     return updated
 
 
@@ -88,8 +104,9 @@ async def _process_batch(db: Session) -> int:
         select(PlayerKillEvent)
         .where(
             PlayerKillEvent.silver_dropped.is_(None),
+            PlayerKillEvent.timestamp > datetime.now(timezone.utc) - RECENT_WINDOW,
         )
-        .order_by(PlayerKillEvent.id.asc())
+        .order_by(PlayerKillEvent.id.desc())
         .limit(BATCH_SIZE)
     ).all())
     candidates = []
@@ -103,6 +120,10 @@ async def _process_batch(db: Session) -> int:
     if not candidates:
         db.commit()
         return len(rows)
+    # Libera read tx antes do HTTP (get_battle_prices faz chamadas à AODP).
+    # Read tx aberta durante await impede wal_checkpoint → WAL cresce →
+    # commit futuro fsync-o inteiro.
+    db.commit()
     await _price_events(db, candidates)
     return len(rows)
 
@@ -122,10 +143,15 @@ async def run_forever() -> None:
     while True:
         db = SessionLocal()
         n = 0
+        t_cycle = time.monotonic()
         try:
             n = await _process_batch(db)
+            t_total = time.monotonic() - t_cycle
             if n:
-                log.info("silver_dropped: %d eventos precificados", n)
+                if t_total > 10.0:
+                    log.warning("silver_dropped: CICLO LENTO — %d eventos em %.1fs", n, t_total)
+                else:
+                    log.info("silver_dropped: %d eventos em %.1fs", n, t_total)
         except Exception as e:
             db.rollback()
             log.error("silver_dropped: erro: %s", e)

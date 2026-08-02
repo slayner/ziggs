@@ -274,3 +274,30 @@ class DeletedProfile(Base):
     entity_type: Mapped[str] = mapped_column(String(16), nullable=False)  # 'guild' | 'alliance'
     albion_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class KillIdProbe(Base):
+    """Memória de sondagem do kill_sweeper — uma linha por albion_event_id que
+    sondamos no endpoint de detalhe (fora da janela de offset 999 da listagem
+    de events). Sem isto, cada ciclo re-sondaria todos os buracos (404s) de
+    novo. status='found' = evento existe e foi ingerido; status='missing' =
+    404, evento inexistente."""
+    __tablename__ = "kill_id_probes"
+
+    albion_event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # "found" | "missing"
+    region: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    probed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class KillSyncCursor(Base):
+    """Cursor de paginação do backfill de kills, 1 linha por região. Avança
+    a cada ciclo (ver player_tracker.backfill_kills_step) varrendo a janela
+    de ~1000 events que a API expõe, igual ao backfill de batalhas."""
+    __tablename__ = "kill_sync_cursors"
+
+    region: Mapped[str] = mapped_column(String(16), primary_key=True)
+    next_offset: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

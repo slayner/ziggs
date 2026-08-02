@@ -1,6 +1,6 @@
 # Plano: Craft, Refino e Transmutacao
 
-Status: planejamento inicial, sem implementacao.
+Status: Fases 0-6 implementadas e validadas contra planilha de referência (jul/2026). Fase 7 (Hideouts) pendente de validação em jogo. §16.1 (arredondamento de foco) implementado com Math.ceil (conservador); §16.2 (taxa de transmutação) implementado e validado — Base Cost = round(silverCost × 1.156) para enchant upgrade, round(silverCost × 1.1584) para tier upgrade, Usage Fee = round((fee/100) × itemValue × 0.1125) com itemValue float do dump.
 
 Fontes de regras consultadas em 27/07/2026:
 

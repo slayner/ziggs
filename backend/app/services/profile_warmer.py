@@ -80,6 +80,9 @@ async def _warm_player(client, db: Session, host: str, region: str, albion_id: s
     )
     if not force and player is not None and (datetime.now(timezone.utc) - _aware(player.last_seen_at)) < STALE_AFTER:
         return True  # fresco conta como sucesso — não há trabalho a fazer
+    # Fecha a read tx ANTES do HTTP — read tx aberta durante await impede
+    # wal_checkpoint, cresce o WAL, e commit futuro fsync-o inteiro (173s+).
+    db.commit()
     try:
         _refresh_progress[albion_id] = "fetching"
         async with slot():
@@ -308,36 +311,42 @@ async def sync_refresh_requests() -> int:
         ).all()
         if not players:
             return 0
+        # Materializa (albion_id, region) e commit antes do HTTP — read tx
+        # aberta durante await impede wal_checkpoint.
+        refresh_list = [(p.albion_id, p.region) for p in players]
+        db.commit()
         async with make_client() as client:
             async with albion_scope(PROFILE):
-                for player in players:
-                    _refresh_progress[player.albion_id] = "queued"
-                    host = HOSTS.get(player.region)
+                for albion_id, region in refresh_list:
+                    _refresh_progress[albion_id] = "queued"
+                    host = HOSTS.get(region)
                     ok = False
                     if host is not None:
                         ok = await _warm_with_timeout(
-                            _warm_player(client, db, host, player.region, player.albion_id, force=True),
-                            player.albion_id, player.albion_id,
+                            _warm_player(client, db, host, region, albion_id, force=True),
+                            albion_id, albion_id,
                         )
                     # Só limpa em sucesso (ou host inválido — sem ponto em
                     # retentar host que não existe). Fetch falhou → pedido
                     # continua na fila e o próximo ciclo tenta de novo (retry
                     # automático, sem o usuário precisar clicar de novo).
                     # Timeout → esquece (não adianta refazer se a Albion travou).
-                    if ok or host is None or _refresh_progress.get(player.albion_id) == "error:timeout":
-                        player.refresh_requested_at = None
-                        db.commit()
+                    if ok or host is None or _refresh_progress.get(albion_id) == "error:timeout":
+                        p = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id, AlbionPlayer.region == region))
+                        if p is not None:
+                            p.refresh_requested_at = None
+                            db.commit()
                         if ok:
                             # Só refresh de VERDADE arma o cooldown (timeout/host
                             # inválido não atualizou nada — não deve bloquear retry).
-                            _refresh_done_at[player.albion_id] = datetime.now(timezone.utc)
-                        if _refresh_progress.get(player.albion_id) != "error:timeout":
-                            _refresh_progress.pop(player.albion_id, None)
+                            _refresh_done_at[albion_id] = datetime.now(timezone.utc)
+                        if _refresh_progress.get(albion_id) != "error:timeout":
+                            _refresh_progress.pop(albion_id, None)
                     else:
                         # Falha: stage volta pra 'queued' — o pedido continua
                         # na fila e o próximo ciclo refaz. O usuário vê voltar
                         # pra fila em vez de ficar travado num stage intermediário.
-                        _refresh_progress[player.albion_id] = "queued"
+                        _refresh_progress[albion_id] = "queued"
                     processed += 1
     finally:
         db.close()
@@ -361,24 +370,28 @@ async def sync_guild_refresh_requests() -> int:
         ).all()
         if not guilds:
             return 0
+        refresh_list = [(g.albion_id, g.region) for g in guilds]
+        db.commit()
         async with make_client() as client:
             async with albion_scope(PROFILE):
-                for g in guilds:
-                    _refresh_progress[f"g:{g.albion_id}"] = "queued"
-                    host = HOSTS.get(g.region)
+                for albion_id, region in refresh_list:
+                    _refresh_progress[f"g:{albion_id}"] = "queued"
+                    host = HOSTS.get(region)
                     ok = False
                     if host is not None:
                         ok = await _warm_with_timeout(
-                            _warm_guild(client, db, host, g.region, g.albion_id),
-                            g.albion_id, f"g:{g.albion_id}",
+                            _warm_guild(client, db, host, region, albion_id),
+                            albion_id, f"g:{albion_id}",
                         )
-                    if ok or host is None or _refresh_progress.get(f"g:{g.albion_id}") == "error:timeout":
-                        g.refresh_requested_at = None
-                        db.commit()
-                        if _refresh_progress.get(f"g:{g.albion_id}") != "error:timeout":
-                            _refresh_progress.pop(f"g:{g.albion_id}", None)
+                    if ok or host is None or _refresh_progress.get(f"g:{albion_id}") == "error:timeout":
+                        g = db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
+                        if g is not None:
+                            g.refresh_requested_at = None
+                            db.commit()
+                        if _refresh_progress.get(f"g:{albion_id}") != "error:timeout":
+                            _refresh_progress.pop(f"g:{albion_id}", None)
                     else:
-                        _refresh_progress[f"g:{g.albion_id}"] = "queued"
+                        _refresh_progress[f"g:{albion_id}"] = "queued"
                     processed += 1
     finally:
         db.close()
@@ -399,24 +412,28 @@ async def sync_alliance_refresh_requests() -> int:
         ).all()
         if not alliances:
             return 0
+        refresh_list = [(a.albion_id, a.region) for a in alliances]
+        db.commit()
         async with make_client() as client:
             async with albion_scope(PROFILE):
-                for a in alliances:
-                    _refresh_progress[f"a:{a.albion_id}"] = "queued"
-                    host = HOSTS.get(a.region)
+                for albion_id, region in refresh_list:
+                    _refresh_progress[f"a:{albion_id}"] = "queued"
+                    host = HOSTS.get(region)
                     ok = False
                     if host is not None:
                         ok = await _warm_with_timeout(
-                            _warm_alliance(client, db, host, a.region, a.albion_id),
-                            a.albion_id, f"a:{a.albion_id}",
+                            _warm_alliance(client, db, host, region, albion_id),
+                            albion_id, f"a:{albion_id}",
                         )
-                    if ok or host is None or _refresh_progress.get(f"a:{a.albion_id}") == "error:timeout":
-                        a.refresh_requested_at = None
-                        db.commit()
-                        if _refresh_progress.get(f"a:{a.albion_id}") != "error:timeout":
-                            _refresh_progress.pop(f"a:{a.albion_id}", None)
+                    if ok or host is None or _refresh_progress.get(f"a:{albion_id}") == "error:timeout":
+                        a = db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
+                        if a is not None:
+                            a.refresh_requested_at = None
+                            db.commit()
+                        if _refresh_progress.get(f"a:{albion_id}") != "error:timeout":
+                            _refresh_progress.pop(f"a:{albion_id}", None)
                     else:
-                        _refresh_progress[f"a:{a.albion_id}"] = "queued"
+                        _refresh_progress[f"a:{albion_id}"] = "queued"
                     processed += 1
     finally:
         db.close()
@@ -469,12 +486,14 @@ async def warm_by_name(name: str, region: str) -> dict:
                 db.commit()
                 request_refresh()
                 return {"status": "queued"}
+            db.commit()
             return {"status": "fresh"}
 
         # Desconhecido: bootstrap. Nome da Albion é case-sensitive ("Moskka" ≠
         # "MosKKa" = contas distintas), então match exato primeiro.
         # WARM (não PROFILE): é warm de FUNDO do companion, não pode furar a
         # descoberta de batalha nova (ver cadeia de prioridade no albion_gate).
+        db.commit()  # libera read tx antes do HTTP
         async with make_client() as client:
             async with albion_scope(WARM):
                 async with slot():
@@ -561,17 +580,27 @@ async def sync_once() -> int:
         ).all()
         if not battles:
             return 0
+        # Materializa IDs das batalhas e commita antes do HTTP — read tx aberta
+        # durante await impede wal_checkpoint. battle.id é estável (autoincrement).
+        battle_ids = [(b.id, b.region) for b in battles]
+        db.commit()
         async with make_client() as client:
-            for battle in battles:
-                host = HOSTS.get(battle.region)
+            for battle_id, region in battle_ids:
+                host = HOSTS.get(region)
                 if host is not None:
                     player_ids = db.scalars(
-                        select(BattleParticipant.albion_player_id).where(BattleParticipant.battle_id == battle.id)
+                        select(BattleParticipant.albion_player_id).where(BattleParticipant.battle_id == battle_id)
                     ).all()
+                    # Commit antes do HTTP: libera read tx do SELECT de player_ids.
+                    db.commit()
                     for albion_id in player_ids:
-                        await _warm_player(client, db, host, battle.region, albion_id)
-                battle.profiles_synced = True
-                db.commit()
+                        await _warm_player(client, db, host, region, albion_id)
+                # Rebusca a battle pra marcar profiles_synced (não guardar ORM
+                # obsoleto da SELECT inicial, já commited e expirado).
+                b = db.get(Battle, battle_id)
+                if b is not None:
+                    b.profiles_synced = True
+                    db.commit()
                 processed += 1
     finally:
         db.close()

@@ -1,59 +1,51 @@
-"""Precompute dos Highscores (rankings + destaques) a cada 5min — antes disso
-cada abertura da página rodava as agregações pesadas ao vivo (GROUP BY de
-guildas, scan de participantes pra pontos por arma), aparecendo como "loading".
-Mesmo padrão de dashboard_cache: guarda o topo generoso por (kind, janela,
-seleção-de-região) na tabela dashboard_cache; as rotas fatiam em Python por
-cima. Busca, páginas além do top-N e combinações raras de região continuam indo
-ao vivo (ver highscores._compute_rankings)."""
+"""Precompute dos Highscores (rankings + destaques) a cada 15 minutos.
+
+DESENHO (jul/2026):
+1. Leitura em uma sessão dedicada `db_read`: computa TODOS os rankings e
+   highlights em memória (nenhum write, nenhum commit intermediário).
+2. Uma única transação de escrita `db_write`: grava todos os DashboardCache
+   de uma vez só (1 commit por ciclo).
+3. Intervalo 15 minutos — o ranking NUNCA recalcula ao abrir a página.
+4. Se o ciclo falhar por lock/erro, o próximo tenta de novo; a rota sempre
+   lê o cache anterior, mesmo stale.
+
+Antes este serviço fazia ~100 commits por ciclo (um por chave). Com 22 bg
+services no mesmo processo SQLite, isso competia pelo write lock, segurava
+read transactions durante writes e impedia o WAL checkpoint — causando
+'database is locked' e commits de 100+ segundos.
+"""
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.dashboard_cache import DashboardCache
 
 logger = logging.getLogger(__name__)
 
-INTERVAL = 300
-TOP_N = 500  # páginas 0..(TOP_N/PAGE_SIZE) servidas do cache; mais fundo = ao vivo
-# Guildas elegíveis são poucas centenas (~700 all-time, todas as regiões) — cabe
-# o ranking INTEIRO no cache. Guardando tudo, a busca por nome no ranking de
-# guilda resolve SEMPRE do cache (o `total <= len(rows)` da rota vê o cache
-# completo e não recorre ao cálculo ao vivo, que custa a agregação de ~5s),
-# mesmo pra guilda de rank baixo ou nome que não casa ninguém.
+# 15 minutos: ranking é background, não on-demand.
+INTERVAL = 900
+
+TOP_N = 500
 GUILD_FULL_LIMIT = 100_000
 
-# Todos os 7 subconjuntos não-vazios das 3 regiões — o usuário pode selecionar
-# qualquer combinação de servidores no site, então qualquer combinação tem que
-# ser cacheada. Antes só as singles e as 3-juntas eram cacheadas, e uma seleção
-# de DUAS regiões caía no cálculo ao vivo dos destaques (scan semanal de ~470k
-# participantes pro card weapon_scorer, ~20s a cada abertura da página).
 REGION_SELECTIONS: list[list[str]] = [
     ["americas"], ["europe"], ["asia"],
     ["americas", "europe"], ["americas", "asia"], ["europe", "asia"],
     ["americas", "europe", "asia"],
 ]
 WINDOWS = ["alltime", "week"]
-# Kinds de guilda são baratos (um GROUP BY) — cacheados pra toda seleção.
-# weapon:<base> fica de fora de propósito: o usuário escolhe uma arma no
-# dropdown (ação deliberada, tolera espera); a página abre em pvp_fame.
+
 GUILD_CACHED_KINDS = ["pvp_fame", "efficiency", "most_battles", "underdog"]
-# Kinds de jogador que agregam de AlbionPlayer/player_kill_events diretamente
-# (coleta + silver_dropped) — "alltime" só (famas acumulativas / prata
-# histórica), nunca janela semanal. Baratos (um GROUP BY / ORDER BY indexado),
-# cacheados pra toda seleção de região.
 _GATHER_SILVER_KINDS = [
     "gather_total", "gather_wood", "gather_hide", "gather_ore", "gather_rock", "gather_fiber",
     "fishing", "crafting", "silver_dropped",
 ]
-# weapon_scorer (esp. na janela "week") escaneia ~470k participantes; caro
-# demais pra rodar por região. Cacheado pro full-combo (3 regiões, default do
-# site) e pros pairs (2 regiões — caminho comum quando alguém desmarca um
-# servidor). Singles (1 região) ficam ao vivo: raras (o default tem os 3) e
-# duplicam o custo do precompute pra um caso que quase ninguém dispara.
+
 _FULL_KEY = "-".join(sorted(["americas", "europe", "asia"]))
 _PAIR_KEYS = {
     "-".join(sorted(["americas", "europe"])),
@@ -63,17 +55,14 @@ _PAIR_KEYS = {
 _WEAPON_SCORER_CACHEABLE = _PAIR_KEYS | {_FULL_KEY}
 CACHED_KINDS = [*GUILD_CACHED_KINDS, "weapon_scorer"]
 
+_CACHEABLE = {"-".join(sorted(rl)) for rl in REGION_SELECTIONS}
+
 
 def _region_key(region_list: list[str] | None) -> str | None:
-    """Chave canônica (ordem-independente) da seleção de regiões, ou None se
-    não é uma seleção cacheada."""
     if not region_list:
         return None
     key = "-".join(sorted(region_list))
     return key if key in _CACHEABLE else None
-
-
-_CACHEABLE = {"-".join(sorted(rl)) for rl in REGION_SELECTIONS}
 
 
 def rankings_cache_key(kind: str, window: str, region_list: list[str] | None) -> str | None:
@@ -84,9 +73,6 @@ def rankings_cache_key(kind: str, window: str, region_list: list[str] | None) ->
         return f"hs:rk:{kind}:{window}:{rk}"
     if kind == "weapon_scorer" and rk in _WEAPON_SCORER_CACHEABLE:
         return f"hs:rk:{kind}:{window}:{rk}"
-    # Coleta + silver: alltime só. Janela "week" não faz sentido (famas
-    # acumulativas da conta), nunca cacheada — deixa a rota devolver o
-    # alltime mesmo se pedirem week (o ranking não tem corte semanal).
     if kind in _GATHER_SILVER_KINDS and window == "alltime":
         return f"hs:rk:{kind}:alltime:{rk}"
     return None
@@ -97,64 +83,82 @@ def highlights_cache_key(region_list: list[str] | None) -> str | None:
     return f"hs:hl:{rk}" if rk else None
 
 
-def _upsert(db, key: str, build) -> None:
-    """Computa `build()` e grava sob `key`, isolado: um lock/erro numa chave não
-    derruba o ciclo inteiro (cada chave é uma transação própria; a que falhar
-    recompõe no próximo ciclo). `build` é lazy pra não pagar a query pesada
-    quando só íamos descartar por lock."""
-    try:
-        payload = build()
-        row = db.get(DashboardCache, key)
-        if row is None:
-            db.add(DashboardCache(key=key, payload=payload))
-        else:
-            row.payload = payload
-        db.commit()
-    except OperationalError as e:
-        db.rollback()
-        if "is locked" in str(getattr(e, "orig", e)).lower():
-            logger.warning("highscores_cache: db locked em %s — retry próximo ciclo", key)
-        else:
-            logger.exception("highscores_cache: falha em %s", key)
-    except Exception:
-        db.rollback()
-        logger.exception("highscores_cache: falha em %s", key)
-
-
-def sync_once() -> None:
-    # Import tardio: a rota importa este módulo (nas funções), então importar a
-    # rota aqui no topo fecharia o ciclo. Dentro da função é seguro.
+def _compute_all() -> dict[str, dict]:
+    """Computa todos os caches de highscores em uma única sessão de leitura.
+    Devolve {cache_key: payload}."""
     from app.api.routes.highscores import _compute_highlights, _compute_rankings, _window_start
 
-    db = SessionLocal()
+    payloads: dict[str, dict] = {}
+    db_read = SessionLocal()
     try:
         for region_list in REGION_SELECTIONS:
-            rl = region_list  # captura por-iteração pros lambdas
-            _upsert(db, highlights_cache_key(rl), lambda: _compute_highlights(db, rl))
+            hl_key = highlights_cache_key(region_list)
+            if hl_key:
+                payloads[hl_key] = _compute_highlights(db_read, region_list)
+
             for window in WINDOWS:
                 week_start = _window_start(window)
                 for kind in CACHED_KINDS:
-                    key = rankings_cache_key(kind, window, rl)
+                    key = rankings_cache_key(kind, window, region_list)
                     if not key:
-                        continue  # weapon_scorer fora de full/pairs: singles ficam ao vivo
-                    # Guilda: ranking inteiro (busca por nome resolve do cache);
-                    # jogador: top-N (são ~100k, cachear tudo não faz sentido).
+                        continue
                     lim = GUILD_FULL_LIMIT if kind in GUILD_CACHED_KINDS else TOP_N
-                    _upsert(db, key, lambda k=kind, ws=week_start, lim=lim: _compute_rankings(db, k, rl, ws, None, lim, 0))
-                # Kinds de coleta + silver: alltime só. Janela "week" não é
-                # cacheada (rankings_cache_key devolve None), e a rota devolve
-                # o alltime mesmo se pedirem week.
+                    payloads[key] = _compute_rankings(db_read, kind, region_list, week_start, None, lim, 0)
+
                 if window == "alltime":
                     for kind in _GATHER_SILVER_KINDS:
-                        key = rankings_cache_key(kind, "alltime", rl)
+                        key = rankings_cache_key(kind, "alltime", region_list)
                         if not key:
                             continue
-                        _upsert(db, key, lambda k=kind: _compute_rankings(db, k, rl, None, None, TOP_N, 0))
+                        payloads[key] = _compute_rankings(db_read, kind, region_list, None, None, TOP_N, 0)
     finally:
-        db.close()
+        db_read.close()
+    return payloads
+
+
+def _write_all(payloads: dict[str, dict]) -> int:
+    """Grava todos os payloads numa única transação. Retorna quantidade."""
+    if not payloads:
+        return 0
+    db_write = SessionLocal()
+    written = 0
+    try:
+        existing = {
+            row.key: row for row in db_write.scalars(
+                select(DashboardCache).where(DashboardCache.key.in_(payloads.keys()))
+            ).all()
+        }
+        for key, payload in payloads.items():
+            row = existing.get(key)
+            if row is None:
+                db_write.add(DashboardCache(key=key, payload=payload))
+            else:
+                row.payload = payload
+            written += 1
+        db_write.commit()
+    except Exception:
+        db_write.rollback()
+        raise
+    finally:
+        db_write.close()
+    return written
+
+
+def sync_once() -> int:
+    t_start = time.monotonic()
+    try:
+        payloads = _compute_all()
+        written = _write_all(payloads)
+        t_total = time.monotonic() - t_start
+        logger.info("highscores_cache: ciclo %.1fs (%d chaves)", t_total, written)
+        return written
+    except Exception:
+        logger.exception("highscores_cache: falha no ciclo")
+        return 0
 
 
 async def run_forever() -> None:
+    logger.info("highscores_cache: iniciando (intervalo=%ds)", INTERVAL)
     while True:
         await asyncio.to_thread(sync_once)
         await asyncio.sleep(INTERVAL)

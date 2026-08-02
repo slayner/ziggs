@@ -13,7 +13,6 @@ from cogs.general import _guild_command_config
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
 PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").rstrip("/") or SITE_URL
 REGION_PREFIX = {"americas": "am", "asia": "as", "europe": "eu"}
-API_DELAY_WARNING_SECS = 15 * 60
 JUICY_MARKER = "ziggs:juicy-kill:"
 
 
@@ -28,61 +27,41 @@ def _link(region: str, player: dict, event_id: str | None = None) -> str:
     return f"[{discord.utils.escape_markdown(name)}]({_profile_url(region, name, event_id)})"
 
 
-def _delay_label(seconds: int) -> str:
-    if seconds < 3600:
-        return f"~{round(seconds / 60)}min"
-    hours = seconds / 3600
-    return f"~{hours:.1f}h" if hours < 10 else f"~{round(hours)}h"
-
 
 def _build_embed(kill: dict, filename: str) -> discord.Embed:
     killer = kill.get("killer") or {}
     victim = kill.get("victim") or {}
-    killer_name = discord.utils.escape_markdown(killer.get("name") or "Unknown")
-    victim_name = discord.utils.escape_markdown(victim.get("name") or "Unknown")
     event_id = str(kill["albion_event_id"])
     region = kill["region"]
-    lines = [f"{_link(region, killer, event_id)} killed {_link(region, victim, event_id)}"]
+    header = f"## {_link(region, killer, event_id)} killed {_link(region, victim, event_id)}"
+    lines = [header]
 
     participants = []
-    seen = {(killer.get("name") or "").casefold()}
+    seen = {(killer.get("name") or "").casefold(), (victim.get("name") or "").casefold()}
     for player in kill.get("participants") or []:
         name = player.get("name") or ""
         if name and name.casefold() not in seen:
             participants.append(_link(region, player))
             seen.add(name.casefold())
-    stats = (
-        f"**{int(kill.get('silver_dropped') or 0):,} silver** · "
-        f"{int(kill.get('fame') or 0):,} fame · {region.title()}"
-    )
     if participants:
         prefix = "**Participants:** "
         shown = []
         for participant in participants:
             candidate = prefix + ", ".join([*shown, participant])
-            if len(lines[0]) + len(candidate) + len(stats) + 2 > 4096:
+            if len(header) + len(candidate) + 2 > 4096:
                 break
             shown.append(participant)
         if shown:
             participant_line = prefix + ", ".join(shown)
-            if (
-                len(shown) < len(participants)
-                and len(lines[0]) + len(participant_line) + len(stats) + 5 <= 4096
-            ):
+            if len(shown) < len(participants) and len(header) + len(participant_line) + 5 <= 4096:
                 participant_line += ", …"
             lines.append(participant_line)
-    lines.append(stats)
     embed = discord.Embed(
-        title=f"{killer_name} killed {victim_name}",
         description="\n".join(lines),
         color=discord.Color.gold(),
     )
     embed.set_image(url=f"attachment://{filename}")
-    delay = int(kill.get("api_delay_secs") or 0)
-    footer = PUBLIC_URL
-    if delay > API_DELAY_WARNING_SECS:
-        footer += f" · Albion API delay ({region.title()}): {_delay_label(delay)}"
-    embed.set_footer(text=f"{footer} · {JUICY_MARKER}{kill['id']}")
+    embed.set_footer(text=f"{PUBLIC_URL} · {JUICY_MARKER}{kill['id']}")
     return embed
 
 
