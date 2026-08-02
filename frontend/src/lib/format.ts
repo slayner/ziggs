@@ -25,6 +25,7 @@ export function silver(n: number): string {
 export function silverShort(n: number): string {
   if (!Number.isFinite(n)) return "—";
   const abs = Math.abs(n);
+  if (abs >= 1_000_000_000) return `${decimalFmt.format(n / 1_000_000_000)}bi`;
   if (abs >= 1_000_000) return `${decimalFmt.format(n / 1_000_000)}mi`;
   if (abs >= 10_000) return `${silverFmt.format(Math.round(n / 1_000))}k`;
   return silverFmt.format(Math.round(n));

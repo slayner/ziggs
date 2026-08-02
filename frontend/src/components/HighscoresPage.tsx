@@ -9,7 +9,7 @@ import GlobalSearch from "./GlobalSearch";
 
 const SERVER_TO_REGION: Record<GameServer, string> = { west: "americas", east: "asia", europe: "europe" };
 const API = import.meta.env.DEV ? "http://localhost:8000" : "";
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 10;
 
 const wBase = (id: string) => id.replace(/^T\d+_/, "").replace(/@\d+$/, "");
 
@@ -78,7 +78,7 @@ function HighlightCard({ icon, label, name, value, onClick, weaponBase }: {
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 flex items-center justify-between gap-2">
       <div className="flex items-center gap-2 min-w-0">
         {weaponBase
-          ? <img src={weaponIcon(weaponBase)} alt={weaponBase} width={32} height={32} className="shrink-0 rounded border border-zinc-800 bg-zinc-950" />
+          ? <img src={weaponIcon(weaponBase)} alt={weaponBase} width={32} height={32} className="shrink-0" />
           : <span className="text-lg">{icon}</span>}
         <div className="min-w-0">
           <div className="truncate text-[10px] text-zinc-500 uppercase tracking-wide">{label}</div>
@@ -286,7 +286,7 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
         onClick={() => { setOpen(o => !o); setGatherSubOpen(false); }}
         className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-200 outline-none hover:border-zinc-500 focus:border-amber-500"
       >
-        {currentWeaponBase && <img src={weaponIcon(currentWeaponBase)} alt="" width={18} height={18} className="rounded border border-zinc-800" />}
+        {currentWeaponBase && <img src={weaponIcon(currentWeaponBase)} alt="" width={18} height={18} />}
         {currentLabel}
         <i className="ti ti-chevron-down text-zinc-500" aria-hidden="true" />
       </button>
@@ -347,7 +347,7 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
             <div className="max-h-72 overflow-y-auto">
               {filteredWeapons.map(w => (
                 <button key={w.key} onClick={() => pick(w.key)} className={rowCls(kind === w.key)}>
-                  <img src={weaponIcon(w.base)} alt="" width={20} height={20} className="shrink-0 rounded border border-zinc-800 bg-zinc-950" />
+                  <img src={weaponIcon(w.base)} alt="" width={20} height={20} className="shrink-0" />
                   <span className="truncate">{w.label}</span>
                 </button>
               ))}
@@ -382,7 +382,7 @@ const RankingRowView = memo(function RankingRowView({ rank, row, kind, highlight
     <>
       <span className="w-8 shrink-0 text-center text-xs font-bold text-zinc-500">{rank}</span>
       {row.weapon_base && (
-        <img src={weaponIcon(row.weapon_base)} alt="" width={28} height={28} className="shrink-0 rounded border border-zinc-800 bg-zinc-950" />
+        <img src={weaponIcon(row.weapon_base)} alt="" width={28} height={28} className="shrink-0" />
       )}
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm text-zinc-200">{title}</div>
