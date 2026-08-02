@@ -21,7 +21,12 @@ function itemBaseId(id: string): string {
 const DEFAULT_NODE_DEFS: {
   key: string; name: { pt: string; en: string; es: string };
   emoji: string | null; weight: number;
-}[] = [];
+}[] = [
+  { key: "8.4", name: { pt: "Nó 8.4", en: "Node 8.4", es: "Nodo 8.4" }, emoji: "🟣", weight: 1.0 },
+  { key: "7.4", name: { pt: "Nó 7.4", en: "Node 7.4", es: "Nodo 7.4" }, emoji: "🔴", weight: 0.2 },
+  { key: "6.4", name: { pt: "Nó 6.4", en: "Node 6.4", es: "Nodo 6.4" }, emoji: "🟠", weight: 0.04 },
+  { key: "vortex", name: { pt: "Vortex/Orbes", en: "Vortex/Orbs", es: "Vórtice/Orbes" }, emoji: "⚪", weight: 0 },
+];
 
 // Nome exibido de um def: se bater com uma key do catálogo default, mostra o
 // nome no idioma do bot; senão mostra o nome literal guardado no banco.
@@ -169,6 +174,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [nodeDefs, setNodeDefs] = useState<NodeDef[]>([]);
   const [nodeDefsLoaded, setNodeDefsLoaded] = useState(false);
   const [nodeMaps, setNodeMaps] = useState<NodeMaps | null>(null);
+  const [mapsOpen, setMapsOpen] = useState(false);
   const [ndName, setNdName] = useState("");
   const [ndEmoji, setNdEmoji] = useState("");
   // Exibido como % (0-100); o backend guarda fração em NodeDef.weight.
@@ -1192,9 +1198,9 @@ async function saveJuicyKillMinSilver() {
                         </span>
                       </button>
                     );
-                  })}
+                    })}
+                  </div>
                 </div>
-              </div>
             </FeatureRow>
 
             {/* ── Registro: /register + tudo que depende dele ── */}
@@ -1655,10 +1661,15 @@ async function saveJuicyKillMinSilver() {
                 </div>
               </div>
 
-              {/* Mapas extras / exclusões */}
+              {/* Mapas extras / exclusões — collapsable (collapsed by default) */}
               {nodeMaps && (
                 <div className="mt-4 border-t border-zinc-800 pt-3">
-                  <h4 className="text-xs font-semibold text-zinc-200 mb-2">{t("nodesMapsTitle")}</h4>
+                  <button onClick={() => setMapsOpen(o => !o)} className="flex w-full items-center justify-between text-xs font-semibold text-zinc-200 mb-1">
+                    <span>{t("nodesMapsTitle")}</span>
+                    <span className="text-zinc-400">{mapsOpen ? "▾" : "▸"}</span>
+                  </button>
+                  {mapsOpen && (
+                    <div className="space-y-2">
                   <div className="flex items-end gap-2 flex-wrap mb-3">
                     <label className="flex flex-col gap-1">
                       <span className="text-[11px] text-zinc-500">{t("nodesMapAdd")}</span>
@@ -1693,6 +1704,8 @@ async function saveJuicyKillMinSilver() {
                       );
                     })}
                   </div>
+                    </div>
+                  )}
                 </div>
               )}
             </FeatureRow>
