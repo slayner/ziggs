@@ -745,9 +745,11 @@ export default function App() {
           --bg liso atrás do próprio ad). O esquadramento em si é global no
           styles.css (não depende disso). */}
       <div className="dash-root">
-      <div style={{ padding: "10px 16px 0" }}>
-        <AdBanner variant="leaderboard" mobileVariant="mobileBanner" />
-      </div>
+      {view !== "craft" && (
+        <div style={{ padding: "10px 16px 0" }}>
+          <AdBanner variant="leaderboard" mobileVariant="mobileBanner" />
+        </div>
+      )}
       <ErrorBoundary>
       {/* Fallback visível: em conexão lenta, trocar de view carrega um chunk
           novo — com fallback null a tela ficava em branco e parecia travada. */}

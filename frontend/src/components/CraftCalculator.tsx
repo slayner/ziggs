@@ -43,6 +43,7 @@ import { fetchAdpPrices, fetchAdpDemand, fetchAdpPriceSeries, fetchAdpGold } fro
 import { useLang, useT, type TKey } from "../i18n";
 import { silver, silverShort, decimal, percent } from "../lib/format";
 import { api, type Me } from "../api";
+import AdBanner from "./AdBanner";
 
 const iconUrl = (id: string, size = 64, quality?: number) =>
   `/render/item/${encodeURIComponent(id)}?size=${size}${quality ? `&quality=${quality}` : ""}`;
@@ -641,68 +642,82 @@ export default function CraftCalculator() {
 
   return (
     <div className="mx-auto w-full max-w-[1800px] px-4 py-5">
-      {/* Control bar */}
-      <div className="mb-4 flex flex-wrap items-start gap-3">
-        {/* Item dropdown */}
-        <div className="relative min-w-64 flex-1" ref={pickerRef}>
-          <button onClick={() => setPickerOpen((o) => !o)} className="flex h-[36px] w-full items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-left hover:border-zinc-600">
-            {family && (
-              <img src={iconUrl(displayVariation(family).uniqueName, 96, displayQuality(family))} alt="" width={28} height={28} />
-            )}
-            <span className="flex-1 truncate text-sm font-semibold text-zinc-100">{family?.name ?? t("loading")}</span>
-            {family?.bonusCity && <span className="hidden rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium sm:inline" style={{ color: cityColor(family.bonusCity) }} title={bonusBiome ? `${t("craftBonusBiomeTitle")} · ${family.bonusCity}` : t("craftBonusCityTitle")}>{bonusBiome ?? family.bonusCity}</span>}
-            <span className="text-zinc-500">▾</span>
-          </button>
-          {pickerOpen && (
-            <div className="absolute z-40 mt-1 w-96 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl">
-              <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("searchItemPlaceholder")} className="mb-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-sm outline-none focus:border-amber-500" />
-              <div className="max-h-96 space-y-0.5 overflow-y-auto">
-                {filteredFamilies.map((f) => (
-                  <button key={f.familyKey} onClick={() => { setFamilyKey(f.familyKey); setPickerOpen(false); setSearch(""); }} className={`flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm ${f.familyKey === familyKey ? "bg-amber-500/15 text-amber-300" : "text-zinc-300 hover:bg-zinc-800"}`}>
-                    <img src={iconUrl(displayVariation(f).uniqueName, 64, displayQuality(f))} alt="" width={30} height={30} />
-                    <span className="truncate">{f.name}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Production controls */}
-        <div className="flex flex-wrap items-center gap-2">
-          <InlineNum label={t("qtyLabel")} value={batchQty} onChange={setBatchQty} w="w-28" />
-          <ToggleBtn active={premium} on="Premium" off="Premium" onClick={() => setPremium((p) => !p)} />
-          <InlineNum label={t("feePerHundredLabel")} value={stationFeePer100} onChange={setStationFeePer100} w="w-32" />
-          <div className="flex h-[36px] items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5" title={t("goldPriceTooltip")}>
-            <span className="text-[11px] text-zinc-500">🪙</span>
-            <span className="text-sm tabular-nums text-zinc-100">{goldPrice ? silver(goldPrice) : "—"}</span>
+      {/* Main grid: configuração + anúncio | preços | carrinho */}
+      <div className="grid items-start gap-4 min-[1200px]:grid-cols-[320px_minmax(0,1fr)_320px]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <SettingsPanel
+            productionLocation={productionLocation} setProductionLocation={setProductionLocation}
+            hideoutEligible={hideoutEligible}
+            hoQuality={hoQuality} setHoQuality={setHoQuality} hoLevel={hoLevel} setHoLevel={setHoLevel}
+            eventBonus={eventBonus} setEventBonus={setEventBonus}
+            bonusCity={family?.bonusCity ?? null} autoSpecialized={autoSpecialized}
+            craftCity={craftCity}
+            sellCity={sellCity} setSellCity={setSellCity}
+            minSpf={minSpf}
+            groups={groups} groupLabel={groupLabel} cityForGroup={cityForGroup} setGroupMarket={setGroupMarket}
+            orderForGroup={orderForGroup} setGroupOrder={setGroupOrder}
+            baseVar={baseVar}
+            siblings={siblings}
+            focusEfficiencyByFamily={focusEfficiencyByFamily} setFocusEff={setFocusEff} commitFocusEfficiency={commitFocusEfficiency}
+            ignoredJournalTiers={ignoredJournalTiers} toggleJournalTier={toggleJournalTier}
+          />
+          <div className="flex justify-center rounded-xl border border-zinc-800 bg-zinc-900/40 p-2">
+            <AdBanner variant="mediumRectangle" mobileVariant="mobileBanner" />
           </div>
-          <IconButton onClick={fetchMarket} disabled={loadingPrices || !family} title={fetchError ?? t("updatePricesTitle")} spinning={loadingPrices}>⟳</IconButton>
-          {fetchError && <span className="text-xs text-red-400" title={fetchError}>⚠</span>}
         </div>
-      </div>
 
-      {/* Main grid: config | lista | carrinho */}
-      <div className="grid items-start gap-5 min-[1500px]:grid-cols-[300px_1fr_300px]">
-        <SettingsPanel
-          productionLocation={productionLocation} setProductionLocation={setProductionLocation}
-          hideoutEligible={hideoutEligible}
-          hoQuality={hoQuality} setHoQuality={setHoQuality} hoLevel={hoLevel} setHoLevel={setHoLevel}
-          eventBonus={eventBonus} setEventBonus={setEventBonus}
-          bonusCity={family?.bonusCity ?? null} autoSpecialized={autoSpecialized}
-          craftCity={craftCity}
-          sellCity={sellCity} setSellCity={setSellCity}
-          minSpf={minSpf}
-          groups={groups} groupLabel={groupLabel} cityForGroup={cityForGroup} setGroupMarket={setGroupMarket}
-          orderForGroup={orderForGroup} setGroupOrder={setGroupOrder}
-          baseVar={baseVar}
-          siblings={siblings}
-          focusEfficiencyByFamily={focusEfficiencyByFamily} setFocusEff={setFocusEff} commitFocusEfficiency={commitFocusEfficiency}
-          ignoredJournalTiers={ignoredJournalTiers} toggleJournalTier={toggleJournalTier}
-        />
+        <div className="flex min-w-0 flex-col gap-3">
+          {/* Item dropdown: a busca fica dentro do menu de receitas */}
+          <div className="relative z-30 w-full" ref={pickerRef}>
+            <button onClick={() => setPickerOpen((o) => !o)} className="flex h-[44px] w-full items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 text-left hover:border-zinc-600">
+              {family && (
+                <img src={iconUrl(displayVariation(family).uniqueName, 96, displayQuality(family))} alt="" width={32} height={32} />
+              )}
+              <span className="flex-1 truncate text-sm font-semibold text-zinc-100">{family?.name ?? t("loading")}</span>
+              {family?.bonusCity && <span className="hidden rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium sm:inline" style={{ color: cityColor(family.bonusCity) }} title={bonusBiome ? `${t("craftBonusBiomeTitle")} · ${family.bonusCity}` : t("craftBonusCityTitle")}>{bonusBiome ?? family.bonusCity}</span>}
+              <span className="text-zinc-500">▾</span>
+            </button>
+            {pickerOpen && (
+              <div className="absolute left-0 right-0 top-full mt-1 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl">
+                <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("searchItemPlaceholder")} className="mb-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-sm outline-none focus:border-amber-500" />
+                <div className="max-h-96 space-y-0.5 overflow-y-auto">
+                  {filteredFamilies.map((f) => (
+                    <button key={f.familyKey} onClick={() => { setFamilyKey(f.familyKey); setPickerOpen(false); setSearch(""); }} className={`flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm ${f.familyKey === familyKey ? "bg-amber-500/15 text-amber-300" : "text-zinc-300 hover:bg-zinc-800"}`}>
+                      <img src={iconUrl(displayVariation(f).uniqueName, 64, displayQuality(f))} alt="" width={30} height={30} />
+                      <span className="truncate">{f.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
-        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40">
-          <table className="w-full text-sm">
+          {/* Controles que afetam os cálculos da tabela */}
+          <div className="flex flex-wrap items-center gap-2">
+            <InlineNum label={t("qtyLabel")} value={batchQty} onChange={setBatchQty} w="w-28" />
+            <ToggleBtn active={premium} on="Premium" off="Premium" onClick={() => setPremium((p) => !p)} />
+            <InlineNum label={t("feePerHundredLabel")} value={stationFeePer100} onChange={setStationFeePer100} w="w-32" />
+            <div className="flex h-[36px] items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5" title={t("goldPriceTooltip")}>
+              <span className="text-[11px] text-zinc-500">🪙</span>
+              <span className="text-sm tabular-nums text-zinc-100">{goldPrice ? silver(goldPrice) : "—"}</span>
+            </div>
+            <IconButton onClick={fetchMarket} disabled={loadingPrices || !family} title={fetchError ?? t("updatePricesTitle")} spinning={loadingPrices}>⟳</IconButton>
+            {fetchError && <span className="text-xs text-red-400" title={fetchError}>⚠</span>}
+          </div>
+
+          <div className="min-w-0 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40">
+          <table className="w-full min-w-[1080px] table-fixed text-sm">
+            <colgroup>
+              <col className="w-[165px]" />
+              <col className="w-[300px]" />
+              <col className="w-[82px]" />
+              <col className="w-[112px]" />
+              <col className="w-[104px]" />
+              <col className="w-[104px]" />
+              <col className="w-[78px]" />
+              <col className="w-[86px]" />
+              <col className="w-[90px]" />
+            </colgroup>
             <thead>
               <tr className="border-b border-zinc-800 text-left text-[11px] uppercase tracking-wide text-zinc-500">
                 <Th>Item</Th>
@@ -723,6 +738,8 @@ export default function CraftCalculator() {
             </thead>
             <tbody>{rows}</tbody>
           </table>
+        </div>
+
         </div>
 
         <Cart cart={cart} matPrices={matPrices} sellPrices={sellPrices} weights={weights} journalBase={journalBase} fullJournalPrices={fullJournalPrices} settings={settings} ignoredTiers={ignoredJournalTiers} rrNoFocus={rrNoFocus} rrFocus={rrFocus} nameOf={nameOf} onRemove={(id) => setCart((c) => c.filter((o) => o.id !== id))} onClear={() => setCart([])} />
@@ -772,7 +789,7 @@ function SettingsPanel({
     }
   };
   return (
-    <aside className="flex flex-col gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+    <aside className="flex min-w-0 flex-col gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
       {/* Local & Bônus — cidade real determina o bônus */}
       <div className="space-y-1.5">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{t("craftLocationHeader")} & {t("bonusLabel")}</h3>
@@ -982,7 +999,7 @@ function Cart({
   }
 
   return (
-    <aside className="space-y-3 xl:sticky xl:top-4 xl:self-start">
+    <aside className="min-w-0 space-y-3 xl:sticky xl:top-4 xl:self-start">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-zinc-200">{t("craftCartTitle")}</h2>
         <div className="flex items-center gap-2 text-xs text-zinc-400">
@@ -1039,7 +1056,7 @@ function Cart({
             </table>
           </div>
 
-          {cart.map((o) => {
+          {[...cart].reverse().map((o) => {
             const journals = journalsFilled(o.variation.resources, o.variation.tier, o.variation.enchant, o.qty);
             const needs = materialNeeds(o.variation.resources, o.qty, o.rr);
             const total = needs.reduce((s, n) => s + n.buyCount * (matPrices[n.uniqueName] ?? 0), 0);
