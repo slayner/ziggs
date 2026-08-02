@@ -37,7 +37,14 @@ target-diag/
 
 # Worktrees e sessões de ferramenta
 .claude/worktrees/
-.opencode/
+# .opencode/: ignorar runtime (node_modules, plugin install, lock), mas
+# versionar skills/commands/agents pra que todo worktree herde.
+.opencode/*
+!.opencode/skills/
+!.opencode/command/
+!.opencode/commands/
+!.opencode/agent/
+!.opencode/agents/
 
 # Sujeira de sessão de debug (screenshots, dumps de perfil, scripts soltos)
 backend/_*.png
