@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { LangProvider, useLang } from "./i18n";
 import { COMMANDS, DOCS_LOCALES, DOCS_PAGES, GUIDE_COPY, localized } from "./docs-content";
 import { docsPath, readDocsLocation } from "./docs-router";
+import { SITE_URL } from "./docs-url";
 import type { DocsLocale } from "./docs-types";
 import "./styles.css";
 import "./docs.css";
@@ -15,10 +16,32 @@ const CATEGORY_LABELS: Record<string, Record<DocsLocale, string>> = {
   events: { en: "Events", pt: "Eventos", es: "Eventos" },
 };
 
+function siteRoot(): URL {
+  return new URL(SITE_URL, window.location.origin);
+}
+
+function readDocsReturnTarget(): string {
+  const raw = new URLSearchParams(window.location.search).get("from");
+  const fallback = siteRoot();
+  if (!raw) return fallback.toString();
+  try {
+    const target = new URL(raw);
+    const isManagementReturn =
+      target.pathname === fallback.pathname && target.searchParams.get("view") === "management";
+    if (!/^https?:$/.test(target.protocol) || target.origin !== fallback.origin || !isManagementReturn) {
+      return fallback.toString();
+    }
+    return target.toString();
+  } catch {
+    return fallback.toString();
+  }
+}
+
 function DocsApp() {
   const { lang, setLang } = useLang();
-  const location = readDocsLocation();
-  const [slug, setSlug] = useState(location.slug);
+  const [location, setLocation] = useState(readDocsLocation);
+  const { slug } = location;
+  const [returnTarget] = useState(readDocsReturnTarget);
   const selectedLang = location.lang ?? lang;
 
   useEffect(() => {
@@ -26,14 +49,14 @@ function DocsApp() {
   }, [lang, location.lang, setLang]);
 
   useEffect(() => {
-    const onPopState = () => setSlug(readDocsLocation().slug);
+    const onPopState = () => setLocation(readDocsLocation());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
   function go(nextSlug: string, nextLang = selectedLang) {
     window.history.pushState({}, "", docsPath(nextLang, nextSlug));
-    setSlug(nextSlug);
+    setLocation({ lang: nextLang, slug: nextSlug });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -43,6 +66,10 @@ function DocsApp() {
   }
 
   const page = PAGE_BY_SLUG.get(slug);
+  const fromManagement = new URL(returnTarget).searchParams.get("view") === "management";
+  const returnLabel = fromManagement
+    ? selectedLang === "pt" ? "Voltar ao gerenciamento" : selectedLang === "es" ? "Volver a gestión" : "Back to management"
+    : selectedLang === "pt" ? "Voltar ao site" : selectedLang === "es" ? "Volver al sitio" : "Back to site";
   return (
     <div className="docs-shell">
       <header className="docs-header">
@@ -51,7 +78,7 @@ function DocsApp() {
           <span>Ziggs <small>DOCS</small></span>
         </a>
         <nav className="docs-header-actions" aria-label="Documentation actions">
-          <a href="/" className="docs-site-link">{selectedLang === "pt" ? "Abrir site" : selectedLang === "es" ? "Abrir sitio" : "Open site"}</a>
+          <a href={returnTarget} className="docs-site-link"><i className="ti ti-arrow-left" aria-hidden="true" /> <span>{returnLabel}</span></a>
           <select value={selectedLang} onChange={e => changeLang(e.target.value as DocsLocale)} aria-label="Language">
             {DOCS_LOCALES.map(locale => <option key={locale} value={locale}>{locale.toUpperCase()}</option>)}
           </select>

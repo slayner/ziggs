@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState, lazy, Suspense, Component, type ReactNode } from "react";
 import { useLocation, navigate, navigateReplace, goBack, parseBattleRoute, parsePlayerRoute, parseGuildRoute, parseEventRoute, parseRegearRoute, parseRegearEventFilter } from "./router";
 import { api, setGuild, onBackendDown, setBackendDown, NO_PERMS, type Me, type Permissions, type SiteGuild } from "./api";
-import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, REGION_LABELS, type Lang, type GameServer } from "./i18n";
+import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, REGION_LABELS, type Lang, type GameServer, type TKey } from "./i18n";
 import AdBanner from "./components/AdBanner";
 import CookieConsent from "./components/CookieConsent";
 import { TermsPage, PrivacyPage, CookiesPage, AboutPage, ContactPage } from "./components/LegalPages";
-import { DOCS_URL } from "./docs-url";
 
 // code-split por página: cada view só baixa seu próprio JS quando é aberta
 // pela primeira vez, em vez de tudo (CompBuilder ~2000 linhas incluso) no bundle inicial.
 const Dashboard = lazy(() => import("./components/Dashboard"));
 const CraftCalculator = lazy(() => import("./components/CraftCalculator"));
-const MarketPage = lazy(() => import("./components/MarketPage"));
 const BattleTracker = lazy(() => import("./components/BattleTracker"));
 const HighscoresPage = lazy(() => import("./components/HighscoresPage"));
 const BattlePage = lazy(() => import("./components/BattlePage"));
@@ -25,9 +23,17 @@ const ManagementPage = lazy(() => import("./components/ManagementPage"));
 const ClaimsPanel = lazy(() => import("./components/ClaimsPanel"));
 const CompanionPage = lazy(() => import("./components/CompanionPage"));
 
-type PublicView = "dashboard" | "craft" | "market" | "battles" | "highscores";
+type PublicView = "dashboard" | "craft" | "battles" | "highscores";
 type GuildView = "config" | "management";
 type View = PublicView | GuildView;
+
+const COMPANION_CTA_FEATURES: { icon: string; label: TKey }[] = [
+  { icon: "ti-radar-2", label: "companionFeatScanTitle" },
+  { icon: "ti-world-bolt", label: "companionFeatDnsTitle" },
+  { icon: "ti-route", label: "companionFeatTunnelTitle" },
+  { icon: "ti-clipboard-text", label: "companionFeatLootlogTitle" },
+  { icon: "ti-layout-bottombar", label: "companionFeatTrayTitle" },
+];
 
 // ponytail: boundary mínimo — sem ele, qualquer throw no render de uma página
 // (lazy ou não) derruba a árvore inteira e vira tela branca sem mensagem. Aqui
@@ -126,6 +132,8 @@ export default function App() {
   const t = useT();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [view, setView] = useState<View>("dashboard");
+  const [companionCtaIndex, setCompanionCtaIndex] = useState(0);
+  const [discordMenuMode, setDiscordMenuMode] = useState(() => sessionStorage.getItem("ziggs-discord-menu") === "1");
   // Deep link pro Highscores a partir do perfil de um jogador: /highscores?
   // kind=gather_wood&player=ID&rank=481&regions=americas. Abre na kind certa,
   // na página certa (calculada do rank) e destaca a linha do jogador. Sem
@@ -189,6 +197,22 @@ export default function App() {
   // URL própria; o App seta a view e os params, e limpa a URL em seguida pra
   // não ficar presa na barra de endereço.
   const hsDeep = loc.split("?")[0] === "/highscores";
+
+  useEffect(() => {
+    const query = loc.split("?")[1];
+    if (loc.split("?")[0] !== "/" || !query) return;
+    const returnView = new URLSearchParams(query).get("view");
+    if (returnView === "management" || returnView === "config") {
+      setView(returnView);
+      navigateReplace("/");
+    }
+  }, [loc]);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const id = setInterval(() => setCompanionCtaIndex(i => (i + 1) % COMPANION_CTA_FEATURES.length), 3200);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     // a página de batalha também mostra o topbar (login/idioma/servidor), então
@@ -308,7 +332,7 @@ export default function App() {
     else if (!guildRoute) {
       const map: Partial<Record<View, string>> = {
         battles: t("battles"),
-        highscores: t("highscores"), craft: t("craft"), market: t("market"),
+        highscores: t("highscores"), craft: t("craft"),
         management: t("management"), config: "Config",
       };
       label = map[view] ?? "";
@@ -365,6 +389,8 @@ export default function App() {
 
   async function logout() {
     await fetch("/auth/logout", { method: "POST", credentials: "include" });
+    sessionStorage.removeItem("ziggs-discord-menu");
+    setDiscordMenuMode(false);
     setMe(null); setSiteGuilds([]); setPerms(NO_PERMS);
     setView("dashboard");
   }
@@ -420,7 +446,30 @@ export default function App() {
       ).join(" · ")}. ${t("apiDelayHint")}`
     : "";
 
-  const userMenu = (
+  function engageDiscordMenu() {
+    sessionStorage.setItem("ziggs-discord-menu", "1");
+    setDiscordMenuMode(true);
+  }
+
+  const discordPromo = (!loggedIn || !discordMenuMode) ? (
+    <div className="discord-mini-promo">
+      {loggedIn ? (
+        <button type="button" onClick={() => { engageDiscordMenu(); setUserDropOpen(true); }}>
+          <span className="discord-mini-icon"><i className="ti ti-brand-discord" aria-hidden="true" /></span>
+          <span><strong>{t("discordPromoTitle")}</strong><small>{t("discordPromoLogged")}</small></span>
+          <i className="ti ti-chevron-right discord-mini-arrow" aria-hidden="true" />
+        </button>
+      ) : (
+        <a href="/auth/discord/login" onClick={engageDiscordMenu}>
+          <span className="discord-mini-icon"><i className="ti ti-brand-discord" aria-hidden="true" /></span>
+          <span><strong>{t("discordPromoTitle")}</strong><small>{t("discordPromoGuest")}</small></span>
+          <i className="ti ti-arrow-up-right discord-mini-arrow" aria-hidden="true" />
+        </a>
+      )}
+    </div>
+  ) : null;
+
+  const userMenu = (discordMenuMode || !loggedIn) ? (
     <div className="topbar-dropdown" ref={userRef}>
       <button className="topbar-dropdown-btn" onClick={() => { setUserDropOpen(o => !o); setUserPanel("main"); }}>
         <i className={`ti ${loggedIn ? "ti-user-circle" : "ti-settings"}`} />
@@ -532,9 +581,37 @@ export default function App() {
         </div>
       )}
     </div>
-  );
+  ) : null;
 
   // ── Conteúdo ─────────────────────────────────────────────────────────────
+  const companionCtaFeature = COMPANION_CTA_FEATURES[companionCtaIndex];
+  const companionCta = (
+    <button
+      type="button"
+      className={`companion-nav-cta${companionActive ? " active" : ""}`}
+      onClick={() => navigate("/download")}
+      aria-label={`${t("companionCtaLabel")}: ${t(companionCtaFeature.label)}`}
+    >
+      <span className="companion-nav-cta-orbit" aria-hidden="true"><i className="ti ti-device-desktop" /></span>
+      <span className="companion-nav-cta-copy">
+        <strong>{t("companionCtaLabel")}</strong>
+        <small key={companionCtaFeature.label}><i className={`ti ${companionCtaFeature.icon}`} aria-hidden="true" /> {t(companionCtaFeature.label)}</small>
+      </span>
+      <i className="ti ti-arrow-right companion-nav-cta-arrow" aria-hidden="true" />
+    </button>
+  );
+
+  const loginGate = (
+    <div className="login-gate">
+      <i className="ti ti-lock login-gate-icon" />
+      <p className="login-gate-title">{t("guildOnly")}</p>
+      <p className="login-gate-sub">{t("loginRequired")}</p>
+      <a className="btn btn-discord" href="/auth/discord/login">
+        <i className="ti ti-brand-discord" /> {t("loginDiscord")}
+      </a>
+    </div>
+  );
+
   let content: React.ReactNode;
 
   if (eventRoute) {
@@ -554,20 +631,15 @@ export default function App() {
   } else if (guildRoute) {
     content = <GuildProfilePage mode={guildRoute.type} albionId={guildRoute.albionId} onBack={goBack} />;
   } else if (pickingGuild && loggedIn) {
-    content = <GuildPicker onSelect={onGuildSelected} />;
-  } else if (!loggedIn && (view === "management" || view === "config")) {
-    content = (
-      <div className="login-gate">
-        <i className="ti ti-lock login-gate-icon" />
-        <p className="login-gate-title">{t("guildOnly")}</p>
-        <p className="login-gate-sub">{t("loginRequired")}</p>
-        <a className="btn btn-discord" href="/auth/discord/login">
-          <i className="ti ti-brand-discord" /> {t("loginDiscord")}
-        </a>
-      </div>
-    );
+    content = view === "management"
+      ? <ManagementPage perms={NO_PERMS} empty={<GuildPicker onSelect={onGuildSelected} />} />
+      : <GuildPicker onSelect={onGuildSelected} />;
+  } else if (!loggedIn && view === "management") {
+    content = <ManagementPage perms={NO_PERMS} empty={loginGate} />;
+  } else if (!loggedIn && view === "config") {
+    content = loginGate;
   } else if (loggedIn && view === "management" && !hasGuild) {
-    content = <GuildPicker onSelect={onGuildSelected} />;
+    content = <ManagementPage perms={NO_PERMS} empty={<GuildPicker onSelect={onGuildSelected} />} />;
   } else if (view === "dashboard") {
     content = (
       <Dashboard
@@ -585,7 +657,6 @@ export default function App() {
     initialRegions={hsParams?.regions || undefined}
   />; }
   else if (view === "craft")     { content = <CraftCalculator />; }
-  else if (view === "market")    { content = <MarketPage />; }
   else if (view === "management") { content = <ManagementPage guildId={me!.guild_id!} perms={perms} />; }
   else                           { content = <GuildConfig guildId={me!.guild_id!} onSwitch={() => setPickingGuild(true)} />; }
 
@@ -649,10 +720,8 @@ export default function App() {
 
   // abas visíveis baseadas em permissões
   const showConfig = loggedIn && hasGuild && perms["guild.admin"];
-  // management engloba comps/events/regear/lootlog/reconcile como abas internas
-  // (ver ManagementPage) — aparece pra quem tem acesso a qualquer uma delas.
-  const showManagement = loggedIn && hasGuild
-    && (perms["events.manage"] || perms["comps.view"] || perms["events.view"]);
+  // Management continua público como porta para Docs; as ferramentas internas
+  // seguem filtradas por permissão dentro de ManagementPage.
   const showGuildBox = !loggedIn || !hasGuild || hasAnyGuildPerm;
 
   return (
@@ -673,26 +742,22 @@ export default function App() {
           {nb("battles", "ti-shield-bolt",    t("battles"))}
           {nb("highscores", "ti-trophy",      t("highscores"))}
           {nb("craft",   "ti-hammer",         t("craft"))}
-          {nb("market",  "ti-chart-line",     t("market"))}
-          <button className={companionActive ? "active" : ""} onClick={() => navigate("/download")}>
-            <i className="ti ti-download" aria-hidden="true" /> {t("companionNav")}
-          </button>
-          <a className="nav-docs-link" href={DOCS_URL}>
-            <i className="ti ti-book-2" aria-hidden="true" /> {t("docsNav")}
-          </a>
         </nav>
 
         <div className="nav-sep" />
+
+        {companionCta}
 
         {showGuildBox && (
           <div className={`nav-guild-box${loggedIn && hasGuild && !hasAnyGuildPerm ? " locked" : (!loggedIn ? " locked" : "")}`}>
             {guildLabel}
             <nav className="nav">
-              {(showManagement || (!loggedIn || !hasGuild)) && nb("management", "ti-adjustments-alt", t("management"))}
+              {nb("management", "ti-adjustments-alt", t("management"))}
               {showConfig && nb("config", "ti-settings", t("config"))}
             </nav>
           </div>
         )}
+        {!showGuildBox && <nav className="nav">{nb("management", "ti-adjustments-alt", t("management"))}</nav>}
 
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           {selectedApiUnstable && (
@@ -734,6 +799,7 @@ export default function App() {
             </div>
           )}
           {serverQuickSwitch}
+          {discordPromo}
           {userMenu}
         </div>
       </div>
