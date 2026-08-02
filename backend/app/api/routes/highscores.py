@@ -476,6 +476,83 @@ def _compute_highlights(db: Session, region_list: list[str] | None) -> dict:
 # ── listas paginadas ────────────────────────────────────────────────────────
 
 _GUILD_KINDS = {"pvp_fame", "underdog", "efficiency", "most_battles"}
+# Kinds que suportam toggle de escopo jogador↔guilda no frontend.
+# pvp_fame/most_battles são guilda por padrão → scope=player agrega por BattleParticipant.
+# crafting é jogador por padrão → scope=guild soma AlbionPlayer.crafting_fame por guild_name.
+_PLAYER_SCOPE_KINDS = {"pvp_fame", "most_battles"}
+_GUILD_SCOPE_KINDS = {"crafting"}
+
+
+def _player_battle_rankings(
+    db: Session, kind: str, battle_filters: list,
+    search_term: str | None, limit: int, offset: int,
+) -> dict:
+    """scope=player para pvp_fame/most_battles: agrega BattleParticipant."""
+    if kind == "pvp_fame":
+        val_expr = func.sum(BattleParticipant.kill_fame)
+    else:  # most_battles
+        val_expr = func.count(func.distinct(BattleParticipant.battle_id))
+    rows = db.execute(
+        select(BattleParticipant.albion_player_id, val_expr.label("val"))
+        .join(Battle, Battle.id == BattleParticipant.battle_id)
+        .where(*battle_filters)
+        .group_by(BattleParticipant.albion_player_id)
+    ).all()
+    candidates = [(r.albion_player_id, int(r.val or 0)) for r in rows if r.val]
+    candidates.sort(key=lambda kv: kv[1], reverse=True)
+    ranked = list(enumerate(candidates, start=1))
+    if search_term:
+        matching_ids = set(db.scalars(
+            select(AlbionPlayer.albion_id).where(norm_sql(AlbionPlayer.name).like(f"%{norm_name(search_term)}%"))
+        ).all())
+        if not matching_ids:
+            return {"total": 0, "rows": []}
+        ranked = [(rank, c) for rank, c in ranked if c[0] in matching_ids]
+    total = len(ranked)
+    page = ranked[offset:offset + limit]
+    players = _player_info(db, [c[0] for _, c in page])
+    return {
+        "total": total,
+        "rows": [
+            {**_player_out(players.get(aid), aid), "value": v, "rank": rank}
+            for rank, (aid, v) in page
+        ],
+    }
+
+
+def _guild_gather_rankings(
+    db: Session, kind: str, region_list: list[str] | None,
+    search_term: str | None, limit: int, offset: int,
+) -> dict:
+    """scope=guild para crafting/gather: soma fama de AlbionPlayer por guild_name."""
+    col_name = _GATHER_KINDS[kind]
+    col = getattr(AlbionPlayer, col_name)
+    q = (
+        select(
+            AlbionPlayer.guild_name,
+            func.max(AlbionPlayer.alliance_name).label("alliance"),
+            func.sum(col).label("val"),
+        )
+        .where(col > 0, AlbionPlayer.guild_name.isnot(None), AlbionPlayer.guild_name != "")
+    )
+    if region_list:
+        q = q.where(AlbionPlayer.region.in_(region_list))
+    q = q.group_by(AlbionPlayer.guild_name)
+    rows = db.execute(q).all()
+    candidates = [(r.guild_name, r.alliance, int(r.val or 0)) for r in rows if r.val]
+    candidates.sort(key=lambda kv: kv[2], reverse=True)
+    ranked = list(enumerate(candidates, start=1))
+    if search_term:
+        ranked = [(rank, c) for rank, c in ranked if search_match(search_term, c[0])]
+    total = len(ranked)
+    page = ranked[offset:offset + limit]
+    return {
+        "total": total,
+        "rows": [
+            {"albion_guild_id": name, "name": name, "alliance_name": alliance, "value": v, "rank": rank}
+            for rank, (name, alliance, v) in page
+        ],
+    }
 
 
 def _filter_cached_rows(kind: str, rows: list[dict], search_term: str) -> list[dict]:
@@ -502,18 +579,20 @@ def highscore_rankings(
     search: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    scope: str = "default",
     db: Session = Depends(deps.db_session),
 ):
     """Servido do precompute de 5min (highscores_cache) para a forma comum —
     seleção de regiões conhecida, sem busca, página dentro do top-N. Busca,
-    páginas profundas e combinações raras de região caem no cálculo ao vivo
-    (`_compute_rankings`)."""
+    páginas profundas, combinações raras de região e scope não-default caem
+    no cálculo ao vivo (`_compute_rankings`)."""
     from app.models.dashboard_cache import DashboardCache
     from app.services import highscores_cache as hc
 
     region_list = _region_list(regions)
     search_term = search.strip().lower() if search else None
-    ckey = hc.rankings_cache_key(kind, window, region_list)
+    # scope não-default bypassa cache (precompute só cobre default).
+    ckey = hc.rankings_cache_key(kind, window, region_list) if scope == "default" else None
     if ckey:
         cached = db.get(DashboardCache, ckey)
         if cached is not None:
@@ -541,13 +620,19 @@ def highscore_rankings(
                 if total <= len(rows):
                     return {"total": 0, "rows": []}
 
-    return _compute_rankings(db, kind, region_list, _window_start(window), search_term, limit, offset)
+    return _compute_rankings(db, kind, region_list, _window_start(window), search_term, limit, offset, scope)
 
 
 def _compute_rankings(
     db: Session, kind: str, region_list: list[str] | None,
     week_start: datetime | None, search_term: str | None, limit: int, offset: int,
+    scope: str = "default",
 ) -> dict:
+    # scope=player em kinds de guilda de batalha: agrega por BattleParticipant.
+    if scope == "player" and kind in _PLAYER_SCOPE_KINDS:
+        battle_filters = _base_battle_filters(region_list, week_start)
+        return _player_battle_rankings(db, kind, battle_filters, search_term, limit, offset)
+
     if kind in _GUILD_KINDS:
         battle_filters = _base_battle_filters(region_list, week_start)
         if kind == "underdog":
@@ -580,6 +665,8 @@ def _compute_rankings(
 
     # ── kinds de coleta: agregação direta em albion_players ──────────────
     if kind in _GATHER_KINDS:
+        if scope == "guild":
+            return _guild_gather_rankings(db, kind, region_list, search_term, limit, offset)
         return _gather_ranking(db, kind, region_list, search_term, limit, offset)
     if kind == _SILVER_KIND:
         return _silver_ranking(db, region_list, search_term, limit, offset)

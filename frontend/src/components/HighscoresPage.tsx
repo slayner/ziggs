@@ -10,6 +10,8 @@ import GlobalSearch from "./GlobalSearch";
 const SERVER_TO_REGION: Record<GameServer, string> = { west: "americas", east: "asia", europe: "europe" };
 const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 const PAGE_SIZE = 10;
+const SCOPE_KINDS = new Set(["pvp_fame", "most_battles", "crafting"]);
+const GUILD_DEFAULT_KINDS = new Set(["pvp_fame", "most_battles"]);
 
 const wBase = (id: string) => id.replace(/^T\d+_/, "").replace(/@\d+$/, "");
 
@@ -425,6 +427,9 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
   }, []);
 
   const [kind, setKind] = useState<RankingKind>(initial.initialKind ?? "pvp_fame");
+  const [scopeView, setScopeView] = useState<"guild" | "player">(
+    GUILD_DEFAULT_KINDS.has(initial.initialKind ?? "pvp_fame") ? "guild" : "player",
+  );
   const [window_, setWindow] = useState<"alltime" | "week">(initial.initialWindow);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState<number>(initial.initialRank != null ? Math.floor((initial.initialRank - 1) / PAGE_SIZE) : 0);
@@ -432,12 +437,20 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const filtersRef = useRef({ kind, window_, search, regions });
+  const filtersRef = useRef({ kind, window_, search, regions, scopeView });
   useEffect(() => {
     const previous = filtersRef.current;
-    filtersRef.current = { kind, window_, search, regions };
-    if (previous.kind !== kind || previous.window_ !== window_ || previous.search !== search || previous.regions !== regions) setPage(0);
-  }, [kind, window_, search, regions]);
+    // Kind mudou → reset scopeView pro default do novo kind
+    if (previous.kind !== kind) {
+      setScopeView(GUILD_DEFAULT_KINDS.has(kind) ? "guild" : "player");
+    }
+    filtersRef.current = { kind, window_, search, regions, scopeView };
+    if (previous.kind !== kind || previous.window_ !== window_ || previous.search !== search || previous.regions !== regions || previous.scopeView !== scopeView) setPage(0);
+  }, [kind, window_, search, regions, scopeView]);
+
+  const apiScope = !SCOPE_KINDS.has(kind) ? "default"
+    : GUILD_DEFAULT_KINDS.has(kind) ? (scopeView === "player" ? "player" : "default")
+    : (scopeView === "guild" ? "guild" : "default");
 
   useEffect(() => {
     setLoading(true);
@@ -445,6 +458,7 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
       kind, regions, window: window_, limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE),
     });
     if (search) params.set("search", search);
+    if (apiScope !== "default") params.set("scope", apiScope);
     let alive = true;
     fetch(`${API}/highscores/rankings?${params}`)
       .then(r => r.json())
@@ -452,7 +466,7 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
       .catch(() => { if (alive) { setRows([]); setTotal(0); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [kind, window_, search, page, regions]);
+  }, [kind, window_, search, page, regions, apiScope]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const pageNums = useMemo(() => {
@@ -471,6 +485,16 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
       {rows === null ? <FilterRowSkeleton /> : (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <RankingTypeSelect kind={kind} onChange={setKind} weapons={weapons} />
+          {SCOPE_KINDS.has(kind) && (
+            <div className="flex overflow-hidden rounded-lg border border-zinc-700">
+              <button onClick={() => setScopeView("guild")} className={`px-3 py-1.5 text-xs ${scopeView === "guild" ? "bg-amber-500/10 text-amber-300" : "text-zinc-400 hover:text-zinc-200"}`}>
+                <i className="ti ti-building-community" style={{ fontSize: 12 }} /> {t("highscoreScopeGuild")}
+              </button>
+              <button onClick={() => setScopeView("player")} className={`px-3 py-1.5 text-xs ${scopeView === "player" ? "bg-amber-500/10 text-amber-300" : "text-zinc-400 hover:text-zinc-200"}`}>
+                <i className="ti ti-user" style={{ fontSize: 12 }} /> {t("highscoreScopePlayer")}
+              </button>
+            </div>
+          )}
           <select
             value={window_}
             onChange={e => setWindow(e.target.value as "alltime" | "week")}
