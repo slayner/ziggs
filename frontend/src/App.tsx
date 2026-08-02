@@ -22,6 +22,7 @@ const RegearPage = lazy(() => import("./components/RegearPage"));
 const ManagementPage = lazy(() => import("./components/ManagementPage"));
 const ClaimsPanel = lazy(() => import("./components/ClaimsPanel"));
 const CompanionPage = lazy(() => import("./components/CompanionPage"));
+const GuildSetup = lazy(() => import("./components/GuildSetup"));
 
 type PublicView = "dashboard" | "craft" | "battles" | "highscores";
 type GuildView = "config" | "management";
@@ -287,7 +288,9 @@ export default function App() {
   const loggedIn = me !== null;
   const botGuilds     = siteGuilds.filter(g => g.bot_present);
   const currentGuild  = botGuilds.find(g => g.id === me?.guild_id) ?? null;
+  const userGuild     = siteGuilds.find(g => g.id === me?.guild_id) ?? null;
   const hasGuild      = !!me?.guild_id && !!currentGuild;
+  const needsSetup    = !!userGuild && (!userGuild.bot_present || !userGuild.albion_guild_name);
   const multiGuild    = botGuilds.length > 1;
   const hasAnyGuildPerm = Object.values(perms).some(Boolean);
 
@@ -295,7 +298,7 @@ export default function App() {
   // (sem deep link de rota, sem picker aberto, logado com guilda). Fora disso
   // as duas continuam montadas mas escondidas (display:none), preservando estado.
   const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive && !legalPage;
-  const useKeepAlive = loggedIn && hasGuild && !pickingGuild && noRoute && (view === "management" || view === "config");
+  const useKeepAlive = loggedIn && hasGuild && !needsSetup && !pickingGuild && noRoute && (view === "management" || view === "config");
   // Deep links escalacao/regear ativos no momento (definem qual keep-alive show).
   const escActive = !!eventRoute;
   const regearActive = !!regearRoute || !!(regearEventFilter && me?.guild_id);
@@ -613,6 +616,21 @@ export default function App() {
     content = <ManagementPage perms={NO_PERMS} empty={loginGate} />;
   } else if (!loggedIn && view === "config") {
     content = loginGate;
+  } else if (loggedIn && needsSetup && (view === "management" || view === "config")) {
+    content = (
+      <Suspense fallback={null}>
+        <GuildSetup
+          guildId={me!.guild_id!}
+          guildName={userGuild!.name}
+          botPresent={userGuild!.bot_present}
+          hasAlbionName={!!userGuild!.albion_guild_name}
+          onSwitch={() => setPickingGuild(true)}
+          onComplete={() => {
+            api.mySiteGuilds().then(gs => { setSiteGuilds(gs); setView("config"); });
+          }}
+        />
+      </Suspense>
+    );
   } else if (loggedIn && view === "management" && !hasGuild) {
     content = <ManagementPage perms={NO_PERMS} empty={<GuildPicker onSelect={onGuildSelected} />} />;
   } else if (view === "dashboard") {

@@ -4,7 +4,7 @@ import { useLang, useT, REGION_LABELS, LANG_FULL, type Lang, type TKey } from ".
 import { ALBION_ITEMS, itemRenderUrl } from "../data/albion-items";
 import { Panel } from "./Panel";
 
-const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
+export const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
 const JUICY_KILL_HARD_FLOOR = 20_000_000;
 
 // ── Itens desabilitados do regear: o backend guarda por BASE ID (sem tier/
@@ -980,6 +980,28 @@ async function saveJuicyKillMinSilver() {
               ))}
             </select>
           </div>
+
+          <div className="flex items-center gap-2 mb-3">
+            <label className="text-xs text-zinc-500">{t("albionGuildTitle")}</label>
+            <input
+              value={albionName}
+              onChange={e => { setAlbionName(e.target.value); setAlbionNotFound(false); }}
+              onBlur={() => void saveAlbion()}
+              placeholder={t("guildNamePlaceholder")}
+              className="flex-1 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-amber-500 placeholder:text-zinc-600"
+            />
+            <select
+              value={albionRegion}
+              onChange={e => { setAlbionRegion(e.target.value); void saveAlbion(); }}
+              className="w-28 shrink-0 rounded-md border border-zinc-700 bg-zinc-800 px-1 py-1 text-xs text-zinc-200"
+            >
+              <option value="">{t("albionRegionAuto")}</option>
+              {ALBION_REGIONS.map(r => (
+                <option key={r} value={r}>{REGION_LABELS[lang][r]}</option>
+              ))}
+            </select>
+          </div>
+          {albionNotFound && <p className="text-xs text-red-400 mb-2">{t("albionGuildNotFound")}</p>}
 
           {guild.bot_present ? (
             <p className="text-xs text-zinc-500">

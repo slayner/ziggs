@@ -53,6 +53,8 @@ const S = {
     setupTitle: "Configuração", activeServer: "Servidor ativo:",
     discordBotSetupDesc: "Adicione o Ziggs ao seu servidor para sincronizar eventos, regears e membros automaticamente.",
     switchServerDescSetup: "Selecione outro servidor Discord para gerenciar com o Ziggs.",
+    setupAlbionGuild: "Guilda no Albion", setupAlreadyConfigured: "Já configurado",
+    setupFinish: "Concluir", setupFinishBtn: "Finalizar setup", setupFinishPending: "Complete os passos acima primeiro",
 
     // GuildPicker
     guildPickerTitle: "Selecione seu servidor",
@@ -797,8 +799,10 @@ const S = {
     loginHint: "Discord login only · free and premium versions",
 
     setupTitle: "Setup", activeServer: "Active server:",
-    discordBotSetupDesc: "Add Ziggs to your server to automatically sync events, regears, and members.",
+    discordBotSetupDesc: "Add Ziggs to your server to sync events, regears and members automatically.",
     switchServerDescSetup: "Select another Discord server to manage with Ziggs.",
+    setupAlbionGuild: "Albion Guild", setupAlreadyConfigured: "Already configured",
+    setupFinish: "Finish", setupFinishBtn: "Finish setup", setupFinishPending: "Complete the steps above first",
 
     guildPickerTitle: "Select your server",
     guildPickerSubSetup: "Discord servers with Ziggs active.",
@@ -1539,6 +1543,8 @@ const S = {
     setupTitle: "Configuración", activeServer: "Servidor activo:",
     discordBotSetupDesc: "Añade Ziggs a tu servidor para sincronizar eventos, regears y miembros automáticamente.",
     switchServerDescSetup: "Selecciona otro servidor de Discord para gestionar con Ziggs.",
+    setupAlbionGuild: "Guild en Albion", setupAlreadyConfigured: "Ya configurado",
+    setupFinish: "Finalizar", setupFinishBtn: "Finalizar configuración", setupFinishPending: "Completa los pasos anteriores primero",
 
     guildPickerTitle: "Selecciona tu servidor",
     guildPickerSubSetup: "Servidores de Discord con Ziggs activo.",
