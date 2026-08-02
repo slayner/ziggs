@@ -39,8 +39,8 @@ function readDocsReturnTarget(): string {
 
 function DocsApp() {
   const { lang, setLang } = useLang();
-  const location = readDocsLocation();
-  const [slug, setSlug] = useState(location.slug);
+  const [location, setLocation] = useState(readDocsLocation);
+  const { slug } = location;
   const [returnTarget] = useState(readDocsReturnTarget);
   const selectedLang = location.lang ?? lang;
 
@@ -49,14 +49,14 @@ function DocsApp() {
   }, [lang, location.lang, setLang]);
 
   useEffect(() => {
-    const onPopState = () => setSlug(readDocsLocation().slug);
+    const onPopState = () => setLocation(readDocsLocation());
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
   function go(nextSlug: string, nextLang = selectedLang) {
     window.history.pushState({}, "", docsPath(nextLang, nextSlug));
-    setSlug(nextSlug);
+    setLocation({ lang: nextLang, slug: nextSlug });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 

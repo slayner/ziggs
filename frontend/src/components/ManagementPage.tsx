@@ -1,4 +1,4 @@
-import { lazy, useEffect, useState } from "react";
+import { lazy, useEffect, useState, type ReactNode } from "react";
 import { useT, type TKey } from "../i18n";
 import { api, type Permissions } from "../api";
 import { DOCS_URL } from "../docs-url";
@@ -9,7 +9,7 @@ const EventsPage = lazy(() => import("./EventsPage"));
 const RegearPage = lazy(() => import("./RegearPage"));
 const ReconcileSection = lazy(() => import("./ReconcileSection"));
 
-interface Props { guildId: string; perms: Permissions; active?: boolean }
+interface Props { guildId?: string; perms: Permissions; active?: boolean; empty?: ReactNode }
 
 type Tab = "comps" | "events" | "regear" | "reconcile";
 
@@ -23,13 +23,14 @@ const TABS: { id: Tab; icon: string; label: TKey; desc: TKey; show: (p: Permissi
   { id: "reconcile", icon: "ti-scale",           label: "rec",    desc: "managementReconcileDesc", show: p => p["events.manage"] },
 ];
 
-export default function ManagementPage({ guildId, perms, active = true }: Props) {
+export default function ManagementPage({ guildId, perms, active = true, empty }: Props) {
   const t = useT();
   const [eventsActive, setEventsActive] = useState(true); // otimista até o fetch resolver — evita esconder a aba num flash
   useEffect(() => {
+    if (!guildId) return;
     api.guildInfo(guildId).then(g => setEventsActive(!!g.settings.events_channel_id)).catch(() => {});
   }, [guildId]);
-  const visible = TABS.filter(tb => tb.show(perms, eventsActive));
+  const visible = guildId ? TABS.filter(tb => tb.show(perms, eventsActive)) : [];
   const [tab, setTab] = useState<Tab | null>(null);
   // activeTab = sub-aba ativa (id). `active` (prop) = visibilidade no App
   // (keep-alive) — repassada pro RegearPage pra pausar o poll de 15s quando
@@ -56,8 +57,25 @@ export default function ManagementPage({ guildId, perms, active = true }: Props)
     return url.toString();
   })();
 
+  const docsLink = (index: number) => (
+    <a className="management-docs-link" href={docsHref}
+      onClick={() => sessionStorage.setItem("ziggs-docs-origin", docsOrigin)}>
+      <span className="management-rail-index">{String(index).padStart(2, "0")}</span>
+      <i className="ti ti-book-2" aria-hidden="true" />
+      <span><strong>{t("docsNav")}</strong><small>{t("managementDocsDesc")}</small></span>
+      <i className="ti ti-arrow-up-right management-external" aria-hidden="true" />
+    </a>
+  );
+
   if (visible.length === 0) {
-    return <div className="lootlog-page"><p className="hint">{t("escNoAccess")}</p></div>;
+    return (
+      <div className="lootlog-page management-shell">
+        <div className="management-layout">
+          <aside className="management-rail" aria-label={t("management")}>{docsLink(1)}</aside>
+          <div className="management-workspace">{empty ?? <p className="hint">{t("escNoAccess")}</p>}</div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -87,13 +105,7 @@ export default function ManagementPage({ guildId, perms, active = true }: Props)
                   <span><strong>{t(tb.label)}</strong><small>{t(tb.desc)}</small></span>
                 </button>
               ))}
-              <a className="management-docs-link" href={docsHref}
-                onClick={() => sessionStorage.setItem("ziggs-docs-origin", docsOrigin)}>
-                <span className="management-rail-index">{String(visible.length + 1).padStart(2, "0")}</span>
-                <i className="ti ti-book-2" aria-hidden="true" />
-                <span><strong>{t("docsNav")}</strong><small>{t("managementDocsDesc")}</small></span>
-                <i className="ti ti-arrow-up-right management-external" aria-hidden="true" />
-              </a>
+              {docsLink(visible.length + 1)}
             </aside>
             <AdBanner variant="skyscraper" />
           </div>
@@ -114,8 +126,8 @@ export default function ManagementPage({ guildId, perms, active = true }: Props)
               <div key={tb.id} style={activeTab === tb.id ? undefined : { display: "none" }}>
                 {tb.id === "comps" && <CompBuilder perms={perms} onOpenChange={setCompOpen} />}
                 {tb.id === "events" && <EventsPage perms={perms} active={active && activeTab === tb.id} />}
-                {tb.id === "regear" && <RegearPage guildId={guildId} active={active && activeTab === tb.id} />}
-                {tb.id === "reconcile" && <ReconcileSection guildId={guildId} />}
+                {tb.id === "regear" && <RegearPage guildId={guildId!} active={active && activeTab === tb.id} />}
+                {tb.id === "reconcile" && <ReconcileSection guildId={guildId!} />}
               </div>
             );
           })}

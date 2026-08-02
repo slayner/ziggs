@@ -132,7 +132,7 @@ export default function App() {
   const { server, setServer, servers, toggleServer } = useServer();
   const t = useT();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
-  const [view, setView] = useState<View>(() => window.location.pathname === "/market" ? "market" : "dashboard");
+  const [view, setView] = useState<View>("dashboard");
   const [companionCtaIndex, setCompanionCtaIndex] = useState(0);
   const [discordMenuMode, setDiscordMenuMode] = useState(() => sessionStorage.getItem("ziggs-discord-menu") === "1");
   // Deep link pro Highscores a partir do perfil de um jogador: /highscores?
@@ -209,11 +209,6 @@ export default function App() {
       navigateReplace("/");
     }
   }, [loc]);
-
-  useEffect(() => {
-    if (!marketDeep) return;
-    setView("market");
-  }, [marketDeep]);
 
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -301,7 +296,7 @@ export default function App() {
   // Keep-alive ativo quando estamos mostrando management ou config direto
   // (sem deep link de rota, sem picker aberto, logado com guilda). Fora disso
   // as duas continuam montadas mas escondidas (display:none), preservando estado.
-  const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive && !legalPage;
+  const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive && !marketDeep && !legalPage;
   const useKeepAlive = loggedIn && hasGuild && !pickingGuild && noRoute && (view === "management" || view === "config");
   // Deep links escalacao/regear ativos no momento (definem qual keep-alive show).
   const escActive = !!eventRoute;
@@ -334,6 +329,7 @@ export default function App() {
   useEffect(() => {
     let label = "";
     if (companionActive) label = t("companionNav");
+    else if (marketDeep) label = t("market");
     else if (battleRoute) label = t("battles");
     else if (playerRoute) label = playerRoute.name || t("players");
     else if (!guildRoute) {
@@ -345,7 +341,7 @@ export default function App() {
       label = map[view] ?? "";
     }
     document.title = label ? `${label} · Ziggs` : "Ziggs — Controle de guildas de Albion";
-  }, [view, companionActive, battleRoute, playerRoute, guildRoute, t]);
+  }, [view, companionActive, marketDeep, battleRoute, playerRoute, guildRoute, t]);
 
   // Banner "backend fora do ar": api.ts marca down em falha de rede; aqui
   // mostramos o aviso e fazemos poll de /health até voltar.
@@ -424,7 +420,7 @@ export default function App() {
   }
 
   const nb = (v: View, icon: string, label: string) => (
-    <button className={!battleRoute && !playerRoute && !guildRoute && !companionActive && view === v ? "active" : ""} onClick={() => { navigate("/"); setView(v); }}>
+    <button className={!battleRoute && !playerRoute && !guildRoute && !companionActive && !marketDeep && view === v ? "active" : ""} onClick={() => { navigate("/"); setView(v); }}>
       <i className={`ti ${icon}`} aria-hidden="true" /> {label}
     </button>
   );
@@ -458,7 +454,7 @@ export default function App() {
     setDiscordMenuMode(true);
   }
 
-  const discordPromo = !discordMenuMode ? (
+  const discordPromo = (!loggedIn || !discordMenuMode) ? (
     <div className="discord-mini-promo">
       {loggedIn ? (
         <button type="button" onClick={() => { engageDiscordMenu(); setUserDropOpen(true); }}>
@@ -608,6 +604,17 @@ export default function App() {
     </button>
   );
 
+  const loginGate = (
+    <div className="login-gate">
+      <i className="ti ti-lock login-gate-icon" />
+      <p className="login-gate-title">{t("guildOnly")}</p>
+      <p className="login-gate-sub">{t("loginRequired")}</p>
+      <a className="btn btn-discord" href="/auth/discord/login">
+        <i className="ti ti-brand-discord" /> {t("loginDiscord")}
+      </a>
+    </div>
+  );
+
   let content: React.ReactNode;
 
   if (eventRoute) {
@@ -626,21 +633,18 @@ export default function App() {
     content = <PlayerProfilePage region={playerRoute.region} name={playerRoute.name} activityId={playerRoute.activityId} onBack={goBack} />;
   } else if (guildRoute) {
     content = <GuildProfilePage mode={guildRoute.type} albionId={guildRoute.albionId} onBack={goBack} />;
+  } else if (marketDeep) {
+    content = <MarketPage />;
   } else if (pickingGuild && loggedIn) {
-    content = <GuildPicker onSelect={onGuildSelected} />;
-  } else if (!loggedIn && (view === "management" || view === "config")) {
-    content = (
-      <div className="login-gate">
-        <i className="ti ti-lock login-gate-icon" />
-        <p className="login-gate-title">{t("guildOnly")}</p>
-        <p className="login-gate-sub">{t("loginRequired")}</p>
-        <a className="btn btn-discord" href="/auth/discord/login">
-          <i className="ti ti-brand-discord" /> {t("loginDiscord")}
-        </a>
-      </div>
-    );
+    content = view === "management"
+      ? <ManagementPage perms={NO_PERMS} empty={<GuildPicker onSelect={onGuildSelected} />} />
+      : <GuildPicker onSelect={onGuildSelected} />;
+  } else if (!loggedIn && view === "management") {
+    content = <ManagementPage perms={NO_PERMS} empty={loginGate} />;
+  } else if (!loggedIn && view === "config") {
+    content = loginGate;
   } else if (loggedIn && view === "management" && !hasGuild) {
-    content = <GuildPicker onSelect={onGuildSelected} />;
+    content = <ManagementPage perms={NO_PERMS} empty={<GuildPicker onSelect={onGuildSelected} />} />;
   } else if (view === "dashboard") {
     content = (
       <Dashboard
@@ -722,10 +726,8 @@ export default function App() {
 
   // abas visíveis baseadas em permissões
   const showConfig = loggedIn && hasGuild && perms["guild.admin"];
-  // management engloba comps/events/regear/lootlog/reconcile como abas internas
-  // (ver ManagementPage) — aparece pra quem tem acesso a qualquer uma delas.
-  const showManagement = loggedIn && hasGuild
-    && (perms["events.manage"] || perms["comps.view"] || perms["events.view"]);
+  // Management continua público como porta para Docs; as ferramentas internas
+  // seguem filtradas por permissão dentro de ManagementPage.
   const showGuildBox = !loggedIn || !hasGuild || hasAnyGuildPerm;
 
   return (
@@ -756,11 +758,12 @@ export default function App() {
           <div className={`nav-guild-box${loggedIn && hasGuild && !hasAnyGuildPerm ? " locked" : (!loggedIn ? " locked" : "")}`}>
             {guildLabel}
             <nav className="nav">
-              {(showManagement || (!loggedIn || !hasGuild)) && nb("management", "ti-adjustments-alt", t("management"))}
+              {nb("management", "ti-adjustments-alt", t("management"))}
               {showConfig && nb("config", "ti-settings", t("config"))}
             </nav>
           </div>
         )}
+        {!showGuildBox && <nav className="nav">{nb("management", "ti-adjustments-alt", t("management"))}</nav>}
 
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           {selectedApiUnstable && (
