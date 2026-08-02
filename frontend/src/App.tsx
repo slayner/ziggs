@@ -133,7 +133,7 @@ export default function App() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [view, setView] = useState<View>("dashboard");
   const [companionCtaIndex, setCompanionCtaIndex] = useState(0);
-  const [discordMenuMode, setDiscordMenuMode] = useState(() => sessionStorage.getItem("ziggs-discord-menu") === "1");
+
   // Deep link pro Highscores a partir do perfil de um jogador: /highscores?
   // kind=gather_wood&player=ID&rank=481&regions=americas. Abre na kind certa,
   // na página certa (calculada do rank) e destaca a linha do jogador. Sem
@@ -389,8 +389,6 @@ export default function App() {
 
   async function logout() {
     await fetch("/auth/logout", { method: "POST", credentials: "include" });
-    sessionStorage.removeItem("ziggs-discord-menu");
-    setDiscordMenuMode(false);
     setMe(null); setSiteGuilds([]); setPerms(NO_PERMS);
     setView("dashboard");
   }
@@ -446,30 +444,7 @@ export default function App() {
       ).join(" · ")}. ${t("apiDelayHint")}`
     : "";
 
-  function engageDiscordMenu() {
-    sessionStorage.setItem("ziggs-discord-menu", "1");
-    setDiscordMenuMode(true);
-  }
-
-  const discordPromo = (!loggedIn || !discordMenuMode) ? (
-    <div className="discord-mini-promo">
-      {loggedIn ? (
-        <button type="button" onClick={() => { engageDiscordMenu(); setUserDropOpen(true); }}>
-          <span className="discord-mini-icon"><i className="ti ti-brand-discord" aria-hidden="true" /></span>
-          <span><strong>{t("discordPromoTitle")}</strong><small>{t("discordPromoLogged")}</small></span>
-          <i className="ti ti-chevron-right discord-mini-arrow" aria-hidden="true" />
-        </button>
-      ) : (
-        <a href="/auth/discord/login" onClick={engageDiscordMenu}>
-          <span className="discord-mini-icon"><i className="ti ti-brand-discord" aria-hidden="true" /></span>
-          <span><strong>{t("discordPromoTitle")}</strong><small>{t("discordPromoGuest")}</small></span>
-          <i className="ti ti-arrow-up-right discord-mini-arrow" aria-hidden="true" />
-        </a>
-      )}
-    </div>
-  ) : null;
-
-  const userMenu = (discordMenuMode || !loggedIn) ? (
+  const userMenu = (
     <div className="topbar-dropdown" ref={userRef}>
       <button className="topbar-dropdown-btn" onClick={() => { setUserDropOpen(o => !o); setUserPanel("main"); }}>
         <i className={`ti ${loggedIn ? "ti-user-circle" : "ti-settings"}`} />
@@ -581,7 +556,7 @@ export default function App() {
         </div>
       )}
     </div>
-  ) : null;
+  );
 
   // ── Conteúdo ─────────────────────────────────────────────────────────────
   const companionCtaFeature = COMPANION_CTA_FEATURES[companionCtaIndex];
@@ -732,21 +707,18 @@ export default function App() {
         </div>
       )}
       <div className="topbar">
-        <div className="brand">
+        <button className="brand" onClick={() => { navigate("/"); setView("dashboard"); }} title={t("dashboard")}>
           <span className="logo"><i className="ti ti-shield-half" /></span>
           Ziggs
-        </div>
+        </button>
 
         <nav className="nav nav-public">
-          {nb("dashboard", "ti-home",         t("dashboard"))}
           {nb("battles", "ti-shield-bolt",    t("battles"))}
           {nb("highscores", "ti-trophy",      t("highscores"))}
           {nb("craft",   "ti-hammer",         t("craft"))}
         </nav>
 
         <div className="nav-sep" />
-
-        {companionCta}
 
         {showGuildBox && (
           <div className={`nav-guild-box${loggedIn && hasGuild && !hasAnyGuildPerm ? " locked" : (!loggedIn ? " locked" : "")}`}>
@@ -799,7 +771,7 @@ export default function App() {
             </div>
           )}
           {serverQuickSwitch}
-          {discordPromo}
+          {companionCta}
           {userMenu}
         </div>
       </div>
