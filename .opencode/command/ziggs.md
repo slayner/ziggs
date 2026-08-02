@@ -41,20 +41,18 @@ thread). Create one worker per task:
 
 1. `traycer_create_agent` — a GUI child. Pick **model by difficulty** (cheapest
    tier that can plausibly finish correctly), per the **Agent Selection Guide**
-   tiers — don't default to the strongest model for everything:
-   - **Hard** `zai-coding-plan:glm-5.2` (reasoning `high`) — substantial/mature/
-     sensitive work (prices, companion, auth, migrations, lootlog), design choices.
-   - **Medium** `zai-coding-plan:glm-5-turbo` — clear bounded single-file work,
-     mechanical refactors, well-specified cleanup. (No `reasoningEffort` param.)
-   - **Easy / free** `opencode:deepseek-v4-flash-free` (reasoning `high`) or
-     `opencode:big-pickle` — grep-and-report, doc edits, one-liners, trivial
-     lookups. Never for mature areas or migrations.
+   tiers. Each tier has a **fallback chain** — if the first provider fails, retry
+   with the next (see Step 4.5 — Failover below).
+   - **Hard** (try in order): `opencode`/`zai-coding-plan:glm-5.2` → `opencode`/`ollama-cloud:glm-5.2` → `hermes`/`ollama-cloud:glm-5.2` → `codex`/`gpt-5.6-sol`
+   - **Medium**: `opencode`/`zai-coding-plan:glm-5-turbo` → `opencode`/`ollama-cloud:kimi-k2.7-code` → `hermes`/`ollama-cloud:kimi-k2.7-code` → `codex`/`gpt-5.6-luna`
+   - **Easy**: `opencode`/`ollama-cloud:deepseek-v4-pro` → `hermes`/`ollama-cloud:deepseek-v4-pro` → `opencode`/`zai-coding-plan:glm-4.7` → `codex`/`gpt-5.6-terra`
    - `permissionMode: "auto_accept_edits"` (or `"full_access"` if it needs bash/
      git — e.g. to run typecheck/build). Give it a short name from the task.
    - Only pass `reasoningEffort` for models that list it in
-     `traycer_list_harness_models` (`glm-5.2`, `deepseek-v4-flash-free`).
-   - When in doubt Medium vs Hard, start Medium — the `NEEDS_ESCALATION` path
-     lets you promote via `traycer_configure_agent` if it gets stuck.
+     `traycer_list_harness_models`. When unsure, omit — the creation fails
+     cleanly and you retry with the param removed.
+   - When in doubt Medium vs Hard, start Medium — the failover + `NEEDS_ESCALATION`
+     path lets you promote if the worker gets stuck.
 2. `traycer_send_message` to the new agent id with `expectReply: true`, sending
    the **worker briefing** below filled in. This is the single source of truth
    for budget + escalation — copy it verbatim into the message.
@@ -93,6 +91,32 @@ ESCALATION:
 Defaults: `permissionMode: auto_accept_edits` (bump to `full_access` if the task
 needs shell/git), and model by difficulty per Step 4. Keep the briefing tight —
 a worker that re-reads AGENTS.md and gets a crisp ceiling needs little else.
+
+## Step 4.5 — Failover (agent failed)
+
+After delegating, you may receive a signal that the worker **failed** (not
+struggled with the task — genuinely failed to run). Detect failure from:
+
+- System message: *"ran into an error before replying"* / *"Payment Required"* /
+  *"Insufficient credits"* → provider error.
+- Agent goes idle without replying → stuck/lost connection.
+- Agent replies but `traycer_get_transcript` shows NO meaningful work (no edits,
+  no tool calls) → silent token exhaustion (common with z.ai-coding-plan).
+
+**Do NOT failover** if the agent did real work but hit a legitimate blocker
+(scope too tight, missing info) — that's `NEEDS_ESCALATION` (Step 5), not
+failover.
+
+### Failover procedure
+
+1. Note the failed `(harness, model)` and which tier it was.
+2. Pick the **next** entry in that tier's fallback chain (Step 4).
+3. Create a **new** agent (`traycer_create_agent`) with the next provider —
+   same workspace, same tier, same permission mode. Do NOT reuse the failed
+   agent id.
+4. Re-send the **same briefing** via `traycer_send_message` with `expectReply: true`.
+5. If **all** providers in the tier fail → escalate to the user (report which
+   providers were tried, don't loop).
 
 ## Step 5 — Handle the reply
 

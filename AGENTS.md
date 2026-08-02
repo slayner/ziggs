@@ -19,7 +19,10 @@ O dispatcher tria em 3 faixas: **trivial** (resolve inline), **vago/área madura
 (manda pro intake clarificar), ou **claro+substancial** (delega pra um worker).
 O worker é um Traycer child agent (`traycer_create_agent` + `traycer_send_message`
 com `expectReply: true`) e recebe no briefing: teto de escopo, orçamento de
-tentativas, e o critério de "pronto". Se o trabalho ultrapassar esse teto, o
+tentativas, e o critério de "pronto". Cada tier tem **4 providers** em cadeia
+de fallback — se um falhar (tokens esgotados, conexão perdida), o dispatcher
+detecta e recria com o próximo provider do mesmo tier (ver Step 4.5 do
+`.opencode/command/ziggs.md`). Se o trabalho ultrapassar esse teto, o
 worker para e devolve `NEEDS_ESCALATION` com evidências (o que tentou, onde
 travou, próximo passo mínimo); ele não amplia escopo nem continua tentando em
 silêncio. O agente pai decide entre fornecer contexto, perguntar ao usuário ou
