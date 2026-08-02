@@ -10,7 +10,6 @@ import { TermsPage, PrivacyPage, CookiesPage, AboutPage, ContactPage } from "./c
 // pela primeira vez, em vez de tudo (CompBuilder ~2000 linhas incluso) no bundle inicial.
 const Dashboard = lazy(() => import("./components/Dashboard"));
 const CraftCalculator = lazy(() => import("./components/CraftCalculator"));
-const MarketPage = lazy(() => import("./components/MarketPage"));
 const BattleTracker = lazy(() => import("./components/BattleTracker"));
 const HighscoresPage = lazy(() => import("./components/HighscoresPage"));
 const BattlePage = lazy(() => import("./components/BattlePage"));
@@ -24,7 +23,7 @@ const ManagementPage = lazy(() => import("./components/ManagementPage"));
 const ClaimsPanel = lazy(() => import("./components/ClaimsPanel"));
 const CompanionPage = lazy(() => import("./components/CompanionPage"));
 
-type PublicView = "dashboard" | "craft" | "market" | "battles" | "highscores";
+type PublicView = "dashboard" | "craft" | "battles" | "highscores";
 type GuildView = "config" | "management";
 type View = PublicView | GuildView;
 
@@ -198,7 +197,6 @@ export default function App() {
   // URL própria; o App seta a view e os params, e limpa a URL em seguida pra
   // não ficar presa na barra de endereço.
   const hsDeep = loc.split("?")[0] === "/highscores";
-  const marketDeep = loc.split("?")[0] === "/market";
 
   useEffect(() => {
     const query = loc.split("?")[1];
@@ -296,7 +294,7 @@ export default function App() {
   // Keep-alive ativo quando estamos mostrando management ou config direto
   // (sem deep link de rota, sem picker aberto, logado com guilda). Fora disso
   // as duas continuam montadas mas escondidas (display:none), preservando estado.
-  const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive && !marketDeep && !legalPage;
+  const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive && !legalPage;
   const useKeepAlive = loggedIn && hasGuild && !pickingGuild && noRoute && (view === "management" || view === "config");
   // Deep links escalacao/regear ativos no momento (definem qual keep-alive show).
   const escActive = !!eventRoute;
@@ -329,19 +327,18 @@ export default function App() {
   useEffect(() => {
     let label = "";
     if (companionActive) label = t("companionNav");
-    else if (marketDeep) label = t("market");
     else if (battleRoute) label = t("battles");
     else if (playerRoute) label = playerRoute.name || t("players");
     else if (!guildRoute) {
       const map: Partial<Record<View, string>> = {
         battles: t("battles"),
-        highscores: t("highscores"), craft: t("craft"), market: t("market"),
+        highscores: t("highscores"), craft: t("craft"),
         management: t("management"), config: "Config",
       };
       label = map[view] ?? "";
     }
     document.title = label ? `${label} · Ziggs` : "Ziggs — Controle de guildas de Albion";
-  }, [view, companionActive, marketDeep, battleRoute, playerRoute, guildRoute, t]);
+  }, [view, companionActive, battleRoute, playerRoute, guildRoute, t]);
 
   // Banner "backend fora do ar": api.ts marca down em falha de rede; aqui
   // mostramos o aviso e fazemos poll de /health até voltar.
@@ -420,7 +417,7 @@ export default function App() {
   }
 
   const nb = (v: View, icon: string, label: string) => (
-    <button className={!battleRoute && !playerRoute && !guildRoute && !companionActive && !marketDeep && view === v ? "active" : ""} onClick={() => { navigate("/"); setView(v); }}>
+    <button className={!battleRoute && !playerRoute && !guildRoute && !companionActive && view === v ? "active" : ""} onClick={() => { navigate("/"); setView(v); }}>
       <i className={`ti ${icon}`} aria-hidden="true" /> {label}
     </button>
   );
@@ -633,8 +630,6 @@ export default function App() {
     content = <PlayerProfilePage region={playerRoute.region} name={playerRoute.name} activityId={playerRoute.activityId} onBack={goBack} />;
   } else if (guildRoute) {
     content = <GuildProfilePage mode={guildRoute.type} albionId={guildRoute.albionId} onBack={goBack} />;
-  } else if (marketDeep) {
-    content = <MarketPage />;
   } else if (pickingGuild && loggedIn) {
     content = view === "management"
       ? <ManagementPage perms={NO_PERMS} empty={<GuildPicker onSelect={onGuildSelected} />} />
@@ -662,7 +657,6 @@ export default function App() {
     initialRegions={hsParams?.regions || undefined}
   />; }
   else if (view === "craft")     { content = <CraftCalculator />; }
-  else if (view === "market")    { content = <MarketPage />; }
   else if (view === "management") { content = <ManagementPage guildId={me!.guild_id!} perms={perms} />; }
   else                           { content = <GuildConfig guildId={me!.guild_id!} onSwitch={() => setPickingGuild(true)} />; }
 
