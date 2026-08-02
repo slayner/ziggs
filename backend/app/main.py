@@ -18,16 +18,30 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from fastapi import FastAPI
+
+# Windows asyncio proactor: ConnectionResetError (WinError 10054) é spam
+# inofensivo — httpx fechou o socket que o remote já derrubou. Sem filtro
+# afoga o log e esconde o sinal real (db locked, LENTO, etc).
+class _ConnResetFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info and isinstance(record.exc_info[1], ConnectionResetError):
+            return False
+        return True
+
+logging.getLogger("asyncio").addFilter(_ConnResetFilter())
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.rate_limit import RateLimitMiddleware
 from app.api.routes import auth, battles, catalog, claims, companion, comps, craft, events, highscores, loot, lootlog, market_history, meta, nodes, players, profiles, regear, render, user_profile
 from app.config import get_settings
 from app.domain.states import EventState, allowed_targets
 from app.services import (
-    battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, companion_scan, dashboard_cache,
-    gold_price, highscores_cache, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
+    battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, companion_scan, companion_kill_scan, dashboard_cache,
+    gold_price, highscores_cache, kill_sweeper, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
     search_index, silver_dropped, small_battle_discovery, weapon_stats,
 )
 
@@ -42,6 +56,7 @@ async def lifespan(app: FastAPI):
     else:
         tasks = [
             asyncio.create_task(player_tracker.run_forever()),
+            asyncio.create_task(player_tracker.run_backfill_forever()),
             asyncio.create_task(battle_tracker.run_forever()),
             asyncio.create_task(battle_tracker.run_backfill_forever()),
             asyncio.create_task(battle_tracker.run_retry_stuck_forever()),
@@ -52,7 +67,9 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(weapon_stats.run_forever()),
             asyncio.create_task(battle_reprocessor.run_forever()),
             asyncio.create_task(battle_sweeper.run_forever()),
+            asyncio.create_task(kill_sweeper.run_forever()),
             asyncio.create_task(companion_scan.run_forever()),
+            asyncio.create_task(companion_kill_scan.run_forever()),
             asyncio.create_task(small_battle_discovery.run_forever()),
             asyncio.create_task(player_count_snapshot.run_forever()),
             asyncio.create_task(battle_price_reprocessor.run_forever()),
@@ -60,7 +77,6 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(regear_retry.run_forever()),
             asyncio.create_task(dashboard_cache.run_forever()),
             asyncio.create_task(highscores_cache.run_forever()),
-            asyncio.create_task(search_index.run_forever()),
             asyncio.create_task(gold_price.run_forever()),
             asyncio.create_task(market_snapshot.run_forever()),
         ]
@@ -69,7 +85,28 @@ async def lifespan(app: FastAPI):
         t.cancel()
 
 
+async def _wal_checkpoint_loop() -> None:
+    """NOOP — mantido só pra não quebrar referências antigas. SQLite foi
+    removido; PostgreSQL não precisa de checkpoint manual."""
+    await asyncio.sleep(3600)
+
+
 app = FastAPI(title="Ziggs API", lifespan=lifespan)
+
+
+
+@app.exception_handler(RequestValidationError)
+async def _log_validation_errors(request: Request, exc: RequestValidationError):
+    # 422 com detalhes: FastAPI só loga o status code, não os campos. Loga o
+    # body que chegou + os errors pra ver exatamente o que o client mandou de
+    # errado (companion scan/report, prices/submit, etc).
+    body = await request.body() if request.method in ("POST", "PUT", "PATCH") else b""
+    logging.getLogger("app.validation").warning(
+        "422 %s %s — errors=%s body=%s",
+        request.method, request.url.path, exc.errors(),
+        body[:500].decode("utf-8", errors="replace"),
+    )
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 # Login/callback do Discord: bem mais restrito, é a rota mais sensível (a "passagem").
 app.add_middleware(RateLimitMiddleware, limit=10, window=60, prefix="/auth/discord")

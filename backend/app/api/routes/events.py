@@ -594,7 +594,7 @@ async def escalacao_prices(
         select(ItemPriceLatest).where(
             ItemPriceLatest.item_id.in_(id_list),
             ItemPriceLatest.city == _AVG_SENTINEL,
-            ItemPriceLatest.quality.in_([1, 2, 3, 4]),
+            ItemPriceLatest.quality.in_([2, 3, 4]),
         )
     ).all()
     by_item: dict[str, list[int]] = defaultdict(list)

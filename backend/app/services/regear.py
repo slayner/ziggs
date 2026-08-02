@@ -215,6 +215,9 @@ async def ingest(
     region = (guild.settings or {}).get("albion_guild_region")
     settings = regear_config.get_regear_settings(guild)
 
+    # Libera read tx antes do HTTP (_recognize faz chamadas à API do Albion).
+    db.commit()
+
     rel_path = _save_image(guild.id, image_bytes, filename, content_type)
 
     rec = await _recognize(db, guild, image_bytes, requester_user_id, region, event_id)

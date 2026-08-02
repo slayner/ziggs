@@ -204,7 +204,12 @@ async def get_prices(
     db: Session = Depends(deps.db_session),
     _member=Depends(deps.require_permission("comps.view")),
 ) -> dict:
-    """Retorna a média histórica 5 cidades × qualidades 1-4 para uma lista de itens."""
+    """Retorna a média histórica 5 cidades × qualidades 2-4 para uma lista de itens.
+
+    Qualities 1 e 5 são descartadas da média: 1 (Normal) tem preço inflacionado
+    por ser o padrão de craft, 5 (Masterpiece) é raríssima e tem preço atípico.
+    Ambas interferem na média. O registro continua sendo capturado e armazenado
+    (todas as qualities), só não entra no cálculo do preço médio."""
     item_ids = [i.strip() for i in items.split(",") if i.strip()]
     if not item_ids:
         return {"prices": {}}
@@ -213,7 +218,7 @@ async def get_prices(
         select(ItemPriceLatest).where(
             ItemPriceLatest.item_id.in_(item_ids),
             ItemPriceLatest.city == _AVG_SENTINEL,
-            ItemPriceLatest.quality.in_([1, 2, 3, 4]),
+            ItemPriceLatest.quality.in_([2, 3, 4]),
         )
     ).all()
     # Average across available qualities per item
@@ -221,6 +226,39 @@ async def get_prices(
     for r in rows:
         by_item[r.item_id].append(r.sell_price_min)
     return {"prices": {iid: int(sum(vals) / len(vals)) for iid, vals in by_item.items()}}
+
+
+# ── preços por cidade (captura companion × ADP — mais fresco vence) ──────────
+
+@router.get("/price-quotes")
+async def get_price_quotes(
+    items: str = Query(description="IDs separados por vírgula"),
+    db: Session = Depends(deps.db_session),
+) -> dict:
+    """Devolve preços por (item_id, city, quality) do nosso banco — captura
+    do companion + sync AODP. Preços são globais — sem auth.
+
+    Aceita tanto UniqueName (T4_CLOTH_LEVEL2) quanto game_name ("Rare Fine
+    Cloth") — converte tudo pra game_name (formato do DB) antes de buscar."""
+    from app.services.prices import _unique_to_game
+    raw_ids = [i.strip() for i in items.split(",") if i.strip()]
+    if not raw_ids:
+        return {"prices": []}
+    item_ids = list(dict.fromkeys(_unique_to_game(i) for i in raw_ids))
+    out: list[dict] = []
+    for i in range(0, len(item_ids), 500):
+        chunk = item_ids[i : i + 500]
+        for row in db.scalars(
+            select(ItemPriceLatest).where(ItemPriceLatest.item_id.in_(chunk))
+        ):
+            out.append({
+                "item_id": row.item_id,
+                "city": row.city,
+                "quality": row.quality,
+                "sell_price_min": row.sell_price_min,
+                "price_date": row.price_date.isoformat() if row.price_date else None,
+            })
+    return {"prices": out}
 
 
 # ── sugestão de build (escopo guilda) ────────────────────────────────────────

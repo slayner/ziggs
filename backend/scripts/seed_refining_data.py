@@ -292,10 +292,13 @@ def extract_transmutations(root: ET.Element) -> list[dict]:
                 continue
 
             source_id = resources[0].get("uniquename", "")
+            item_value = el.get("itemvalue")
+            item_value = float(item_value) if item_value else 0.0
             transmutations.append({
                 "sourceId": source_id,
                 "targetId": uid,
                 "silverCost": int(silver),
+                "itemValue": item_value,
             })
 
     return transmutations

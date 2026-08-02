@@ -5,7 +5,7 @@ os.environ.setdefault("BOT_PUBLIC_URL", "https://ziggs.example")
 from cogs.juicy_kills import _build_embed, _message_kill_id
 
 
-def test_embed_links_every_player_and_has_site_only_footer():
+def test_embed_links_every_player_and_footer_is_site_only():
     embed = _build_embed({
         "id": 1, "region": "europe", "albion_event_id": "99",
         "api_delay_secs": 901,
@@ -13,12 +13,16 @@ def test_embed_links_every_player_and_has_site_only_footer():
         "killer": {"name": "Killer"}, "victim": {"name": "Victim"},
         "participants": [{"name": "Killer"}, {"name": "Assist One"}],
     }, "kill.png")
-    assert embed.title == "Killer killed Victim"
+    assert embed.title is None
+    assert "## " in embed.description
     assert "/eu/Killer?activity=99" in embed.description
     assert "/eu/Victim?activity=99" in embed.description
     assert "/eu/Assist%20One" in embed.description
     assert "/eu/Assist%20One?activity=" not in embed.description
-    assert embed.footer.text == "https://ziggs.example · Albion API delay (Europe): ~15min · ziggs:juicy-kill:1"
+    assert "silver" not in embed.description
+    assert "fame" not in embed.description
+    assert "Europe" not in embed.description
+    assert embed.footer.text == "https://ziggs.example · ziggs:juicy-kill:1"
     assert embed.timestamp is None
     assert embed.image.url == "attachment://kill.png"
 
@@ -45,7 +49,7 @@ def test_embed_caps_description_and_exposes_stable_marker():
 
 
 if __name__ == "__main__":
-    test_embed_links_every_player_and_has_site_only_footer()
+    test_embed_links_every_player_and_footer_is_site_only()
     test_embed_hides_normal_api_delay()
     test_embed_caps_description_and_exposes_stable_marker()
     print("juicy kills: ok")

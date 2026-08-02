@@ -41,6 +41,10 @@ KILLER_C = (0x5B, 0x8C, 0xE4)
 VICTIM_C = (0xE4, 0x5B, 0x6B)
 ALLIANCE_C = (0x8B, 0x8B, 0x9E)
 
+# ── Escala: todas as dimensões em px são multiplicadas por S ───────────────────
+# Imagem maior = ícones e texto renderizados em alta resolução (não upscale).
+S = 1.5
+
 # Fontes
 _FONT_REGULAR = None
 _FONT_SMALL = None
@@ -61,20 +65,19 @@ def _load_fonts() -> None:
         return
     seg = r"C:\Windows\Fonts\segoeui.ttf"
     segb = r"C:\Windows\Fonts\segoeuib.ttf"
-    segsb = r"C:\Windows\Fonts\seguisb.ttf"
     cons = r"C:\Windows\Fonts\consola.ttf"
     consb = r"C:\Windows\Fonts\consolab.ttf"
     try:
-        _FONT_REGULAR = ImageFont.truetype(seg, 14)
-        _FONT_SMALL = ImageFont.truetype(seg, 11)
-        _FONT_GUILD = ImageFont.truetype(seg, 12)
-        _FONT_ITEM_PRICE = ImageFont.truetype(seg, 10)
-        _FONT_STATS_LABEL = ImageFont.truetype(seg, 11)
-        _FONT_TITLE = ImageFont.truetype(segb, 18)
-        _FONT_SMALL_BOLD = ImageFont.truetype(segb, 11)
-        _FONT_QTY = ImageFont.truetype(segb, 9)
-        _FONT_STATS = ImageFont.truetype(consb, 18)
-        _FONT_CENTER = ImageFont.truetype(cons, 12)
+        _FONT_REGULAR = ImageFont.truetype(seg, int(14 * S))
+        _FONT_SMALL = ImageFont.truetype(seg, int(11 * S))
+        _FONT_GUILD = ImageFont.truetype(seg, int(12 * S))
+        _FONT_ITEM_PRICE = ImageFont.truetype(seg, int(10 * S))
+        _FONT_STATS_LABEL = ImageFont.truetype(seg, int(11 * S))
+        _FONT_TITLE = ImageFont.truetype(segb, int(18 * S))
+        _FONT_SMALL_BOLD = ImageFont.truetype(segb, int(11 * S))
+        _FONT_QTY = ImageFont.truetype(segb, int(9 * S))
+        _FONT_STATS = ImageFont.truetype(consb, int(18 * S))
+        _FONT_CENTER = ImageFont.truetype(cons, int(12 * S))
     except Exception:
         pass
     if _FONT_REGULAR is None:
@@ -114,10 +117,7 @@ def _draw_qty(draw, text, x, y, color):
     Assim "5" fica na mesma posição que "55". Usa _FONT_QTY."""
     w = _text_w(draw, text, _FONT_QTY)
     two_w = _text_w(draw, "00", _FONT_QTY)
-    # Centro de uma string de 2 chars alinhada à direita em x:
-    # right_edge = x, left = x - two_w, center = x - two_w/2
-    # Nosso text de largura w fica centralizado nesse espaço:
-    draw.text((x - two_w // 2 - w // 2 - 1, y - 2), text, fill=color, font=_FONT_QTY)
+    draw.text((x - two_w // 2 - w // 2 - int(1 * S), y - int(2 * S)), text, fill=color, font=_FONT_QTY)
 
 
 def _truncate_to_w(draw, text, max_w, font):
@@ -155,20 +155,23 @@ EQUIP_SLOTS = [
     ("Mount", None),
 ]
 
-ICON_SIZE = 56
-SLOT_GAP = 4
+ICON_SIZE = int(56 * S)
+SLOT_GAP = int(4 * S)
 GRID_COLS = 3
-GRID_W = GRID_COLS * (ICON_SIZE + SLOT_GAP)  # 180px
+GRID_W = GRID_COLS * (ICON_SIZE + SLOT_GAP)
+
+# Tamanho do render baixado do CDN (maior = ícone mais nítido em tela maior)
+CDN_ICON_SIZE = 256
 
 
 async def _fetch_item_icon(item_id: str, quality: int = 0) -> Image.Image | None:
-    cache_path = _RENDER_CACHE / f"{quote(item_id, safe='')}_q{quality}_s128.png"
+    cache_path = _RENDER_CACHE / f"{quote(item_id, safe='')}_q{quality}_s{CDN_ICON_SIZE}.png"
     content: bytes | None = None
     if cache_path.exists() and cache_path.stat().st_size > 300:
         content = cache_path.read_bytes()
     else:
         url = f"https://render.albiononline.com/v1/item/{quote(item_id, safe='')}.png"
-        params = {"size": 128}
+        params = {"size": CDN_ICON_SIZE}
         if quality:
             params["quality"] = quality
         try:
@@ -222,26 +225,26 @@ def _draw_equip_grid(draw, img, equipment, x0, y0, icon_cache, show_awakened=Fal
         if icon is not None:
             img.paste(icon, (x, y), icon)
         else:
-            draw.text((x + 20, y + 20), "—", fill=DIM_COLOR, font=_FONT_SMALL)
+            draw.text((x + int(20 * S), y + int(20 * S)), "—", fill=DIM_COLOR, font=_FONT_SMALL)
 
-        # Quantidade no canto inferior direito (centralizada como 2 chars, +4px baixo)
+        # Quantidade no canto inferior direito (centralizada como 2 chars)
         count = item.get("Count", 1)
         if count > 1:
-            _draw_qty(draw, str(count), x + ICON_SIZE - 8, y + ICON_SIZE - 20, TEXT_COLOR)
+            _draw_qty(draw, str(count), x + ICON_SIZE - int(8 * S), y + ICON_SIZE - int(20 * S), TEXT_COLOR)
 
         # Preço awakened da arma: abaixo do render
         if show_awakened and slot_key == "MainHand" and is_awakened(t):
             awake_val = awakened_value(t)
             if awake_val > 0:
                 price_str = f"+{_silver(awake_val)}"
-                _draw_centered(draw, price_str, x + ICON_SIZE // 2, y + ICON_SIZE + 2, GOLD, _FONT_ITEM_PRICE)
+                _draw_centered(draw, price_str, x + ICON_SIZE // 2, y + ICON_SIZE + int(2 * S), GOLD, _FONT_ITEM_PRICE)
 
         # Killer awakened: valor sem o +
         if not show_awakened and slot_key == "MainHand" and is_awakened(t):
             awake_val = awakened_value(t)
             if awake_val > 0:
                 price_str = _silver(awake_val)
-                _draw_centered(draw, price_str, x + ICON_SIZE // 2, y + ICON_SIZE + 2, GOLD, _FONT_ITEM_PRICE)
+                _draw_centered(draw, price_str, x + ICON_SIZE // 2, y + ICON_SIZE + int(2 * S), GOLD, _FONT_ITEM_PRICE)
 
 
 async def render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
@@ -277,16 +280,13 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
         victim_eq = dict(ev.victim_equipment or {})
         victim_inv = ev.victim_inventory or []
 
+        # Libera read tx antes dos HTTP (download de ícones da CDN).
+        db.commit()
+
         # Carrega ícones
         icon_cache: dict[tuple[str, int], Image.Image | None] = {}
         await _load_icons(killer_eq, icon_cache)
         await _load_icons(victim_eq, icon_cache)
-        for inv_item in victim_inv:
-            if inv_item and inv_item.get("Type"):
-                t = inv_item["Type"]
-                key = (t, inv_item.get("Quality", 0))
-                if key not in icon_cache:
-                    icon_cache[key] = await _fetch_item_icon(*key)
 
         # Food e Potion do set da vítima vão pro inventário (primeiros)
         inv_items = [i for i in victim_inv if i and i.get("Type")]
@@ -298,28 +298,31 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
 
         inv_list = [(i["Type"], i.get("Quality", 0), i.get("Count", 1)) for i in inv_items]
 
+        # Garante todos os ícones do inventário carregados antes de desenhar
+        for item_id, quality, _ in inv_list:
+            key = (item_id, quality)
+            if key not in icon_cache:
+                icon_cache[key] = await _fetch_item_icon(item_id, quality)
+
         # --- Layout ---
-        W = 640
-        MARGIN = 16
-        # Largura útil alinhada com os grids: de killer_x a victim_x + GRID_W
-        # killer_x = MARGIN, victim_x + GRID_W = W - MARGIN
-        inv_area_w = W - 2 * MARGIN  # 608px
-        PER_ROW = inv_area_w // (ICON_SIZE + SLOT_GAP)  # 10
+        W = int(640 * S)
+        MARGIN = int(16 * S)
+        inv_area_w = W - 2 * MARGIN
+        PER_ROW = inv_area_w // (ICON_SIZE + SLOT_GAP)
 
         # Grid: 3 linhas + extra se arma awakened
         killer_awake = is_awakened((killer_eq.get("MainHand") or {}).get("Type", ""))
         victim_awake = is_awakened((victim_eq.get("MainHand") or {}).get("Type", ""))
-        grid_extra = 14 if (killer_awake or victim_awake) else 0
+        grid_extra = int(14 * S) if (killer_awake or victim_awake) else 0
         grid_h = 3 * (ICON_SIZE + SLOT_GAP) + grid_extra
 
         # Inventário
         inv_row_h = ICON_SIZE + SLOT_GAP
         inv_rows = max(1, (len(inv_list) + PER_ROW - 1) // PER_ROW) if inv_list else 0
-        # Altura exata: header + linhas usadas (não arredonda pra cima)
-        inv_block_h = (24 + inv_rows * inv_row_h + 4) if inv_list else 24
+        inv_block_h = (int(24 * S) + inv_rows * inv_row_h) if inv_list else int(24 * S)
 
-        # Altura total: header (64) + server (18) + date (16) + info gap + grids + sep + inv + pad
-        H = 64 + 18 + 16 + 6 + grid_h + 8 + inv_block_h + 12
+        # Altura total
+        H = int(64 * S) + int(18 * S) + int(16 * S) + int(6 * S) + grid_h + int(8 * S) + inv_block_h + int(12 * S)
 
         img = Image.new("RGB", (W, H), BG_COLOR)
         draw = ImageDraw.Draw(img)
@@ -328,64 +331,62 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
         cx = W // 2
 
         # ── Header: killer (esq) | victim (dir) ──
-        header_y = 12
-        text_inset = 9  # mesma lógica do grid_inset: puxa os textos pro centro
+        header_y = int(12 * S)
+        text_inset = int(9 * S)
 
-        k_name = _truncate_to_w(draw, killer_name, cx - 30, _FONT_TITLE)
+        k_name = _truncate_to_w(draw, killer_name, cx - int(30 * S), _FONT_TITLE)
         _draw_text(draw, k_name, (MARGIN + text_inset, header_y), KILLER_C, _FONT_TITLE)
         if killer_alliance or killer_guild:
             kx = MARGIN + text_inset
             if killer_alliance:
-                a_text = _truncate_to_w(draw, f"[{killer_alliance}]", cx - 30, _FONT_GUILD)
-                _draw_text(draw, a_text, (kx, header_y + 22), ALLIANCE_C, _FONT_GUILD)
+                a_text = _truncate_to_w(draw, f"[{killer_alliance}]", cx - int(30 * S), _FONT_GUILD)
+                _draw_text(draw, a_text, (kx, header_y + int(22 * S)), ALLIANCE_C, _FONT_GUILD)
                 kx += _text_w(draw, a_text + " ", _FONT_GUILD)
             if killer_guild:
-                g_text = _truncate_to_w(draw, killer_guild, cx - 30 - (kx - MARGIN - text_inset), _FONT_GUILD)
-                _draw_text(draw, g_text, (kx, header_y + 22), DIM_COLOR, _FONT_GUILD)
+                g_text = _truncate_to_w(draw, killer_guild, cx - int(30 * S) - (kx - MARGIN - text_inset), _FONT_GUILD)
+                _draw_text(draw, g_text, (kx, header_y + int(22 * S)), DIM_COLOR, _FONT_GUILD)
 
-        v_name = _truncate_to_w(draw, victim_name, cx - 30, _FONT_TITLE)
+        v_name = _truncate_to_w(draw, victim_name, cx - int(30 * S), _FONT_TITLE)
         _draw_right(draw, v_name, W - MARGIN - text_inset, header_y, VICTIM_C, _FONT_TITLE)
         if victim_alliance or victim_guild:
             vx = W - MARGIN - text_inset
             if victim_guild:
-                g_text = _truncate_to_w(draw, victim_guild, cx - 30, _FONT_GUILD)
+                g_text = _truncate_to_w(draw, victim_guild, cx - int(30 * S), _FONT_GUILD)
                 gw = _text_w(draw, g_text, _FONT_GUILD)
-                _draw_text(draw, g_text, (vx - gw, header_y + 22), DIM_COLOR, _FONT_GUILD)
+                _draw_text(draw, g_text, (vx - gw, header_y + int(22 * S)), DIM_COLOR, _FONT_GUILD)
                 vx -= gw + _text_w(draw, " ", _FONT_GUILD)
             if victim_alliance:
-                a_text = _truncate_to_w(draw, f"[{victim_alliance}]", cx - 30 - (W - MARGIN - text_inset - vx), _FONT_GUILD)
+                a_text = _truncate_to_w(draw, f"[{victim_alliance}]", cx - int(30 * S) - (W - MARGIN - text_inset - vx), _FONT_GUILD)
                 aw = _text_w(draw, a_text, _FONT_GUILD)
-                _draw_text(draw, a_text, (vx - aw, header_y + 22), ALLIANCE_C, _FONT_GUILD)
+                _draw_text(draw, a_text, (vx - aw, header_y + int(22 * S)), ALLIANCE_C, _FONT_GUILD)
 
         # ── Server (isolado, acima da data) ──
         region_map = {"americas": "Americas", "europe": "Europe", "asia": "Asia"}
         region_label = region_map.get(ev.region, ev.region)
-        server_y = header_y + 44
+        server_y = header_y + int(44 * S)
         _draw_centered(draw, region_label, cx, server_y, DIM_COLOR, _FONT_CENTER)
 
         # ── Date/time UTC (abaixo do servidor) ──
         ts = ev.timestamp.strftime("%d/%m/%Y %H:%M UTC") if ev.timestamp else "?"
-        date_y = server_y + 16
+        date_y = server_y + int(16 * S)
         _draw_centered(draw, ts, cx, date_y, DIM_COLOR, _FONT_CENTER)
 
         # ── Info central: fame + silver ──
         info_x = cx
-        info_y = date_y + 40
+        info_y = date_y + int(40 * S)
         _draw_centered(draw, _silver(ev.fame), info_x, info_y, GOLD, _FONT_STATS)
-        _draw_centered(draw, "fame", info_x, info_y + 22, DIM_COLOR, _FONT_STATS_LABEL)
+        _draw_centered(draw, "fame", info_x, info_y + int(22 * S), DIM_COLOR, _FONT_STATS_LABEL)
 
         silver = ev.silver_dropped or 0
-        _draw_centered(draw, _silver_full(silver), info_x, info_y + 56, TEXT_COLOR, _FONT_STATS)
-        _draw_centered(draw, "silver dropped", info_x, info_y + 78, DIM_COLOR, _FONT_STATS_LABEL)
+        _draw_centered(draw, _silver_full(silver), info_x, info_y + int(56 * S), TEXT_COLOR, _FONT_STATS)
+        _draw_centered(draw, "silver dropped", info_x, info_y + int(78 * S), DIM_COLOR, _FONT_STATS_LABEL)
 
         if not ev.is_solo:
-            _draw_centered(draw, f"{ev.participant_count} participants", info_x, info_y + 100, DIM_COLOR, _FONT_STATS_LABEL)
+            _draw_centered(draw, f"{ev.participant_count} participants", info_x, info_y + int(100 * S), DIM_COLOR, _FONT_STATS_LABEL)
 
         # ── Sets de equipamento (grids 3×3) ──
-        # Grids puxados pra o centro pra diminuir o gap entre eles e alinhar
-        # melhor com o inventário (que ocupa a largura total).
-        grid_y = header_y + 44
-        grid_inset = 9  # empurra cada grid 9px pra dentro (gap central um pouco menor)
+        grid_y = header_y + int(44 * S)
+        grid_inset = int(9 * S)
         killer_x = MARGIN + grid_inset
         victim_x = W - MARGIN - GRID_W - grid_inset
 
@@ -393,14 +394,13 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
         _draw_equip_grid(draw, img, victim_eq, victim_x, grid_y, icon_cache, show_awakened=True)
 
         # ── Linha separadora (acima do texto do inventário) ──
-        sep_y = grid_y + grid_h + 8
+        sep_y = grid_y + grid_h + int(8 * S)
         draw.line([(MARGIN, sep_y), (W - MARGIN, sep_y)], fill=BORDER, width=1)
 
         # ── Inventário da vítima ──
-        inv_y = sep_y + 8
-        inv_header = f"VICTIM INVENTORY  ·  {len(inv_list)} items"
-        _draw_centered(draw, inv_header, cx, inv_y, DIM_COLOR, _FONT_SMALL_BOLD)
-        inv_y += 24
+        inv_y = sep_y + int(8 * S)
+        _draw_centered(draw, "VICTIM INVENTORY", cx, inv_y, DIM_COLOR, _FONT_SMALL_BOLD)
+        inv_y += int(24 * S)
 
         if not inv_list:
             _draw_centered(draw, "Empty", cx, inv_y, DIM_COLOR, _FONT_SMALL)
@@ -417,9 +417,8 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
                 if icon is not None:
                     img.paste(icon, (ix, iy), icon)
 
-                # Quantidade no canto inferior direito (centralizada como 2 chars, +4px baixo)
                 if count > 1:
-                    _draw_qty(draw, str(count), ix + ICON_SIZE - 8, iy + ICON_SIZE - 20, TEXT_COLOR)
+                    _draw_qty(draw, str(count), ix + ICON_SIZE - int(8 * S), iy + ICON_SIZE - int(20 * S), TEXT_COLOR)
 
                 ix += ICON_SIZE + SLOT_GAP
 

@@ -1,0 +1,1517 @@
+{
+  "2H_ARCANESTAFF": {
+    "en": "Great Arcane Staff",
+    "pt": "Cajado Arcano Elevado",
+    "es": "Gran bastón arcano"
+  },
+  "2H_ARCANESTAFF_CRYSTAL": {
+    "en": "Astral Staff",
+    "pt": "Cajado Astral",
+    "es": "Báculo Astral"
+  },
+  "2H_ARCANESTAFF_HELL": {
+    "en": "Occult Staff",
+    "pt": "Cajado Oculto",
+    "es": "Bastón oculto"
+  },
+  "2H_ARCANE_RINGPAIR_AVALON": {
+    "en": "Evensong",
+    "pt": "Som Equilibrado",
+    "es": "Sonido equilibrado"
+  },
+  "2H_AXE": {
+    "en": "Greataxe",
+    "pt": "Machadão",
+    "es": "Gran hacha"
+  },
+  "2H_AXE_AVALON": {
+    "en": "Realmbreaker",
+    "pt": "Quebra-reino",
+    "es": "Romperreinos"
+  },
+  "2H_BOW": {
+    "en": "Bow",
+    "pt": "Arco",
+    "es": "Arco"
+  },
+  "2H_BOW_AVALON": {
+    "en": "Mistpiercer",
+    "pt": "Fura-bruma",
+    "es": "Perforador de niebla"
+  },
+  "2H_BOW_CRYSTAL": {
+    "en": "Skystrider Bow",
+    "pt": "Arco do Andarilho Celeste",
+    "es": "Arco del Caminante del Cielo"
+  },
+  "2H_BOW_HELL": {
+    "en": "Wailing Bow",
+    "pt": "Arco Plangente",
+    "es": "Arco de lamentaciones"
+  },
+  "2H_BOW_KEEPER": {
+    "en": "Bow of Badon",
+    "pt": "Arco Badônico",
+    "es": "Arco de Badon"
+  },
+  "2H_CLAWPAIR": {
+    "en": "Claws",
+    "pt": "Garras",
+    "es": "Garras"
+  },
+  "2H_CLAYMORE": {
+    "en": "Claymore",
+    "pt": "Montante",
+    "es": "Claymore"
+  },
+  "2H_CLAYMORE_AVALON": {
+    "en": "Kingmaker",
+    "pt": "Cria-reis",
+    "es": "Crea-reyes"
+  },
+  "2H_CLEAVER_HELL": {
+    "en": "Carving Sword",
+    "pt": "Espada Entalhada",
+    "es": "Espada tallada"
+  },
+  "2H_COMBATSTAFF_MORGANA": {
+    "en": "Black Monk Stave",
+    "pt": "Cajado de Monge Negro",
+    "es": "Bastón de monje negro"
+  },
+  "2H_CROSSBOW": {
+    "en": "Crossbow",
+    "pt": "Besta",
+    "es": "Ballesta"
+  },
+  "2H_CROSSBOWLARGE": {
+    "en": "Heavy Crossbow",
+    "pt": "Besta Pesada",
+    "es": "Ballesta pesada"
+  },
+  "2H_CROSSBOWLARGE_MORGANA": {
+    "en": "Siegebow",
+    "pt": "Arco de Cerco",
+    "es": "Arco de asedio"
+  },
+  "2H_CROSSBOW_CANNON_AVALON": {
+    "en": "Energy Shaper",
+    "pt": "Modelador de Energia",
+    "es": "Modelador de energía"
+  },
+  "2H_CURSEDSTAFF": {
+    "en": "Great Cursed Staff",
+    "pt": "Cajado Amaldiçoado Elevado",
+    "es": "Gran bastón maldito"
+  },
+  "2H_CURSEDSTAFF_MORGANA": {
+    "en": "Damnation Staff",
+    "pt": "Cajado da Danação",
+    "es": "Bastón de maldiciones"
+  },
+  "2H_DAGGERPAIR": {
+    "en": "Dagger Pair",
+    "pt": "Par de Adagas",
+    "es": "Daga doble"
+  },
+  "2H_DAGGERPAIR_CRYSTAL": {
+    "en": "Twin Slayers",
+    "pt": "Gêmeas Aniquiladoras",
+    "es": "Gemelas Aniquiladoras"
+  },
+  "2H_DAGGER_KATAR_AVALON": {
+    "en": "Bridled Fury",
+    "pt": "Fúria Contida",
+    "es": "Furia contenida"
+  },
+  "2H_DEMONICSTAFF": {
+    "en": "Demonic Staff",
+    "pt": "Cajado Demoníaco",
+    "es": "Bastón demoníaco"
+  },
+  "2H_DIVINESTAFF": {
+    "en": "Divine Staff",
+    "pt": "Cajado Divino",
+    "es": "Bastón divino"
+  },
+  "2H_DOUBLEBLADEDSTAFF": {
+    "en": "Double Bladed Staff",
+    "pt": "Cajado Bilaminado",
+    "es": "Bastón de doble filo"
+  },
+  "2H_DOUBLEBLADEDSTAFF_CRYSTAL": {
+    "en": "Phantom Twinblade",
+    "pt": "Lâminas Gêmeas Fantasmagóricas",
+    "es": "Hojas Gemelas Fantasmales"
+  },
+  "2H_DUALAXE_KEEPER": {
+    "en": "Bear Paws",
+    "pt": "Patas de Urso",
+    "es": "Patas de oso"
+  },
+  "2H_DUALCROSSBOW_CRYSTAL": {
+    "en": "Arclight Blasters",
+    "pt": "Detonadores Reluzentes",
+    "es": "Detonadores Relucientes"
+  },
+  "2H_DUALCROSSBOW_HELL": {
+    "en": "Boltcasters",
+    "pt": "Lança-virotes",
+    "es": "Lanzasaetas"
+  },
+  "2H_DUALHAMMER_HELL": {
+    "en": "Forge Hammers",
+    "pt": "Martelos de Forja",
+    "es": "Martillos de forja"
+  },
+  "2H_DUALMACE_AVALON": {
+    "en": "Oathkeepers",
+    "pt": "Jurador",
+    "es": "Juradores"
+  },
+  "2H_DUALSCIMITAR_UNDEAD": {
+    "en": "Galatine Pair",
+    "pt": "Par de Galatinas",
+    "es": "Dos galatinas"
+  },
+  "2H_DUALSICKLE_UNDEAD": {
+    "en": "Deathgivers",
+    "pt": "Mortíficos",
+    "es": "Concedemuertes"
+  },
+  "2H_DUALSWORD": {
+    "en": "Dual Swords",
+    "pt": "Espadas Duplas",
+    "es": "Dos espadas"
+  },
+  "2H_ENIGMATICORB_MORGANA": {
+    "en": "Malevolent Locus",
+    "pt": "Local Malévolo",
+    "es": "Locus malévolo"
+  },
+  "2H_ENIGMATICSTAFF": {
+    "en": "Enigmatic Staff",
+    "pt": "Cajado Enigmático",
+    "es": "Bastón enigmático"
+  },
+  "2H_FIRESTAFF": {
+    "en": "Great Fire Staff",
+    "pt": "Cajado de Fogo Elevado",
+    "es": "Gran bastón ígneo"
+  },
+  "2H_FIRESTAFF_HELL": {
+    "en": "Brimstone Staff",
+    "pt": "Cajado Sulfuroso",
+    "es": "Bastón de azufre"
+  },
+  "2H_FIRE_RINGPAIR_AVALON": {
+    "en": "Dawnsong",
+    "pt": "Canção da Alvorada",
+    "es": "Canción del despertar"
+  },
+  "2H_FLAIL": {
+    "en": "Morning Star",
+    "pt": "Mangual",
+    "es": "Mangual"
+  },
+  "2H_FROSTSTAFF": {
+    "en": "Great Frost Staff",
+    "pt": "Cajado de Gelo Elevado",
+    "es": "Gran bastón de hielo"
+  },
+  "2H_FROSTSTAFF_CRYSTAL": {
+    "en": "Arctic Staff",
+    "pt": "Cajado Ártico",
+    "es": "Báculo Ártico"
+  },
+  "2H_GLACIALSTAFF": {
+    "en": "Glacial Staff",
+    "pt": "Cajado Glacial",
+    "es": "Bastón glacial"
+  },
+  "2H_GLAIVE": {
+    "en": "Glaive",
+    "pt": "Archa",
+    "es": "Guja"
+  },
+  "2H_GLAIVE_CRYSTAL": {
+    "en": "Rift Glaive",
+    "pt": "Archa Fraturada",
+    "es": "Guja Fracturada"
+  },
+  "2H_HALBERD": {
+    "en": "Halberd",
+    "pt": "Alabarda",
+    "es": "Alabarda"
+  },
+  "2H_HALBERD_MORGANA": {
+    "en": "Carrioncaller",
+    "pt": "Chama-corpos",
+    "es": "Llamacarroña"
+  },
+  "2H_HAMMER": {
+    "en": "Great Hammer",
+    "pt": "Martelo Elevado",
+    "es": "Gran martillo"
+  },
+  "2H_HAMMER_AVALON": {
+    "en": "Hand of Justice",
+    "pt": "Mão da Justiça",
+    "es": "Mano de justicia"
+  },
+  "2H_HAMMER_CRYSTAL": {
+    "en": "Truebolt Hammer",
+    "pt": "Martelo Estrondoso",
+    "es": "Martillo Atronador"
+  },
+  "2H_HAMMER_UNDEAD": {
+    "en": "Tombhammer",
+    "pt": "Martelo Fúnebre",
+    "es": "Martillo de la tumba"
+  },
+  "2H_HARPOON_HELL": {
+    "en": "Spirithunter",
+    "pt": "Caça-espíritos",
+    "es": "Cazaespíritus"
+  },
+  "2H_HOLYSTAFF": {
+    "en": "Great Holy Staff",
+    "pt": "Cajado Sagrado Elevado",
+    "es": "Gran bastón sagrado"
+  },
+  "2H_HOLYSTAFF_CRYSTAL": {
+    "en": "Exalted Staff",
+    "pt": "Cajado Exaltado",
+    "es": "Báculo Exaltado"
+  },
+  "2H_HOLYSTAFF_HELL": {
+    "en": "Fallen Staff",
+    "pt": "Cajado Corrompido",
+    "es": "Bastón caído"
+  },
+  "2H_HOLYSTAFF_UNDEAD": {
+    "en": "Redemption Staff",
+    "pt": "Cajado da Redenção",
+    "es": "Bastón de redención"
+  },
+  "2H_ICECRYSTAL_UNDEAD": {
+    "en": "Permafrost Prism",
+    "pt": "Prisma Geleterno",
+    "es": "Prisma de hielos perpetuos"
+  },
+  "2H_ICEGAUNTLETS_HELL": {
+    "en": "Icicle Staff",
+    "pt": "Cajado de Sincelo",
+    "es": "Bastón de carámbanos"
+  },
+  "2H_INFERNOSTAFF": {
+    "en": "Infernal Staff",
+    "pt": "Cajado Infernal",
+    "es": "Bastón infernal"
+  },
+  "2H_INFERNOSTAFF_MORGANA": {
+    "en": "Blazing Staff",
+    "pt": "Cajado Fulgurante",
+    "es": "Bastón flamígero"
+  },
+  "2H_IRONCLADEDSTAFF": {
+    "en": "Iron-clad Staff",
+    "pt": "Cajado Férreo",
+    "es": "Bastón metálico"
+  },
+  "2H_KNUCKLES_AVALON": {
+    "en": "Fists of Avalon",
+    "pt": "Punhos de Avalon",
+    "es": "Puños de Avalon"
+  },
+  "2H_KNUCKLES_CRYSTAL": {
+    "en": "Forcepulse Bracers",
+    "pt": "Braçadeiras Pulsantes",
+    "es": "Brazales Pulsantes"
+  },
+  "2H_KNUCKLES_HELL": {
+    "en": "Hellfire Hands",
+    "pt": "Mãos Infernais",
+    "es": "Manos infernales"
+  },
+  "2H_KNUCKLES_KEEPER": {
+    "en": "Ursine Maulers",
+    "pt": "Luvas Ursinas",
+    "es": "Zarpas osunas"
+  },
+  "2H_KNUCKLES_MORGANA": {
+    "en": "Ravenstrike Cestus",
+    "pt": "Cestus Golpeadores",
+    "es": "Cestus córvidos"
+  },
+  "2H_KNUCKLES_SET1": {
+    "en": "Brawler Gloves",
+    "pt": "Luvas de Lutador",
+    "es": "Guantes de peleador"
+  },
+  "2H_KNUCKLES_SET2": {
+    "en": "Battle Bracers",
+    "pt": "Braçadeiras de Batalha",
+    "es": "Brazales de batalla"
+  },
+  "2H_KNUCKLES_SET3": {
+    "en": "Spiked Gauntlets",
+    "pt": "Manoplas Cravadas",
+    "es": "Guanteletes de púas"
+  },
+  "2H_LONGBOW": {
+    "en": "Longbow",
+    "pt": "Arco Longo",
+    "es": "Arco largo"
+  },
+  "2H_LONGBOW_UNDEAD": {
+    "en": "Whispering Bow",
+    "pt": "Arco Sussurrante",
+    "es": "Arco susurrante"
+  },
+  "2H_MACE": {
+    "en": "Heavy Mace",
+    "pt": "Maça Pesada",
+    "es": "Maza pesada"
+  },
+  "2H_MACE_MORGANA": {
+    "en": "Camlann Mace",
+    "pt": "Maça Cambriana",
+    "es": "Maza de Camlann"
+  },
+  "2H_NATURESTAFF": {
+    "en": "Great Nature Staff",
+    "pt": "Cajado da Natureza Elevado",
+    "es": "Gran bastón natural"
+  },
+  "2H_NATURESTAFF_HELL": {
+    "en": "Blight Staff",
+    "pt": "Cajado Pustulento",
+    "es": "Bastón de infortunio"
+  },
+  "2H_NATURESTAFF_KEEPER": {
+    "en": "Rampant Staff",
+    "pt": "Cajado Rampante",
+    "es": "Bastón desenfrenado"
+  },
+  "2H_POLEHAMMER": {
+    "en": "Polehammer",
+    "pt": "Martelo de Batalha",
+    "es": "Martillo largo"
+  },
+  "2H_QUARTERSTAFF": {
+    "en": "Quarterstaff",
+    "pt": "Bordão",
+    "es": "Vara"
+  },
+  "2H_QUARTERSTAFF_AVALON": {
+    "en": "Grailseeker",
+    "pt": "Buscador do Graal",
+    "es": "Buscador de grial"
+  },
+  "2H_RAM_KEEPER": {
+    "en": "Grovekeeper",
+    "pt": "Guarda-bosques",
+    "es": "Guardabosques"
+  },
+  "2H_REPEATINGCROSSBOW_UNDEAD": {
+    "en": "Weeping Repeater",
+    "pt": "Repetidor Lamentoso",
+    "es": "Repetidora de desconsuelo"
+  },
+  "2H_ROCKSTAFF_KEEPER": {
+    "en": "Staff of Balance",
+    "pt": "Cajado do Equilíbrio",
+    "es": "Bastón de equilibrio"
+  },
+  "2H_SCYTHE_CRYSTAL": {
+    "en": "Crystal Reaper",
+    "pt": "Foice de Cristal",
+    "es": "Guadaña de Cristal"
+  },
+  "2H_SCYTHE_HELL": {
+    "en": "Infernal Scythe",
+    "pt": "Segadeira Infernal",
+    "es": "Guadaña infernal"
+  },
+  "2H_SHAPESHIFTER_AVALON": {
+    "en": "Lightcaller",
+    "pt": "Cajado Invocador da Luz",
+    "es": "Báculo Invocador de Luz"
+  },
+  "2H_SHAPESHIFTER_CRYSTAL": {
+    "en": "Stillgaze Staff",
+    "pt": "Cajado Petrificante",
+    "es": "Báculo Petrificante"
+  },
+  "2H_SHAPESHIFTER_HELL": {
+    "en": "Hellspawn Staff",
+    "pt": "Cajado Endemoniado",
+    "es": "Báculo Endemoniado"
+  },
+  "2H_SHAPESHIFTER_KEEPER": {
+    "en": "Earthrune Staff",
+    "pt": "Cajado Rúnico da Terra",
+    "es": "Báculo Rúnico de la Tierra"
+  },
+  "2H_SHAPESHIFTER_MORGANA": {
+    "en": "Bloodmoon Staff",
+    "pt": "Cajado da Lua de Sangue",
+    "es": "Báculo de la Luna de Sangre"
+  },
+  "2H_SHAPESHIFTER_SET1": {
+    "en": "Prowling Staff",
+    "pt": "Cajado de Predador",
+    "es": "Báculo Depredador"
+  },
+  "2H_SHAPESHIFTER_SET2": {
+    "en": "Rootbound Staff",
+    "pt": "Cajado Enraizado",
+    "es": "Báculo Enraizado"
+  },
+  "2H_SHAPESHIFTER_SET3": {
+    "en": "Primal Staff",
+    "pt": "Cajado Primitivo",
+    "es": "Báculo Primitivo"
+  },
+  "2H_SKULLORB_HELL": {
+    "en": "Cursed Skull",
+    "pt": "Caveira Amaldiçoada",
+    "es": "Calavera maldita"
+  },
+  "2H_SPEAR": {
+    "en": "Pike",
+    "pt": "Pique",
+    "es": "Pica"
+  },
+  "2H_TOOL_AXE": {
+    "en": "Axe",
+    "pt": "Machado",
+    "es": "Hacha"
+  },
+  "2H_TOOL_AXE_AVALON": {
+    "en": "Avalonian Axe",
+    "pt": "Machado Avaloniano",
+    "es": "Hacha avaloniana"
+  },
+  "2H_TOOL_FISHINGROD": {
+    "en": "Fishing Rod",
+    "pt": "Vara de Pescar",
+    "es": "Caña de pescar"
+  },
+  "2H_TOOL_FISHINGROD_AVALON": {
+    "en": "Avalonian Fishing Rod",
+    "pt": "Vara de Pescar Avaloniano",
+    "es": "Caña de pescar avaloniana"
+  },
+  "2H_TOOL_HAMMER": {
+    "en": "Stone Hammer",
+    "pt": "Martelo de Pedra",
+    "es": "Martillo de piedra"
+  },
+  "2H_TOOL_HAMMER_AVALON": {
+    "en": "Avalonian Stone Hammer",
+    "pt": "Martelo de Pedra Avaloniano",
+    "es": "Martillo de piedra avaloniano"
+  },
+  "2H_TOOL_KNIFE": {
+    "en": "Skinning Knife",
+    "pt": "Faca de Esfolar",
+    "es": "Cuchillo de despellejar"
+  },
+  "2H_TOOL_KNIFE_AVALON": {
+    "en": "Avalonian Skinning Knife",
+    "pt": "Faca de Esfolar Avaloniano",
+    "es": "Cuchillo de despellejar avaloniano"
+  },
+  "2H_TOOL_PICK": {
+    "en": "Pickaxe",
+    "pt": "Picareta",
+    "es": "Pico"
+  },
+  "2H_TOOL_PICK_AVALON": {
+    "en": "Avalonian Pickaxe",
+    "pt": "Picareta Avaloniano",
+    "es": "Pico avaloniano"
+  },
+  "2H_TOOL_SICKLE": {
+    "en": "Sickle",
+    "pt": "Foice",
+    "es": "Hoz"
+  },
+  "2H_TOOL_SICKLE_AVALON": {
+    "en": "Avalonian Sickle",
+    "pt": "Foice Avaloniano",
+    "es": "Hoz avaloniana"
+  },
+  "2H_TOOL_SIEGEHAMMER": {
+    "en": "Demolition Hammer",
+    "pt": "Martelo de Demolição",
+    "es": "Martillo de demolición"
+  },
+  "2H_TOOL_SIEGEHAMMER_AVALON": {
+    "en": "Avalonian Demolition Hammer",
+    "pt": "Martelo de Demolição Avaloniano",
+    "es": "Martillo de demolición avaloniano"
+  },
+  "2H_TRIDENT_UNDEAD": {
+    "en": "Trinity Spear",
+    "pt": "Lança Trina",
+    "es": "Lanza de trinidad"
+  },
+  "2H_TWINSCYTHE_HELL": {
+    "en": "Soulscythe",
+    "pt": "Seganímica",
+    "es": "Guadaña de almas"
+  },
+  "2H_WARBOW": {
+    "en": "Warbow",
+    "pt": "Arco de Guerra",
+    "es": "Arco de guerra"
+  },
+  "2H_WILDSTAFF": {
+    "en": "Wild Staff",
+    "pt": "Cajado Selvagem",
+    "es": "Bastón salvaje"
+  },
+  "ARMOR_CLOTH_AVALON": {
+    "en": "Robe of Purity",
+    "pt": "Robe da Pureza",
+    "es": "Túnica de pureza"
+  },
+  "ARMOR_CLOTH_FEY": {
+    "en": "Feyscale Robe",
+    "pt": "Robe Feérico",
+    "es": "Túnica de escamas feéricas"
+  },
+  "ARMOR_CLOTH_HELL": {
+    "en": "Fiend Robe",
+    "pt": "Robe Malévolo",
+    "es": "Túnica de diablo"
+  },
+  "ARMOR_CLOTH_KEEPER": {
+    "en": "Druid Robe",
+    "pt": "Robe de Druida",
+    "es": "Túnica de druida"
+  },
+  "ARMOR_CLOTH_MORGANA": {
+    "en": "Cultist Robe",
+    "pt": "Robe Sectário",
+    "es": "Túnica de sectario"
+  },
+  "ARMOR_CLOTH_SET1": {
+    "en": "Scholar Robe",
+    "pt": "Robe de Erudito",
+    "es": "Túnica de erudito"
+  },
+  "ARMOR_CLOTH_SET2": {
+    "en": "Cleric Robe",
+    "pt": "Robe de Clérigo",
+    "es": "Túnica de clérigo"
+  },
+  "ARMOR_CLOTH_SET3": {
+    "en": "Mage Robe",
+    "pt": "Robe de Mago",
+    "es": "Túnica de mago"
+  },
+  "ARMOR_GATHERER_FIBER": {
+    "en": "Harvester Garb",
+    "pt": "Traje do Ceifeiro",
+    "es": "Atuendo de cosechador"
+  },
+  "ARMOR_GATHERER_FISH": {
+    "en": "Fisherman Garb",
+    "pt": "Traje do Pescador",
+    "es": "Atuendo de pescador"
+  },
+  "ARMOR_GATHERER_HIDE": {
+    "en": "Skinner Garb",
+    "pt": "Traje do Esfolador",
+    "es": "Atuendo de peletero"
+  },
+  "ARMOR_GATHERER_ORE": {
+    "en": "Miner Garb",
+    "pt": "Traje do Minerador",
+    "es": "Atuendo de minero"
+  },
+  "ARMOR_GATHERER_ROCK": {
+    "en": "Quarrier Garb",
+    "pt": "Traje do Cavouqueiro",
+    "es": "Atuendo de cantero"
+  },
+  "ARMOR_GATHERER_WOOD": {
+    "en": "Lumberjack Garb",
+    "pt": "Traje do Lenhador",
+    "es": "Atuendo de leñador"
+  },
+  "ARMOR_LEATHER_AVALON": {
+    "en": "Jacket of Tenacity",
+    "pt": "Casaco da Tenacidade",
+    "es": "Chaqueta de tenacidad"
+  },
+  "ARMOR_LEATHER_FEY": {
+    "en": "Mistwalker Jacket",
+    "pt": "Casaco de Andarilho da Névoa",
+    "es": "Chaqueta de caminanieblas"
+  },
+  "ARMOR_LEATHER_HELL": {
+    "en": "Hellion Jacket",
+    "pt": "Casaco Inferial",
+    "es": "Chaqueta de vándalo"
+  },
+  "ARMOR_LEATHER_MORGANA": {
+    "en": "Stalker Jacket",
+    "pt": "Casaco de Espreitador",
+    "es": "Chaqueta de acechador"
+  },
+  "ARMOR_LEATHER_SET1": {
+    "en": "Mercenary Jacket",
+    "pt": "Casaco de Mercenário",
+    "es": "Chaqueta de mercenario"
+  },
+  "ARMOR_LEATHER_SET2": {
+    "en": "Hunter Jacket",
+    "pt": "Casaco de Caçador",
+    "es": "Chaqueta de cazador"
+  },
+  "ARMOR_LEATHER_SET3": {
+    "en": "Assassin Jacket",
+    "pt": "Casaco de Assassino",
+    "es": "Chaqueta de asesino"
+  },
+  "ARMOR_LEATHER_UNDEAD": {
+    "en": "Specter Jacket",
+    "pt": "Casaco Espectral",
+    "es": "Chaqueta de espectro"
+  },
+  "ARMOR_PLATE_AVALON": {
+    "en": "Armor of Valor",
+    "pt": "Armadura da Bravura",
+    "es": "Armadura de valor"
+  },
+  "ARMOR_PLATE_FEY": {
+    "en": "Duskweaver Armor",
+    "pt": "Armadura de Tecelão do Crepúsculo",
+    "es": "Armadura crepuscular"
+  },
+  "ARMOR_PLATE_HELL": {
+    "en": "Demon Armor",
+    "pt": "Armadura Demônia",
+    "es": "Armadura de demonio"
+  },
+  "ARMOR_PLATE_KEEPER": {
+    "en": "Judicator Armor",
+    "pt": "Armadura Judicante",
+    "es": "Armadura de juez"
+  },
+  "ARMOR_PLATE_SET1": {
+    "en": "Soldier Armor",
+    "pt": "Armadura de Soldado",
+    "es": "Armadura de soldado"
+  },
+  "ARMOR_PLATE_SET2": {
+    "en": "Knight Armor",
+    "pt": "Armadura de Cavaleiro",
+    "es": "Armadura de caballero"
+  },
+  "ARMOR_PLATE_SET3": {
+    "en": "Guardian Armor",
+    "pt": "Armadura de Guardião",
+    "es": "Armadura de guardián"
+  },
+  "ARMOR_PLATE_UNDEAD": {
+    "en": "Graveguard Armor",
+    "pt": "Armadura de Guarda-tumbas",
+    "es": "Armadura de guardatumbas"
+  },
+  "BACKPACK_GATHERER_FIBER": {
+    "en": "Harvester Backpack",
+    "pt": "Mochila do Ceifeiro",
+    "es": "Mochila de cosechador"
+  },
+  "BACKPACK_GATHERER_FISH": {
+    "en": "Fisherman Backpack",
+    "pt": "Mochila do Pescador",
+    "es": "Mochila de pescador"
+  },
+  "BACKPACK_GATHERER_HIDE": {
+    "en": "Skinner Backpack",
+    "pt": "Mochila do Esfolador",
+    "es": "Mochila de peletero"
+  },
+  "BACKPACK_GATHERER_ORE": {
+    "en": "Miner Backpack",
+    "pt": "Mochila do Minerador",
+    "es": "Mochila de minero"
+  },
+  "BACKPACK_GATHERER_ROCK": {
+    "en": "Quarrier Backpack",
+    "pt": "Mochila do Cavouqueiro",
+    "es": "Mochila de cantero"
+  },
+  "BACKPACK_GATHERER_WOOD": {
+    "en": "Lumberjack Backpack",
+    "pt": "Mochila do Lenhador",
+    "es": "Mochila de leñador"
+  },
+  "BAG": {
+    "en": "Bag",
+    "pt": "Bolsa",
+    "es": "Bolsa"
+  },
+  "BAG_INSIGHT": {
+    "en": "Satchel of Insight",
+    "pt": "Sacola da Visão",
+    "es": "Bolsa de visión"
+  },
+  "CAPE": {
+    "en": "Cape",
+    "pt": "Capa",
+    "es": "Capa"
+  },
+  "HEAD_CLOTH_AVALON": {
+    "en": "Cowl of Purity",
+    "pt": "Capote da Pureza",
+    "es": "Hábito de pureza"
+  },
+  "HEAD_CLOTH_FEY": {
+    "en": "Feyscale Hat",
+    "pt": "Capote Feérico",
+    "es": "Sombrero de escamas feéricas"
+  },
+  "HEAD_CLOTH_HELL": {
+    "en": "Fiend Cowl",
+    "pt": "Capote Malévolo",
+    "es": "Hábito de diablo"
+  },
+  "HEAD_CLOTH_KEEPER": {
+    "en": "Druid Cowl",
+    "pt": "Capote de Druida",
+    "es": "Hábito de druida"
+  },
+  "HEAD_CLOTH_MORGANA": {
+    "en": "Cultist Cowl",
+    "pt": "Capote Sectário",
+    "es": "Hábito de sectario"
+  },
+  "HEAD_CLOTH_SET1": {
+    "en": "Scholar Cowl",
+    "pt": "Capote de Erudito",
+    "es": "Hábito de erudito"
+  },
+  "HEAD_CLOTH_SET2": {
+    "en": "Cleric Cowl",
+    "pt": "Capote de Clérigo",
+    "es": "Hábito de clérigo"
+  },
+  "HEAD_CLOTH_SET3": {
+    "en": "Mage Cowl",
+    "pt": "Capote de Mago",
+    "es": "Hábito de mago"
+  },
+  "HEAD_GATHERER_FIBER": {
+    "en": "Harvester Cap",
+    "pt": "Chapéu do Ceifeiro",
+    "es": "Gorro de cosechador"
+  },
+  "HEAD_GATHERER_FISH": {
+    "en": "Fisherman Cap",
+    "pt": "Chapéu do Pescador",
+    "es": "Gorro de pescador"
+  },
+  "HEAD_GATHERER_HIDE": {
+    "en": "Skinner Cap",
+    "pt": "Chapéu do Esfolador",
+    "es": "Gorro de peletero"
+  },
+  "HEAD_GATHERER_ORE": {
+    "en": "Miner Cap",
+    "pt": "Chapéu do Minerador",
+    "es": "Gorro de minero"
+  },
+  "HEAD_GATHERER_ROCK": {
+    "en": "Quarrier Cap",
+    "pt": "Chapéu do Cavouqueiro",
+    "es": "Gorro de cantero"
+  },
+  "HEAD_GATHERER_WOOD": {
+    "en": "Lumberjack Cap",
+    "pt": "Chapéu do Lenhador",
+    "es": "Gorro de leñador"
+  },
+  "HEAD_LEATHER_AVALON": {
+    "en": "Hood of Tenacity",
+    "pt": "Capuz da Tenacidade",
+    "es": "Capucha de tenacidad"
+  },
+  "HEAD_LEATHER_FEY": {
+    "en": "Mistwalker Hood",
+    "pt": "Capuz de Andarilho da Névoa",
+    "es": "Capucha de caminanieblas"
+  },
+  "HEAD_LEATHER_HELL": {
+    "en": "Hellion Hood",
+    "pt": "Capuz Inferial",
+    "es": "Capucha de vándalo"
+  },
+  "HEAD_LEATHER_MORGANA": {
+    "en": "Stalker Hood",
+    "pt": "Capuz de Espreitador",
+    "es": "Capucha de acechador"
+  },
+  "HEAD_LEATHER_SET1": {
+    "en": "Mercenary Hood",
+    "pt": "Capuz de Mercenário",
+    "es": "Capucha de mercenario"
+  },
+  "HEAD_LEATHER_SET2": {
+    "en": "Hunter Hood",
+    "pt": "Capuz de Caçador",
+    "es": "Capucha de cazador"
+  },
+  "HEAD_LEATHER_SET3": {
+    "en": "Assassin Hood",
+    "pt": "Capuz de Assassino",
+    "es": "Capucha de asesino"
+  },
+  "HEAD_LEATHER_UNDEAD": {
+    "en": "Specter Hood",
+    "pt": "Capuz Espectral",
+    "es": "Capucha de espectro"
+  },
+  "HEAD_PLATE_AVALON": {
+    "en": "Helmet of Valor",
+    "pt": "Elmo da Bravura",
+    "es": "Casco de valor"
+  },
+  "HEAD_PLATE_FEY": {
+    "en": "Duskweaver Helmet",
+    "pt": "Elmo de Tecelão do Crepúsculo",
+    "es": "Casco crepuscular"
+  },
+  "HEAD_PLATE_HELL": {
+    "en": "Demon Helmet",
+    "pt": "Elmo Demônio",
+    "es": "Casco de demonio"
+  },
+  "HEAD_PLATE_KEEPER": {
+    "en": "Judicator Helmet",
+    "pt": "Elmo Judicante",
+    "es": "Casco de juez"
+  },
+  "HEAD_PLATE_SET1": {
+    "en": "Soldier Helmet",
+    "pt": "Elmo de Soldado",
+    "es": "Casco de soldado"
+  },
+  "HEAD_PLATE_SET2": {
+    "en": "Knight Helmet",
+    "pt": "Elmo de Cavaleiro",
+    "es": "Casco de caballero"
+  },
+  "HEAD_PLATE_SET3": {
+    "en": "Guardian Helmet",
+    "pt": "Elmo de Guardião",
+    "es": "Casco de guardián"
+  },
+  "HEAD_PLATE_UNDEAD": {
+    "en": "Graveguard Helmet",
+    "pt": "Elmo de Guarda-tumbas",
+    "es": "Casco de guardatumbas"
+  },
+  "MAIN_1HCROSSBOW": {
+    "en": "Light Crossbow",
+    "pt": "Besta Leve",
+    "es": "Ballesta ligera"
+  },
+  "MAIN_ARCANESTAFF": {
+    "en": "Arcane Staff",
+    "pt": "Cajado Arcano",
+    "es": "Bastón arcano"
+  },
+  "MAIN_ARCANESTAFF_UNDEAD": {
+    "en": "Witchwork Staff",
+    "pt": "Cajado Feiticeiro",
+    "es": "Bastón de brujería"
+  },
+  "MAIN_AXE": {
+    "en": "Battleaxe",
+    "pt": "Machado de Guerra",
+    "es": "Hacha de guerra"
+  },
+  "MAIN_CURSEDSTAFF": {
+    "en": "Cursed Staff",
+    "pt": "Cajado Amaldiçoado",
+    "es": "Bastón maldito"
+  },
+  "MAIN_CURSEDSTAFF_AVALON": {
+    "en": "Shadowcaller",
+    "pt": "Chama-sombra",
+    "es": "Invocador oscuro"
+  },
+  "MAIN_CURSEDSTAFF_CRYSTAL": {
+    "en": "Rotcaller Staff",
+    "pt": "Cajado Pútrido",
+    "es": "Báculo Pútrido"
+  },
+  "MAIN_CURSEDSTAFF_UNDEAD": {
+    "en": "Lifecurse Staff",
+    "pt": "Cajado Execrado",
+    "es": "Bastón de maldición de vida"
+  },
+  "MAIN_DAGGER": {
+    "en": "Dagger",
+    "pt": "Adaga",
+    "es": "Daga"
+  },
+  "MAIN_DAGGER_HELL": {
+    "en": "Demonfang",
+    "pt": "Presa Demoníaca",
+    "es": "Colmillo demoníaco"
+  },
+  "MAIN_FIRESTAFF": {
+    "en": "Fire Staff",
+    "pt": "Cajado de Fogo",
+    "es": "Bastón ígneo"
+  },
+  "MAIN_FIRESTAFF_CRYSTAL": {
+    "en": "Flamewalker Staff",
+    "pt": "Cajado do Andarilho Flamejante",
+    "es": "Báculo del Caminante de Llamas"
+  },
+  "MAIN_FIRESTAFF_KEEPER": {
+    "en": "Wildfire Staff",
+    "pt": "Cajado Incendiário",
+    "es": "Bastón de fuego incontrolable"
+  },
+  "MAIN_FROSTSTAFF": {
+    "en": "Frost Staff",
+    "pt": "Cajado de Gelo",
+    "es": "Bastón de hielo"
+  },
+  "MAIN_FROSTSTAFF_AVALON": {
+    "en": "Chillhowl",
+    "pt": "Uivo Frio",
+    "es": "Grito gélido"
+  },
+  "MAIN_FROSTSTAFF_KEEPER": {
+    "en": "Hoarfrost Staff",
+    "pt": "Cajado Enregelante",
+    "es": "Bastón de escarcha"
+  },
+  "MAIN_HAMMER": {
+    "en": "Hammer",
+    "pt": "Martelo",
+    "es": "Martillo"
+  },
+  "MAIN_HOLYSTAFF": {
+    "en": "Holy Staff",
+    "pt": "Cajado Sagrado",
+    "es": "Bastón sagrado"
+  },
+  "MAIN_HOLYSTAFF_AVALON": {
+    "en": "Hallowfall",
+    "pt": "Queda Santa",
+    "es": "Santificador"
+  },
+  "MAIN_HOLYSTAFF_MORGANA": {
+    "en": "Lifetouch Staff",
+    "pt": "Cajado Avivador",
+    "es": "Bastón de toque de vida"
+  },
+  "MAIN_MACE": {
+    "en": "Mace",
+    "pt": "Maça",
+    "es": "Maza"
+  },
+  "MAIN_MACE_CRYSTAL": {
+    "en": "Dreadstorm Monarch",
+    "pt": "Monarca Tempestuoso",
+    "es": "Monarca Tempestuoso"
+  },
+  "MAIN_MACE_HELL": {
+    "en": "Incubus Mace",
+    "pt": "Maça de Íncubo",
+    "es": "Maza íncubo"
+  },
+  "MAIN_NATURESTAFF": {
+    "en": "Nature Staff",
+    "pt": "Cajado da Natureza",
+    "es": "Bastón natural"
+  },
+  "MAIN_NATURESTAFF_AVALON": {
+    "en": "Ironroot Staff",
+    "pt": "Raíz Férrea",
+    "es": "Bastón de raíz férrea"
+  },
+  "MAIN_NATURESTAFF_CRYSTAL": {
+    "en": "Forgebark Staff",
+    "pt": "Cajado de Crosta Forjada",
+    "es": "Báculo de Corteza Forjada"
+  },
+  "MAIN_NATURESTAFF_KEEPER": {
+    "en": "Druidic Staff",
+    "pt": "Cajado Druídico",
+    "es": "Bastón druida"
+  },
+  "MAIN_RAPIER_MORGANA": {
+    "en": "Bloodletter",
+    "pt": "Dessangrador",
+    "es": "Sangrador"
+  },
+  "MAIN_ROCKMACE_KEEPER": {
+    "en": "Bedrock Mace",
+    "pt": "Maça Pétrea",
+    "es": "Maza de lecho de roca"
+  },
+  "MAIN_SCIMITAR_MORGANA": {
+    "en": "Clarent Blade",
+    "pt": "Lâmina Aclarada",
+    "es": "Hoja Clarent"
+  },
+  "MAIN_SPEAR": {
+    "en": "Spear",
+    "pt": "Lança",
+    "es": "Lanza"
+  },
+  "MAIN_SPEAR_KEEPER": {
+    "en": "Heron Spear",
+    "pt": "Lança Garceira",
+    "es": "Lanza de garza"
+  },
+  "MAIN_SPEAR_LANCE_AVALON": {
+    "en": "Daybreaker",
+    "pt": "Alvorada",
+    "es": "Portador del alba"
+  },
+  "MAIN_SWORD": {
+    "en": "Broadsword",
+    "pt": "Espada Larga",
+    "es": "Espada ancha"
+  },
+  "MAIN_SWORD_CRYSTAL": {
+    "en": "Infinity Blade",
+    "pt": "Lâmina da Infinidade",
+    "es": "Hoja del Infinito"
+  },
+  "MEAL_GRILLEDFISH": {
+    "en": "Grilled Fish",
+    "pt": "Peixe Grelhado",
+    "es": "Pescado a la Parrilla"
+  },
+  "MEAL_OMELETTE": {
+    "en": "Goose Omelette",
+    "pt": "Omelete de Ganso",
+    "es": "Tortilla de ganso"
+  },
+  "MEAL_OMELETTE_AVALON": {
+    "en": "Avalonian Goose Omelette",
+    "pt": "Omelete de Ganso Avaloniano",
+    "es": "Tortilla de ganso avaloniana"
+  },
+  "MEAL_OMELETTE_FISH": {
+    "en": "Drybrook Crab Omelette",
+    "pt": "Omelete de Caranguejo de Riacho",
+    "es": "Tortilla de cangrejo de río"
+  },
+  "MEAL_PIE": {
+    "en": "Goose Pie",
+    "pt": "Torta de Ganso",
+    "es": "Pastel de ganso"
+  },
+  "MEAL_PIE_FISH": {
+    "en": "Mountain Blindeye Pie",
+    "pt": "Torta de Olhocego das Montanhas",
+    "es": "Pastel de ojo muerto de las montañas"
+  },
+  "MEAL_SALAD": {
+    "en": "Turnip Salad",
+    "pt": "Salada de Nabo",
+    "es": "Ensalada de rábano"
+  },
+  "MEAL_SALAD_FISH": {
+    "en": "Midwater Octopus Salad",
+    "pt": "Salada de Polvo das Águas médias",
+    "es": "Ensalada de pulpo de aguas medias"
+  },
+  "MEAL_SANDWICH": {
+    "en": "Goat Sandwich",
+    "pt": "Sanduíche de Cabra",
+    "es": "Bocadillo de cabra"
+  },
+  "MEAL_SANDWICH_AVALON": {
+    "en": "Avalonian Goat Sandwich",
+    "pt": "Sanduíche de Cabra Avaloniano",
+    "es": "Bocadillo de cabra avaloniano"
+  },
+  "MEAL_SANDWICH_FISH": {
+    "en": "Stonestream Lurcher Sandwich",
+    "pt": "Sanduíche de Larápio de Pedregulho",
+    "es": "Bocadillo de locha pedregosa"
+  },
+  "MEAL_SEAWEEDSALAD": {
+    "en": "Seaweed Salad",
+    "pt": "Salada de Algas",
+    "es": "Ensalada de Algas"
+  },
+  "MEAL_SOUP": {
+    "en": "Cabbage Soup",
+    "pt": "Sopa de Repolho",
+    "es": "Sopa de col"
+  },
+  "MEAL_SOUP_FISH": {
+    "en": "Blackbog Clam Soup",
+    "pt": "Sopa de Mexilhão do Brejo",
+    "es": "Sopa de almeja de pantano negro"
+  },
+  "MEAL_STEW": {
+    "en": "Goat Stew",
+    "pt": "Guisado de Cabra",
+    "es": "Guiso de cabra"
+  },
+  "MEAL_STEW_AVALON": {
+    "en": "Avalonian Goat Stew",
+    "pt": "Guisado de Cabra Avaloniano",
+    "es": "Guiso de cabra avaloniano"
+  },
+  "MEAL_STEW_FISH": {
+    "en": "Greenriver Eel Stew",
+    "pt": "Guisado de Enguia Esverdeada",
+    "es": "Guiso de anguila de agua verdosa"
+  },
+  "OFF_BOOK": {
+    "en": "Tome of Spells",
+    "pt": "Tomo de Feitiços",
+    "es": "Libro de hechizos"
+  },
+  "OFF_CENSER_AVALON": {
+    "en": "Celestial Censer",
+    "pt": "Incensário Celeste",
+    "es": "Incensario celestial"
+  },
+  "OFF_DEMONSKULL_HELL": {
+    "en": "Muisak",
+    "pt": "Muisec",
+    "es": "Muisak"
+  },
+  "OFF_HORN_KEEPER": {
+    "en": "Mistcaller",
+    "pt": "Brumário",
+    "es": "Invocanieblas"
+  },
+  "OFF_JESTERCANE_HELL": {
+    "en": "Leering Cane",
+    "pt": "Bengala Maligna",
+    "es": "Bastón malicioso"
+  },
+  "OFF_LAMP_UNDEAD": {
+    "en": "Cryptcandle",
+    "pt": "Lume Críptico",
+    "es": "Vela de cripta"
+  },
+  "OFF_ORB_MORGANA": {
+    "en": "Eye of Secrets",
+    "pt": "Olho dos Segredos",
+    "es": "Ojo de los secretos"
+  },
+  "OFF_SHIELD": {
+    "en": "Shield",
+    "pt": "Escudo",
+    "es": "Escudo"
+  },
+  "OFF_SHIELD_AVALON": {
+    "en": "Astral Aegis",
+    "pt": "Égide Astral",
+    "es": "Aegis astral"
+  },
+  "OFF_SHIELD_CRYSTAL": {
+    "en": "Unbreakable Ward",
+    "pt": "Barreira Inquebrável",
+    "es": "Barrera Inquebrantable"
+  },
+  "OFF_SHIELD_HELL": {
+    "en": "Caitiff Shield",
+    "pt": "Escudo Vampírico",
+    "es": "Escudo de villano"
+  },
+  "OFF_SPIKEDSHIELD_MORGANA": {
+    "en": "Facebreaker",
+    "pt": "Quebra-rostos",
+    "es": "Partecaras"
+  },
+  "OFF_TALISMAN_AVALON": {
+    "en": "Sacred Scepter",
+    "pt": "Cetro Sagrado",
+    "es": "Cetro sagrado"
+  },
+  "OFF_TOME_CRYSTAL": {
+    "en": "Timelocked Grimoire",
+    "pt": "Grimório Estagnado",
+    "es": "Grimorio Atemporal"
+  },
+  "OFF_TORCH": {
+    "en": "Torch",
+    "pt": "Tocha",
+    "es": "Antorcha"
+  },
+  "OFF_TORCH_CRYSTAL": {
+    "en": "Blueflame Torch",
+    "pt": "Tocha Chama Azul",
+    "es": "Antorcha Llama Azul"
+  },
+  "OFF_TOTEM_KEEPER": {
+    "en": "Taproot",
+    "pt": "Raiz Mestra",
+    "es": "Raíz primaria"
+  },
+  "OFF_TOWERSHIELD_UNDEAD": {
+    "en": "Sarcophagus",
+    "pt": "Sarcófago",
+    "es": "Sarcófago"
+  },
+  "POTION_ACID": {
+    "en": "Minor Acid Potion",
+    "pt": "Poção Ácida",
+    "es": "Poción de ácido"
+  },
+  "POTION_BERSERK": {
+    "en": "Minor Berserk Potion",
+    "pt": "Poção de Fúria Menor",
+    "es": "Poción Berserk"
+  },
+  "POTION_CLEANSE": {
+    "en": "Invisibility Potion",
+    "pt": "Poção de Invisibilidade",
+    "es": "Poción de invisibilidad"
+  },
+  "POTION_CLEANSE2": {
+    "en": "Minor Cleansing Potion",
+    "pt": "Poção Purificadora",
+    "es": "Poción de Limpieza"
+  },
+  "POTION_COOLDOWN": {
+    "en": "Minor Poison Potion",
+    "pt": "Poção Venenosa Menor",
+    "es": "Poción de veneno menor"
+  },
+  "POTION_ENERGY": {
+    "en": "Energy Potion",
+    "pt": "Poção de Energia",
+    "es": "Poción de energía"
+  },
+  "POTION_GATHER": {
+    "en": "Minor Gathering Potion",
+    "pt": "Poção de Coleta Menor",
+    "es": "Poción de Recolección"
+  },
+  "POTION_HEAL": {
+    "en": "Healing Potion",
+    "pt": "Poção de Cura",
+    "es": "Poción de curación"
+  },
+  "POTION_LAVA": {
+    "en": "Minor Hellfire Potion",
+    "pt": "Poção Infernal Menor",
+    "es": "Poción Hellfire"
+  },
+  "POTION_MOB_RESET": {
+    "en": "Minor Calming Potion",
+    "pt": "Poção Calmante Menor",
+    "es": "Poción de calma menor"
+  },
+  "POTION_REVIVE": {
+    "en": "Gigantify Potion",
+    "pt": "Poção de Crescimento",
+    "es": "Poción de gigantismo"
+  },
+  "POTION_SLOWFIELD": {
+    "en": "Sticky Potion",
+    "pt": "Poção Pegajosa",
+    "es": "Poción pegajosa"
+  },
+  "POTION_STONESKIN": {
+    "en": "Resistance Potion",
+    "pt": "Poção de Resistência",
+    "es": "Poción de resistencia"
+  },
+  "POTION_TORNADO": {
+    "en": "Minor Tornado in a Bottle",
+    "pt": "Tornado Engarrafado Menor",
+    "es": "Tornado en una Botella"
+  },
+  "SHOES_CLOTH_AVALON": {
+    "en": "Sandals of Purity",
+    "pt": "Sandálias da Pureza",
+    "es": "Sandalias de pureza"
+  },
+  "SHOES_CLOTH_FEY": {
+    "en": "Feyscale Sandals",
+    "pt": "Sandálias Feéricas",
+    "es": "Sandalias de escamas feéricas"
+  },
+  "SHOES_CLOTH_HELL": {
+    "en": "Fiend Sandals",
+    "pt": "Sandálias Malévolas",
+    "es": "Sandalias de diablo"
+  },
+  "SHOES_CLOTH_KEEPER": {
+    "en": "Druid Sandals",
+    "pt": "Sandálias de Druida",
+    "es": "Sandalias de druida"
+  },
+  "SHOES_CLOTH_MORGANA": {
+    "en": "Cultist Sandals",
+    "pt": "Sandálias Sectárias",
+    "es": "Sandalias de sectario"
+  },
+  "SHOES_CLOTH_SET1": {
+    "en": "Scholar Sandals",
+    "pt": "Sandálias de Erudito",
+    "es": "Sandalias de erudito"
+  },
+  "SHOES_CLOTH_SET2": {
+    "en": "Cleric Sandals",
+    "pt": "Sandálias de Clérigo",
+    "es": "Sandalias de clérigo"
+  },
+  "SHOES_CLOTH_SET3": {
+    "en": "Mage Sandals",
+    "pt": "Sandálias de Mago",
+    "es": "Sandalias de mago"
+  },
+  "SHOES_GATHERER_FIBER": {
+    "en": "Harvester Workboots",
+    "pt": "Botas de Trabalho do Ceifeiro",
+    "es": "Botas de trabajo de cosechador"
+  },
+  "SHOES_GATHERER_FISH": {
+    "en": "Fisherman Workboots",
+    "pt": "Botas do Pescador",
+    "es": "Botas de trabajo de pescador"
+  },
+  "SHOES_GATHERER_HIDE": {
+    "en": "Skinner Workboots",
+    "pt": "Botas de Trabalho do Esfolador",
+    "es": "Botas de trabajo de peletero"
+  },
+  "SHOES_GATHERER_ORE": {
+    "en": "Miner Workboots",
+    "pt": "Botas de Trabalho do Minerador",
+    "es": "Botas de trabajo de minero"
+  },
+  "SHOES_GATHERER_ROCK": {
+    "en": "Quarrier Workboots",
+    "pt": "Botas de Trabalho do Cavouqueiro",
+    "es": "Botas de trabajo de cantero"
+  },
+  "SHOES_GATHERER_WOOD": {
+    "en": "Lumberjack Workboots",
+    "pt": "Botas de Trabalho do Lenhador",
+    "es": "Botas de trabajo de leñador"
+  },
+  "SHOES_LEATHER_AVALON": {
+    "en": "Shoes of Tenacity",
+    "pt": "Sapatos da Tenacidade",
+    "es": "Zapatos de tenacidad"
+  },
+  "SHOES_LEATHER_FEY": {
+    "en": "Mistwalker Shoes",
+    "pt": "Sapatos de Andarilho da Névoa",
+    "es": "Zapatos de caminanieblas"
+  },
+  "SHOES_LEATHER_HELL": {
+    "en": "Hellion Shoes",
+    "pt": "Sapatos Inferiais",
+    "es": "Zapatos de vándalo"
+  },
+  "SHOES_LEATHER_MORGANA": {
+    "en": "Stalker Shoes",
+    "pt": "Sapatos de Espreitador",
+    "es": "Zapatos de acechador"
+  },
+  "SHOES_LEATHER_SET1": {
+    "en": "Mercenary Shoes",
+    "pt": "Sapatos de Mercenário",
+    "es": "Zapatos de mercenario"
+  },
+  "SHOES_LEATHER_SET2": {
+    "en": "Hunter Shoes",
+    "pt": "Sapatos de Caçador",
+    "es": "Zapatos de cazador"
+  },
+  "SHOES_LEATHER_SET3": {
+    "en": "Assassin Shoes",
+    "pt": "Sapatos de Assassino",
+    "es": "Zapatos de asesino"
+  },
+  "SHOES_LEATHER_UNDEAD": {
+    "en": "Specter Shoes",
+    "pt": "Sapatos Espectrais",
+    "es": "Zapatos de espectro"
+  },
+  "SHOES_PLATE_AVALON": {
+    "en": "Boots of Valor",
+    "pt": "Botas da Bravura",
+    "es": "Botas de valor"
+  },
+  "SHOES_PLATE_FEY": {
+    "en": "Duskweaver Boots",
+    "pt": "Botas de Tecelão do Crepúsculo",
+    "es": "Botas crepusculares"
+  },
+  "SHOES_PLATE_HELL": {
+    "en": "Demon Boots",
+    "pt": "Botas Demônias",
+    "es": "Botas de demonio"
+  },
+  "SHOES_PLATE_KEEPER": {
+    "en": "Judicator Boots",
+    "pt": "Botas Judicantes",
+    "es": "Botas de juez"
+  },
+  "SHOES_PLATE_SET1": {
+    "en": "Soldier Boots",
+    "pt": "Botas de Soldado",
+    "es": "Botas de soldado"
+  },
+  "SHOES_PLATE_SET2": {
+    "en": "Knight Boots",
+    "pt": "Botas de Cavaleiro",
+    "es": "Botas de caballero"
+  },
+  "SHOES_PLATE_SET3": {
+    "en": "Guardian Boots",
+    "pt": "Botas de Guardião",
+    "es": "Botas de guardián"
+  },
+  "SHOES_PLATE_UNDEAD": {
+    "en": "Graveguard Boots",
+    "pt": "Botas de Guarda-tumbas",
+    "es": "Botas de guardatumbas"
+  },
+  "refining:fiber": {
+    "pt": "Fibra",
+    "en": "Fiber",
+    "es": "Fibra"
+  },
+  "refining:hide": {
+    "pt": "Couro",
+    "en": "Hide",
+    "es": "Cuero"
+  },
+  "refining:ore": {
+    "pt": "Minério",
+    "en": "Ore",
+    "es": "Mineral"
+  },
+  "refining:wood": {
+    "pt": "Madeira",
+    "en": "Wood",
+    "es": "Madera"
+  },
+  "refining:stone": {
+    "pt": "Pedra",
+    "en": "Stone",
+    "es": "Piedra"
+  }
+}

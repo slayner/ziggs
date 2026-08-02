@@ -51,7 +51,6 @@ a { color: var(--info); text-decoration: none; }
 }
 .badge {
   font-size: 11px; padding: 3px 9px; border-radius: 999px;
-  background: var(--gold-soft); color: var(--gold);
   display: inline-flex; align-items: center; gap: 4px;
 }
 .badge.info { background: var(--info-soft); color: var(--info); }
@@ -927,6 +926,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .status-dropdown-row { display: flex; align-items: center; gap: 9px; padding: 9px 4px; border-bottom: 1px solid var(--border); }
 .status-dropdown-row:last-child { border-bottom: 0; }
 .status-pulse { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #e0a23b; box-shadow: 0 0 0 3px rgba(224, 162, 59, .12); }
+@keyframes craft-suggest-pulse { 0%, 100% { opacity: .35; transform: scale(1); } 50% { opacity: .7; transform: scale(1.08); } }
+.craft-suggest-pulse { animation: craft-suggest-pulse 1.6s ease-in-out infinite; }
 .status-region strong { color: var(--text); font-size: 12px; }
 .status-region small { color: var(--hint); font-size: 10px; }
 .status-delay { font: 600 12px ui-monospace, monospace; font-variant-numeric: tabular-nums; }

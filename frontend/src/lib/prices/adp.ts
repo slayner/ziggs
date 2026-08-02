@@ -2,23 +2,18 @@
  * Albion Online Data Project (ADP) price source — browser-side client.
  * Calls the ADP API directly (CORS-enabled). No User-Agent header is sent
  * since browsers block setting it from JS.
+ *
+ * ADP usa UniqueNames (T4_FIBER_LEVEL2@2). Nosso sistema usa game_names
+ * ("Rare Hemp"). Conversão via itemMap nas fronteiras.
  */
 import type { PriceQuote, PriceServer } from "./types";
+import { toUniqueIds, toGameNames } from "./itemMap";
 
 const BASE: Record<PriceServer, string> = {
   west: "https://west.albion-online-data.com",
   east: "https://east.albion-online-data.com",
   europe: "https://europe.albion-online-data.com",
 };
-
-export function toMarketId(catalogId: string): string {
-  const m = catalogId.match(/_LEVEL(\d)$/);
-  return m ? `${catalogId}@${m[1]}` : catalogId;
-}
-export function fromMarketId(marketId: string): string {
-  const m = marketId.match(/^(.*_LEVEL\d)@\d$/);
-  return m ? m[1] : marketId;
-}
 
 function parseDate(s: string | undefined): number {
   if (!s || s.startsWith("0001")) return 0;
@@ -53,14 +48,26 @@ export async function fetchAdpPrices(
   const qual = encodeURIComponent(qualities.join(","));
   const out: PriceQuote[] = [];
 
-  for (const ids of chunk(catalogItemIds.map(toMarketId), 100)) {
+  // catalogItemIds são UniqueNames (catálogo). Converte pra game_name
+  // (formato canônico do PriceQuote) e pra UniqueName ADP pra chamar a API.
+  // Devolve PriceQuote.itemId = game_name.
+  const gameIds = toGameNames(catalogItemIds);
+  const uniqueIds = toUniqueIds(gameIds);
+  // uniqueId ADP → game_name
+  const adpToGame = new Map<string, string>();
+  for (let i = 0; i < uniqueIds.length; i++) {
+    adpToGame.set(uniqueIds[i], gameIds[i]);
+  }
+
+  for (const ids of chunk(uniqueIds, 100)) {
     const url = `${base}/api/v2/stats/prices/${ids.join(",")}.json?locations=${loc}&qualities=${qual}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`ADP prices ${res.status}`);
     const rows = (await res.json()) as AdpPriceRow[];
     for (const r of rows) {
+      const itemId = adpToGame.get(r.item_id) ?? r.item_id;
       out.push({
-        itemId: fromMarketId(r.item_id),
+        itemId,
         city: r.city,
         quality: r.quality,
         sellMin: r.sell_price_min || 0,
@@ -91,7 +98,14 @@ export async function fetchAdpDemand(
   const qual = encodeURIComponent(qualities.join(","));
   const totals: Record<string, number> = {};
 
-  for (const ids of chunk(catalogItemIds.map(toMarketId), 100)) {
+  const gameIds = toGameNames(catalogItemIds);
+  const uniqueIds = toUniqueIds(gameIds);
+  const adpToGame = new Map<string, string>();
+  for (let i = 0; i < uniqueIds.length; i++) {
+    adpToGame.set(uniqueIds[i], gameIds[i]);
+  }
+
+  for (const ids of chunk(uniqueIds, 100)) {
     const url = `${base}/api/v2/stats/history/${ids.join(",")}.json?locations=${loc}&time-scale=24&qualities=${qual}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`ADP history ${res.status}`);
@@ -99,7 +113,7 @@ export async function fetchAdpDemand(
     for (const r of rows) {
       const recent = r.data.slice(-days);
       const avg = recent.length ? recent.reduce((s, d) => s + d.item_count, 0) / recent.length : 0;
-      const id = fromMarketId(r.item_id);
+      const id = adpToGame.get(r.item_id) ?? r.item_id;
       totals[id] = (totals[id] ?? 0) + avg;
     }
   }
@@ -123,7 +137,9 @@ export async function fetchAdpPriceSeries(
   days = 28,
 ): Promise<{ series: { t: string; price: number }[]; avg: number }> {
   const base = BASE[server];
-  const url = `${base}/api/v2/stats/history/${toMarketId(catalogItemId)}.json?locations=${encodeURIComponent(location)}&time-scale=24&qualities=${encodeURIComponent(qualities.join(","))}`;
+  const [gameId] = toGameNames([catalogItemId]);
+  const [uniqueId] = toUniqueIds([gameId]);
+  const url = `${base}/api/v2/stats/history/${uniqueId}.json?locations=${encodeURIComponent(location)}&time-scale=24&qualities=${encodeURIComponent(qualities.join(","))}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`ADP history ${res.status}`);
   const rows = (await res.json()) as AdpHistoryRow[];

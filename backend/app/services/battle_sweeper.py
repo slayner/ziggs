@@ -54,6 +54,13 @@ CYCLE_INTERVAL = 180          # segundos entre ciclos
 MAX_429_RETRIES = 3
 DB_LOCK_RETRIES = 3
 
+# Companion-aware: quando há companions ativos sondando, o sweeper reduz seus
+# candidatos — eles cobrem os mesmos buracos de graça (IP deles, não nosso rate
+# limit). Sem companion → throughput total; com companion → só o que o companion
+# não vai alcançar (a janela abaixo do mínimo, que o companion também gera, mas
+# o sweeper chega primeiro por ser mais direto).
+COMPANION_AWARE_DIVISOR = 4  # com N companions: MAX / 4 (não divide por N — companion cai, sweeper assume)
+
 # ponytail: taxa agregada = 1200 candidatos × 1 host / 180s ≈ 6.7 req/s — o
 # MESMO budget da versão anterior (400 × 3 hosts), só que 100% dele gasto na
 # região certa em vez de ⅓. Se virar 429 sustentado, baixa
@@ -87,12 +94,23 @@ def _region_candidates(ids_desc: list[int], probed: set[int], limit: int) -> lis
     return out
 
 
-def generate_candidates(db: Session) -> list[tuple[str, int]]:
+def generate_candidates(db: Session, active_companions: int = 0) -> list[tuple[str, int]]:
     """[(region, albion_id_int), ...] — buracos por região, novos primeiro.
     Exclusão de sondados é GLOBAL por albion_id (PK única da BattleIdProbe):
     um número sondado numa região não re-entra pra outra. Perde no máximo o
     gêmeo de número coincidente em outra região — raro e barato; se um dia
-    importar, o upgrade é PK composta (region, albion_id) na probe table."""
+    importar, o upgrade é PK composta (region, albion_id) na probe table.
+
+    `active_companions`: se >0, reduz o teto de candidatos — companions ativos
+    sondam os mesmos buracos de graça (IP deles), então o sweeper gasta menos
+    do nosso rate limit e deixa espaço pra backfill/warmer.
+    """
+    limit = MAX_CANDIDATES_PER_CYCLE
+    if active_companions > 0:
+        limit = max(100, MAX_CANDIDATES_PER_CYCLE // COMPANION_AWARE_DIVISOR)
+        log.info("battle_sweeper: %d companion(s) ativo(s) — teto reduzido pra %d candidatos",
+                 active_companions, limit)
+
     probed: set[int] = set()
     for x in db.scalars(select(BattleIdProbe.albion_id)):
         try:
@@ -100,7 +118,7 @@ def generate_candidates(db: Session) -> list[tuple[str, int]]:
         except (TypeError, ValueError):
             continue
 
-    per_region_limit = max(1, MAX_CANDIDATES_PER_CYCLE // len(HOSTS))
+    per_region_limit = max(1, limit // len(HOSTS))
     out: list[tuple[str, int]] = []
     for region in HOSTS:
         raw = db.scalars(select(Battle.albion_id).where(Battle.region == region)).all()
@@ -115,7 +133,7 @@ def generate_candidates(db: Session) -> list[tuple[str, int]]:
         ids_desc = sorted(ids, reverse=True)
         for c in _region_candidates(ids_desc, probed | ids, per_region_limit):
             out.append((region, c))
-    return out[:MAX_CANDIDATES_PER_CYCLE]
+    return out[:limit]
 
 
 async def _probe_detail(client: httpx.AsyncClient, host: str, albion_id: str) -> tuple[str, dict | None]:
@@ -209,16 +227,25 @@ async def _probe_and_capture(
         raise AssertionError("unreachable")
 
 
-def _generate_candidates_sync() -> list[tuple[str, int]]:
+def _generate_candidates_sync(active_companions: int = 0) -> list[tuple[str, int]]:
     db = SessionLocal()
     try:
-        return generate_candidates(db)
+        return generate_candidates(db, active_companions)
     finally:
         db.close()
 
 
 async def sweep_cycle(client: httpx.AsyncClient, db: Session) -> dict:
-    candidates = await asyncio.to_thread(_generate_candidates_sync)
+    # Companion-aware: companions ativos sondam os mesmos buracos de graça.
+    # Reduzir o teto aqui libera rate limit pro backfill/warmer sem perder
+    # cobertura (o companion cobre o que o sweeper pula).
+    active = 0
+    try:
+        from app.services.companion_scan import count_active_companions
+        active = count_active_companions(db)
+    except Exception:
+        pass
+    candidates = await asyncio.to_thread(_generate_candidates_sync, active)
     if not candidates:
         log.info("battle_sweeper: sem candidatos novos (tudo sondado ou base vazia)")
         return {"candidates": 0, "found": 0, "probed": 0}

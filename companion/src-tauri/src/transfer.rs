@@ -28,6 +28,8 @@ pub struct QueuedItem {
     pub kind: String,       // "scan_report" | "prices"
     pub payload: serde_json::Value,
     pub queued_at: String,  // ISO timestamp
+    #[serde(default)]
+    pub retries: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -72,6 +74,7 @@ impl TransferQueue {
             kind: "scan_report".into(),
             payload: serde_json::to_value(&report).unwrap_or(serde_json::Value::Null),
             queued_at: iso_now(),
+            retries: 0,
         };
         let mut items = self.items.lock().await;
         items.push(item);
@@ -85,6 +88,7 @@ impl TransferQueue {
             kind: "prices".into(),
             payload: serde_json::json!({ "rows": rows }),
             queued_at: iso_now(),
+            retries: 0,
         };
         let mut items = self.items.lock().await;
         items.push(item);
@@ -98,6 +102,7 @@ impl TransferQueue {
             kind: "market_history".into(),
             payload: serde_json::json!({ "rows": rows }),
             queued_at: iso_now(),
+            retries: 0,
         };
         let mut items = self.items.lock().await;
         items.push(item);
@@ -119,13 +124,14 @@ impl TransferQueue {
         let _uploader = self.uploader.lock().await;
         let mut sent = 0;
         let mut failed = 0;
+        const MAX_RETRIES: u32 = 5;
         let batch = {
             let items = self.items.lock().await;
             items.iter().take(max).cloned().collect::<Vec<_>>()
         };
         for (i, item) in batch.iter().enumerate() {
             if i > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
             }
             if self.send_one(api, item).await {
                 sent += 1;
@@ -133,12 +139,27 @@ impl TransferQueue {
                 if let Some(pos) = items.iter().position(|queued| queued == item) {
                     items.remove(pos); // só depois do ACK
                     if let Err(e) = save_queue(&self.path, &items) {
-                        // O disco ainda contém o item: crash pode duplicar, nunca perder.
                         tracing::error!("ACK recebido, mas falhou salvar remoção da fila: {e:#}");
                     }
                 }
             } else {
                 failed += 1;
+                let mut items = self.items.lock().await;
+                if let Some(pos) = items.iter().position(|queued| queued == item) {
+                    let mut updated = items.remove(pos);
+                    updated.retries += 1;
+                    if updated.retries >= MAX_RETRIES {
+                        tracing::warn!(
+                            "descartando item após {} tentativas: kind={}",
+                            updated.retries, updated.kind
+                        );
+                    } else {
+                        items.push(updated); // mover pro fim: próximos items tentam primeiro
+                    }
+                    if let Err(e) = save_queue(&self.path, &items) {
+                        tracing::error!("falha ao salvar fila após mover item falhado: {e:#}");
+                    }
+                }
             }
         }
         (sent, failed)
@@ -203,7 +224,7 @@ mod tests {
 
     #[test]
     fn persisted_item_is_only_removed_by_ack_path() {
-        let item = QueuedItem { kind: "prices".into(), payload: serde_json::json!({}), queued_at: "1".into() };
+        let item = QueuedItem { kind: "prices".into(), payload: serde_json::json!({}), queued_at: "1".into(), retries: 0 };
         let mut items = vec![item.clone()];
         let pending = items[0].clone();
         assert_eq!(items, vec![item.clone()]); // enviar/clonar não drena

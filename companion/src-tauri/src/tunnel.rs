@@ -254,15 +254,15 @@ impl Tunnel {
             for (network, mask) in routes {
                 let gateway = TUNNEL_IPV4_GW.to_string();
                 // Cura rota órfã deixada por crash/kill do processo anterior.
-                let _ = std::process::Command::new("route")
+                let _ = crate::winutil::no_window(std::process::Command::new("route"))
                     .args(["delete", &network.to_string(), "mask", &mask.to_string(), &gateway])
                     .output();
-                let output = std::process::Command::new("route")
+                let output = crate::winutil::no_window(std::process::Command::new("route"))
                     .args(["add", &network.to_string(), "mask", &mask.to_string(), &gateway, "metric", "1"])
                     .output()?;
                 if !output.status.success() {
                     for added in &installed {
-                        let _ = std::process::Command::new("route")
+                        let _ = crate::winutil::no_window(std::process::Command::new("route"))
                             .args(["delete", &added.network.to_string(), "mask", &added.mask.to_string(), &gateway]).output();
                     }
                     return Err(anyhow!("Windows recusou a rota do jogo para {network}"));
@@ -476,7 +476,7 @@ fn stale_route_cleanup_script() -> &'static str {
 
 #[cfg(target_os = "windows")]
 pub fn scrub_stale_routes_now() -> Result<()> {
-    let output = std::process::Command::new("powershell")
+    let output = crate::winutil::no_window(std::process::Command::new("powershell"))
         .args(["-NoProfile", "-NonInteractive", "-Command", stale_route_cleanup_script()])
         .output()?;
     if !output.status.success() {
@@ -513,7 +513,7 @@ fn resolve_endpoint(endpoint: &str) -> Result<SocketAddr> {
 #[cfg(target_os = "windows")]
 fn enumerate_internet_paths() -> Result<Vec<PathCandidate>> {
     let script = r#"Get-NetIPConfiguration | Where-Object { $_.NetAdapter.Status -eq 'Up' -and $_.IPv4DefaultGateway -and $_.IPv4Address -and $_.InterfaceAlias -ne 'Ziggs' } | ForEach-Object { "{0}`t{1}`t{2}`t{3}" -f $_.InterfaceIndex,$_.InterfaceAlias,$_.IPv4Address[0].IPAddress,$_.NetIPv4Interface.InterfaceMetric }"#;
-    let output = std::process::Command::new("powershell")
+    let output = crate::winutil::no_window(std::process::Command::new("powershell"))
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
         .map_err(|e| anyhow!("falha ao listar conexões: {e}"))?;

@@ -64,6 +64,10 @@ async def _discover_region(client, db, region: str) -> int:
     ).all())
     missing = [cid for cid in candidate_ids if cid not in known]
 
+    # Libera read tx antes do loop de HTTP (resolve_by_albion_id bate na API
+    # do Albion pra cada ID — read tx aberta impede wal_checkpoint).
+    db.commit()
+
     for albion_id in missing:
         try:
             # ponytail: NEW_SMALL flat — esses IDs vêm do ledger de kills recente,

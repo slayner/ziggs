@@ -175,7 +175,7 @@ pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
         }
         let iface = default_interface_name()?;
         let primary = &profile.primary;
-        let out = std::process::Command::new("netsh")
+        let out = crate::winutil::no_window(std::process::Command::new("netsh"))
             .args(["interface", "ip", "set", "dns", &iface, "static", primary])
             .output()
             .map_err(|e| anyhow::anyhow!("netsh: {e}"))?;
@@ -183,7 +183,7 @@ pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
             return Err(anyhow::anyhow!("netsh falhou: {}", String::from_utf8_lossy(&out.stderr)));
         }
         if !profile.secondary.is_empty() && profile.secondary != "system" {
-            let _ = std::process::Command::new("netsh")
+            let _ = crate::winutil::no_window(std::process::Command::new("netsh"))
                 .args(["interface", "ip", "add", "dns", &iface, &profile.secondary, "index=2"])
                 .output();
         }
@@ -199,7 +199,7 @@ pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
 /// Descobre o nome da interface de rede primária (com default gateway).
 #[cfg(target_os = "windows")]
 fn default_interface_name() -> Result<String> {
-    let out = std::process::Command::new("powershell")
+    let out = crate::winutil::no_window(std::process::Command::new("powershell"))
         .args([
             "-NoProfile", "-Command",
             "Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Select-Object -First 1 -ExpandProperty InterfaceAlias",

@@ -5,6 +5,7 @@ import { ALBION_ITEMS, itemRenderUrl } from "../data/albion-items";
 import { Panel } from "./Panel";
 
 const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
+const JUICY_KILL_HARD_FLOOR = 20_000_000;
 
 // ── Itens desabilitados do regear: o backend guarda por BASE ID (sem tier/
 // enchant — "HEAD_PLATE_SET1", "MOUNT_OX"). O catálogo lista variantes
@@ -549,8 +550,8 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     }
   }
 
-  async function saveJuicyKillMinSilver() {
-    const n = Math.max(0, Number(juicyKillMinSilver) || 0);
+async function saveJuicyKillMinSilver() {
+    const n = Math.max(JUICY_KILL_HARD_FLOOR, Number(juicyKillMinSilver) || 0);
     setJuicyKillMinSilver(String(n));
     await api.updateGuildSettings(guildId, { juicy_kill_min_silver: n });
   }
@@ -1735,7 +1736,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
                 <label className="block text-xs text-zinc-400">
                   {t("juicyKillsMinSilverLabel")}
                   <span className="block text-[11px] text-zinc-600 my-1">{t("juicyKillsMinSilverDesc")}</span>
-                  <input type="number" min={0} value={juicyKillMinSilver}
+<input type="number" min={20000000} value={juicyKillMinSilver}
                     onChange={e => setJuicyKillMinSilver(e.target.value)} onBlur={saveJuicyKillMinSilver}
                     className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200" />
                 </label>
@@ -1748,17 +1749,13 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
                 </label>
               </div>
 
-              <label className="block text-xs text-zinc-400 mb-2">{t("juicyKillsRegionsLabel")}</label>
+<label className="block text-xs text-zinc-400 mb-2">{t("juicyKillsRegionsLabel")}</label>
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => saveJuicyKillRegions([])}
-                  className={`badge ${juicyKillRegions.length === 0 ? "border-amber-500 text-amber-300" : ""}`}>
-                  {t("juicyKillsAllRegions")}
-                </button>
                 {ALBION_REGIONS.map(region => {
                   const selected = juicyKillRegions.includes(region);
                   return <button type="button" key={region}
                     onClick={() => saveJuicyKillRegions(selected ? juicyKillRegions.filter(r => r !== region) : [...juicyKillRegions, region])}
-                    className={`badge ${selected ? "border-amber-500 text-amber-300" : ""}`}>
+                    className={`badge border ${selected ? "border-amber-500 text-amber-300 bg-amber-500/15" : "border-zinc-700 bg-zinc-800 text-zinc-500"}`}>
                     {REGION_LABELS[lang][region]}
                   </button>;
                 })}

@@ -1,9 +1,12 @@
-"""Base declarativa + mixins comuns a todas as tabelas."""
+"""Base declarativa + mixins comuns a todas as tabelas.
+
+PostgreSQL 16 local em dev. SQLite foi removido (ver app/db.py).
+"""
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, BigInteger, DateTime, Integer, func
+from sqlalchemy import BigInteger, DateTime, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -27,28 +30,19 @@ class TimestampMixin:
 
 
 # IDs do Discord (guild, user, role, channel, message) são snowflakes de 64 bits.
-# Usamos BigInteger e guardamos o próprio snowflake como PK quando faz sentido.
 Snowflake = BigInteger
 
 
 def BigInt():
-    """BigInteger no Postgres, Integer no SQLite (portável para colunas de prata)."""
-    return BigInteger().with_variant(Integer, "sqlite")
+    """BigInteger para colunas de prata/fama (escala)."""
+    return BigInteger()
 
 
 def json_type():
-    """JSONB no Postgres (produção), JSON genérico no SQLite (dev local)."""
-    return JSONB().with_variant(JSON(), "sqlite")
+    """JSONB no Postgres."""
+    return JSONB()
 
 
 def pk() -> Mapped[int]:
-    """
-    Chave primária sintética auto-incremento, portável.
-
-    BIGINT no Postgres (escala); INTEGER no SQLite (só INTEGER vira alias de
-    rowid e auto-incrementa lá). Use nas PKs geradas pelo banco — NÃO nas PKs que
-    são snowflake do Discord (essas usam Snowflake + autoincrement=False).
-    """
-    return mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"), primary_key=True
-    )
+    """Chave primária sintética auto-incremento (BIGSERIAL)."""
+    return mapped_column(BigInteger, primary_key=True)

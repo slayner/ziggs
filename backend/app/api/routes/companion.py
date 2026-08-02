@@ -39,9 +39,10 @@ from app.models.events import Event, EventSignup
 from app.models.loot import ItemPriceCache
 from app.models.lootlog import LootLogSubmission
 from app.models.tenancy import Guild, User
-from app.services import companion_scan, lootlog as lootlog_svc, market_history, prices, profile_warmer
+from app.services import companion_scan, companion_kill_scan, lootlog as lootlog_svc, market_history, prices, profile_warmer
 from app.domain.states import EventState
 from app.models.companion import RANGE_SIZE
+from app.models.prices import ItemPriceLatest
 from app.services.player_tracker import HOSTS
 
 router = APIRouter(tags=["companion"])
@@ -74,7 +75,8 @@ def _install_id(raw: str | None) -> str | None:
 # vira N× o configurado. Sobe pra Redis quando isso importar.
 _RATE_WINDOW_S = 300.0        # 5 min
 _RATE_MAX_ROWS = 5_000        # por instalação, na janela
-_MAX_ROWS_PER_REQUEST = 2_000  # payload absurdo é recusado na entrada
+_MAX_ROWS_PER_REQUEST = 50_000  # teto anti-DoS: acima disso rejeita. Chunk interno em _CHUNK_SIZE
+_CHUNK_SIZE = 2_000  # tamanho de cada chunk no processamento interno
 _rate_log: dict[str, deque[tuple[float, int]]] = defaultdict(deque)
 
 
@@ -330,7 +332,7 @@ class SilverEstimateItemIn(BaseModel):
 
 
 class SilverEstimateIn(BaseModel):
-    items: list[SilverEstimateItemIn] = Field(max_length=200)
+    items: list[SilverEstimateItemIn] = Field(max_length=10_000)
 
 
 class SilverEstimateOut(BaseModel):
@@ -352,12 +354,18 @@ def companion_lootlog_silver_estimate(
     quantities: dict[str, int] = defaultdict(int)
     for item in body.items:
         quantities[item.item_id] += item.quantity
-    prices_by_id = {
-        row.item_type: row.silver_value
+
+    # Chunkar o SELECT IN — Postgres tem limite de ~32k params por query,
+    # e payloads grandes podem ter milhares de item_ids únicos.
+    all_ids = list(quantities.keys())
+    prices_by_id: dict[str, int] = {}
+    for i in range(0, len(all_ids), 500):
+        chunk = all_ids[i : i + 500]
         for row in db.scalars(
-            select(ItemPriceCache).where(ItemPriceCache.item_type.in_(quantities))
-        )
-    }
+            select(ItemPriceCache).where(ItemPriceCache.item_type.in_(chunk))
+        ):
+            prices_by_id[row.item_type] = row.silver_value
+
     return SilverEstimateOut(silver_total=sum(
         prices_by_id.get(item_id, 0) * quantity
         for item_id, quantity in quantities.items()
@@ -447,6 +455,78 @@ async def scan_report(
     return ScanReportOut(accepted=accepted, rejected=rejected)
 
 
+# ─── Kill scan distribuído (sem auth) ────────────────────────────────────────
+
+class KillScanClaimOut(BaseModel):
+    region: str
+    event_id_start: int
+    event_id_end: int
+
+
+@router.post("/companion/kill-scan/claim")
+def kill_scan_claim(
+    request: Request,
+    region: str | None = Query(None),
+    db: Session = Depends(get_session),
+    x_ziggs_install: str | None = Header(None),
+) -> KillScanClaimOut | None:
+    """Pega um range de EventIds pra sondar. 204 = sem trabalho."""
+    install = _install_id(x_ziggs_install)
+    if install is None:
+        raise HTTPException(400, "X-Ziggs-Install inválido")
+    result = companion_kill_scan.claim_kill_range(db, install, region)
+    if result is None:
+        raise HTTPException(204)
+    log.info("companion/kill-scan/claim [%s] install=%s region=%s range=%d-%d",
+             _client_ip(request), install, result["region"],
+             result["start"], result["end"])
+    return KillScanClaimOut(
+        region=result["region"],
+        event_id_start=result["start"],
+        event_id_end=result["end"],
+    )
+
+
+class KillScanReportIn(BaseModel):
+    region: str
+    event_id_start: int
+    event_id_end: int
+    found: list[int] = Field(default_factory=list, max_length=200)
+    missing: list[int] = Field(default_factory=list, max_length=200)
+    errors: list[int] = Field(default_factory=list, max_length=200)
+
+
+class KillScanReportOut(BaseModel):
+    accepted: int
+    rejected: int
+
+
+@router.post("/companion/kill-scan/report")
+async def kill_scan_report(
+    payload: KillScanReportIn,
+    request: Request,
+    x_ziggs_install: str | None = Header(None),
+    db: Session = Depends(get_session),
+) -> KillScanReportOut:
+    install = _install_id(x_ziggs_install)
+    if install is None:
+        raise HTTPException(400, "X-Ziggs-Install inválido")
+    log.info("companion/kill-scan/report [%s] region=%s found=%d missing=%d errors=%d",
+             _client_ip(request), payload.region,
+             len(payload.found), len(payload.missing), len(payload.errors))
+    try:
+        accepted, rejected = await companion_kill_scan.report_kill_range(
+            db, install, payload.region,
+            payload.event_id_start, payload.event_id_end,
+            payload.found, payload.missing, payload.errors,
+        )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return KillScanReportOut(accepted=accepted, rejected=rejected)
+
+
 # ─── Nomes de feitiço (damage meter) ─────────────────────────────────────────
 # Gerado por scripts/seed_spell_names.py a partir do spells.xml do ao-bin-dumps.
 # Lista ORDENADA: a posição no array é o índice que assumimos vir no pacote.
@@ -487,6 +567,49 @@ def companion_items(response: Response) -> list[dict]:
     """
     response.headers["Cache-Control"] = "public, max-age=86400"
     return market_history.get_index_catalog()
+
+
+@router.get("/companion/items-map")
+def companion_items_map(response: Response) -> dict[str, str]:
+    """Mapeamento UniqueName → nome do jogo (EN). O companion usa pra converter
+    o ItemTypeId do pacote do mercado em game_name antes de mandar pro backend.
+    O frontend usa pra converter catalogId (UniqueName) em game_name antes de
+    buscar preços. Cache de 24h — só muda em patch."""
+    response.headers["Cache-Control"] = "public, max-age=86400"
+    from pathlib import Path
+    p = Path(__file__).resolve().parent.parent.parent.parent / "data" / "item_names.json"
+    if not p.exists():
+        return {}
+    return json.loads(p.read_bytes())
+
+
+@router.get("/companion/price-quotes")
+def companion_price_quotes(
+    items: str = Query(description="IDs separados por vírgula"),
+    db: Session = Depends(get_session),
+) -> dict:
+    """Preços do nosso banco — público, sem auth, sem guild_id.
+    Aceita UniqueName (T4_CLOTH_LEVEL2) ou game_name ("Rare Fine Cloth").
+    Converte pra game_name (formato do DB) antes de buscar."""
+    from app.services.prices import _unique_to_game
+    raw_ids = [i.strip() for i in items.split(",") if i.strip()]
+    if not raw_ids:
+        return {"prices": []}
+    item_ids = list(dict.fromkeys(_unique_to_game(i) for i in raw_ids))
+    out: list[dict] = []
+    for i in range(0, len(item_ids), 500):
+        chunk = item_ids[i : i + 500]
+        for row in db.scalars(
+            select(ItemPriceLatest).where(ItemPriceLatest.item_id.in_(chunk))
+        ):
+            out.append({
+                "item_id": row.item_id,
+                "city": row.city,
+                "quality": row.quality,
+                "sell_price_min": row.sell_price_min,
+                "price_date": row.price_date.isoformat() if row.price_date else None,
+            })
+    return {"prices": out}
 
 
 class CompanionStatsOut(BaseModel):
@@ -614,8 +737,9 @@ def market_history_submit(
     """Ingere histórico de mercado capturado pelo companion (dado público do
     jogo, sem auth). Cada row é um bucket do gráfico do próprio jogo.
 
-    Mesmo teto de vazão dos preços — os dois compartilham a cota por
-    instalação, senão bastaria alternar entre as rotas pra dobrar o limite.
+    Payloads grandes são chunkados internamente — o companion não precisa
+    fragmentar. O upsert já compara age e descarta buckets antigos, então
+    não há teto de vazão aqui — aceita tudo (só o anti-DoS de 50k).
     """
     install = _install_id(x_ziggs_install)
     n = len(payload.rows)
@@ -623,10 +747,6 @@ def market_history_submit(
         log.warning("companion/market-history/submit [%s] install=%s payload absurdo: %d rows",
                     _client_ip(request), install or "?", n)
         raise HTTPException(413, "payload grande demais")
-    if not _rate_ok(install, n):
-        log.warning("companion/market-history/submit [%s] install=%s ESTOUROU o limite (%d rows)",
-                    _client_ip(request), install or "?", n)
-        raise HTTPException(429, "limite de envio excedido")
 
     sample = next(iter(payload.rows), None)
     sample_str = ""
@@ -634,11 +754,19 @@ def market_history_submit(
         sample_str = f" item_id={getattr(sample, 'albion_id', '?')} loc={getattr(sample, 'location', '') or '?'}"
     log.info("companion/market-history/submit [%s] install=%s rows=%d%s",
              _client_ip(request), install or "?", n, sample_str)
-    rows = [r.model_dump() for r in payload.rows]
-    accepted, rejected = market_history.ingest_history(db, rows)
+
+    all_rows = [r.model_dump() for r in payload.rows]
+    total_accepted = 0
+    total_rejected = 0
+    for i in range(0, len(all_rows), _CHUNK_SIZE):
+        chunk = all_rows[i : i + _CHUNK_SIZE]
+        accepted, rejected = market_history.ingest_history(db, chunk)
+        total_accepted += accepted
+        total_rejected += rejected
+
     log.info("companion/market-history/submit [%s] aceito=%d rejeitado=%d",
-             _client_ip(request), accepted, rejected)
-    return MarketHistorySubmitOut(accepted=accepted, rejected=rejected)
+             _client_ip(request), total_accepted, total_rejected)
+    return MarketHistorySubmitOut(accepted=total_accepted, rejected=total_rejected)
 
 
 @router.post("/companion/prices/submit")
@@ -654,10 +782,8 @@ def prices_submit(
     (item_id + price não-vazio) e upsertada em item_prices/item_prices_latest
     pela mesma lógica do sync_prices.
 
-    A instalação de origem é gravada em `item_prices.source_install` pra dado
-    ruim ser rastreável e expurgável. Não é auth: o cliente escolhe o próprio
-    id. A defesa real contra preço mentiroso é estatística (mediana + corte de
-    outlier por IQR no pipeline de leitura), não este campo.
+    Payloads grandes são chunkados internamente. A instalação de origem é
+    gravada em `item_prices.source_install` pra dado ruim ser rastreável.
     """
     install = _install_id(x_ziggs_install)
     n = len(payload.rows)
@@ -665,10 +791,6 @@ def prices_submit(
         log.warning("companion/prices/submit [%s] install=%s payload absurdo: %d rows",
                     _client_ip(request), install or "?", n)
         raise HTTPException(413, "payload grande demais")
-    if not _rate_ok(install, n):
-        log.warning("companion/prices/submit [%s] install=%s ESTOUROU o limite (%d rows)",
-                    _client_ip(request), install or "?", n)
-        raise HTTPException(429, "limite de envio excedido")
 
     sample = next(iter(payload.rows), None)
     sample_str = ""
@@ -676,8 +798,16 @@ def prices_submit(
         sample_str = f" item_id={getattr(sample, 'item_id', '?')} city={getattr(sample, 'city', '') or '?'}"
     log.info("companion/prices/submit [%s] install=%s rows=%d%s",
              _client_ip(request), install or "?", n, sample_str)
-    rows = [r.model_dump() for r in payload.rows]
-    accepted, rejected = prices.upsert_companion_prices(db, rows, source_install=install)
+
+    all_rows = [r.model_dump() for r in payload.rows]
+    total_accepted = 0
+    total_rejected = 0
+    for i in range(0, len(all_rows), _CHUNK_SIZE):
+        chunk = all_rows[i : i + _CHUNK_SIZE]
+        accepted, rejected = prices.upsert_companion_prices(db, chunk, source_install=install)
+        total_accepted += accepted
+        total_rejected += rejected
+
     log.info("companion/prices/submit [%s] aceito=%d rejeitado=%d",
-             _client_ip(request), accepted, rejected)
-    return PriceSubmitOut(accepted=accepted, rejected=rejected)
+             _client_ip(request), total_accepted, total_rejected)
+    return PriceSubmitOut(accepted=total_accepted, rejected=total_rejected)

@@ -37,9 +37,9 @@ export interface CatalogFamily {
   variations: CatalogVariation[];
 }
 
-/** Tier.enchant label, e.g. "T4.0", "T5.3". */
+/** Tier.enchant label, e.g. "4.0", "5.3" (sem prefixo T). */
 export function tierLabel(v: { tier: number; enchant: number }): string {
-  return `T${v.tier}.${v.enchant}`;
+  return `${v.tier}.${v.enchant}`;
 }
 
 /** Distinct material ids used across a set of variations. */
@@ -70,6 +70,20 @@ export function loadNames(): Promise<Record<string, string>> {
     namesCache = fetch("/data/names.json").then((r) => (r.ok ? r.json() : {}));
   }
   return namesCache;
+}
+
+export type FamilyNameMap = Record<string, Record<"en" | "pt" | "es", string>>;
+
+let familyNamesCache: Promise<FamilyNameMap> | null = null;
+
+/** Fetch and cache the familyKey → { pt, en, es } localized short-name map. */
+export function loadFamilyNames(): Promise<FamilyNameMap> {
+  if (!familyNamesCache) {
+    familyNamesCache = fetch("/data/family_names.json").then((r) =>
+      r.ok ? (r.json() as Promise<FamilyNameMap>) : {}
+    );
+  }
+  return familyNamesCache;
 }
 
 let weightsCache: Promise<Record<string, number>> | null = null;

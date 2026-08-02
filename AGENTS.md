@@ -7,6 +7,22 @@ Plataforma web para guildas de Albion Online: gerencia composições de batalha 
 > passadas, migrations criadas, arquitetura de perfis/highscores/companion, ou
 > pendências em aberto — evita re-explicar o que já foi decidido.
 
+## Entrada automática de tarefas
+
+Para todo pedido relacionado ao Ziggs, use `$prompt-dispatcher` como porta de
+entrada antes de editar ou delegar. Pedidos vagos, incompletos ou que toquem
+áreas maduras passam primeiro por `$ziggs-change-intake`. O dispatcher pode
+resolver diretamente pedidos triviais; não crie agentes só para cumprir rito.
+
+Toda tarefa delegada recebe orçamento de tentativas e teto de complexidade. Se
+o trabalho ultrapassar esse teto, o worker para e devolve `NEEDS_ESCALATION`
+com evidências; ele não amplia escopo nem continua tentando em silêncio. O
+agente pai decide entre fornecer contexto, perguntar ao usuário ou promover o
+worker para um modelo mais capaz. Quando uma resposta entre agentes for
+esperada, ela deve ser entregue via `traycer_send_message` no thread original.
+
+Esta regra vale somente para trabalho no Ziggs, não para outros projetos.
+
 ## Estrutura do projeto
 
 ```

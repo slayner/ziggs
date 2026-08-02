@@ -6641,957 +6641,1148 @@
     {
       "sourceId": "T4_WOOD",
       "targetId": "T5_WOOD",
-      "silverCost": 781
+      "silverCost": 781,
+      "itemValue": 5.34
     },
     {
       "sourceId": "T5_WOOD",
       "targetId": "T6_WOOD",
-      "silverCost": 1250
+      "silverCost": 1250,
+      "itemValue": 8.0
     },
     {
       "sourceId": "T6_WOOD",
       "targetId": "T7_WOOD",
-      "silverCost": 2500
+      "silverCost": 2500,
+      "itemValue": 12.8
     },
     {
       "sourceId": "T7_WOOD",
       "targetId": "T8_WOOD",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T4_WOOD",
       "targetId": "T4_WOOD_LEVEL1",
-      "silverCost": 1500
+      "silverCost": 1500,
+      "itemValue": 12.0
     },
     {
       "sourceId": "T4_WOOD_LEVEL1",
       "targetId": "T5_WOOD_LEVEL1",
-      "silverCost": 1563
+      "silverCost": 1563,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_WOOD",
       "targetId": "T5_WOOD_LEVEL1",
-      "silverCost": 2000
+      "silverCost": 2000,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_WOOD_LEVEL1",
       "targetId": "T6_WOOD_LEVEL1",
-      "silverCost": 2500
+      "silverCost": 2500,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_WOOD",
       "targetId": "T6_WOOD_LEVEL1",
-      "silverCost": 3000
+      "silverCost": 3000,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_WOOD_LEVEL1",
       "targetId": "T7_WOOD_LEVEL1",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_WOOD",
       "targetId": "T7_WOOD_LEVEL1",
-      "silverCost": 4800
+      "silverCost": 4800,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_WOOD_LEVEL1",
       "targetId": "T8_WOOD_LEVEL1",
-      "silverCost": 15000
+      "silverCost": 15000,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T8_WOOD",
       "targetId": "T8_WOOD_LEVEL1",
-      "silverCost": 14400
+      "silverCost": 14400,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T4_WOOD_LEVEL1",
       "targetId": "T4_WOOD_LEVEL2",
-      "silverCost": 3000
+      "silverCost": 3000,
+      "itemValue": 28.0
     },
     {
       "sourceId": "T4_WOOD_LEVEL2",
       "targetId": "T5_WOOD_LEVEL2",
-      "silverCost": 3125
+      "silverCost": 3125,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_WOOD_LEVEL1",
       "targetId": "T5_WOOD_LEVEL2",
-      "silverCost": 4000
+      "silverCost": 4000,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_WOOD_LEVEL2",
       "targetId": "T6_WOOD_LEVEL2",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_WOOD_LEVEL1",
       "targetId": "T6_WOOD_LEVEL2",
-      "silverCost": 6000
+      "silverCost": 6000,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_WOOD_LEVEL2",
       "targetId": "T7_WOOD_LEVEL2",
-      "silverCost": 15750
+      "silverCost": 15750,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_WOOD_LEVEL1",
       "targetId": "T7_WOOD_LEVEL2",
-      "silverCost": 15120
+      "silverCost": 15120,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_WOOD_LEVEL2",
       "targetId": "T8_WOOD_LEVEL2",
-      "silverCost": 47250
+      "silverCost": 47250,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T8_WOOD_LEVEL1",
       "targetId": "T8_WOOD_LEVEL2",
-      "silverCost": 45360
+      "silverCost": 45360,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T4_WOOD_LEVEL2",
       "targetId": "T4_WOOD_LEVEL3",
-      "silverCost": 6000
+      "silverCost": 6000,
+      "itemValue": 60.0
     },
     {
       "sourceId": "T4_WOOD_LEVEL3",
       "targetId": "T5_WOOD_LEVEL3",
-      "silverCost": 6250
+      "silverCost": 6250,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_WOOD_LEVEL2",
       "targetId": "T5_WOOD_LEVEL3",
-      "silverCost": 8000
+      "silverCost": 8000,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_WOOD_LEVEL3",
       "targetId": "T6_WOOD_LEVEL3",
-      "silverCost": 16500
+      "silverCost": 16500,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_WOOD_LEVEL2",
       "targetId": "T6_WOOD_LEVEL3",
-      "silverCost": 19800
+      "silverCost": 19800,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_WOOD_LEVEL3",
       "targetId": "T7_WOOD_LEVEL3",
-      "silverCost": 51975
+      "silverCost": 51975,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_WOOD_LEVEL2",
       "targetId": "T7_WOOD_LEVEL3",
-      "silverCost": 49896
+      "silverCost": 49896,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_WOOD_LEVEL3",
       "targetId": "T8_WOOD_LEVEL3",
-      "silverCost": 155925
+      "silverCost": 155925,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T8_WOOD_LEVEL2",
       "targetId": "T8_WOOD_LEVEL3",
-      "silverCost": 149688
+      "silverCost": 149688,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T4_WOOD_LEVEL3",
       "targetId": "T4_WOOD_LEVEL4",
-      "silverCost": 24000
+      "silverCost": 24000,
+      "itemValue": 124.0
     },
     {
       "sourceId": "T4_WOOD_LEVEL4",
       "targetId": "T5_WOOD_LEVEL4",
-      "silverCost": 25000
+      "silverCost": 25000,
+      "itemValue": 85.34
     },
     {
       "sourceId": "T5_WOOD_LEVEL3",
       "targetId": "T5_WOOD_LEVEL4",
-      "silverCost": 32000
+      "silverCost": 32000,
+      "itemValue": 85.34
     },
     {
       "sourceId": "T5_WOOD_LEVEL4",
       "targetId": "T6_WOOD_LEVEL4",
-      "silverCost": 66000
+      "silverCost": 66000,
+      "itemValue": 128.0
     },
     {
       "sourceId": "T6_WOOD_LEVEL3",
       "targetId": "T6_WOOD_LEVEL4",
-      "silverCost": 79200
+      "silverCost": 79200,
+      "itemValue": 128.0
     },
     {
       "sourceId": "T6_WOOD_LEVEL4",
       "targetId": "T7_WOOD_LEVEL4",
-      "silverCost": 207900
+      "silverCost": 207900,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T7_WOOD_LEVEL3",
       "targetId": "T7_WOOD_LEVEL4",
-      "silverCost": 199584
+      "silverCost": 199584,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T7_WOOD_LEVEL4",
       "targetId": "T8_WOOD_LEVEL4",
-      "silverCost": 779625
+      "silverCost": 779625,
+      "itemValue": 409.6
     },
     {
       "sourceId": "T8_WOOD_LEVEL3",
       "targetId": "T8_WOOD_LEVEL4",
-      "silverCost": 748440
+      "silverCost": 748440,
+      "itemValue": 409.6
     },
     {
       "sourceId": "T4_ROCK",
       "targetId": "T5_ROCK",
-      "silverCost": 1180
+      "silverCost": 1180,
+      "itemValue": 5.34
     },
     {
       "sourceId": "T5_ROCK",
       "targetId": "T6_ROCK",
-      "silverCost": 2640
+      "silverCost": 2640,
+      "itemValue": 8.0
     },
     {
       "sourceId": "T6_ROCK",
       "targetId": "T7_ROCK",
-      "silverCost": 5640
+      "silverCost": 5640,
+      "itemValue": 12.8
     },
     {
       "sourceId": "T7_ROCK",
       "targetId": "T8_ROCK",
-      "silverCost": 14080
+      "silverCost": 14080,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T4_ROCK",
       "targetId": "T4_ROCK_LEVEL1",
-      "silverCost": 1800
+      "silverCost": 1800,
+      "itemValue": 12.0
     },
     {
       "sourceId": "T4_ROCK_LEVEL1",
       "targetId": "T5_ROCK_LEVEL1",
-      "silverCost": 2130
+      "silverCost": 2130,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_ROCK",
       "targetId": "T5_ROCK_LEVEL1",
-      "silverCost": 1600
+      "silverCost": 1600,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_ROCK_LEVEL1",
       "targetId": "T6_ROCK_LEVEL1",
-      "silverCost": 3200
+      "silverCost": 3200,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_ROCK",
       "targetId": "T6_ROCK_LEVEL1",
-      "silverCost": 2400
+      "silverCost": 2400,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_ROCK_LEVEL1",
       "targetId": "T7_ROCK_LEVEL1",
-      "silverCost": 5120
+      "silverCost": 5120,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_ROCK",
       "targetId": "T7_ROCK_LEVEL1",
-      "silverCost": 3840
+      "silverCost": 3840,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_ROCK_LEVEL1",
       "targetId": "T8_ROCK_LEVEL1",
-      "silverCost": 10240
+      "silverCost": 10240,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T8_ROCK",
       "targetId": "T8_ROCK_LEVEL1",
-      "silverCost": 7680
+      "silverCost": 7680,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T4_ROCK_LEVEL1",
       "targetId": "T4_ROCK_LEVEL2",
-      "silverCost": 3600
+      "silverCost": 3600,
+      "itemValue": 28.0
     },
     {
       "sourceId": "T4_ROCK_LEVEL2",
       "targetId": "T5_ROCK_LEVEL2",
-      "silverCost": 4270
+      "silverCost": 4270,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_ROCK_LEVEL1",
       "targetId": "T5_ROCK_LEVEL2",
-      "silverCost": 3200
+      "silverCost": 3200,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_ROCK_LEVEL2",
       "targetId": "T6_ROCK_LEVEL2",
-      "silverCost": 6400
+      "silverCost": 6400,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_ROCK_LEVEL1",
       "targetId": "T6_ROCK_LEVEL2",
-      "silverCost": 4800
+      "silverCost": 4800,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_ROCK_LEVEL2",
       "targetId": "T7_ROCK_LEVEL2",
-      "silverCost": 10240
+      "silverCost": 10240,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_ROCK_LEVEL1",
       "targetId": "T7_ROCK_LEVEL2",
-      "silverCost": 7680
+      "silverCost": 7680,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_ROCK_LEVEL2",
       "targetId": "T8_ROCK_LEVEL2",
-      "silverCost": 20480
+      "silverCost": 20480,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T8_ROCK_LEVEL1",
       "targetId": "T8_ROCK_LEVEL2",
-      "silverCost": 15360
+      "silverCost": 15360,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T4_ROCK_LEVEL2",
       "targetId": "T4_ROCK_LEVEL3",
-      "silverCost": 7200
+      "silverCost": 7200,
+      "itemValue": 60.0
     },
     {
       "sourceId": "T4_ROCK_LEVEL3",
       "targetId": "T5_ROCK_LEVEL3",
-      "silverCost": 8530
+      "silverCost": 8530,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_ROCK_LEVEL2",
       "targetId": "T5_ROCK_LEVEL3",
-      "silverCost": 6400
+      "silverCost": 6400,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_ROCK_LEVEL3",
       "targetId": "T6_ROCK_LEVEL3",
-      "silverCost": 12800
+      "silverCost": 12800,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_ROCK_LEVEL2",
       "targetId": "T6_ROCK_LEVEL3",
-      "silverCost": 9600
+      "silverCost": 9600,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_ROCK_LEVEL3",
       "targetId": "T7_ROCK_LEVEL3",
-      "silverCost": 20480
+      "silverCost": 20480,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_ROCK_LEVEL2",
       "targetId": "T7_ROCK_LEVEL3",
-      "silverCost": 15360
+      "silverCost": 15360,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_ROCK_LEVEL3",
       "targetId": "T8_ROCK_LEVEL3",
-      "silverCost": 40960
+      "silverCost": 40960,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T8_ROCK_LEVEL2",
       "targetId": "T8_ROCK_LEVEL3",
-      "silverCost": 30720
+      "silverCost": 30720,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T4_ORE",
       "targetId": "T5_ORE",
-      "silverCost": 781
+      "silverCost": 781,
+      "itemValue": 5.34
     },
     {
       "sourceId": "T5_ORE",
       "targetId": "T6_ORE",
-      "silverCost": 1250
+      "silverCost": 1250,
+      "itemValue": 8.0
     },
     {
       "sourceId": "T6_ORE",
       "targetId": "T7_ORE",
-      "silverCost": 2500
+      "silverCost": 2500,
+      "itemValue": 12.8
     },
     {
       "sourceId": "T7_ORE",
       "targetId": "T8_ORE",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T4_ORE",
       "targetId": "T4_ORE_LEVEL1",
-      "silverCost": 1500
+      "silverCost": 1500,
+      "itemValue": 12.0
     },
     {
       "sourceId": "T4_ORE_LEVEL1",
       "targetId": "T5_ORE_LEVEL1",
-      "silverCost": 1563
+      "silverCost": 1563,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_ORE",
       "targetId": "T5_ORE_LEVEL1",
-      "silverCost": 2000
+      "silverCost": 2000,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_ORE_LEVEL1",
       "targetId": "T6_ORE_LEVEL1",
-      "silverCost": 2500
+      "silverCost": 2500,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_ORE",
       "targetId": "T6_ORE_LEVEL1",
-      "silverCost": 3000
+      "silverCost": 3000,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_ORE_LEVEL1",
       "targetId": "T7_ORE_LEVEL1",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_ORE",
       "targetId": "T7_ORE_LEVEL1",
-      "silverCost": 4800
+      "silverCost": 4800,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_ORE_LEVEL1",
       "targetId": "T8_ORE_LEVEL1",
-      "silverCost": 15000
+      "silverCost": 15000,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T8_ORE",
       "targetId": "T8_ORE_LEVEL1",
-      "silverCost": 14400
+      "silverCost": 14400,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T4_ORE_LEVEL1",
       "targetId": "T4_ORE_LEVEL2",
-      "silverCost": 3000
+      "silverCost": 3000,
+      "itemValue": 28.0
     },
     {
       "sourceId": "T4_ORE_LEVEL2",
       "targetId": "T5_ORE_LEVEL2",
-      "silverCost": 3125
+      "silverCost": 3125,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_ORE_LEVEL1",
       "targetId": "T5_ORE_LEVEL2",
-      "silverCost": 4000
+      "silverCost": 4000,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_ORE_LEVEL2",
       "targetId": "T6_ORE_LEVEL2",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_ORE_LEVEL1",
       "targetId": "T6_ORE_LEVEL2",
-      "silverCost": 6000
+      "silverCost": 6000,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_ORE_LEVEL2",
       "targetId": "T7_ORE_LEVEL2",
-      "silverCost": 15750
+      "silverCost": 15750,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_ORE_LEVEL1",
       "targetId": "T7_ORE_LEVEL2",
-      "silverCost": 15120
+      "silverCost": 15120,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_ORE_LEVEL2",
       "targetId": "T8_ORE_LEVEL2",
-      "silverCost": 47250
+      "silverCost": 47250,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T8_ORE_LEVEL1",
       "targetId": "T8_ORE_LEVEL2",
-      "silverCost": 45360
+      "silverCost": 45360,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T4_ORE_LEVEL2",
       "targetId": "T4_ORE_LEVEL3",
-      "silverCost": 6000
+      "silverCost": 6000,
+      "itemValue": 60.0
     },
     {
       "sourceId": "T4_ORE_LEVEL3",
       "targetId": "T5_ORE_LEVEL3",
-      "silverCost": 6250
+      "silverCost": 6250,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_ORE_LEVEL2",
       "targetId": "T5_ORE_LEVEL3",
-      "silverCost": 8000
+      "silverCost": 8000,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_ORE_LEVEL3",
       "targetId": "T6_ORE_LEVEL3",
-      "silverCost": 16500
+      "silverCost": 16500,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_ORE_LEVEL2",
       "targetId": "T6_ORE_LEVEL3",
-      "silverCost": 19800
+      "silverCost": 19800,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_ORE_LEVEL3",
       "targetId": "T7_ORE_LEVEL3",
-      "silverCost": 51975
+      "silverCost": 51975,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_ORE_LEVEL2",
       "targetId": "T7_ORE_LEVEL3",
-      "silverCost": 49896
+      "silverCost": 49896,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_ORE_LEVEL3",
       "targetId": "T8_ORE_LEVEL3",
-      "silverCost": 155925
+      "silverCost": 155925,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T8_ORE_LEVEL2",
       "targetId": "T8_ORE_LEVEL3",
-      "silverCost": 149688
+      "silverCost": 149688,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T4_ORE_LEVEL3",
       "targetId": "T4_ORE_LEVEL4",
-      "silverCost": 24000
+      "silverCost": 24000,
+      "itemValue": 124.0
     },
     {
       "sourceId": "T4_ORE_LEVEL4",
       "targetId": "T5_ORE_LEVEL4",
-      "silverCost": 25000
+      "silverCost": 25000,
+      "itemValue": 85.34
     },
     {
       "sourceId": "T5_ORE_LEVEL3",
       "targetId": "T5_ORE_LEVEL4",
-      "silverCost": 32000
+      "silverCost": 32000,
+      "itemValue": 85.34
     },
     {
       "sourceId": "T5_ORE_LEVEL4",
       "targetId": "T6_ORE_LEVEL4",
-      "silverCost": 66000
+      "silverCost": 66000,
+      "itemValue": 128.0
     },
     {
       "sourceId": "T6_ORE_LEVEL3",
       "targetId": "T6_ORE_LEVEL4",
-      "silverCost": 79200
+      "silverCost": 79200,
+      "itemValue": 128.0
     },
     {
       "sourceId": "T6_ORE_LEVEL4",
       "targetId": "T7_ORE_LEVEL4",
-      "silverCost": 207900
+      "silverCost": 207900,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T7_ORE_LEVEL3",
       "targetId": "T7_ORE_LEVEL4",
-      "silverCost": 199584
+      "silverCost": 199584,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T7_ORE_LEVEL4",
       "targetId": "T8_ORE_LEVEL4",
-      "silverCost": 779625
+      "silverCost": 779625,
+      "itemValue": 409.6
     },
     {
       "sourceId": "T8_ORE_LEVEL3",
       "targetId": "T8_ORE_LEVEL4",
-      "silverCost": 748440
+      "silverCost": 748440,
+      "itemValue": 409.6
     },
     {
       "sourceId": "T4_HIDE",
       "targetId": "T5_HIDE",
-      "silverCost": 781
+      "silverCost": 781,
+      "itemValue": 5.34
     },
     {
       "sourceId": "T5_HIDE",
       "targetId": "T6_HIDE",
-      "silverCost": 1250
+      "silverCost": 1250,
+      "itemValue": 8.0
     },
     {
       "sourceId": "T6_HIDE",
       "targetId": "T7_HIDE",
-      "silverCost": 2500
+      "silverCost": 2500,
+      "itemValue": 12.8
     },
     {
       "sourceId": "T7_HIDE",
       "targetId": "T8_HIDE",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T4_HIDE",
       "targetId": "T4_HIDE_LEVEL1",
-      "silverCost": 1500
+      "silverCost": 1500,
+      "itemValue": 12.0
     },
     {
       "sourceId": "T4_HIDE_LEVEL1",
       "targetId": "T5_HIDE_LEVEL1",
-      "silverCost": 1563
+      "silverCost": 1563,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_HIDE",
       "targetId": "T5_HIDE_LEVEL1",
-      "silverCost": 2000
+      "silverCost": 2000,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_HIDE_LEVEL1",
       "targetId": "T6_HIDE_LEVEL1",
-      "silverCost": 2500
+      "silverCost": 2500,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_HIDE",
       "targetId": "T6_HIDE_LEVEL1",
-      "silverCost": 3000
+      "silverCost": 3000,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_HIDE_LEVEL1",
       "targetId": "T7_HIDE_LEVEL1",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_HIDE",
       "targetId": "T7_HIDE_LEVEL1",
-      "silverCost": 4800
+      "silverCost": 4800,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_HIDE_LEVEL1",
       "targetId": "T8_HIDE_LEVEL1",
-      "silverCost": 15000
+      "silverCost": 15000,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T8_HIDE",
       "targetId": "T8_HIDE_LEVEL1",
-      "silverCost": 14400
+      "silverCost": 14400,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T4_HIDE_LEVEL1",
       "targetId": "T4_HIDE_LEVEL2",
-      "silverCost": 3000
+      "silverCost": 3000,
+      "itemValue": 28.0
     },
     {
       "sourceId": "T4_HIDE_LEVEL2",
       "targetId": "T5_HIDE_LEVEL2",
-      "silverCost": 3125
+      "silverCost": 3125,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_HIDE_LEVEL1",
       "targetId": "T5_HIDE_LEVEL2",
-      "silverCost": 4000
+      "silverCost": 4000,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_HIDE_LEVEL2",
       "targetId": "T6_HIDE_LEVEL2",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_HIDE_LEVEL1",
       "targetId": "T6_HIDE_LEVEL2",
-      "silverCost": 6000
+      "silverCost": 6000,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_HIDE_LEVEL2",
       "targetId": "T7_HIDE_LEVEL2",
-      "silverCost": 15750
+      "silverCost": 15750,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_HIDE_LEVEL1",
       "targetId": "T7_HIDE_LEVEL2",
-      "silverCost": 15120
+      "silverCost": 15120,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_HIDE_LEVEL2",
       "targetId": "T8_HIDE_LEVEL2",
-      "silverCost": 47250
+      "silverCost": 47250,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T8_HIDE_LEVEL1",
       "targetId": "T8_HIDE_LEVEL2",
-      "silverCost": 45360
+      "silverCost": 45360,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T4_HIDE_LEVEL2",
       "targetId": "T4_HIDE_LEVEL3",
-      "silverCost": 6000
+      "silverCost": 6000,
+      "itemValue": 60.0
     },
     {
       "sourceId": "T4_HIDE_LEVEL3",
       "targetId": "T5_HIDE_LEVEL3",
-      "silverCost": 6250
+      "silverCost": 6250,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_HIDE_LEVEL2",
       "targetId": "T5_HIDE_LEVEL3",
-      "silverCost": 8000
+      "silverCost": 8000,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_HIDE_LEVEL3",
       "targetId": "T6_HIDE_LEVEL3",
-      "silverCost": 16500
+      "silverCost": 16500,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_HIDE_LEVEL2",
       "targetId": "T6_HIDE_LEVEL3",
-      "silverCost": 19800
+      "silverCost": 19800,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_HIDE_LEVEL3",
       "targetId": "T7_HIDE_LEVEL3",
-      "silverCost": 51975
+      "silverCost": 51975,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_HIDE_LEVEL2",
       "targetId": "T7_HIDE_LEVEL3",
-      "silverCost": 49896
+      "silverCost": 49896,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_HIDE_LEVEL3",
       "targetId": "T8_HIDE_LEVEL3",
-      "silverCost": 155925
+      "silverCost": 155925,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T8_HIDE_LEVEL2",
       "targetId": "T8_HIDE_LEVEL3",
-      "silverCost": 149688
+      "silverCost": 149688,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T4_HIDE_LEVEL3",
       "targetId": "T4_HIDE_LEVEL4",
-      "silverCost": 24000
+      "silverCost": 24000,
+      "itemValue": 124.0
     },
     {
       "sourceId": "T4_HIDE_LEVEL4",
       "targetId": "T5_HIDE_LEVEL4",
-      "silverCost": 25000
+      "silverCost": 25000,
+      "itemValue": 85.34
     },
     {
       "sourceId": "T5_HIDE_LEVEL3",
       "targetId": "T5_HIDE_LEVEL4",
-      "silverCost": 32000
+      "silverCost": 32000,
+      "itemValue": 85.34
     },
     {
       "sourceId": "T5_HIDE_LEVEL4",
       "targetId": "T6_HIDE_LEVEL4",
-      "silverCost": 66000
+      "silverCost": 66000,
+      "itemValue": 128.0
     },
     {
       "sourceId": "T6_HIDE_LEVEL3",
       "targetId": "T6_HIDE_LEVEL4",
-      "silverCost": 79200
+      "silverCost": 79200,
+      "itemValue": 128.0
     },
     {
       "sourceId": "T6_HIDE_LEVEL4",
       "targetId": "T7_HIDE_LEVEL4",
-      "silverCost": 207900
+      "silverCost": 207900,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T7_HIDE_LEVEL3",
       "targetId": "T7_HIDE_LEVEL4",
-      "silverCost": 199584
+      "silverCost": 199584,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T7_HIDE_LEVEL4",
       "targetId": "T8_HIDE_LEVEL4",
-      "silverCost": 779625
+      "silverCost": 779625,
+      "itemValue": 409.6
     },
     {
       "sourceId": "T8_HIDE_LEVEL3",
       "targetId": "T8_HIDE_LEVEL4",
-      "silverCost": 748440
+      "silverCost": 748440,
+      "itemValue": 409.6
     },
     {
       "sourceId": "T4_FIBER",
       "targetId": "T5_FIBER",
-      "silverCost": 781
+      "silverCost": 781,
+      "itemValue": 5.34
     },
     {
       "sourceId": "T5_FIBER",
       "targetId": "T6_FIBER",
-      "silverCost": 1250
+      "silverCost": 1250,
+      "itemValue": 8.0
     },
     {
       "sourceId": "T6_FIBER",
       "targetId": "T7_FIBER",
-      "silverCost": 2500
+      "silverCost": 2500,
+      "itemValue": 12.8
     },
     {
       "sourceId": "T7_FIBER",
       "targetId": "T8_FIBER",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T4_FIBER",
       "targetId": "T4_FIBER_LEVEL1",
-      "silverCost": 1500
+      "silverCost": 1500,
+      "itemValue": 12.0
     },
     {
       "sourceId": "T4_FIBER_LEVEL1",
       "targetId": "T5_FIBER_LEVEL1",
-      "silverCost": 1563
+      "silverCost": 1563,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_FIBER",
       "targetId": "T5_FIBER_LEVEL1",
-      "silverCost": 2000
+      "silverCost": 2000,
+      "itemValue": 10.66
     },
     {
       "sourceId": "T5_FIBER_LEVEL1",
       "targetId": "T6_FIBER_LEVEL1",
-      "silverCost": 2500
+      "silverCost": 2500,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_FIBER",
       "targetId": "T6_FIBER_LEVEL1",
-      "silverCost": 3000
+      "silverCost": 3000,
+      "itemValue": 16.0
     },
     {
       "sourceId": "T6_FIBER_LEVEL1",
       "targetId": "T7_FIBER_LEVEL1",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_FIBER",
       "targetId": "T7_FIBER_LEVEL1",
-      "silverCost": 4800
+      "silverCost": 4800,
+      "itemValue": 25.6
     },
     {
       "sourceId": "T7_FIBER_LEVEL1",
       "targetId": "T8_FIBER_LEVEL1",
-      "silverCost": 15000
+      "silverCost": 15000,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T8_FIBER",
       "targetId": "T8_FIBER_LEVEL1",
-      "silverCost": 14400
+      "silverCost": 14400,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T4_FIBER_LEVEL1",
       "targetId": "T4_FIBER_LEVEL2",
-      "silverCost": 3000
+      "silverCost": 3000,
+      "itemValue": 28.0
     },
     {
       "sourceId": "T4_FIBER_LEVEL2",
       "targetId": "T5_FIBER_LEVEL2",
-      "silverCost": 3125
+      "silverCost": 3125,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_FIBER_LEVEL1",
       "targetId": "T5_FIBER_LEVEL2",
-      "silverCost": 4000
+      "silverCost": 4000,
+      "itemValue": 21.34
     },
     {
       "sourceId": "T5_FIBER_LEVEL2",
       "targetId": "T6_FIBER_LEVEL2",
-      "silverCost": 5000
+      "silverCost": 5000,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_FIBER_LEVEL1",
       "targetId": "T6_FIBER_LEVEL2",
-      "silverCost": 6000
+      "silverCost": 6000,
+      "itemValue": 32.0
     },
     {
       "sourceId": "T6_FIBER_LEVEL2",
       "targetId": "T7_FIBER_LEVEL2",
-      "silverCost": 15750
+      "silverCost": 15750,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_FIBER_LEVEL1",
       "targetId": "T7_FIBER_LEVEL2",
-      "silverCost": 15120
+      "silverCost": 15120,
+      "itemValue": 51.2
     },
     {
       "sourceId": "T7_FIBER_LEVEL2",
       "targetId": "T8_FIBER_LEVEL2",
-      "silverCost": 47250
+      "silverCost": 47250,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T8_FIBER_LEVEL1",
       "targetId": "T8_FIBER_LEVEL2",
-      "silverCost": 45360
+      "silverCost": 45360,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T4_FIBER_LEVEL2",
       "targetId": "T4_FIBER_LEVEL3",
-      "silverCost": 6000
+      "silverCost": 6000,
+      "itemValue": 60.0
     },
     {
       "sourceId": "T4_FIBER_LEVEL3",
       "targetId": "T5_FIBER_LEVEL3",
-      "silverCost": 6250
+      "silverCost": 6250,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_FIBER_LEVEL2",
       "targetId": "T5_FIBER_LEVEL3",
-      "silverCost": 8000
+      "silverCost": 8000,
+      "itemValue": 42.66
     },
     {
       "sourceId": "T5_FIBER_LEVEL3",
       "targetId": "T6_FIBER_LEVEL3",
-      "silverCost": 16500
+      "silverCost": 16500,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_FIBER_LEVEL2",
       "targetId": "T6_FIBER_LEVEL3",
-      "silverCost": 19800
+      "silverCost": 19800,
+      "itemValue": 64.0
     },
     {
       "sourceId": "T6_FIBER_LEVEL3",
       "targetId": "T7_FIBER_LEVEL3",
-      "silverCost": 51975
+      "silverCost": 51975,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_FIBER_LEVEL2",
       "targetId": "T7_FIBER_LEVEL3",
-      "silverCost": 49896
+      "silverCost": 49896,
+      "itemValue": 102.4
     },
     {
       "sourceId": "T7_FIBER_LEVEL3",
       "targetId": "T8_FIBER_LEVEL3",
-      "silverCost": 155925
+      "silverCost": 155925,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T8_FIBER_LEVEL2",
       "targetId": "T8_FIBER_LEVEL3",
-      "silverCost": 149688
+      "silverCost": 149688,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T4_FIBER_LEVEL3",
       "targetId": "T4_FIBER_LEVEL4",
-      "silverCost": 24000
+      "silverCost": 24000,
+      "itemValue": 124.0
     },
     {
       "sourceId": "T4_FIBER_LEVEL4",
       "targetId": "T5_FIBER_LEVEL4",
-      "silverCost": 25000
+      "silverCost": 25000,
+      "itemValue": 85.34
     },
     {
       "sourceId": "T5_FIBER_LEVEL3",
       "targetId": "T5_FIBER_LEVEL4",
-      "silverCost": 32000
+      "silverCost": 32000,
+      "itemValue": 85.34
     },
     {
       "sourceId": "T5_FIBER_LEVEL4",
       "targetId": "T6_FIBER_LEVEL4",
-      "silverCost": 66000
+      "silverCost": 66000,
+      "itemValue": 128.0
     },
     {
       "sourceId": "T6_FIBER_LEVEL3",
       "targetId": "T6_FIBER_LEVEL4",
-      "silverCost": 79200
+      "silverCost": 79200,
+      "itemValue": 128.0
     },
     {
       "sourceId": "T6_FIBER_LEVEL4",
       "targetId": "T7_FIBER_LEVEL4",
-      "silverCost": 207900
+      "silverCost": 207900,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T7_FIBER_LEVEL3",
       "targetId": "T7_FIBER_LEVEL4",
-      "silverCost": 199584
+      "silverCost": 199584,
+      "itemValue": 204.8
     },
     {
       "sourceId": "T7_FIBER_LEVEL4",
       "targetId": "T8_FIBER_LEVEL4",
-      "silverCost": 779625
+      "silverCost": 779625,
+      "itemValue": 409.6
     },
     {
       "sourceId": "T8_FIBER_LEVEL3",
       "targetId": "T8_FIBER_LEVEL4",
-      "silverCost": 748440
+      "silverCost": 748440,
+      "itemValue": 409.6
     }
   ],
   "heartConversions": [

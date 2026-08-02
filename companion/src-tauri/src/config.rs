@@ -16,7 +16,7 @@ fn default_true() -> bool { true }
 #[cfg(debug_assertions)]
 pub const API_BASE_URL: &str = "http://localhost:8000";
 #[cfg(not(debug_assertions))]
-pub const API_BASE_URL: &str = "https://ziggs.xyz";
+pub const API_BASE_URL: &str = "http://localhost:8000";
 
 fn default_api_base() -> String { API_BASE_URL.to_string() }
 

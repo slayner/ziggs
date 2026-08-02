@@ -6,6 +6,8 @@ função virou site-only).
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -73,7 +75,13 @@ async def ingest_log(
     if len(data) > lootlog.MAX_FILE_BYTES:
         raise HTTPException(413, "arquivo grande demais (limite 15 MB)")
     try:
-        return lootlog.ingest(
+        # to_thread: `lootlog.ingest` faz parse síncrono de CSV até 15 MB +
+        # db.commit(); rodar direto no event loop trava TODAS as outras rotas
+        # (e o próprio request) pela duração do parse. Session SQLAlchemy é
+        # single-thread uso-por-vez — enquanto o await suspende a coro no loop,
+        # a thread do to_thread usa a session exclusivamente.
+        return await asyncio.to_thread(
+            lootlog.ingest,
             db, guild_id, event_id, user.id, user.global_name or user.username,
             fname, data,
         )
@@ -113,19 +121,23 @@ async def bot_ingest_log(
     fname = file.filename or "log.csv"
     if not fname.lower().endswith((".csv", ".txt")):
         raise HTTPException(400, "arquivo precisa ser .csv ou .txt")
+    # Libera read tx antes do await (file.read pode demorar em upload grande).
+    db.commit()
     data = await file.read()
     if not data:
         raise HTTPException(400, "arquivo vazio")
     if len(data) > lootlog.MAX_FILE_BYTES:
         raise HTTPException(413, "arquivo grande demais (limite 15 MB)")
     try:
-        out = lootlog.ingest(
+        out = await asyncio.to_thread(
+            lootlog.ingest,
             db, guild_id, ev.id, submitter_user_id, submitter_name, fname, data,
         )
     except lootlog.LootLogServiceError as e:
         raise HTTPException(400, str(e))
     # Standings atual: % de cada logger no logger_pool (pesos bot-v1).
-    weights = lootlog.compute_logger_weights(db, guild_id, ev.id)
+    # to_thread aqui também: compute_logger_weights é sync e faz queries pesadas.
+    weights = await asyncio.to_thread(lootlog.compute_logger_weights, db, guild_id, ev.id)
     total_w = sum(weights.values())
     standings = [
         LoggerStandingOut(user_id=uid,

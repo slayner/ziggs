@@ -466,6 +466,9 @@ async def update_guild_settings(
         raise HTTPException(404)
 
     settings = dict(g.settings or {})
+    # Libera read tx antes do HTTP (_lookup_albion_guild chama a API do Albion).
+    # expire_on_commit=False: g permanece válido após commit.
+    db.commit()
     if "albion_guild_region" in body.model_fields_set:
         if body.albion_guild_region in HOSTS:
             settings["albion_guild_region"] = body.albion_guild_region
@@ -693,8 +696,11 @@ async def guild_allies(
         return []
 
     region = (g.settings or {}).get("albion_guild_region")
+    alliance_id = g.albion_alliance_id
+    # Libera read tx antes do HTTP (gather de _is_guild_in_alliance chama Albion).
+    db.commit()
     still_in = await asyncio.gather(*(
-        _is_guild_in_alliance(gid, g.albion_alliance_id, region) for gid, _ in rows
+        _is_guild_in_alliance(gid, alliance_id, region) for gid, _ in rows
     ))
     return [{"id": gid, "name": name} for (gid, name), ok in zip(rows, still_in) if ok]
 
@@ -992,7 +998,8 @@ def bot_guild_commands(
         "battle_feed_channel_id": settings.get("battle_feed_channel_id"),
         "battle_feed_min_players": settings.get("battle_feed_min_players", 10),
         "juicy_kill_channel_id": settings.get("juicy_kill_channel_id"),
-        "juicy_kill_min_silver": settings.get("juicy_kill_min_silver", 50_000_000),
+        "juicy_kill_min_silver": max(settings.get("juicy_kill_min_silver", 50_000_000), _JUICY_KILL_HARD_FLOOR),
+        "juicy_kill_hard_floor": _JUICY_KILL_HARD_FLOOR,
         "juicy_kill_min_fame": settings.get("juicy_kill_min_fame", 0),
         "juicy_kill_regions": settings.get("juicy_kill_regions", []),
     }
@@ -1226,6 +1233,8 @@ async def bot_register(
     region: str | None = None
     any_host_ok = False
     guild_region = (g.settings or {}).get("albion_guild_region")
+    # Libera read tx antes do HTTP (busca na API do Albion por região).
+    db.commit()
     # Alianças e guildas não cruzam região (cada região é um servidor de jogo
     # separado) — se a região da guilda já é conhecida, busca só nela, senão um
     # personagem com o mesmo nick em outra região pode "casar" com a guilda errada.
@@ -2841,6 +2850,7 @@ def logout():
 # NULL e não entram no queue (o bot não posta kill sem valor calculado).
 
 _JUICY_KILL_BATCH = 25
+_JUICY_KILL_HARD_FLOOR = 20_000_000  # mínimo absoluto — nenhum guilda desce abaixo disso
 
 
 @router.get("/bot/guilds/{guild_id}/juicy-kill/queue")
@@ -2859,7 +2869,7 @@ def bot_juicy_kill_queue(
     channel_id = settings.get("juicy_kill_channel_id")
     if not channel_id:
         return {"kills": []}
-    min_silver = settings.get("juicy_kill_min_silver", 50_000_000)
+    min_silver = max(settings.get("juicy_kill_min_silver", 50_000_000), _JUICY_KILL_HARD_FLOOR)
     min_fame = settings.get("juicy_kill_min_fame", 0)
     regions = settings.get("juicy_kill_regions") or []
     since_id = settings.get("juicy_kill_last_id", 0)
@@ -2970,6 +2980,8 @@ async def bot_juicy_kill_image(
     _require_bot_secret(authorization)
     if db.scalar(select(Guild.id).where(Guild.id == guild_id)) is None:
         raise HTTPException(404)
+    # Libera read tx antes do HTTP (render_juicy_kill_image baixa ícones da CDN).
+    db.commit()
     path = await render_juicy_kill_image(db, kill_id)
     if path is None:
         raise HTTPException(404, "juicy kill não encontrada")

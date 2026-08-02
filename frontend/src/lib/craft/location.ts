@@ -121,3 +121,96 @@ export function saveLocation(loc: ProductionLocation): void {
     // localStorage indisponível (modo privado etc) — não bloqueia
   }
 }
+
+// ─── Specs de refino (Fase 4) ────────────────────────────────────────────────
+// T4-T8 por família. Anônimo e logado usam localStorage; o backend já tem
+// `craft_settings.focus_efficiency` (por familyKey) que cobre craft e refino
+// juntos, mas refino tem chaves próprias (T4..T8 por família) pra não colidir.
+export const REFINING_SPECS_STORAGE_KEY = "ziggs:refining-specs";
+
+/** Lê specs de refino por família do localStorage, ou {} se vazio. */
+export function loadRefiningSpecs(): Record<string, Record<number, number>> {
+  try {
+    const raw = localStorage.getItem(REFINING_SPECS_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, Record<number, number>>;
+  } catch {
+    return {};
+  }
+}
+
+/** Persiste specs de refino por família no localStorage. */
+export function saveRefiningSpecs(specs: Record<string, Record<number, number>>): void {
+  try {
+    localStorage.setItem(REFINING_SPECS_STORAGE_KEY, JSON.stringify(specs));
+  } catch {
+    // localStorage indisponível — não bloqueia
+  }
+}
+
+// ─── Per-item location config (cidade onde crafta + bônus com expiração) ─────
+// Cada item (familyKey) tem sua própria escolha de cidade/locação. O bônus
+// (eventBonus) é persistente mas expira às 10 UTC do dia em que foi setado —
+// horário em que os bônus de craft do jogo mudam. O default de toda arma nova
+// é a sua cidade bônus (ex: adaga → Bridgewatch).
+export interface PerItemConfig {
+  location: ProductionLocation;
+  eventBonus: number;
+  bonusSetAt: number; // epoch ms — quando o bônus foi alterado pela última vez
+  hoQuality: number;  // hideout quality (só relevante se location.kind === "hideout")
+  hoLevel: number;    // hideout power level
+}
+
+export const PERITEM_STORAGE_KEY = "ziggs:craft-peritem";
+
+type PerItemMap = Record<string, PerItemConfig>;
+
+export function loadPerItemConfig(): PerItemMap {
+  try {
+    const raw = localStorage.getItem(PERITEM_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as PerItemMap;
+  } catch {
+    return {};
+  }
+}
+
+export function savePerItemConfig(cfg: PerItemMap): void {
+  try {
+    localStorage.setItem(PERITEM_STORAGE_KEY, JSON.stringify(cfg));
+  } catch {
+    // localStorage indisponível — não bloqueia
+  }
+}
+
+/** Retorna 10:00 UTC do dia do timestamp dado (mesmo dia). */
+function utc10OfSameDay(ts: number): number {
+  const d = new Date(ts);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 10, 0, 0);
+}
+
+/** True se o bônus setado em `bonusSetAt` já expirou (depois das 10 UTC hoje). */
+export function bonusExpired(bonusSetAt: number, now = Date.now()): boolean {
+  const today10 = utc10OfSameDay(now);
+  // Se setou antes das 10 UTC de hoje, expira às 10 UTC de hoje.
+  // Se setou depois das 10 UTC de hoje, expira às 10 UTC de amanhã.
+  return bonusSetAt < today10;
+}
+
+/** Default config: cidade bônus da família, eventBonus 0, bonusSetAt 0 (expira já). */
+export function defaultPerItem(bonusCity: string | null | undefined): PerItemConfig {
+  const city: ProductionCity = (bonusCity && (PRODUCTION_CITIES as readonly string[]).includes(bonusCity))
+    ? (bonusCity as ProductionCity)
+    : "Lymhurst";
+  return { location: { kind: "city", city }, eventBonus: 0, bonusSetAt: 0, hoQuality: 6, hoLevel: 8 };
+}
+
+/** Lê config de um item, aplicando expiração do bônus. */
+export function getPerItem(cfg: PerItemMap, familyKey: string, bonusCity: string | null | undefined): PerItemConfig {
+  const c = cfg[familyKey];
+  if (!c) return defaultPerItem(bonusCity);
+  if (bonusExpired(c.bonusSetAt)) {
+    return { ...c, eventBonus: 0 };
+  }
+  return c;
+}
