@@ -4,11 +4,9 @@ Polla o backend por batalhas novas que casam com os filtros da guilda (canal
 configurado + mínimo de jogadores) e posta o link no canal definido pelo admin
 no site (GuildConfig → Battle Feed).
 
-O link aponta pro endpoint de embed do backend (/battles/embed/{public_id})
-que serve OG tags com a imagem de resumo PNG — o Discord gera o card
-automaticamente. meta-refresh redireciona humanos pro frontend (SPA). Assim
-qualquer pessoa colando o link vê o embed, não só o bot. Nenhum texto além
-do link é enviado, como pedido.
+O link é a própria URL pública da batalha (/{public_id}). O serving da SPA
+injeta nela as OG tags com a imagem de resumo, então qualquer pessoa colando
+o mesmo link recebe o embed — não só o bot. Nenhum texto além do link é enviado.
 
 Mesma estrutura de cogs/audit_log.py: @tasks.loop, _cog_ref global, before_loop
 espera wait_until_ready, .error auto-reinicia via call_soon."""
@@ -23,6 +21,7 @@ import http_client
 from cogs.general import _guild_command_config
 
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
+PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").rstrip("/") or SITE_URL
 
 
 async def _get(path: str) -> Optional[dict]:
@@ -30,7 +29,7 @@ async def _get(path: str) -> Optional[dict]:
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    return await http_client.post_json(path, body)
+    return await http_client.post_json(path, body, tag="battle_feed", attempts=2)
 
 
 _cog_ref: "BattleFeed | None" = None
@@ -39,6 +38,8 @@ _cog_ref: "BattleFeed | None" = None
 class BattleFeed(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._sent: dict[int, int] = {}
+        self._locks: dict[int, asyncio.Lock] = {}
 
     async def cog_load(self) -> None:
         global _cog_ref
@@ -51,6 +52,11 @@ class BattleFeed(commands.Cog):
         battle_feed_loop.cancel()
 
     async def sync_guild(self, guild: discord.Guild) -> None:
+        lock = self._locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            await self._sync_guild_unlocked(guild)
+
+    async def _sync_guild_unlocked(self, guild: discord.Guild) -> None:
         cfg = await _guild_command_config(guild.id)
         channel_id = cfg.get("battle_feed_channel_id")
         if not channel_id:
@@ -62,22 +68,22 @@ class BattleFeed(commands.Cog):
         data = await _get(f"/bot/guilds/{guild.id}/battle-feed")
         if data is None:
             return  # site fora do ar — próximo tick cobre
-        battles = data.get("battles") or []
+        battles = [
+            battle for battle in (data.get("battles") or [])
+            if battle["id"] > self._sent.get(guild.id, 0)
+        ]
         if not battles:
             return
 
         last_id = None
         for b in battles:
-            # Link de embed (backend) — o Discord crawler lê as OG tags e gera
-            # o card com a imagem de resumo. meta-refresh redireciona humanos
-            # pro frontend (SPA). Assim qualquer pessoa colando o link vê o
-            # embed, não só o bot.
-            link = f"{SITE_URL}/battles/embed/{b['public_id']}"
+            link = f"{PUBLIC_URL}/{b['public_id']}"
             try:
                 await channel.send(content=link)
             except (discord.Forbidden, discord.HTTPException):
                 break  # para no primeiro erro — ack só até o último enviado
             last_id = b["id"]
+            self._sent[guild.id] = last_id
 
         if last_id is not None:
             await _post(f"/bot/guilds/{guild.id}/battle-feed-synced", {"last_id": last_id})

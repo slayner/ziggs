@@ -64,6 +64,24 @@ async def patch_notes() -> list[dict]:
     return _cache
 
 
+@router.get("/battle-delay")
+def battle_delay() -> dict:
+    """Delay aproximado da API do Albion por região: quanto tempo ela demora pra
+    publicar uma batalha depois que termina. ~5min normal; horas em dias de
+    tráfego alto (a API sobrecarrega). Pro dashboard de ops e o dropdown do site."""
+    from app.services.battle_tracker import publish_delay_status
+    return publish_delay_status()
+
+
+@router.get("/albion-gate")
+def albion_gate_status() -> dict:
+    """Estado do rate limiter adaptativo da API do Albion (taxa corrente, teto,
+    fila) — pro dashboard de ops. Lê o estado em memória do processo, não toca
+    no banco."""
+    from app.services.albion_gate import rate_status
+    return rate_status()
+
+
 @router.get("/reprocess-progress")
 def reprocess_progress(db: Session = Depends(deps.db_session)) -> dict:
     """% de batalhas já reprocessadas, somado entre todas as campanhas de

@@ -31,52 +31,6 @@ function parseDragPayload(raw: string): { origin: DragOrigin; userId: number } |
   return { origin: m[1] as DragOrigin, userId: Number(m[2]) };
 }
 
-// Autofill puro: escala inscritos em slots cuja função casa. Prioriza fechar
-// parties (mais cheias primeiro). Em cada slot vazio, SORTEIA um entre todos os
-// candidatos que casa (em vez de sempre o 1º — greedy deixava o mesmo usuário
-// ganhar toda vez e os outros parados mesmo tendo lugar). Quem não casa com
-// nenhum slot vazio fica na lista de inscritos sem ser escalado (ignorado).
-// Extraída pra fora do componente pra ser estável entre renders.
-function runAutofill(
-  data: EscalationOut,
-  pool: EscalationOut["enlisted"],
-  guildId: string,
-  eventId: number,
-  onDone: () => void,
-) {
-  const slotAssigned = new Set(
-    data.assignments.flatMap(a => a.slot_id == null ? [] : [a.slot_id])
-  );
-  const usedUsers = new Set(data.assignments.map(a => a.user_id));
-  const sortedParties = [...data.parties].sort((a, b) => {
-    const af = a.slots.filter(s => slotAssigned.has(s.id)).length;
-    const bf = b.slots.filter(s => slotAssigned.has(s.id)).length;
-    return bf - af;
-  });
-  const tasks: Promise<unknown>[] = [];
-  for (const party of sortedParties) {
-    for (const slot of party.slots) {
-      if (slotAssigned.has(slot.id)) continue;
-      const candidates = pool.filter(s =>
-        !usedUsers.has(s.user_id) &&
-        s.functions.some(f => slot.roles.some(r => r.name === f))
-      );
-      if (candidates.length === 0) continue;
-      // Sorteio: com >1 candidato pra mesma role, pega um aleatório. Sem isso
-      // o find() sempre retornava o 1º do array e o resto nunca era escalado.
-      const match = candidates[Math.floor(Math.random() * candidates.length)];
-      const role = slot.roles.find(r => match.functions.includes(r.name)) ?? slot.roles[0];
-      usedUsers.add(match.user_id);
-      tasks.push(api.assignEscalacao(guildId, eventId, {
-        slot_id: slot.id, user_id: match.user_id, user_name: match.user_name, game_role_id: role.id,
-      }));
-    }
-  }
-  // onDone sempre roda (libera o flag de in-flight do effect, mesmo sem tarefas).
-  if (!tasks.length) { onDone(); return; }
-  Promise.all(tasks).then(onDone).catch(e => { alert(String((e as Error)?.message ?? e)); onDone(); });
-}
-
 // Ordem dos tipos de equipamento na coluna Build (arma primeiro).
 const BUILD_ORDER = ["weapon", "offhand", "helmet", "armor", "boots", "cape", "food"];
 
@@ -248,13 +202,11 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
   const [err, setErr] = useState<string | null>(null);
   const [prices, setPrices] = useState<Record<string, number> | null>(null);
   const [flexPick, setFlexPick] = useState<FlexPick | null>(null);
-  const [autoFillOn, setAutoFillOn] = useState(false);
+  const [autoFillBusy, setAutoFillBusy] = useState(false);
+  const [undoRunId, setUndoRunId] = useState<string | null>(null);
+  const [expandedProfiles, setExpandedProfiles] = useState<Set<number>>(new Set());
   const autoTried = useRef(false);
   const lastEnlistedKey = useRef<string>("");
-  // Guarda contra runs de autofill sobrepostos: sem isso, um poll que recarrega
-  // `data` no meio do Promise.all dispara um 2º run com snapshot velho e reescala
-  // quem já tá sendo escalado (duplicava/conflitava quando havia >1 candidato).
-  const autofillInFlight = useRef(false);
 
   useEffect(() => { api.me().then(m => setMe(m)); }, []);
 
@@ -313,34 +265,6 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [guildId, eventId, !!data]);
-
-  // Autofill automático: roda sempre que data muda e autofill está ligado.
-  // Só escala inscritos que ainda não estão em nenhum slot. Quem não casa com
-  // nenhum slot vazio é ignorado — fica parado na lista de inscritos.
-  useEffect(() => {
-    if (!autoFillOn || !data || !data.can_manage) return;
-    if (autofillInFlight.current) return;
-    const assignedIds = new Set(data.assignments.map(a => a.user_id));
-    const unassigned = data.enlisted.filter(s => !assignedIds.has(s.user_id));
-    const key = data.enlisted.map(s => `${s.user_id}:${s.functions.join(",")}`).sort().join("|");
-    lastEnlistedKey.current = key;
-    if (unassigned.length === 0) return;
-    // Só prossegue se algum inscrito sem slot casa com algum slot vazio. Se
-    // ninguém é casável, não há nada a fazer — ficam parados na lista (ignora
-    // os sem lugar) e evita chamar o backend a cada poll pra nada.
-    const slotAssigned = new Set(data.assignments.flatMap(a => a.slot_id == null ? [] : [a.slot_id]));
-    const emptySlots = data.parties.flatMap(p => p.slots).filter(s => !slotAssigned.has(s.id));
-    const placeable = unassigned.some(s =>
-      emptySlots.some(slot => s.functions.some(f => slot.roles.some(r => r.name === f)))
-    );
-    if (!placeable) return;
-    autofillInFlight.current = true;
-    runAutofill(data, unassigned, guildId, eventId, () => {
-      autofillInFlight.current = false;
-      load();
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoFillOn, data]);
 
   // ── Colapso responsivo por cobertura (painel overlay) ────────────────────────
   // Dois modos conforme a página cabe ou não:
@@ -607,12 +531,52 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
                 <i className="ti ti-list-check" /> {t("escEnlisted")} <span className="esc-count">{data.enlisted.length}</span>
                 {canManage && (
                   <button
-                    className={"btn esc-autofill" + (autoFillOn ? " esc-autofill-on" : "")}
-                    onClick={() => setAutoFillOn(v => !v)}
-                    title={autoFillOn ? t("escAutofillStop") : t("escAutofill")}
+                    className="btn esc-autofill"
+                    disabled={autoFillBusy}
+                    onClick={async () => {
+                      setAutoFillBusy(true);
+                      try {
+                        const preview = await api.previewAutofillEscalacao(guildId, eventId);
+                        if (!preview.assignments.length) {
+                          alert(t("escAutofillEmpty"));
+                          return;
+                        }
+                        const lines = preview.assignments.map(a => `${a.user_name || "—"} → ${a.game_role_name}`).join("\n");
+                        if (confirm(`${t("escAutofillPreview")}\n\n${lines}`)) {
+                          const result = await api.autofillEscalacao(guildId, eventId);
+                          setUndoRunId(result.run_id);
+                          load();
+                        }
+                      } catch (e) {
+                        alert(String((e as Error)?.message ?? e));
+                      } finally {
+                        setAutoFillBusy(false);
+                      }
+                    }}
+                    title={t("escAutofill")}
                   >
-                    <i className={"ti " + (autoFillOn ? "ti-toggle-right" : "ti-wand")} />
-                    {autoFillOn ? t("escAutofillOn") : t("escAutofill")}
+                    <i className="ti ti-wand" />
+                    {t("escAutofill")}
+                  </button>
+                )}
+                {canManage && undoRunId && (
+                  <button
+                    className="btn"
+                    disabled={autoFillBusy}
+                    onClick={async () => {
+                      setAutoFillBusy(true);
+                      try {
+                        await api.undoAutofillEscalacao(guildId, eventId, undoRunId);
+                        setUndoRunId(null);
+                        load();
+                      } catch (e) {
+                        alert(String((e as Error)?.message ?? e));
+                      } finally {
+                        setAutoFillBusy(false);
+                      }
+                    }}
+                  >
+                    <i className="ti ti-arrow-back-up" /> {t("escAutofillUndo")}
                   </button>
                 )}
                 {canManage && ["scheduled", "in_progress"].includes(data.event.state) && (
@@ -663,9 +627,26 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
                       <span className="esc-signup-name">{s.user_name || String(s.user_id)}</span>
                       {s.functions.length > 0 && (
                         <span className="esc-signup-fns">
-                          {s.functions.map(f => (
-                            <span key={f} className="badge info" style={{ fontSize: 10, padding: "1px 6px" }}>{f}</span>
+                          {(expandedProfiles.has(s.user_id) ? s.functions : s.functions.slice(0, 4)).map(f => (
+                            <span key={f} className="esc-role-chip" title={f}>{f}</span>
                           ))}
+                          {s.functions.length > 4 && (
+                            <button
+                              type="button"
+                              className="esc-role-more"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedProfiles(prev => {
+                                  const next = new Set(prev);
+                                  next.has(s.user_id) ? next.delete(s.user_id) : next.add(s.user_id);
+                                  return next;
+                                });
+                              }}
+                              title={expandedProfiles.has(s.user_id) ? "Ocultar roles" : "Mostrar todas as roles"}
+                            >
+                              {expandedProfiles.has(s.user_id) ? "−" : `+${s.functions.length - 4}`}
+                            </button>
+                          )}
                         </span>
                       )}
                       {placed && <i className={"ti " + (flexible ? "ti-alert-circle" : "ti-check") + " esc-signup-check"} />}

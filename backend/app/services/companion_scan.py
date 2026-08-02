@@ -22,8 +22,9 @@ from app.models.companion import (
     CLAIM_TTL, CompanionScanTask, RANGE_SIZE, COMPANION_REGIONS,
 )
 from app.db import SessionLocal
-from app.services.battle_sweeper import _region_candidates
+from app.services.battle_sweeper import _probe_detail, _region_candidates
 from app.services.battle_tracker import upsert_battle_light, REPROCESS_REASON_SWEEPER
+from app.services.player_tracker import HOSTS, make_client
 
 log = logging.getLogger(__name__)
 
@@ -196,75 +197,102 @@ def count_active_companions(db: Session) -> int:
     ) or 0
 
 
-def report_task(
+async def report_task(
     db: Session,
     task_id: int,
-    found: list[dict],
+    found: list[int],
     missing: list[int],
     errors: list[int],
+    install_id: str,
+    reported_region: str,
     character_name: str | None = None,
 ) -> tuple[int, int]:
-    """Companion reporta resultados. Aplica upsert_battle_light nas batalhas
-    encontradas, grava BattleIdProbe pros 404s, marca a tarefa como done.
-    Retorna (accepted, rejected) — rejected = batalhas inválidas (sem id).
+    """Revalida no Albion os IDs reportados e persiste só o resultado oficial.
 
     character_name (opcional): nick configurado no companion. Batalhas que
     este report CRIOU ganham found_by=nick (agradecimento na página pública).
     Endpoint sem auth → só aceita nicks no formato do Albion (alfanumérico
     3-16 chars); qualquer outra coisa é ignorada, não rejeita o report."""
     task = db.get(CompanionScanTask, task_id)
-    if task is None or task.status not in ("claimed", "pending"):
-        # pending = claim expirou (companion em PvP pode demorar > CLAIM_TTL).
-        # Aceitamos mesmo assim — o dado é validado contra a API pública no upsert.
-        return (0, 0)
+    if task is None:
+        raise LookupError("tarefa não encontrada")
+    if task.status != "claimed" or not task.claimed_by or task.claimed_by != install_id:
+        raise PermissionError("tarefa não pertence a esta instalação")
+    if reported_region != task.region:
+        raise ValueError("região não corresponde à tarefa")
+
+    partitions = (found, missing, errors)
+    if any(len(part) > RANGE_SIZE for part in partitions):
+        raise ValueError("partição grande demais")
+    reported = found + missing + errors
+    if len(reported) > RANGE_SIZE or len(reported) != len(set(reported)):
+        raise ValueError("IDs duplicados ou em excesso")
+    if any(aid < task.battle_id_start or aid > task.battle_id_end for aid in reported):
+        raise ValueError("ID fora do range reivindicado")
 
     nick = None
     if character_name and re.fullmatch(r"[A-Za-z0-9]{3,16}", character_name.strip()):
         nick = character_name.strip()
 
     accepted = 0
-    rejected = 0
     region = task.region
+    async with make_client() as client:
+        verified = await asyncio.gather(*(
+            _probe_detail(client, HOSTS[region], str(aid)) for aid in reported
+        ))
 
-    for raw in found:
-        if not isinstance(raw, dict) or not raw.get("id"):
-            rejected += 1
-            continue
+    verified_missing = 0
+    verified_errors = 0
+    for aid, (status, raw) in zip(reported, verified):
+        battle = None
         try:
-            is_new = nick is not None and db.scalar(
-                select(Battle.id).where(
-                    Battle.region == region, Battle.albion_id == str(raw["id"])
-                )
-            ) is None
-            battle = upsert_battle_light(db, raw, region)
-            if battle is not None:
-                battle.reprocess_reason = REPROCESS_REASON_SWEEPER
-                if is_new:
-                    battle.found_by = nick
-                accepted += 1
+            if status == "found" and raw is not None and str(raw.get("id")) == str(aid):
+                is_new = nick is not None and db.scalar(
+                    select(Battle.id).where(
+                        Battle.region == region, Battle.albion_id == str(aid)
+                    )
+                ) is None
+                battle = upsert_battle_light(db, raw, region)
+                if battle is not None:
+                    battle.reprocess_reason = REPROCESS_REASON_SWEEPER
+                    if is_new:
+                        battle.found_by = nick
+                        log.info("scan: batalha %s (%s) encontrada por %s — %d jogadores",
+                                 battle.albion_id, region, nick, battle.players_total or 0)
+                    accepted += 1
+                else:
+                    # A API confirmou o ID, mas lutas pequenas não são armazenadas.
+                    status = "found"
+            elif status == "missing":
+                verified_missing += 1
             else:
-                rejected += 1
+                status = "error"
+                verified_errors += 1
         except Exception as e:
-            log.warning("companion_scan: upsert falhou (%s): %s", raw.get("id"), e)
-            rejected += 1
+            log.warning("companion_scan: upsert falhou (%s): %s", aid, e)
+            status = "error"
+            verified_errors += 1
 
-    # grava probes pros 404 e pros found (pra não re-sondar)
-    for aid in missing:
-        existing = db.get(BattleIdProbe, str(aid))
-        if existing is None:
-            db.add(BattleIdProbe(
-                albion_id=str(aid), status="missing", region=region,
-                probed_at=_now(),
-            ))
-    # errors não gravam probe — re-sondar depois
+        if status != "error":
+            probe = db.get(BattleIdProbe, str(aid))
+            if probe is None:
+                db.add(BattleIdProbe(
+                    albion_id=str(aid), status=status, region=region,
+                    battle_id=battle.id if battle else None, probed_at=_now(),
+                ))
+            else:
+                probe.status = status
+                probe.region = region
+                probe.battle_id = battle.id if battle else None
+                probe.probed_at = _now()
 
     task.status = "done"
     task.completed_at = _now()
     task.found_count = accepted
-    task.missing_count = len(missing)
-    task.error_count = len(errors)
+    task.missing_count = verified_missing
+    task.error_count = verified_errors
     db.commit()
-    return (accepted, rejected)
+    return (accepted, len(reported) - accepted)
 
 
 # ─── scheduler periódico ─────────────────────────────────────────────────────

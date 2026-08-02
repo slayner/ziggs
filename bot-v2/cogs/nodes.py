@@ -46,15 +46,19 @@ def _fmt_eta(minutes: int) -> str:
 
 
 async def _get(path: str) -> Optional[dict]:
-    return await http_client.get_json(path)
+    return await http_client.get_json(path, tag="nodes")
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    return await http_client.post_json(path, body)
+    return await http_client.post_json(
+        path, body, tag="nodes", attempts=2, queue_on_failure=False,
+    )
 
 
 async def _delete(path: str) -> Optional[dict]:
-    return await http_client.delete_json(path)
+    return await http_client.delete_json(
+        path, tag="nodes", attempts=2, queue_on_failure=False,
+    )
 
 
 def _is_staff(member: discord.Member) -> bool:
@@ -326,6 +330,7 @@ class AddNodeView(discord.ui.View):
             "spawn_at": self.spawn_at.isoformat(),
             "added_by_id": interaction.user.id,
             "added_by_name": interaction.user.display_name,
+            "request_id": str(interaction.id),
         })
         if res is None or not res.get("ok"):
             reason = (res or {}).get("detail") if isinstance(res, dict) else None
@@ -427,6 +432,7 @@ class Nodes(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._calendar_msg: dict[int, int] = {}  # {guild_id: message_id} fast-path
+        self._calendar_locks: dict[int, asyncio.Lock] = {}
 
     async def cog_load(self) -> None:
         # Sem bot.add_view: a view é reanexada a cada ciclo do update_calendar
@@ -442,6 +448,11 @@ class Nodes(commands.Cog):
         await self._sync_calendar(guild)
 
     async def _sync_calendar(self, guild: discord.Guild) -> None:
+        lock = self._calendar_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            await self._sync_calendar_unlocked(guild)
+
+    async def _sync_calendar_unlocked(self, guild: discord.Guild) -> None:
         cfg = await _guild_command_config(guild.id)
         ch_id = cfg.get("nodes_calendar_channel_id")
         if not ch_id:

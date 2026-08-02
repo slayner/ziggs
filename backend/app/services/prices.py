@@ -14,6 +14,7 @@ Funções legacy (sync_prices / get_price) mantidas para compatibilidade.
 from __future__ import annotations
 
 import asyncio
+import logging
 import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -22,6 +23,8 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
 from sqlalchemy.orm import Session
+
+log = logging.getLogger(__name__)
 
 from app.models.catalog import GameRole
 from app.models.prices import ItemPrice, ItemPriceLatest
@@ -60,7 +63,11 @@ def _aware(dt: datetime) -> datetime:
 # ── Companion: ingest de preços capturados via packet capture (Fase 2) ────────
 
 
-def upsert_companion_prices(db: Session, rows: list[dict[str, Any]]) -> tuple[int, int]:
+def upsert_companion_prices(
+    db: Session,
+    rows: list[dict[str, Any]],
+    source_install: str | None = None,
+) -> tuple[int, int]:
     """Insere preços reportados por companions (packet capture do mercado).
 
     Reaproveita _upsert_latest — mesmo formato de row. Normaliza price_date
@@ -88,8 +95,13 @@ def upsert_companion_prices(db: Session, rows: list[dict[str, Any]]) -> tuple[in
             "sell_price_min_date": pd,
         })
     if clean:
-        _upsert_latest(db, clean, now)
+        _upsert_latest(db, clean, now, source_install=source_install)
         db.commit()
+        # Loga cada preço ingerido — fluxo distribuído, usuário quer ver o spam.
+        for r in clean:
+            log.info("preço: %s @ %s q%d — %d prata (install=%s)",
+                     r["item_id"], r["city"], r["quality"], r["sell_price_min"],
+                     source_install or "?")
     return (len(clean), rejected)
 
 
@@ -109,7 +121,12 @@ async def _fetch_from_api(
         return resp.json()
 
 
-def _upsert_latest(db: Session, data: list[dict[str, Any]], now: datetime) -> None:
+def _upsert_latest(
+    db: Session,
+    data: list[dict[str, Any]],
+    now: datetime,
+    source_install: str | None = None,
+) -> None:
     # Cache do objeto por chave única DENTRO deste lote. O companion manda o
     # mesmo (item_id, city, quality) várias vezes num lote só (o mercado tem N
     # ordens do mesmo item); como a sessão é autoflush=False, o select abaixo
@@ -125,9 +142,12 @@ def _upsert_latest(db: Session, data: list[dict[str, Any]], now: datetime) -> No
         price: int = row["sell_price_min"]
         price_date = _parse_dt(row["sell_price_min_date"])
 
+        # Atribuição só no histórico append-only. Em item_prices_latest o
+        # último a escrever vence, então guardar a fonte lá diria pouco.
         db.add(ItemPrice(
             item_id=item_id, city=city, quality=quality,
             sell_price_min=price, price_date=price_date, recorded_at=now,
+            source_install=source_install,
         ))
         key = (item_id, city, quality)
         existing = pending.get(key) or db.scalar(

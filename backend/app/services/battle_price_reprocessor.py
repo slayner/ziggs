@@ -30,6 +30,11 @@ from app.services.prices import _BATTLE_SENTINEL, get_battle_prices
 
 log = logging.getLogger(__name__)
 
+# silver_dropped não pode recalcular o ledger enquanto este worker ainda está
+# corrigindo o cache antigo contaminado por listagens troll. Ambos sobem juntos
+# no lifespan; o Event explicita a ordem sem serializar os workers no main.py.
+ready = asyncio.Event()
+
 BATCH_SIZE = 50      # igual ao _BATCH_SIZE interno do prices.py — 1 lote aqui = 1 lote de requisições lá
 BUSY_INTERVAL = 5    # subiu de 30/10s pra 50/5s (usuário batendo em preços errados na hora de navegar,
 # vale acelerar a migração) — ainda devagar de propósito,
@@ -82,6 +87,8 @@ async def run_forever() -> None:
             n = await _reprocess_batch(db)
             if n:
                 log.info("battle_price_reprocessor: %d preços recalculados", n)
+            else:
+                ready.set()
         except Exception as e:
             log.error("battle_price_reprocessor: erro: %s", e)
         finally:

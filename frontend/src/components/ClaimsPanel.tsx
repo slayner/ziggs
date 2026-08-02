@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { navigate } from "../router";
 import { useLang, useT, type Lang } from "../i18n";
 import { CHALLENGE_ITEM_NAMES } from "../data/challenge-items";
@@ -104,10 +104,29 @@ function ProfileCustomize({ onBack, playerIds }: { onBack: () => void; playerIds
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [pendingCrop, setPendingCrop] = useState<{ kind: ImgKind; file: File; url: string } | null>(null);
+  const mutating = useRef(false);
+  const mutationGeneration = useRef(0);
+  const blocked = !!profile?.blocked_until && new Date(profile.blocked_until).getTime() > Date.now();
+  const pending = new Set(profile?.pending_kinds ?? []);
 
   useEffect(() => { api.getMyProfile().then(setProfile).catch(() => {}); }, []);
+  useEffect(() => {
+    if (!profile?.pending_kinds.length) return;
+    const timer = window.setInterval(() => {
+      if (mutating.current) return;
+      const generation = mutationGeneration.current;
+      api.getMyProfile().then(next => {
+        if (mutating.current || generation !== mutationGeneration.current) return;
+        setProfile(next);
+        window.dispatchEvent(new CustomEvent("ziggs:profile-updated", { detail: { profile: next, playerIds } }));
+      }).catch(() => {});
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [profile?.pending_kinds.length, playerIds.join(",")]);
 
   async function apply(action: () => Promise<MyProfile>) {
+    mutating.current = true;
+    mutationGeneration.current += 1;
     setBusy(true); setErr("");
     try {
       const next = await action();
@@ -117,7 +136,7 @@ function ProfileCustomize({ onBack, playerIds }: { onBack: () => void; playerIds
       window.dispatchEvent(new CustomEvent("ziggs:profile-updated", { detail: { profile: next, playerIds } }));
     }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(false); }
+    finally { mutating.current = false; setBusy(false); }
   }
 
   // Valida tamanho/dimensão e abre o modal de crop. Dimensões via <img> em
@@ -161,6 +180,11 @@ function ProfileCustomize({ onBack, playerIds }: { onBack: () => void; playerIds
         <div className="px-3 py-4 text-center text-xs text-zinc-600">{t("loading")}</div>
       ) : (
         <div className="px-3 py-2 space-y-3">
+          {blocked && profile.blocked_until && (
+            <p className="rounded border border-red-900/60 bg-red-950/30 px-2 py-1.5 text-[10px] text-red-300">
+              {t("profileMediaBlocked").replace("{date}", new Date(profile.blocked_until).toLocaleDateString())}
+            </p>
+          )}
           <div>
             <p className="text-[10px] uppercase tracking-wide text-zinc-600 mb-1.5">{t("profileTheme")}</p>
             <div className="flex gap-2">
@@ -176,12 +200,12 @@ function ProfileCustomize({ onBack, playerIds }: { onBack: () => void; playerIds
             <p className="text-[10px] uppercase tracking-wide text-zinc-600 mb-1.5">{t("profileAvatar")}</p>
             <div className="flex items-center gap-2">
               {profile.avatar_url && <img src={profile.avatar_url} alt="" className="h-10 w-10 rounded-full object-cover" />}
-              <label className="flex-1 cursor-pointer rounded-lg bg-zinc-800 px-3 py-1.5 text-center text-xs text-zinc-300 hover:bg-zinc-700">
-                {t("uploadImage")}
-                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" disabled={busy}
+              <label className={`flex-1 rounded-lg bg-zinc-800 px-3 py-1.5 text-center text-xs text-zinc-300 ${blocked || pending.has("avatar") ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-zinc-700"}`}>
+                {pending.has("avatar") ? t("profileMediaPending") : t("uploadImage")}
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" disabled={busy || blocked || pending.has("avatar")}
                   onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickFile("avatar", f); }} />
               </label>
-              {profile.avatar_url && (
+              {(profile.avatar_url || pending.has("avatar")) && (
                 <button disabled={busy} onClick={() => apply(api.removeProfileAvatar)} className="text-zinc-600 hover:text-red-400 text-xs">✕</button>
               )}
             </div>
@@ -191,12 +215,12 @@ function ProfileCustomize({ onBack, playerIds }: { onBack: () => void; playerIds
             <p className="text-[10px] uppercase tracking-wide text-zinc-600 mb-1.5">{t("profileBanner")}</p>
             {profile.banner_url && <img src={profile.banner_url} alt="" className="mb-1.5 h-12 w-full rounded object-cover" />}
             <div className="flex items-center gap-2">
-              <label className="flex-1 cursor-pointer rounded-lg bg-zinc-800 px-3 py-1.5 text-center text-xs text-zinc-300 hover:bg-zinc-700">
-                {t("uploadImage")}
-                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" disabled={busy}
+              <label className={`flex-1 rounded-lg bg-zinc-800 px-3 py-1.5 text-center text-xs text-zinc-300 ${blocked || pending.has("banner") ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-zinc-700"}`}>
+                {pending.has("banner") ? t("profileMediaPending") : t("uploadImage")}
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" disabled={busy || blocked || pending.has("banner")}
                   onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) pickFile("banner", f); }} />
               </label>
-              {profile.banner_url && (
+              {(profile.banner_url || pending.has("banner")) && (
                 <button disabled={busy} onClick={() => apply(api.removeProfileBanner)} className="text-zinc-600 hover:text-red-400 text-xs">✕</button>
               )}
             </div>

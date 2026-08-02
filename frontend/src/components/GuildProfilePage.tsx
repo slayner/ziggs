@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
 import { dateUTC } from "../lib/format";
 import { RoleIcon } from "./RoleIcons";
@@ -63,11 +63,18 @@ interface GuildProfile {
   albion_id: string; name: string;
   alliance_id: string | null; alliance_name: string | null;
   last_synced_at: string | null;
+  // Estado de refresh compartilhado (do profile_warmer). Enquanto != null,
+  // TODOS os visitantes vêem "atualizando" e o botão fica disabled.
+  refresh_requested_at?: string | null;
   kills_total: number; deaths_total: number;
   kill_fame: WindowStat; silver_dropped: WindowStat; battles: WindowStat;
   members: GuildMember[];
   battles_count: number;
   alliance_history: AllianceEvent[];
+  // Primeira página da aba Batalhas (page=0, filtros padrão) — já vem pronta
+  // no cold-load, mesmo motivo do `members`: evita reabrir a aba e esperar
+  // de novo por algo que já foi calculado minutos atrás.
+  battles_page0: BattlesPage;
 }
 
 interface AllianceProfile extends Omit<GuildProfile, "members" | "alliance_history"> {
@@ -75,9 +82,12 @@ interface AllianceProfile extends Omit<GuildProfile, "members" | "alliance_histo
   roster_log: RosterEvent[];
 }
 
+interface ColdLoadStub { _cold_load: true; albion_id: string }
+
 interface BattlesPage { battles: ProfileBattle[]; total: number; page: number; pages: number }
 
 type Profile = GuildProfile | AllianceProfile;
+type ProfileOrCold = Profile | ColdLoadStub;
 type Tab = "members" | "battles" | "alliances" | "roster";
 
 /* ── Helpers ────────────────────────────────────────────────────── */
@@ -107,6 +117,17 @@ function timeAgo(ts: string): string {
   const d = Math.floor(h / 24);
   if (d < 30) return `${d}d`;
   return `${Math.floor(d / 30)}mo`;
+}
+
+// "agora" cobre os primeiros 10min — mesmo tempo que o REFRESH_COOLDOWN de
+// guilda/aliança no backend (profiles.py).
+const JUST_NOW_MS = 10 * 60_000;
+// O sufixo "atrás" só faz sentido junto de um tempo real (5m atrás, 3h
+// atrás) — "agora atrás" não é frase em nenhum dos 3 idiomas (nem "now ago"
+// em EN). Decide aqui, uma vez só, em vez de deixar o caller colar o sufixo
+// incondicionalmente por fora.
+function ageLabel(ts: string, justNow: string, suffix: string): string {
+  return Date.now() - new Date(ts).getTime() < JUST_NOW_MS ? justNow : `${timeAgo(ts)} ${suffix}`;
 }
 
 /* ── Reused heatmap (mesmo modelo de PlayerProfilePage) ─────────── */
@@ -437,8 +458,14 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
   const [membersLoading, setMembersLoading] = useState(false);
   const [entityDeleted, setEntityDeleted] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshStage, setRefreshStage] = useState<string | null>(null);
   const [loadStage, setLoadStage] = useState<string | null>(null);
   const [retryAttempt, setRetryAttempt] = useState(0);
+  const refreshPollRef = useRef<object | null>(null);
+  const refreshIdentityRef = useRef("");
+  refreshIdentityRef.current = `${mode}\0${albionId}`;
+  const refreshingRef = useRef(false);
+  useEffect(() => { refreshingRef.current = refreshing; }, [refreshing]);
 
   // Guarda de resposta obsoleta (mesmo padrão de GuildConfig.tsx): ao trocar
   // de mode/albionId (ex.: clicar na aliança a partir do perfil da guilda),
@@ -460,6 +487,9 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     setFilteredMembers([]);
     setEntityDeleted(false);
     setTab("members");
+    setRefreshing(false);
+    setRefreshStage(null);
+    refreshPollRef.current = null;
     const endpoint = mode === "guild" ? "guilds" : "alliances";
     const TRANSIENT = new Set([502, 503, 504]);
     const attempt = (delay: number) => {
@@ -476,7 +506,20 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
           if (!r.ok) throw new Error(`${r.status}`);
           return r.json();
         })
-        .then(d => { if (!cancelled && d !== null) { setData(d); setLoading(false); } })
+        .then((d: ProfileOrCold | null) => {
+          if (cancelled || d === null) return;
+          // Cold load em andamento: backend disparou task em background e
+          // retornou stub. NÃO setData — mantém loading=true e re-tenta em 2s.
+          // A barra de progresso continua de onde estava (o stage vem do
+          // /load-progress, que é alimentado pela task em background, não por
+          // esta request). Quando a task termina, o resultado é cacheado e a
+          // próxima leitura retorna o perfil completo.
+          if ("_cold_load" in d) {
+            setTimeout(() => attempt(2_000), 2_000);
+            return;
+          }
+          setData(d); setLoading(false);
+        })
         .catch(e => { if (!cancelled) { setError(e.message); setLoading(false); } });
     };
     attempt(3_000);
@@ -484,7 +527,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
       .then(r => r.json())
       .then(d => { if (!cancelled) setEntityDeleted(d.exists === false); })
       .catch(() => {});
-    return () => { cancelled = true; };
+    return () => { cancelled = true; refreshPollRef.current = null; };
   }, [mode, albionId]);
 
   // Polling da etapa da montagem do perfil (ver LoadProgress) — a agregação
@@ -500,8 +543,19 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     }, 1000);
     return () => { alive = false; clearInterval(iv); };
   }, [loading, mode, albionId]);
+  // Mesmo padrão do fix dos Membros: o payload principal já traz a página 0
+  // com os filtros padrão prontos — usa direto, sem reabrir a aba e esperar
+  // de novo pela mesma busca que o cold-load acabou de fazer.
+  useEffect(() => {
+    if (!data) return;
+    setBattlesPage(data.battles_page0);
+  }, [data]);
+
   useEffect(() => {
     if (tab !== "battles") return;
+    // Página 0 com filtro padrão já veio no payload — só busca ao vivo
+    // quando o usuário pagina ou muda o filtro de verdade.
+    if (battlesCurPage === 0 && minPlayers === "25" && minKills === "5") return;
     let cancelled = false;
     setBattlesLoading(true);
     const endpoint = mode === "guild" ? "guilds" : "alliances";
@@ -516,10 +570,21 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
       .finally(() => { if (!cancelled) setBattlesLoading(false); });
     return () => { cancelled = true; };
   }, [tab, albionId, mode, battlesCurPage, minPlayers, minKills]);
+  // O payload principal (cold-load) já traz members/guilds com os MESMOS
+  // filtros padrão (25/5 — ver profiles.py) que esta aba usa de início. Usa
+  // direto, sem round-trip: evita refazer a mesma agregação pesada que
+  // acabou de rodar segundos/minutos atrás só pra mostrar a mesma coisa.
   useEffect(() => {
+    if (!data) return;
+    setFilteredMembers(("members" in data ? data.members : data.guilds) ?? []);
+  }, [data]);
+
+  // Só busca ao vivo quando o filtro sai do padrão embutido no payload —
+  // reabrir o mesmo perfil sem mexer no filtro não deveria re-agregar do zero.
+  useEffect(() => {
+    if (minPlayers === "25" && minKills === "5") return;
     let cancelled = false;
     setMembersLoading(true);
-    setFilteredMembers([]);
     const endpoint = mode === "guild" ? "guilds" : "alliances";
     const params = new URLSearchParams({ min_players: minPlayers || "0", min_kills: minKills || "0" });
     fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}/members?${params}`)
@@ -530,22 +595,110 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     return () => { cancelled = true; };
   }, [albionId, mode, minPlayers, minKills]);
 
-  // Sem fila aqui — guild/alliance_profile já é 100% DB (nunca chama a Albion
-  // no caminho principal), então "refresh" é só reler os mesmos endpoints.
+  // Botão ⟳: enfileira no backend (POST /refresh) e faz polling até
+  // refresh_requested_at sumir — mesmo padrão do PlayerProfilePage. O estado
+  // é COMPARTILHADO: enquanto refresh_requested_at != null, qualquer outro
+  // usuário olhando o mesmo perfil também vê "atualizando". Cooldown de 5min.
   function forceRefresh() {
     if (refreshing) return;
+    const identity = `${mode}\0${albionId}`;
     setRefreshing(true);
-    const endpoint = mode === "guild" ? "guilds" : "alliances";
-    Promise.all([
-      fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}`).then(r => (r.ok ? r.json() : null)),
-      fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}/check`).then(r => r.json()).catch(() => null),
-    ])
-      .then(([d, checkD]) => {
-        if (d) setData(d);
-        if (checkD) setEntityDeleted(checkD.exists === false);
+    setRefreshStage("queued");
+    fetch(`${API}/public/${mode === "guild" ? "guilds" : "alliances"}/${encodeURIComponent(albionId)}/refresh`, { method: "POST" })
+      .then(r => r.json())
+      .then((res: { queued?: boolean; cooldown_seconds?: number }) => {
+        if (refreshIdentityRef.current !== identity) return;
+        if (!res.queued) {
+          // Cooldown — perfil acabou de ser atualizado há menos de 5min.
+          setRefreshing(false);
+          setRefreshStage(null);
+          return;
+        }
+        startRefreshPoll();
       })
-      .finally(() => setRefreshing(false));
+      .catch(() => { if (refreshIdentityRef.current === identity) startRefreshPoll(); });  // POST falhou — tenta polling do estado
   }
+
+  function startRefreshPoll() {
+    const endpoint = mode === "guild" ? "guilds" : "alliances";
+    const identity = `${mode}\0${albionId}`;
+    if (refreshIdentityRef.current !== identity) return;
+    const run = {};
+    refreshPollRef.current = run;
+    const active = () => refreshPollRef.current === run && refreshIdentityRef.current === identity;
+    const poll = () => {
+      if (!active()) return;
+      fetch(`${API}/public/${endpoint}/${encodeURIComponent(albionId)}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then((d: ProfileOrCold | null) => {
+          if (!active()) return;
+          if (!d) { setTimeout(poll, 2_000); return; }
+          // O refresh do warmer bumpa last_seen_at, o que invalida o
+          // cold-cache — o próximo poll pode pegar a rota disparando um novo
+          // cold-load e devolvendo o stub (_cold_load), não o perfil
+          // completo. stub.refresh_requested_at é sempre undefined, então
+          // sem essa checagem `stillRefreshing` dava falso NEGATIVO (achava
+          // que tinha terminado) e `setData` recebia um objeto sem
+          // members/guilds — quebrava o render. Só continua esperando.
+          if ("_cold_load" in d) { setTimeout(poll, 2_000); return; }
+          const stillRefreshing = d.refresh_requested_at != null;
+          setData(d);
+          if (stillRefreshing) setTimeout(poll, 2_000);
+          else {
+            // Refresh terminou — busca o stage final pra pegar error:timeout.
+            fetch(`${API}/public/refresh-progress/${mode}/${encodeURIComponent(albionId)}`)
+              .then(r => (r.ok ? r.json() : null))
+              .then((sd: { stage?: string | null } | null) => {
+                if (!active()) return;
+                if (sd?.stage?.startsWith("error:")) setRefreshStage(sd.stage);
+                else setRefreshStage(null);
+                setRefreshing(false);
+                refreshPollRef.current = null;
+              })
+              .catch(() => { if (active()) { setRefreshStage(null); setRefreshing(false); refreshPollRef.current = null; } });
+          }
+        })
+        .catch(() => { if (active()) setTimeout(poll, 3_000); });
+    };
+    const stagePoll = () => {
+      if (!active()) return;
+      fetch(`${API}/public/refresh-progress/${mode}/${encodeURIComponent(albionId)}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then((d: { stage?: string | null } | null) => {
+          if (!active()) return;
+          if (d?.stage) setRefreshStage(d.stage);
+        })
+        .catch(() => {})
+        .finally(() => { if (active() && refreshingRef.current) setTimeout(stagePoll, 1_000); });
+    };
+    setTimeout(poll, 2_000);
+    setTimeout(stagePoll, 500);
+  }
+
+  function refreshStageLabel(): string {
+    if (!refreshStage) return t("refreshingLabel");
+    if (refreshStage.startsWith("error:")) {
+      if (refreshStage === "error:timeout") return t("refreshStageTimeout");
+      return t("refreshingLabel");
+    }
+    const map: Record<string, string> = {
+      queued: t("refreshStageQueued"),
+      fetching: t("refreshStageFetching"),
+      building: t("refreshStageBuilding"),
+    };
+    return map[refreshStage] ?? t("refreshingLabel");
+  }
+
+  // Se o perfil chegou com refresh_requested_at != null (outro usuário pediu),
+  // entra no polling automaticamente — todo mundo vê "atualizando" desde o início.
+  useEffect(() => {
+    if (data?.refresh_requested_at && !refreshing && !refreshPollRef.current) {
+      setRefreshing(true);
+      setRefreshStage("queued");
+      startRefreshPoll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.refresh_requested_at]);
 
   if (loading) {
     return (
@@ -592,7 +745,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     );
   }
 
-  const members = "members" in data ? data.members : data.guilds;
+  const members = ("members" in data ? data.members : data.guilds) ?? [];
   const { kill_fame, silver_dropped, battles, battles_count } = data;
   const allianceHistory = mode === "guild" ? (data as GuildProfile).alliance_history ?? [] : [];
   const rosterLog = mode === "alliance" ? (data as AllianceProfile).roster_log ?? [] : [];
@@ -650,7 +803,14 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
               >
                 <i className={`ti ti-refresh inline-block${refreshing ? " animate-spin" : ""}`} aria-hidden="true" />
               </button>
-              {data.last_synced_at ? `${timeAgo(data.last_synced_at)} ${t("justAgoSuffix")}` : t("neverSyncedLabel")}
+              {refreshing && <span className="refresh-mini-bar" aria-hidden="true" />}
+              {refreshing ? (
+                <span className="text-amber-400/80">{refreshStageLabel()}</span>
+              ) : (
+                data.last_synced_at
+                  ? ageLabel(data.last_synced_at, t("justNowLabel"), t("justAgoSuffix"))
+                  : t("neverSyncedLabel")
+              )}
             </div>
           </div>
 

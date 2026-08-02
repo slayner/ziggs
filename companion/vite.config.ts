@@ -7,6 +7,12 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    watch: {
+      // Sem isso o Vite observa src-tauri/target inteiro (17GB+ de build do
+      // Cargo) — quando o linker trava um .dll pra escrever, o watcher do
+      // Node explode com EBUSY não tratado e derruba o `npm run dev` inteiro.
+      ignored: ["**/src-tauri/**"],
+    },
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {

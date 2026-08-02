@@ -4,14 +4,14 @@ O bot é só cliente da API do site: toda mutação chama os endpoints
 `/bot/events/*` (auth por BOT_API_SECRET). A máquina de estados vive no site
 (`app/services/events.py`); o bot renderiza pickers e wizards.
 
-Horário UTC via lupa paginada (faixas de 25min ◀️/▶️ até 36h → minuto exato),
-mesma UX do /nodes. Gate via command_roles do site (check_command_access,
-"event") — default admin, refinável por cargo no painel de permissões.
+Horário digitado em formato humano (21h, 21:30 BRT, data completa). Gate via
+command_roles do site (check_command_access, "event") — default admin,
+refinável por cargo no painel de permissões.
 """
 from __future__ import annotations
 
-import asyncio
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional
 
@@ -27,30 +27,33 @@ from localization import loc, name_locs
 SITE_URL   = os.getenv("BOT_SITE_URL", "").rstrip("/")
 API_SECRET = os.getenv("BOT_API_SECRET", "")
 
-# Lupa de horário — espelho de cogs/nodes.py.
-TIME_BUCKET_MIN       = 25
-TIME_HORIZON_H        = 36
-TIME_TOTAL_FAIXAS     = TIME_HORIZON_H * 60 // TIME_BUCKET_MIN + 1   # 87
-TIME_FAIXAS_PER_PAGE  = 23
-TIME_PAGES            = -(-TIME_TOTAL_FAIXAS // TIME_FAIXAS_PER_PAGE)  # 4
-
-
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
 async def _get(path: str):
-    return await http_client.get_json(path)
+    return await http_client.get_json(
+        path, tag="event_cmd", raise_on_unavailable=True,
+    )
 
 
 async def _post(path: str, body: dict):
-    return await http_client.post_json(path, body)
+    return await http_client.post_json(
+        path, body, tag="event_cmd", attempts=2, queue_on_failure=False,
+        raise_on_unavailable=True,
+    )
 
 
 async def _patch(path: str, body: dict):
-    return await http_client.patch_json(path, body)
+    return await http_client.patch_json(
+        path, body, tag="event_cmd", attempts=2, queue_on_failure=False,
+        raise_on_unavailable=True,
+    )
 
 
 async def _delete(path: str):
-    return await http_client.delete_json(path)
+    return await http_client.delete_json(
+        path, tag="event_cmd", attempts=2, queue_on_failure=False,
+        raise_on_unavailable=True,
+    )
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -69,40 +72,79 @@ def _fmt_utc(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%H:%M")
 
 
-def _parse_utc_hhmm(s: str) -> datetime | None:
-    """'HH:MM', 'HHhMM' ou só 'HH' -> próxima ocorrência em UTC (hoje se ainda
-    não passou, senão amanhã). Também aceita data completa ISO
-    ('YYYY-MM-DD HH:MM') pra agendar além das próximas 24h."""
-    s = s.strip()
-    dt = _parse_iso(s)
-    if dt is not None:
-        return dt
-    parts = s.lower().replace("h", ":").split(":")
+def _parse_event_time(s: str, now: datetime | None = None) -> datetime | None:
+    """Interpreta horário humano e devolve a próxima ocorrência em UTC.
+
+    Aceita 21h, 21h30, 21:30, fusos conhecidos e datas DD/MM/YYYY ou
+    YYYY-MM-DD. Sem sufixo, mantém UTC como padrão histórico do comando.
+    """
+    value = s.strip()
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+    # Também preserva ISO completo com offset, usado por integrações antigas.
     try:
-        hour = int(parts[0])
-        minute = int(parts[1]) if len(parts) > 1 and parts[1] else 0
-    except (ValueError, IndexError):
+        iso = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        iso = None
+    if iso is not None:
+        iso = iso if iso.tzinfo else iso.replace(tzinfo=timezone.utc)
+        iso = iso.astimezone(timezone.utc)
+        return iso if iso > now_utc else None
+
+    match = re.fullmatch(
+        r"(?:(?:(\d{4})-(\d{1,2})-(\d{1,2})|"
+        r"(\d{1,2})[/.](\d{1,2})(?:[/.](\d{4}))?)\s+)?"
+        r"(\d{1,2})(?:h(\d{1,2})?|:(\d{1,2}))?\s*"
+        r"(BRT|BRST|UTC|GMT|CET|CEST)?",
+        value,
+        re.IGNORECASE,
+    )
+    if match is None:
         return None
-    if not (0 <= hour < 24 and 0 <= minute < 60):
+
+    hour = int(match.group(7))
+    minute = int(match.group(8) or match.group(9) or 0)
+    if hour > 23 or minute > 59:
         return None
-    now = datetime.now(timezone.utc)
-    dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    return dt if dt > now else dt + timedelta(days=1)
+
+    offsets = {"UTC": 0, "GMT": 0, "BRT": -3, "BRST": -2, "CET": 1, "CEST": 2}
+    suffix = (match.group(10) or "UTC").upper()
+    source_tz = timezone(timedelta(hours=offsets[suffix]), name=suffix)
+    source_now = now_utc.astimezone(source_tz)
+    year = int(match.group(1) or match.group(6) or source_now.year)
+    month = int(match.group(2) or match.group(5) or source_now.month)
+    day = int(match.group(3) or match.group(4) or source_now.day)
+    has_date = bool(match.group(1) or match.group(4))
+    has_year = bool(match.group(1) or match.group(6))
+
+    try:
+        parsed = datetime(year, month, day, hour, minute, tzinfo=source_tz)
+    except ValueError:
+        return None
+    if parsed <= source_now:
+        if has_year:
+            return None
+        try:
+            parsed = (
+                parsed.replace(year=year + 1)
+                if has_date
+                else parsed + timedelta(days=1)
+            )
+        except ValueError:
+            return None
+    return parsed.astimezone(timezone.utc)
 
 
-def _fmt_eta(minutes: int) -> str:
-    if minutes <= 0:
-        return "agora"
-    h, m = divmod(minutes, 60)
-    if h and m:
-        return f"{h}h{m:02d}min"
-    if h:
-        return f"{h} hora{'s' if h > 1 else ''}"
-    return f"{m} minuto{'s' if m > 1 else ''}"
-
-
-async def _rerender(interaction: Interaction, content: str, view: discord.ui.View) -> None:
+async def _rerender(
+    interaction: Interaction, content: str, view: discord.ui.View | None,
+) -> None:
     """Atualiza a mensagem ephemeral do componente clicado pra próxima etapa."""
+    if interaction.response.is_done():
+        try:
+            await interaction.edit_original_response(content=content, view=view)
+        except (discord.NotFound, discord.HTTPException):
+            pass
+        return
     try:
         await interaction.response.edit_message(content=content, view=view)
     except discord.InteractionResponded:
@@ -121,164 +163,55 @@ async def _defer(interaction: Interaction) -> None:
         pass
 
 
-async def _refresh_massinfo(interaction: Interaction) -> None:
-    cog = interaction.client.get_cog("Events")
-    if cog is None or interaction.guild is None:
-        return
-    try:
-        await cog.refresh_massinfo(interaction.guild)
-    except Exception:
-        pass  # best-effort — o polling de 5s cobre
+_EDIT_FIELD_ORDER = ("objetivo", "horario", "comp", "attendance")
+
+
+def _edit_panel_content(
+    lang: str, changes: dict[str, tuple[str, str]], error: str | None = None,
+) -> str:
+    lines = [error] if error else []
+    if changes:
+        if lines:
+            lines.append("")
+        lines.append(t(lang, "ev_edit_history"))
+        for field in _EDIT_FIELD_ORDER:
+            change = changes.get(field)
+            if change is None:
+                continue
+            before, after = change
+            label = t(lang, f"ev_field_{field}")
+            lines.append(t(lang, "ev_edit_history_line", field=label, before=before, after=after))
+    if lines:
+        lines.append("")
+    lines.append(t(lang, "ev_pick_field"))
+    return "\n".join(lines)
+
+
+async def _show_edit_result(
+    interaction: Interaction, lang: str, ev: dict, comps: list[dict],
+    changes: dict[str, tuple[str, str]], error: str | None = None,
+) -> None:
+    await _rerender(
+        interaction,
+        _edit_panel_content(lang, changes, error),
+        EditFieldView(lang, ev, comps, changes),
+    )
 
 
 def _event_label(ev: dict, lang: str) -> str:
-    title = ev.get("title") or "—"
     dt = _parse_iso(ev.get("scheduled_at"))
     when = f" · {_fmt_utc(dt)} UTC" if dt else ""
+    title = ev.get("title") or f"Evento #{ev['id']}"
     comp = f" · {ev.get('comp_name')}" if ev.get("comp_name") else ""
     return f"#{ev['id']} — {title}{when}{comp}"[:100]
-
-
-# ── Lupa de horário ───────────────────────────────────────────────────────────
-
-class TimeLupaView(discord.ui.View):
-    """Lupa paginada (faixa 25min → minuto exato, até 36h à frente) que devolve
-    um datetime UTC via `on_picked(interaction, dt)`. Reusada por criar/editar-
-    horário/adiar. Renderização espelhada de cogs/nodes.py:AddNodeView."""
-
-    def __init__(self, lang: str, on_picked: Callable[[Interaction, datetime], Awaitable[None]],
-                 prompt_key: str = "ev_pick_time"):
-        super().__init__(timeout=300)
-        self.lang = lang
-        self.on_picked = on_picked
-        self.prompt_key = prompt_key
-        self.spawn_at: datetime | None = None
-        self._time_base: datetime | None = None
-        self._time_page = 0
-        self._time_block_start: datetime | None = None
-        self._show_range()
-
-    def _prompt(self) -> str:
-        return t(self.lang, self.prompt_key)
-
-    def _show_range(self) -> None:
-        if self._time_base is None:
-            self._time_base = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        self.clear_items()
-        now = datetime.now(timezone.utc)
-        page = self._time_page
-        start_idx = page * TIME_FAIXAS_PER_PAGE
-        end_idx = min(start_idx + TIME_FAIXAS_PER_PAGE, TIME_TOTAL_FAIXAS)
-        options: list[discord.SelectOption] = []
-        if page > 0:
-            options.append(discord.SelectOption(label=t(self.lang, "ev_time_prev"), value="__prev__"))
-        for idx in range(start_idx, end_idx):
-            s = self._time_base + timedelta(minutes=idx * TIME_BUCKET_MIN)
-            e = s + timedelta(minutes=TIME_BUCKET_MIN)
-            eta_s = _fmt_eta(-(-int((s - now).total_seconds()) // 60))
-            eta_e = _fmt_eta(-(-int((e - now).total_seconds()) // 60))
-            pref = "" if eta_s == "agora" else "em "
-            options.append(discord.SelectOption(
-                label=f"{s:%H:%M}–{e:%H:%M} UTC  ({pref}{eta_s} - {eta_e})",
-                value=str(int(s.timestamp())),
-            ))
-        if page < TIME_PAGES - 1:
-            options.append(discord.SelectOption(label=t(self.lang, "ev_time_next"), value="__next__"))
-        select = discord.ui.Select(
-            placeholder=t(self.lang, "ev_pick_time_range", page=page + 1, pages=TIME_PAGES),
-            min_values=1, max_values=1, options=options,
-        )
-        select.callback = self._on_range
-        self.add_item(select)
-        cancel = discord.ui.Button(label=t(self.lang, "ev_cancel"), style=discord.ButtonStyle.secondary)
-        cancel.callback = self._on_cancel
-        self.add_item(cancel)
-
-    def _show_minute(self, block_start: datetime) -> None:
-        self._time_block_start = block_start
-        self.clear_items()
-        now = datetime.now(timezone.utc)
-        options: list[discord.SelectOption] = []
-        for k in range(TIME_BUCKET_MIN):
-            s = block_start + timedelta(minutes=k)
-            eta = _fmt_eta(-(-int((s - now).total_seconds()) // 60))
-            pref = "" if eta == "agora" else "em "
-            options.append(discord.SelectOption(
-                label=f"{s:%H:%M} UTC  ({pref}{eta})", value=str(int(s.timestamp())),
-            ))
-        select = discord.ui.Select(
-            placeholder=t(self.lang, "ev_pick_time_minute"),
-            min_values=1, max_values=1, options=options,
-        )
-        select.callback = self._on_minute
-        self.add_item(select)
-        back = discord.ui.Button(label=t(self.lang, "ev_back"), style=discord.ButtonStyle.secondary)
-        back.callback = self._on_back
-        self.add_item(back)
-        cancel = discord.ui.Button(label=t(self.lang, "ev_cancel"), style=discord.ButtonStyle.secondary)
-        cancel.callback = self._on_cancel
-        self.add_item(cancel)
-
-    def _show_confirm(self) -> None:
-        self.clear_items()
-        confirm = discord.ui.Button(label=t(self.lang, "ev_confirm"), style=discord.ButtonStyle.success)
-        confirm.callback = self._on_confirm
-        back = discord.ui.Button(label=t(self.lang, "ev_back"), style=discord.ButtonStyle.secondary)
-        back.callback = self._on_back_to_minute
-        self.add_item(confirm)
-        self.add_item(back)
-        cancel = discord.ui.Button(label=t(self.lang, "ev_cancel"), style=discord.ButtonStyle.secondary)
-        cancel.callback = self._on_cancel
-        self.add_item(cancel)
-
-    async def _on_range(self, interaction: Interaction) -> None:
-        val = self.children[0].values[0]
-        if val == "__next__":
-            self._time_page = min(self._time_page + 1, TIME_PAGES - 1)
-            self._show_range()
-            await interaction.response.edit_message(content=self._prompt(), view=self)
-            return
-        if val == "__prev__":
-            self._time_page = max(self._time_page - 1, 0)
-            self._show_range()
-            await interaction.response.edit_message(content=self._prompt(), view=self)
-            return
-        block = datetime.fromtimestamp(int(val), tz=timezone.utc)
-        self._show_minute(block)
-        await interaction.response.edit_message(content=self._prompt(), view=self)
-
-    async def _on_minute(self, interaction: Interaction) -> None:
-        self.spawn_at = datetime.fromtimestamp(int(self.children[0].values[0]), tz=timezone.utc)
-        self._show_confirm()
-        await interaction.response.edit_message(
-            content=f"{self._prompt()}\n**{_fmt_utc(self.spawn_at)} UTC**", view=self)
-
-    async def _on_back(self, interaction: Interaction) -> None:
-        self._show_range()
-        await interaction.response.edit_message(content=self._prompt(), view=self)
-
-    async def _on_back_to_minute(self, interaction: Interaction) -> None:
-        if self._time_block_start is not None:
-            self._show_minute(self._time_block_start)
-        else:
-            self._show_range()
-        await interaction.response.edit_message(content=self._prompt(), view=self)
-
-    async def _on_confirm(self, interaction: Interaction) -> None:
-        if self.spawn_at is None:
-            await interaction.response.defer()
-            return
-        await self.on_picked(interaction, self.spawn_at)
-
-    async def _on_cancel(self, interaction: Interaction) -> None:
-        await interaction.response.edit_message(content=t(self.lang, "ev_cancelled"), view=None)
 
 
 # ── Picker de comp ────────────────────────────────────────────────────────────
 
 class CompSelectView(discord.ui.View):
     def __init__(self, lang: str, comps: list[dict],
-                 on_picked: Callable[[Interaction, int | None], Awaitable[None]]):
+                 on_picked: Callable[[Interaction, int | None], Awaitable[None]],
+                 *, show_cancel: bool = True):
         super().__init__(timeout=180)
         self.lang = lang
         self.on_picked = on_picked
@@ -290,9 +223,10 @@ class CompSelectView(discord.ui.View):
         )
         select.callback = self._on_pick
         self.add_item(select)
-        cancel = discord.ui.Button(label=t(lang, "ev_cancel"), style=discord.ButtonStyle.secondary)
-        cancel.callback = self._on_cancel
-        self.add_item(cancel)
+        if show_cancel:
+            cancel = discord.ui.Button(label=t(lang, "ev_cancel"), style=discord.ButtonStyle.secondary)
+            cancel.callback = self._on_cancel
+            self.add_item(cancel)
 
     async def _on_pick(self, interaction: Interaction) -> None:
         val = self.children[0].values[0]
@@ -307,7 +241,8 @@ class CompSelectView(discord.ui.View):
 
 class EventSelectView(discord.ui.View):
     def __init__(self, lang: str, events: list[dict],
-                 on_picked: Callable[[Interaction, dict], Awaitable[None]]):
+                 on_picked: Callable[[Interaction, dict], Awaitable[None]],
+                 *, show_cancel: bool = True):
         super().__init__(timeout=180)
         self.lang = lang
         self.on_picked = on_picked
@@ -319,9 +254,10 @@ class EventSelectView(discord.ui.View):
         )
         select.callback = self._on_pick
         self.add_item(select)
-        cancel = discord.ui.Button(label=t(lang, "ev_cancel"), style=discord.ButtonStyle.secondary)
-        cancel.callback = self._on_cancel
-        self.add_item(cancel)
+        if show_cancel:
+            cancel = discord.ui.Button(label=t(lang, "ev_cancel"), style=discord.ButtonStyle.secondary)
+            cancel.callback = self._on_cancel
+            self.add_item(cancel)
 
     async def _on_pick(self, interaction: Interaction) -> None:
         eid = int(self.children[0].values[0])
@@ -335,39 +271,85 @@ class EventSelectView(discord.ui.View):
         await interaction.response.edit_message(content=t(self.lang, "ev_cancelled"), view=None)
 
 
-# ── Modais (editar: objetivo + attendance) ────────────────────────────────────
+# ── Modais ────────────────────────────────────────────────────────────────────
+
+class TimeModal(discord.ui.Modal):
+    def __init__(
+        self, lang: str, ev: dict, comps: list[dict] | None = None,
+        changes: dict[str, tuple[str, str]] | None = None,
+    ):
+        super().__init__(title=t(lang, "ev_field_horario"), timeout=180)
+        self.lang = lang
+        self.ev = ev
+        self.comps = comps
+        self.changes = changes
+        current = _parse_iso(ev.get("scheduled_at"))
+        self.value = discord.ui.TextInput(
+            label=t(lang, "ev_time_input_label"),
+            placeholder=t(lang, "ev_time_input_placeholder"),
+            default=current.astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC") if current else None,
+            max_length=40,
+            required=True,
+        )
+        self.add_item(self.value)
+
+    async def on_submit(self, interaction: Interaction) -> None:
+        parsed = _parse_event_time(str(self.value.value))
+        if parsed is None:
+            await interaction.response.send_message(t(self.lang, "ev_bad_time"), ephemeral=True)
+            return
+        await _do_patch_scheduled(
+            interaction, self.lang, self.ev, parsed, self.comps, self.changes,
+        )
 
 class TitleModal(discord.ui.Modal):
-    def __init__(self, lang: str, ev: dict):
+    def __init__(
+        self, lang: str, ev: dict, comps: list[dict],
+        changes: dict[str, tuple[str, str]],
+    ):
         super().__init__(title=t(lang, "ev_field_objetivo"), timeout=180)
         self.lang = lang
         self.ev = ev
-        self.title = discord.ui.TextInput(
+        self.comps = comps
+        self.changes = changes
+        self.title_input = discord.ui.TextInput(
             label=t(lang, "ev_field_objetivo"),
             default=ev.get("title") or None,
             max_length=255, required=True,
         )
-        self.add_item(self.title)
+        self.add_item(self.title_input)
 
     async def on_submit(self, interaction: Interaction) -> None:
         await _defer(interaction)
         res = await _patch(
             f"/bot/events/{interaction.guild_id}/{self.ev['id']}",
-            {"set_title": True, "title": self.title.value, "actor_id": interaction.user.id},
+            {"set_title": True, "title": self.title_input.value, "actor_id": interaction.user.id},
         )
         if res is None:
-            await interaction.followup.send(t(self.lang, "ev_update_fail"), ephemeral=True)
+            await _show_edit_result(
+                interaction, self.lang, self.ev, self.comps, self.changes,
+                t(self.lang, "ev_update_fail"),
+            )
             return
-        await interaction.followup.send(
-            t(self.lang, "ev_edit_done_field", field=t(self.lang, "ev_field_objetivo")), ephemeral=True)
-        await _refresh_massinfo(interaction)
+        old_value = str(self.ev.get("title") or "—")
+        new_value = str(self.title_input.value)
+        self.changes["objetivo"] = (old_value, new_value)
+        self.ev["title"] = new_value
+        await _show_edit_result(
+            interaction, self.lang, self.ev, self.comps, self.changes,
+        )
 
 
 class AttendanceModal(discord.ui.Modal):
-    def __init__(self, lang: str, ev: dict):
+    def __init__(
+        self, lang: str, ev: dict, comps: list[dict],
+        changes: dict[str, tuple[str, str]],
+    ):
         super().__init__(title=t(lang, "ev_field_attendance"), timeout=180)
         self.lang = lang
         self.ev = ev
+        self.comps = comps
+        self.changes = changes
         self.val = discord.ui.TextInput(
             label=t(lang, "ev_field_attendance"),
             placeholder="1 · 0.5 · 1.5",
@@ -389,21 +371,32 @@ class AttendanceModal(discord.ui.Modal):
             {"set_attendance": True, "attendance": value, "actor_id": interaction.user.id},
         )
         if res is None:
-            await interaction.followup.send(t(self.lang, "ev_update_fail"), ephemeral=True)
+            await _show_edit_result(
+                interaction, self.lang, self.ev, self.comps, self.changes,
+                t(self.lang, "ev_update_fail"),
+            )
             return
-        await interaction.followup.send(
-            t(self.lang, "ev_edit_done_field", field=t(self.lang, "ev_field_attendance")), ephemeral=True)
-        await _refresh_massinfo(interaction)
+        old_value = f"{float(self.ev.get('attendance', 1)):g}"
+        new_value = f"{value:g}"
+        self.changes["attendance"] = (old_value, new_value)
+        self.ev["attendance"] = value
+        await _show_edit_result(
+            interaction, self.lang, self.ev, self.comps, self.changes,
+        )
 
 
 # ── Editar: picker de campo ───────────────────────────────────────────────────
 
 class EditFieldView(discord.ui.View):
-    def __init__(self, lang: str, ev: dict, comps: list[dict]):
+    def __init__(
+        self, lang: str, ev: dict, comps: list[dict],
+        changes: dict[str, tuple[str, str]] | None = None,
+    ):
         super().__init__(timeout=180)
         self.lang = lang
         self.ev = ev
         self.comps = comps
+        self.changes = changes if changes is not None else {}
         options = [
             discord.SelectOption(label=t(lang, "ev_field_objetivo"), value="objetivo"),
             discord.SelectOption(label=t(lang, "ev_field_horario"), value="horario"),
@@ -415,29 +408,32 @@ class EditFieldView(discord.ui.View):
         )
         select.callback = self._on_pick
         self.add_item(select)
-        cancel = discord.ui.Button(label=t(lang, "ev_cancel"), style=discord.ButtonStyle.secondary)
-        cancel.callback = self._on_cancel
-        self.add_item(cancel)
 
     async def _on_pick(self, interaction: Interaction) -> None:
         field = self.children[0].values[0]
         lang = self.lang
         ev = self.ev
         if field == "objetivo":
-            await interaction.response.send_modal(TitleModal(lang, ev))
+            await interaction.response.send_modal(
+                TitleModal(lang, ev, self.comps, self.changes),
+            )
         elif field == "horario":
-            async def on_time(inter, dt):
-                await _do_patch_scheduled(inter, lang, ev, dt)
-            await _rerender(interaction, t(lang, "ev_pick_time"), TimeLupaView(lang, on_time))
+            await interaction.response.send_modal(
+                TimeModal(lang, ev, self.comps, self.changes),
+            )
         elif field == "comp":
             async def on_comp(inter, comp_id):
-                await _do_patch_comp(inter, lang, ev, comp_id, self.comps)
-            await _rerender(interaction, t(lang, "ev_pick_comp"), CompSelectView(lang, self.comps, on_comp))
+                await _do_patch_comp(
+                    inter, lang, ev, comp_id, self.comps, self.changes,
+                )
+            await _rerender(
+                interaction, t(lang, "ev_pick_comp"),
+                CompSelectView(lang, self.comps, on_comp, show_cancel=False),
+            )
         elif field == "attendance":
-            await interaction.response.send_modal(AttendanceModal(lang, ev))
-
-    async def _on_cancel(self, interaction: Interaction) -> None:
-        await interaction.response.edit_message(content=t(self.lang, "ev_cancelled"), view=None)
+            await interaction.response.send_modal(
+                AttendanceModal(lang, ev, self.comps, self.changes),
+            )
 
 
 # ── Deletar: confirmação ──────────────────────────────────────────────────────
@@ -464,7 +460,6 @@ class DeleteConfirmView(discord.ui.View):
             return
         await interaction.followup.send(
             t(self.lang, "ev_delete_done", eid=self.ev["id"]), ephemeral=True)
-        await _refresh_massinfo(interaction)
 
     async def _on_cancel(self, interaction: Interaction) -> None:
         await interaction.response.edit_message(content=t(self.lang, "ev_cancelled"), view=None)
@@ -472,78 +467,81 @@ class DeleteConfirmView(discord.ui.View):
 
 # ── Ações (POST/PATCH/DELETE + refresh) ───────────────────────────────────────
 
-async def _do_create(interaction: Interaction, lang: str, objetivo: str,
+async def _do_create(interaction: Interaction, lang: str, objetivo: str | None,
                      comp_id: int | None, dt: datetime) -> None:
     await _defer(interaction)
     res = await _post(f"/bot/events/{interaction.guild_id}", {
-        "title": objetivo,
+        "title": objetivo or None,
         "scheduled_at": dt.isoformat(),
         "comp_id": comp_id,
         "actor_id": interaction.user.id,
         "actor_name": interaction.user.display_name,
+        "request_id": str(interaction.id),
     })
     if res is None or "id" not in (res or {}):
         await interaction.followup.send(t(lang, "ev_create_fail"), ephemeral=True)
         return
     await interaction.followup.send(
         t(lang, "ev_create_done", eid=res["id"], hora=_fmt_utc(dt)), ephemeral=True)
-    await _refresh_massinfo(interaction)
 
 
-async def _do_patch_scheduled(interaction: Interaction, lang: str, ev: dict, dt: datetime) -> None:
+async def _do_patch_scheduled(
+    interaction: Interaction, lang: str, ev: dict, dt: datetime,
+    comps: list[dict] | None = None,
+    changes: dict[str, tuple[str, str]] | None = None,
+) -> None:
     await _defer(interaction)
     res = await _patch(
         f"/bot/events/{interaction.guild_id}/{ev['id']}",
         {"set_scheduled_at": True, "scheduled_at": dt.isoformat(), "actor_id": interaction.user.id},
     )
     if res is None:
-        await interaction.followup.send(t(lang, "ev_update_fail"), ephemeral=True)
+        if comps is not None and changes is not None:
+            await _show_edit_result(
+                interaction, lang, ev, comps, changes, t(lang, "ev_update_fail"),
+            )
+        else:
+            await _rerender(interaction, t(lang, "ev_update_fail"), None)
         return
-    await interaction.followup.send(
-        t(lang, "ev_reschedule_done", eid=ev["id"], hora=_fmt_utc(dt)), ephemeral=True)
-    await _refresh_massinfo(interaction)
+    old_dt = _parse_iso(ev.get("scheduled_at"))
+    old_value = old_dt.astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC") if old_dt else "—"
+    new_value = dt.astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    if changes is not None:
+        changes["horario"] = (old_value, new_value)
+    ev["scheduled_at"] = dt.isoformat()
+    if comps is not None and changes is not None:
+        await _show_edit_result(interaction, lang, ev, comps, changes)
+    else:
+        await _rerender(
+            interaction,
+            t(
+                lang, "ev_edit_changed", field=t(lang, "ev_field_horario"),
+                value=new_value,
+            ),
+            None,
+        )
 
 
 async def _do_patch_comp(interaction: Interaction, lang: str, ev: dict,
-                         comp_id: int | None, comps: list[dict]) -> None:
+                         comp_id: int | None, comps: list[dict],
+                         changes: dict[str, tuple[str, str]]) -> None:
     await _defer(interaction)
     res = await _patch(
         f"/bot/events/{interaction.guild_id}/{ev['id']}",
         {"set_comp": True, "comp_id": comp_id, "actor_id": interaction.user.id},
     )
     if res is None:
-        await interaction.followup.send(t(lang, "ev_update_fail"), ephemeral=True)
+        await _show_edit_result(
+            interaction, lang, ev, comps, changes, t(lang, "ev_update_fail"),
+        )
         return
-    notified = (res or {}).get("notified_signups") or []
+    old_value = ev.get("comp_name") or t(lang, "ev_no_comp")
     comp_name = next((c["name"] for c in comps if c["id"] == comp_id), None) if comp_id else None
-    if notified:
-        # DMa cada inscrito avisando que a comp mudou e ele precisa repingar.
-        for su in notified:
-            await _send_comp_changed_dm(interaction, lang, ev, su, comp_name)
-        await interaction.followup.send(
-            t(lang, "ev_comp_changed_summary", n=len(notified), comp=comp_name or "—"), ephemeral=True)
-    else:
-        await interaction.followup.send(
-            t(lang, "ev_edit_done_field", field=t(lang, "ev_field_comp")), ephemeral=True)
-    await _refresh_massinfo(interaction)
-
-
-async def _send_comp_changed_dm(interaction: Interaction, lang: str, ev: dict,
-                                su: dict, comp_name: str | None) -> None:
-    user = None
-    guild = interaction.guild
-    if guild is not None:
-        user = guild.get_member(su.get("user_id"))
-    if user is None:
-        try:
-            user = await interaction.client.fetch_user(su.get("user_id"))
-        except (discord.NotFound, discord.HTTPException):
-            return
-    try:
-        await user.send(t(lang, "ev_comp_changed_dm", eid=ev["id"],
-                          title=ev.get("title") or "—", comp=comp_name or "—"))
-    except (discord.Forbidden, discord.HTTPException):
-        pass  # DMs fechadas — nada a fazer
+    new_value = comp_name or t(lang, "ev_no_comp")
+    changes["comp"] = (old_value, new_value)
+    ev["comp_id"] = comp_id
+    ev["comp_name"] = comp_name
+    await _show_edit_result(interaction, lang, ev, comps, changes)
 
 
 # ── Cog / grupo ───────────────────────────────────────────────────────────────
@@ -563,8 +561,11 @@ class EventCmd(commands.Cog):
 
     async def _comp_autocomplete(self, interaction: Interaction, current: str
                                  ) -> list[app_commands.Choice[str]]:
-        lang = await guild_lang_for(interaction.guild_id)
-        comps = await _get(f"/bot/events/{interaction.guild_id}/comps") or []
+        try:
+            lang = await guild_lang_for(interaction.guild_id)
+            comps = await _get(f"/bot/events/{interaction.guild_id}/comps") or []
+        except http_client.BackendUnavailable:
+            return []
         cur = current.lower()
         none_label = t(lang, "ev_no_comp")
         choices = [app_commands.Choice(name=none_label, value="none")] if cur in none_label.lower() or not cur else []
@@ -575,25 +576,28 @@ class EventCmd(commands.Cog):
         return choices[:25]
 
     @group.command(name="create",
-                   description=loc("Create a new event (CTA): objective, comp and UTC time",
+                   description=loc("Create a new event (CTA): objective, optional comp and time",
                                                    "cmd_desc_event_criar"))
     @app_commands.describe(
-        objetivo=loc("The event's objective (its name/title)", "opt_desc_event_objetivo"),
+        objetivo=loc("The event's objective (optional)", "opt_desc_event_objetivo"),
         comp=loc("The event's comp (start typing to search)", "opt_desc_event_comp"),
-        utc=loc("UTC time (HH:MM, next occurrence)", "opt_desc_event_utc"),
+        horario=loc("Time: 21h, 21:30 BRT or a full date", "opt_desc_event_time"),
     )
     @app_commands.rename(
         objetivo=loc("objective", "opt_name_event_objetivo"),
         comp=loc("comp", "opt_name_event_comp"),
-        utc=loc("utc", "opt_name_event_utc"),
+        horario=loc("time", "opt_name_event_time"),
     )
     @app_commands.autocomplete(comp=_comp_autocomplete)
-    async def criar(self, interaction: Interaction, objetivo: str, comp: str, utc: str) -> None:
+    async def criar(
+        self, interaction: Interaction, horario: str, objetivo: str | None = None,
+        comp: str = "none",
+    ) -> None:
         if not await check_command_access(interaction, "event"):
             return
         lang = await guild_lang_for(interaction.guild_id)
 
-        dt = _parse_utc_hhmm(utc)
+        dt = _parse_event_time(horario)
         if dt is None:
             await interaction.response.send_message(t(lang, "ev_bad_time"), ephemeral=True)
             return
@@ -638,7 +642,10 @@ class EventCmd(commands.Cog):
                             EditFieldView(lang, ev, comps))
 
         await interaction.response.send_message(
-            t(lang, "ev_pick_event"), view=EventSelectView(lang, events, on_event), ephemeral=True)
+            t(lang, "ev_pick_event"),
+            view=EventSelectView(lang, events, on_event, show_cancel=False),
+            ephemeral=True,
+        )
 
     # ── adiar ───────────────────────────────────────────────────────────────────
 
@@ -653,10 +660,7 @@ class EventCmd(commands.Cog):
             return
 
         async def on_event(inter, ev):
-            async def on_time(inter, dt):
-                await _do_patch_scheduled(inter, lang, ev, dt)
-            await _rerender(inter, t(lang, "ev_pick_time"),
-                            TimeLupaView(lang, on_time, prompt_key="ev_pick_time"))
+            await inter.response.send_modal(TimeModal(lang, ev))
 
         await interaction.response.send_message(
             t(lang, "ev_pick_event"), view=EventSelectView(lang, events, on_event), ephemeral=True)

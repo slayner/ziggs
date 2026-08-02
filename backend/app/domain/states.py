@@ -6,7 +6,8 @@ um evento passando por aqui — nunca escrevendo `events.state` na mão. Toda
 transição válida gera (1) uma linha em `event_state_transitions` e (2) um registro
 no audit log append-only. Transição inválida levanta `InvalidTransition`.
 
-Estados (4 + 2 terminais de limpeza):
+Estados (rascunho + 4 + 2 terminais de limpeza):
+  rascunho       draft        — ainda não publicado
   agendado     scheduled    — criado para começar no futuro
   andamento    in_progress  — CTA acontecendo (pingado por site ou comando)
   revisao      review       — deu /callout; freeze voice%, abre thread de embed,
@@ -25,6 +26,7 @@ import enum
 
 
 class EventState(str, enum.Enum):
+    DRAFT = "draft"                # rascunho
     SCHEDULED = "scheduled"        # agendado
     IN_PROGRESS = "in_progress"    # andamento
     REVIEW = "review"              # revisão (antigo definition+verification+waiting)
@@ -66,8 +68,9 @@ TERMINAL: frozenset[EventState] = frozenset(
 # Transições do "caminho feliz" + ramos de cancelamento.
 # Origem -> conjunto de destinos permitidos.
 _TRANSITIONS: dict[EventState, frozenset[EventState]] = {
+    EventState.DRAFT: frozenset({EventState.SCHEDULED, EventState.DELETED}),
     EventState.SCHEDULED: frozenset(
-        {EventState.IN_PROGRESS, EventState.CANCELLED, EventState.DELETED}
+        {EventState.DRAFT, EventState.IN_PROGRESS, EventState.CANCELLED, EventState.DELETED}
     ),
     EventState.IN_PROGRESS: frozenset(
         {EventState.REVIEW, EventState.CANCELLED, EventState.DELETED}

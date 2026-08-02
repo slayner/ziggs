@@ -44,6 +44,8 @@ class EconomyTransaction(Base):
     __tablename__ = "economy_transactions"
 
     id: Mapped[int] = pk()
+    request_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    undo_request_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     guild_id: Mapped[int] = mapped_column(
         ForeignKey("guilds.id", ondelete="CASCADE"), nullable=False, index=True
     )

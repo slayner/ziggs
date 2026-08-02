@@ -723,7 +723,7 @@ pub fn extract_party(op: &ParsedOperation) -> Option<Vec<String>> {
 // ponytail: os campos vêm como parâmetros do Photon — 1=looted_from, 2=looter,
 // 3=is_silver, 4=item_index, 5=quantity. Não há timestamp no pacote; usamos o
 // relógio local no momento da captura.
-#[derive(Clone, Debug, Default, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct LootEvent {
     pub ts: String,              // ISO 8601 UTC (relógio local)
     pub looted_by: String,       // param 2 — quem pegou
@@ -770,6 +770,112 @@ pub fn extract_loot(op: &ParsedOperation) -> Option<LootEvent> {
     }
     let ts = now_iso_utc();
     Some(LootEvent { ts, looted_by, looted_from, item_index, quantity, is_silver: false })
+}
+
+/// Loot do PRÓPRIO jogador — nunca vem pelo OtherGrabbedLoot (o nome já diz:
+/// é broadcast pra QUEM VÊ o saque, o servidor não ecoa de volta pra quem
+/// lootou). Confirmado contra o ao-loot-logger (madvac/ao-loot-logger): a
+/// única forma de detectar é acompanhar o PEDIDO que o próprio cliente manda
+/// ao arrastar um item do loot bag pra mochila (OpInventoryMoveItem) e
+/// resolver o item/dono a partir de eventos anteriores que registraram o
+/// conteúdo daquele loot bag. Exige estado entre pacotes — por isso os mapas
+/// vivem no Sniffer (como `entities`), e as funções abaixo só extraem, uma
+/// operação por vez, o pedaço que cada evento contribui.
+///
+/// Sequência observada pelo cliente ao abrir um corpo/mob morto:
+///   EvNewLoot(98)            → container_id → dono (nome do corpo/mob)
+///   EvNewSimpleItem(32) /
+///   EvNewEquipmentItem(30, EVENT) /
+///   EvNewSiegeBannerItem(31) → object_id → (item_index, quantity)
+///   EvAttachItemContainer(99)→ liga container_id ↔ uuid, e lista object_id
+///                              por slot (é o uuid que o request usa, não o id)
+///   EvDetachItemContainer(100)→ container fechado, uuid morre
+/// Loot em si: OpInventoryMoveItem(30, REQUEST) do slot X do container A pro
+/// container B — quando A≠B, slot X saiu do loot bag pra outro lugar (a
+/// mochila do jogador). Resolve object_id → item/qty e container_id → dono.
+
+/// EvNewLoot (opcode 98, event): container_id → dono do corpo/mob.
+pub fn extract_new_loot_owner(op: &ParsedOperation) -> Option<(i64, String)> {
+    if op.message_type != 4 || op.albion_code != 98 { return None; }
+    let id = op.parameters.get(&0)?.as_i64()?;
+    let owner = op.parameters.get(&3).and_then(|v| v.as_string())?.to_string();
+    Some((id, owner))
+}
+
+/// EvNewSimpleItem(32) / EvNewEquipmentItem(30 EVENT) / EvNewSiegeBannerItem(31):
+/// mesmo layout nos 3 — objectId@0, itemNumId@1, quantity@2. O 30 aqui é EVENT;
+/// não confundir com o opcode 30 do OpInventoryMoveItem, que é REQUEST — os
+/// dois namespaces (message_type) não colidem.
+pub fn extract_new_loot_item(op: &ParsedOperation) -> Option<(i64, i32, i32)> {
+    if op.message_type != 4 || !matches!(op.albion_code, 30 | 31 | 32) { return None; }
+    let object_id = op.parameters.get(&0)?.as_i64()?;
+    let item_index = op.parameters.get(&1)?.as_i64()? as i32;
+    let quantity = op.parameters.get(&2)?.as_i64()? as i32;
+    Some((object_id, item_index, quantity))
+}
+
+/// EvAttachItemContainer (opcode 99, event): container_id, uuid (16 bytes,
+/// usado pelo request de mover item) e a lista de object_id por slot (índice
+/// do vetor = slot; 0 = slot vazio).
+pub fn extract_attach_container(op: &ParsedOperation) -> Option<(i64, [u8; 16], Vec<i64>)> {
+    if op.message_type != 4 || op.albion_code != 99 { return None; }
+    let id = op.parameters.get(&0)?.as_i64()?;
+    let uuid = as_uuid16(op.parameters.get(&1)?)?;
+    let inventory = op.parameters.get(&3)?.as_array()?;
+    let slots = inventory.iter().map(|v| v.as_i64().unwrap_or(0)).collect();
+    Some((id, uuid, slots))
+}
+
+/// EvDetachItemContainer (opcode 100, event): container fechado/despawnado.
+pub fn extract_detach_container(op: &ParsedOperation) -> Option<[u8; 16]> {
+    if op.message_type != 4 || op.albion_code != 100 { return None; }
+    as_uuid16(op.parameters.get(&0)?)
+}
+
+/// Pedido do cliente movendo um item entre containers (OpInventoryMoveItem,
+/// opcode 30, REQUEST). `from_uuid == to_uuid` é só reorganizar dentro do
+/// mesmo container (abrir e reordenar o loot bag) — não é loot, por isso
+/// devolve None nesse caso.
+pub struct InventoryMove {
+    pub from_slot: i32,
+    pub from_uuid: [u8; 16],
+    pub to_uuid: [u8; 16],
+}
+pub fn extract_inventory_move(op: &ParsedOperation) -> Option<InventoryMove> {
+    if op.message_type != 2 || op.albion_code != 30 { return None; }
+    let from_slot = op.parameters.get(&0).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let from_uuid = as_uuid16(op.parameters.get(&1)?)?;
+    let to_uuid = as_uuid16(op.parameters.get(&4)?)?;
+    if from_uuid == to_uuid { return None; }
+    Some(InventoryMove { from_slot, from_uuid, to_uuid })
+}
+
+/// uuid vem como array Photon de 16 elementos — pode decodificar como Bytes
+/// (blob cru) ou Array (de valores 0-255), dependendo do tipo que o encoder
+/// do protocolo escolheu pro campo; aceita os dois.
+fn as_uuid16(v: &PhotonValue) -> Option<[u8; 16]> {
+    match v {
+        PhotonValue::Bytes(b) if b.len() == 16 => {
+            let mut out = [0u8; 16];
+            out.copy_from_slice(b);
+            Some(out)
+        }
+        PhotonValue::Array(arr) if arr.len() == 16 => {
+            let mut out = [0u8; 16];
+            for (i, item) in arr.iter().enumerate() {
+                out[i] = item.as_i64()? as u8;
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// Monta o LootEvent de um self-loot já resolvido (dono do corpo + item +
+/// qtd) — quem lootou é sempre o jogador local, dado que só chegamos aqui a
+/// partir do PRÓPRIO request de mover item.
+pub fn self_loot_event(looted_by: String, looted_from: String, item_index: i32, quantity: i32) -> LootEvent {
+    LootEvent { ts: now_iso_utc(), looted_by, looted_from, item_index, quantity, is_silver: false }
 }
 
 /// Registro de personagem: NewCharacter (event 29) mapeia entityId → nome.
@@ -873,6 +979,35 @@ impl DamageAcc {
     }
 
     /// DPS sobre o tempo ativo (primeiro→último golpe), mínimo 1s.
+    /// Junta outro acumulador neste.
+    ///
+    /// Existe porque um jogador tem VÁRIOS entity ids numa sessão: o jogo dá id
+    /// novo quando ele sai e volta do teu alcance de visão. Sem juntar, a mesma
+    /// pessoa aparecia como várias linhas, cada uma com um pedaço do dano.
+    pub fn merge(&mut self, other: &DamageAcc) {
+        self.damage += other.damage;
+        for (sid, sp) in &other.spells {
+            let e = self.spells.entry(*sid).or_default();
+            e.hits += sp.hits;
+            e.total += sp.total;
+            if sp.max_hit > e.max_hit {
+                e.max_hit = sp.max_hit;
+            }
+        }
+        // Mesmo segundo soma no mesmo bucket, senão o gráfico desenharia dois
+        // pontos no mesmo x. Busca linear serve: a janela tem 180 entradas.
+        for (sec, d) in &other.timeline {
+            match self.timeline.iter_mut().find(|(s, _)| s == sec) {
+                Some((_, acc)) => *acc += d,
+                None => self.timeline.push_back((*sec, *d)),
+            }
+        }
+        self.timeline.make_contiguous().sort_by_key(|(s, _)| *s);
+        // O DPS usa tempo ativo: primeiro golpe de qualquer id até o último.
+        self.first_hit = [self.first_hit, other.first_hit].into_iter().flatten().min();
+        self.last_hit = [self.last_hit, other.last_hit].into_iter().flatten().max();
+    }
+
     pub fn dps(&self) -> f64 {
         match (self.first_hit, self.last_hit) {
             (Some(a), Some(b)) => self.damage / (b.saturating_sub(a).max(1) as f64),
@@ -1059,6 +1194,54 @@ fn epoch_to_ymd_hms(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
 mod tests {
     use super::*;
 
+    /// O bug real: o mesmo jogador ganha entity id novo ao reentrar na tua
+    /// visão, virava várias linhas com o dano picado, e como o React usa o
+    /// nome como `key` as chaves colidiam e a lista duplicava.
+    #[test]
+    fn test_merge_junta_ids_do_mesmo_jogador() {
+        let mut a = DamageAcc::default();
+        a.record(10, 100.0, 1000);
+        a.record(10, 50.0, 1000);   // mesmo segundo, mesma skill
+        a.record(20, 30.0, 1001);
+
+        let mut b = DamageAcc::default();
+        b.record(10, 200.0, 1001);  // skill repetida, segundo repetido
+        b.record(30, 7.0, 1005);
+
+        a.merge(&b);
+
+        assert_eq!(a.damage as i64, 387);
+        assert_eq!(a.spells[&10].hits, 3, "golpes das duas somam");
+        assert_eq!(a.spells[&10].total as i64, 350);
+        assert_eq!(a.spells[&10].max_hit as i64, 200, "maior golpe é o do outro id");
+        assert_eq!(a.spells[&30].hits, 1, "skill que só o outro tinha entra");
+
+        // Mesmo segundo tem que virar UM bucket, senão o gráfico desenha dois
+        // pontos no mesmo x.
+        let secs: Vec<u64> = a.timeline.iter().map(|(s, _)| *s).collect();
+        assert_eq!(secs, vec![1000, 1001, 1005], "ordenado e sem segundo repetido");
+        assert_eq!(a.timeline.iter().find(|(s, _)| *s == 1001).unwrap().1 as i64, 230);
+
+        assert_eq!(a.first_hit, Some(1000));
+        assert_eq!(a.last_hit, Some(1005), "DPS usa do 1º golpe de qualquer id ao último");
+    }
+
+    #[test]
+    fn test_merge_com_acumulador_vazio_nao_inventa_tempo() {
+        let mut vazio = DamageAcc::default();
+        let mut cheio = DamageAcc::default();
+        cheio.record(1, 10.0, 500);
+
+        vazio.merge(&cheio);
+        assert_eq!(vazio.first_hit, Some(500));
+
+        let mut outro = DamageAcc::default();
+        outro.record(1, 10.0, 500);
+        outro.merge(&DamageAcc::default());
+        assert_eq!(outro.first_hit, Some(500), "vazio não pode zerar o first_hit");
+        assert_eq!(outro.damage as i64, 10);
+    }
+
     #[test]
     fn test_damage_acc_agrega_por_skill() {
         let mut acc = DamageAcc::default();
@@ -1177,6 +1360,74 @@ mod tests {
     }
 
     #[test]
+    fn test_self_loot_chain() {
+        let uuid: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let other_uuid: [u8; 16] = [9; 16];
+
+        // EvNewLoot(98): container 500 pertence ao mob "MOB_DIREWOLF".
+        let mut p = HashMap::new();
+        p.insert(0u8, PhotonValue::Int(500));
+        p.insert(3u8, PhotonValue::String("MOB_DIREWOLF".into()));
+        let op = ParsedOperation { message_type: 4, albion_code: 98, parameters: p };
+        let (id, owner) = extract_new_loot_owner(&op).expect("EvNewLoot");
+        assert_eq!((id, owner.as_str()), (500, "MOB_DIREWOLF"));
+
+        // EvNewSimpleItem(32): object 7001 = item 1234, qty 3.
+        let mut p = HashMap::new();
+        p.insert(0u8, PhotonValue::Int(7001));
+        p.insert(1u8, PhotonValue::Int(1234));
+        p.insert(2u8, PhotonValue::Int(3));
+        let op = ParsedOperation { message_type: 4, albion_code: 32, parameters: p };
+        let (object_id, item_index, quantity) = extract_new_loot_item(&op).expect("EvNewSimpleItem");
+        assert_eq!((object_id, item_index, quantity), (7001, 1234, 3));
+
+        // EvNewEquipmentItem(30, EVENT) não deve ser confundido com o
+        // OpInventoryMoveItem(30, REQUEST) abaixo — mesmo número, message_type diferente.
+        let mut p = HashMap::new();
+        p.insert(0u8, PhotonValue::Bytes(uuid.to_vec()));
+        let op = ParsedOperation { message_type: 2, albion_code: 30, parameters: p };
+        assert!(extract_new_loot_item(&op).is_none());
+
+        // EvAttachItemContainer(99): container 500, uuid, slot 2 = object 7001.
+        let mut p = HashMap::new();
+        p.insert(0u8, PhotonValue::Int(500));
+        p.insert(1u8, PhotonValue::Bytes(uuid.to_vec()));
+        p.insert(3u8, PhotonValue::Array(vec![
+            PhotonValue::Int(0), PhotonValue::Int(0), PhotonValue::Int(7001),
+        ]));
+        let op = ParsedOperation { message_type: 4, albion_code: 99, parameters: p };
+        let (cid, got_uuid, slots) = extract_attach_container(&op).expect("EvAttachItemContainer");
+        assert_eq!(cid, 500);
+        assert_eq!(got_uuid, uuid);
+        assert_eq!(slots, vec![0, 0, 7001]);
+
+        // OpInventoryMoveItem(30, REQUEST): slot 2 do loot bag (uuid) pra mochila (other_uuid).
+        let mut p = HashMap::new();
+        p.insert(0u8, PhotonValue::Int(2));
+        p.insert(1u8, PhotonValue::Bytes(uuid.to_vec()));
+        p.insert(4u8, PhotonValue::Bytes(other_uuid.to_vec()));
+        let op = ParsedOperation { message_type: 2, albion_code: 30, parameters: p };
+        let mv = extract_inventory_move(&op).expect("OpInventoryMoveItem");
+        assert_eq!(mv.from_slot, 2);
+        assert_eq!(mv.from_uuid, uuid);
+        assert_eq!(mv.to_uuid, other_uuid);
+
+        // Mesmo container origem/destino = reorganizar o bag, não é loot.
+        let mut p = HashMap::new();
+        p.insert(0u8, PhotonValue::Int(0));
+        p.insert(1u8, PhotonValue::Bytes(uuid.to_vec()));
+        p.insert(4u8, PhotonValue::Bytes(uuid.to_vec()));
+        let op = ParsedOperation { message_type: 2, albion_code: 30, parameters: p };
+        assert!(extract_inventory_move(&op).is_none());
+
+        let loot = self_loot_event("Slayner".into(), owner, item_index, quantity);
+        assert_eq!(loot.looted_by, "Slayner");
+        assert_eq!(loot.looted_from, "MOB_DIREWOLF");
+        assert_eq!(loot.item_index, 1234);
+        assert_eq!(loot.quantity, 3);
+    }
+
+    #[test]
     fn test_extract_market() {
         let offer = r#"{"UnitPriceSilver":1250000,"ItemTypeId":"T4_BAG","QualityLevel":2,"EnchantmentLevel":1,"AuctionType":"offer","LocationId":""}"#;
         let buy = r#"{"UnitPriceSilver":990000,"ItemTypeId":"T4_BAG","QualityLevel":1,"EnchantmentLevel":0,"AuctionType":"request"}"#;
@@ -1252,5 +1503,64 @@ mod tests {
         // Epoch zero = 1970-01-01T00:00:00Z
         let (y0, mo0, d0, h0, mi0, s0) = epoch_to_ymd_hms(0);
         assert_eq!((y0, mo0, d0, h0, mi0, s0), (1970, 1, 1, 0, 0, 0));
+    }
+}
+#[cfg(test)]
+mod pacote_tests {
+    use super::*;
+
+    /// Monta um pacote Photon completo: header + 1 command + 1 Event com 8
+    /// params. Era um probe de performance (medido: 0,34 µs/pacote, ~3M pkt/s
+    /// num core em release); virou teste de correção porque o parser não tinha
+    /// nenhum exercitando o caminho inteiro de ponta a ponta.
+    fn pacote_evento() -> Vec<u8> {
+        let mut op = Vec::new();
+        op.push(0u8);       // skip
+        op.push(4u8);       // message_type = Event
+        op.push(6u8);       // photon_code
+        op.push(8u8);       // quantidade de params
+        for k in 0..8u8 {
+            op.push(k);      // key
+            op.push(11u8);   // type_code = Int1
+            op.push(k * 7);  // value
+        }
+        let cmd_len = 12 + op.len();
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&0i16.to_be_bytes());  // peer_id
+        pkt.push(0u8);                                // flags
+        pkt.push(1u8);                                // command_count
+        pkt.extend_from_slice(&0i32.to_be_bytes());   // crc
+        pkt.extend_from_slice(&0i32.to_be_bytes());   // user_data
+        pkt.push(6u8);                                // command_type = SendReliable
+        pkt.extend_from_slice(&[0, 0, 0]);
+        pkt.extend_from_slice(&(cmd_len as i32).to_be_bytes());
+        pkt.extend_from_slice(&0i32.to_be_bytes());   // seq
+        pkt.extend_from_slice(&op);
+        pkt
+    }
+
+    #[test]
+    fn parseia_evento_completo() {
+        let mut p = PhotonParser::new();
+        let ops = p.parse(&pacote_evento());
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].message_type, 4, "Event");
+        assert_eq!(ops[0].parameters.len(), 8);
+        assert_eq!(ops[0].parameters[&3].as_i64(), Some(21), "3 * 7");
+    }
+
+    #[test]
+    fn pacote_curto_nao_entra_em_panico() {
+        let mut p = PhotonParser::new();
+        for n in 0..14usize {
+            assert!(p.parse(&vec![0u8; n]).is_empty(), "len={n}");
+        }
+    }
+
+    #[test]
+    fn pacote_criptografado_e_ignorado() {
+        let mut pkt = pacote_evento();
+        pkt[2] = 0x01; // flags = encrypted
+        assert!(PhotonParser::new().parse(&pkt).is_empty());
     }
 }

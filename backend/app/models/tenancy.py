@@ -83,6 +83,8 @@ class User(Base, TimestampMixin):
     username: Mapped[str] = mapped_column(String(255), nullable=False)
     global_name: Mapped[str | None] = mapped_column(String(255))
     avatar: Mapped[str | None] = mapped_column(String(255))
+    email: Mapped[str | None] = mapped_column(String(320))
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     discord_access_token: Mapped[str | None] = mapped_column(String(512))
     current_guild_id: Mapped[int | None] = mapped_column(Snowflake, nullable=True)
     # Preferências pessoais globais (não-por-guilda), ex.: {"focus_efficiency":
@@ -94,6 +96,7 @@ class User(Base, TimestampMixin):
     profile_theme: Mapped[str | None] = mapped_column(String(16))
     profile_avatar_path: Mapped[str | None] = mapped_column(String(255))
     profile_banner_path: Mapped[str | None] = mapped_column(String(255))
+    profile_media_blocked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class GuildMember(Base, TimestampMixin):

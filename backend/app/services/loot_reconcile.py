@@ -98,7 +98,13 @@ def _per_looter(
     ts_p (estava no inventário na hora da morte). Coletas depois da última morte
     (ou de quem nunca morreu) = carregadas pra cidade. Depósito abate primeiro o
     devido (missing), depois explica o morto — assim loot depositado numa volta
-    anterior não vira 'roubado' nem 'morto' por engano."""
+    anterior não vira 'roubado' nem 'morto' por engano.
+
+    (Já houve uma "Phase 2" com marcadores de cidade do companion partindo a
+    sessão em viagens — ABANDONADA em 19/07/2026: entrar na cidade não implica
+    ter depositado, então quem só passasse por ela carregando o loot e
+    morresse depois seria COBRADO por itens que morreram junto. A regra v1 é a
+    conservadora certa. Não reintroduza sem resolver isso.)"""
     # mortes por vítima (nome lower → lista de datetimes)
     deaths_by_victim: dict[str, list[datetime]] = defaultdict(list)
     for ev in loot_events:

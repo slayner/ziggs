@@ -1,0 +1,134 @@
+"""Precifica player_kill_events.silver_dropped em background — mesmo cálculo
+de routes/players._silver_dropped (preço dos itens equipados + carregados da
+vítima via services.prices.get_battle_prices, cache permanente), mas aplicado
+no processamento em vez de só on-demand ao abrir o perfil.
+
+Sem isso, o ranking de highscore "mais prata dropada" precisaria precificar
+TODAS as mortes de TODOS os jogadores a cada request — inviável. O worker
+varre eventos com silver_dropped=0 e fame>0 (mesmo critério de "vale atividade"
+do perfil, ver _counts_for_activity), precifica em lotes e grava. Uma vez
+precificado, o evento nunca é reprocessado (silver_dropped>0 marca como feito;
+eventos sem gear ficam 0 de verdade e NÃO reprocessam — ver _BARE_SEED).
+
+Mesma doutrina de battle_price_reprocessor: roda dentro do processo da API
+(não disputa lock do SQLite com um segundo processo), aos poucos, sem competir
+por rate limit com o resto dos serviços de fundo. Quando não sobra nada pra
+fazer, fica ocioso (IDLE_INTERVAL)."""
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db import SessionLocal
+from app.models.players import PlayerKillEvent
+from app.services.lethality import is_likely_lethal
+from app.services.prices import get_battle_prices
+
+log = logging.getLogger(__name__)
+
+BATCH_SIZE = 50      # eventos por ciclo — get_battle_prices agrupa todos os itens do lote em poucas chamadas de API
+BUSY_INTERVAL = 5    # ainda devagar de propósito (soma à taxa agregada dos outros serviços)
+IDLE_INTERVAL = 300  # entre ciclos quando o backlog acabou
+
+# silver_dropped NULL = pendente (ainda não precificado). 0 = já precificado e
+# deu zero (vítima sem gear, ou gear sem cotação), >0 = prata real. O worker só
+# processa NULL — assim evento precificado-zero (gear sem preço) não é
+# reprocessado todo ciclo. O filtro por "tem gear" é em Python porque
+# victim_equipment é JSON; "sem gear alguma" (vítima pelada) também fica NULL
+# pra sempre, mas nunca é candidato (não tem gear p/_has_gear) — não é bug,
+# apenas nunca ganha silver (correto, não tinha nada pra dropar).
+def _has_gear(ev: PlayerKillEvent) -> bool:
+    eq = ev.victim_equipment or {}
+    if any(slot and slot.get("Type") for slot in eq.values()):
+        return True
+    return any(inv and inv.get("Type") for inv in (ev.victim_inventory or []))
+
+
+async def _price_events(db: Session, events: list[PlayerKillEvent]) -> int:
+    """Precifica e grava silver_dropped nos eventos do lote. Devolve quantos
+    foram atualizados (todos com gear; podem ficar 0 se preço ausente, mas
+    nunca reprocessam — já foram escritos)."""
+    pairs: list[tuple[str, int]] = []
+    for ev in events:
+        for item in (ev.victim_equipment or {}).values():
+            if item and item.get("Type"):
+                pairs.append((item["Type"], 1))
+        for inv in (ev.victim_inventory or []):
+            if inv and inv.get("Type"):
+                pairs.append((inv["Type"], inv.get("Count") or 1))
+    if not pairs:
+        # Sem gear — não devia chegar aqui (filtro _has_gear), mas defesa.
+        return 0
+    item_ids = list({iid for iid, _ in pairs})
+    price_by_id = await get_battle_prices(db, item_ids)
+
+    updated = 0
+    for ev in events:
+        total = 0
+        for item in (ev.victim_equipment or {}).values():
+            if item and item.get("Type"):
+                total += price_by_id.get(item["Type"], 0)
+        for inv in (ev.victim_inventory or []):
+            if inv and inv.get("Type"):
+                total += price_by_id.get(inv["Type"], 0) * (inv.get("Count") or 1)
+        ev.silver_dropped = total
+        updated += 1
+    db.commit()
+    return updated
+
+
+async def _process_batch(db: Session) -> int:
+    # Lê o lote em ordem e marca rejeitados com zero: deixá-los NULL faria os
+    # mesmos primeiros eventos bloquearem a fila para sempre. Histórico sem
+    # group_member_count também passa pela estimativa conservadora.
+    rows = list(db.scalars(
+        select(PlayerKillEvent)
+        .where(
+            PlayerKillEvent.silver_dropped.is_(None),
+        )
+        .order_by(PlayerKillEvent.id.asc())
+        .limit(BATCH_SIZE)
+    ).all())
+    candidates = []
+    for ev in rows:
+        if _has_gear(ev) and is_likely_lethal(
+            ev.fame, ev.victim_equipment, ev.group_member_count,
+        ):
+            candidates.append(ev)
+        else:
+            ev.silver_dropped = 0
+    if not candidates:
+        db.commit()
+        return len(rows)
+    await _price_events(db, candidates)
+    return len(rows)
+
+
+async def run_forever() -> None:
+    log.info("silver_dropped: iniciando (precificação de player_kill_events)")
+    # ponytail: folga de 30s no boot — não brigar com os outros serviços
+    # acordando (battle_tracker/backfill/sweeper fazem rajada de requests ao
+    # subir). O backlog de silver é tolerante (já esperou desde sempre).
+    await asyncio.sleep(30)
+    # A migration z8d9e0f1a2b3 invalida totais feitos antes da mediana
+    # anti-troll. Só recalcula depois que o cache _battle_spot_ antigo terminou
+    # de ser refeito; sem esta barreira, os dois workers corriam e o ledger
+    # podia gravar novamente o preço contaminado antes da correção chegar.
+    from app.services import battle_price_reprocessor
+    await battle_price_reprocessor.ready.wait()
+    while True:
+        db = SessionLocal()
+        n = 0
+        try:
+            n = await _process_batch(db)
+            if n:
+                log.info("silver_dropped: %d eventos precificados", n)
+        except Exception as e:
+            db.rollback()
+            log.error("silver_dropped: erro: %s", e)
+        finally:
+            db.close()
+        await asyncio.sleep(BUSY_INTERVAL if n > 0 else IDLE_INTERVAL)

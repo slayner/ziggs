@@ -5,6 +5,7 @@ O bot NÃO faz OCR nem valuation — só repassa a imagem ao backend
 (`POST /guilds/{g}/regear/ingest`, auth Bearer BOT_API_SECRET) e reage na mensagem.
 Logística revisa e aprova no site (RegearPage). Idempotente por msg_id (o backend
 deduplica; aqui também cacheamos pra não re-baixar o mesmo attachment em edits)."""
+import asyncio
 import os
 import time
 
@@ -110,25 +111,23 @@ class Regears(commands.Cog):
                 data = await att.read()
             except Exception:
                 continue
-            form = aiohttp.FormData()
-            form.add_field("file", data, filename=att.filename, content_type="image/png")
-            form.add_field("msg_id", str(message.id))
-            form.add_field("requester_name", message.author.display_name)
-            form.add_field("requester_user_id", str(message.author.id))
-            form.add_field("channel_id", str(chan.id))
-            try:
-                async with http_client.session().post(
-                    f"{SITE_URL}/guilds/{guild_id}/regear/ingest",
-                    data=form,
-                    headers={"Authorization": f"Bearer {API_SECRET}"},
-                    timeout=aiohttp.ClientTimeout(total=20),
-                ) as r:
-                    if r.status == 200:
-                        out = await r.json()
-                        request_id = out.get("id")
-                        status = out.get("recognition_status") or "manual"
-            except Exception:
-                status = "manual"
+            for attempt in range(2):
+                form = aiohttp.FormData()
+                form.add_field("file", data, filename=att.filename, content_type="image/png")
+                form.add_field("msg_id", str(message.id))
+                form.add_field("requester_name", message.author.display_name)
+                form.add_field("requester_user_id", str(message.author.id))
+                form.add_field("channel_id", str(chan.id))
+                out = await http_client.post_form(
+                    f"/guilds/{guild_id}/regear/ingest",
+                    form, timeout=20, tag="regears",
+                )
+                if out is not None:
+                    request_id = out.get("id")
+                    status = out.get("recognition_status") or "manual"
+                    break
+                if attempt == 0:
+                    await asyncio.sleep(0.2)
 
         _done_msgs[message.id] = time.monotonic() + _DONE_TTL
         try:

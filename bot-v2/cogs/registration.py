@@ -70,7 +70,7 @@ async def _post_register(guild_id: int, discord_user_id: int, nick: str) -> dict
     return await http_client.request_json(
         "POST", f"/bot/register/{guild_id}",
         json={"discord_user_id": str(discord_user_id), "albion_player_name": nick},
-        timeout=10,
+        timeout=10, attempts=2, queue_on_failure=False,
     )
 
 
@@ -82,7 +82,10 @@ async def _post_unregister(
         body["discord_user_id"] = str(discord_user_id)
     if albion_player_name is not None:
         body["albion_player_name"] = albion_player_name
-    return await http_client.request_json("POST", f"/bot/unregister/{guild_id}", json=body, timeout=10)
+    return await http_client.request_json(
+        "POST", f"/bot/unregister/{guild_id}", json=body, timeout=10,
+        attempts=2, queue_on_failure=False,
+    )
 
 
 async def _post_left_guild(guild_id: int, discord_user_id: int) -> None:
@@ -130,7 +133,7 @@ async def _apply_result(guild: discord.Guild, lang: str, invoker_id: int, target
 
     try:
         await target.add_roles(role, reason=f"/register — {result['albion_player_name']}")
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         return t(lang, "role_forbidden")
 
     who = t(lang, "register_who_self") if target.id == invoker_id else t(lang, "register_who_other", mention=target.mention)

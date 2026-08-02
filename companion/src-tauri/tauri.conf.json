@@ -14,13 +14,14 @@
       {
         "label": "main",
         "title": "Ziggs Companion",
-        "width": 960,
-        "height": 660,
-        "minWidth": 760,
-        "minHeight": 560,
+        "width": 980,
+        "height": 760,
+        "minWidth": 780,
+        "minHeight": 660,
         "resizable": true,
         "fullscreen": false,
-        "visible": false
+        "visible": false,
+        "decorations": false
       }
     ],
     "security": {
@@ -30,15 +31,16 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["msi", "nsis", "deb", "appimage", "app"],
+    "targets": ["nsis", "deb", "appimage", "app"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico", "icons/icon.png"],
-    "resources": ["resources/wintun.dll", "resources/npcap-installer.exe"],
+    "resources": ["resources/wintun.dll"],
     "category": "Utility",
     "shortDescription": "Ziggs Companion",
     "longDescription": "Battle scanner distribuído, otimizador de rota/DNS e auxiliar de lootlog para a plataforma Ziggs.",
     "windows": {
-      "nsis": {
-        "installerHooks": "nsis-hooks.nsh"
+      "signCommand": {
+        "cmd": "powershell",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/sign-windows.ps1", "%1"]
       }
     }
   },

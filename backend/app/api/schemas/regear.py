@@ -68,14 +68,19 @@ class RegearRequestOut(BaseModel):
     notes: str | None
     created_at: datetime
     recognition_status: str  # recognized | manual | error
+    recognition_method: str = "manual"
+    recognition_confidence: str = "low"
+    recognition_candidates: list[Any] = Field(default_factory=list)
+    recognition_window_match: bool | None = None
+    recognition_fallback_reason: str | None = None
 
 
 class RegearRequestUpdate(BaseModel):
-    final_total: int | None = None
+    final_total: int | None = Field(default=None, ge=0)
     status: str | None = None  # paid | denied | pending
     notes: str | None = None
     # Edição de itens detectados (manual): sobrescreve a lista reconhecida.
-    detected_items: list[dict[str, Any]] | None = None
+    detected_items: list[dict[str, Any]] | None = Field(default=None, max_length=100)
 
 
 class RegearListOut(BaseModel):

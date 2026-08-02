@@ -35,6 +35,7 @@ if _is_sqlite:
     @event.listens_for(engine, "connect")
     def _set_sqlite_wal(dbapi_conn, _rec):
         cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA synchronous=NORMAL")
         cur.close()

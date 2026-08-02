@@ -19,6 +19,7 @@ from discord import Interaction
 from discord.ext import commands, tasks
 
 import http_client
+import ephemeral_guard
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -30,16 +31,29 @@ async def _get(path: str) -> Optional[dict]:
     return await http_client.get_json(path, tag="event_embeds")
 
 
-async def _post(path: str, body: dict) -> Optional[dict]:
-    return await http_client.post_json(path, body, tag="event_embeds")
+async def _post(
+    path: str, body: dict, *, attempts: int = 2,
+    queue_on_failure: bool = False, interactive: bool = False,
+) -> Optional[dict]:
+    return await http_client.post_json(
+        path, body, tag="event_embeds", attempts=attempts,
+        queue_on_failure=queue_on_failure,
+        raise_on_unavailable=interactive,
+    )
 
 
 async def _patch(path: str, body: dict) -> Optional[dict]:
-    return await http_client.patch_json(path, body, tag="event_embeds")
+    return await http_client.patch_json(
+        path, body, tag="event_embeds", attempts=2, queue_on_failure=False,
+        raise_on_unavailable=True,
+    )
 
 
 async def _delete(path: str) -> Optional[dict]:
-    return await http_client.delete_json(path)
+    return await http_client.delete_json(
+        path, tag="event_embeds", attempts=2, queue_on_failure=False,
+        raise_on_unavailable=True,
+    )
 
 
 async def _dismiss_ephemeral(interaction: Interaction) -> None:
@@ -53,6 +67,7 @@ async def _dismiss_ephemeral(interaction: Interaction) -> None:
         await interaction.response.defer()
     except (discord.InteractionResponded, discord.HTTPException):
         pass
+    ephemeral_guard.cleanup(interaction)
     try:
         await interaction.delete_original_response()
     except (discord.NotFound, discord.HTTPException):
@@ -95,6 +110,7 @@ def _fit_field(lines: list[str], cap: int = 1024) -> str:
 def _build_event_embed(lang: str, guild_id: int, eid: int, dto: dict) -> discord.Embed:
     ev = dto["event"]
     embed = discord.Embed(color=discord.Color.blurple())
+    embed.set_footer(text=f"ziggs:event:{eid}")
     bb = ev.get("battleboard_url")
     if bb:
         embed.url = bb
@@ -103,8 +119,9 @@ def _build_event_embed(lang: str, guild_id: int, eid: int, dto: dict) -> discord
     # a data do evento entra aqui, não o title nativo do embed.
     started = _parse_iso(ev.get("started_at") or ev.get("scheduled_at"))
     date_str = started.strftime("%d/%m/%y %H:%M") if started else "—"
+    title = ev.get("title") or f"Evento #{eid}"
     embed.add_field(
-        name=f"**📑 {t(lang, 'ev_title')} #{eid} — {date_str} UTC**",
+        name=f"**📑 {title} — {date_str} UTC**",
         value="​", inline=False,
     )
 
@@ -178,6 +195,13 @@ def _build_event_embed(lang: str, guild_id: int, eid: int, dto: dict) -> discord
                             value=_fit_field(lines), inline=False)
 
     return embed
+
+
+def _is_event_message(message, event_id: int) -> bool:
+    return bool(
+        message.embeds
+        and message.embeds[0].footer.text == f"ziggs:event:{event_id}"
+    )
 
 
 # ── Modais ───────────────────────────────────────────────────────────────────
@@ -274,13 +298,19 @@ class SplitNodesValueModal(discord.ui.Modal):
             await self._close_question()
             return
         # Todos com preço → captura cada um, apaga a pergunta, refresh.
+        failed = False
         for ti, nid in self.items:
             raw = str(ti.value).strip().replace(".", "").replace(",", "")
             sold = int(raw) if raw.isdigit() else 0
-            await _post(
+            result = await _post(
                 f"/bot/events/{interaction.guild_id}/{self.event_id}/nodes/{nid}/claim",
                 {"captured": True, "sold_value": sold, "actor_id": interaction.user.id},
+                attempts=2, queue_on_failure=False, interactive=True,
             )
+            failed = failed or result is None
+        if failed:
+            await interaction.followup.send(t(self.lang, "ev_update_fail"), ephemeral=True)
+            return
         await self._close_question()
         asyncio.create_task(_trigger_embed_refresh(interaction.client, interaction.guild, self.event_id))
 
@@ -394,6 +424,7 @@ class TabValueModal(discord.ui.Modal):
         res = await _post(
             f"/bot/events/{interaction.guild_id}/{self.event_id}/verification/tab_value",
             {"completed": True, "data": {"value": value}, "actor_id": interaction.user.id},
+            interactive=True,
         )
         if res is None:
             await interaction.followup.send(t(self.lang, "ev_update_fail"), ephemeral=True)
@@ -548,6 +579,7 @@ class AddParticipantUserSelect(discord.ui.Select):
             {"user_id": member.id, "user_name": member.display_name,
              "percent": 100, "base_percent": 100,
              "is_trial": False, "actor_id": interaction.user.id},
+            interactive=True,
         )
         if res is None:
             # 400 = já existe; 404 = evento. _post devolve None p/ qualquer não-200.
@@ -575,24 +607,6 @@ class EventEmbedView(discord.ui.View):
     review/finalizado ficaria com botões mortos ("interaction failed")
     indefinidamente após um restart, já que aqui não existe staleness-timer
     de fallback como no mass-info."""
-
-    async def on_error(self, interaction: Interaction, error: Exception, item: discord.ui.Item) -> None:
-        # Default do discord.ui.View só loga via logging (_log.error) — bot-v2
-        # chama bot.start() em vez de bot.run(), então NENHUM handler de log
-        # é configurado (bot.run() faz isso sozinho), e a exceção real fica
-        # muda: o botão só "parece não responder" (Discord mostra "This
-        # interaction failed" pro clique que nunca foi reconhecido), sem
-        # nenhum rastro em lugar nenhum. Print no mesmo padrão do resto do
-        # cog pra aparecer sempre, com ou sem logging configurado.
-        import traceback
-        print(f"[event_embeds] erro no botão '{item}' (evento {self.event_id}): "
-              f"{type(error).__name__}: {error}")
-        traceback.print_exception(type(error), error, error.__traceback__)
-        if not interaction.response.is_done():
-            try:
-                await interaction.response.send_message(t(self.lang, "ev_update_fail"), ephemeral=True)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
 
     def __init__(self, lang: str, event_id: int, state: str,
                  allowed: list[str], ev: dict, nodes: list[dict] | None = None):
@@ -643,6 +657,7 @@ class EventEmbedView(discord.ui.View):
             res = await _post(
                 f"/bot/events/{interaction.guild_id}/{self.event_id}/transition",
                 {"to": to, "actor_id": interaction.user.id, "actor_name": interaction.user.display_name},
+                interactive=True,
             )
             if res is None:
                 await interaction.followup.send(t(self.lang, "ev_update_fail"), ephemeral=True)
@@ -717,6 +732,8 @@ _cog_ref: "EventEmbeds | None" = None
 class EventEmbeds(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._locks: dict[tuple[int, int], asyncio.Lock] = {}
+        self._message_ids: dict[tuple[int, int], tuple[int, int]] = {}
 
     async def cog_load(self) -> None:
         global _cog_ref
@@ -754,9 +771,7 @@ class EventEmbeds(commands.Cog):
             path += "?force=true"
         work = await _get(path)
         if work is None:
-            print(f"[event_embeds] {guild.id}: embed-work sem resposta "
-                  f"(backend fora do ar ou 401) — BOT_SITE_URL={SITE_URL or '(vazio)'}")
-            return
+            return  # backend fora/401 já logado 1× (http_client / tag) — próximo tick cobre
         events = work.get("events") or []
         if events:
             print(f"[event_embeds] {guild.id}: {len(events)} embed(s) pra (re)editar "
@@ -791,10 +806,22 @@ class EventEmbeds(commands.Cog):
         # Best-effort: confirma mesmo sem thread pra trancar (guilda sem sala
         # de revisão configurada, embed num canal comum) ou se ela já sumiu —
         # tira o evento da fila de arquivamento de qualquer jeito.
-        await _post(f"/bot/events/{guild.id}/{event_id}/event-thread-archived", {})
+        await _post(
+            f"/bot/events/{guild.id}/{event_id}/event-thread-archived", {},
+            queue_on_failure=True,
+        )
 
     async def _post_or_edit_embed(self, guild: discord.Guild, event_id: int,
                                   dto: dict, ids: dict | None = None) -> None:
+        key = (guild.id, event_id)
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            await self._post_or_edit_embed_unlocked(guild, event_id, dto, ids)
+
+    async def _post_or_edit_embed_unlocked(
+        self, guild: discord.Guild, event_id: int,
+        dto: dict, ids: dict | None = None,
+    ) -> None:
         cfg = await _guild_command_config(guild.id)
         lang = cfg["language"]
         ev = dto["event"]
@@ -814,6 +841,9 @@ class EventEmbeds(commands.Cog):
         # get_channel cobre threads em cache, fetch_channel pega as que não estão
         # (pós-restart o bot não tem a thread em memória).
         channel_id = ids.get("event_channel_id") or dto.get("event_channel_id")
+        cached = self._message_ids.get((guild.id, event_id))
+        if cached and not (message_id and channel_id):
+            channel_id, message_id = cached
         message = None
         if message_id and channel_id:
             ch = guild.get_channel(int(channel_id))
@@ -842,11 +872,12 @@ class EventEmbeds(commands.Cog):
             except (discord.Forbidden, discord.HTTPException):
                 return
 
+        self._message_ids[(guild.id, event_id)] = (message.channel.id, message.id)
         await _post(f"/bot/events/{guild.id}/{event_id}/embed-synced", {
             "event_channel_id": str(message.channel.id),
             "event_message_id": str(message.id),
             "clear_dirty": True,
-        })
+        }, attempts=2, queue_on_failure=True)
 
     async def _create_embed_message(
         self, guild: discord.Guild, event_id: int, lang: str,
@@ -855,6 +886,7 @@ class EventEmbeds(commands.Cog):
         """Primeira postagem do embed: thread na sala de revisão (se setada) ou
         mensagem simples no canal de eventos (fallback). Devolve a mensagem
         criada pra o caller gravar os ids e editar depois."""
+        bot_id = guild.me.id if guild.me else 0
         target = _embed_target(cfg.get("event_review_channel_id"), cfg.get("events_channel_id"))
         print(f"[event_embeds] {guild.id} evento {event_id}: target={target} "
               f"review={cfg.get('event_review_channel_id')} events={cfg.get('events_channel_id')}")
@@ -872,15 +904,26 @@ class EventEmbeds(commands.Cog):
                           f"não encontrada em {guild.id}")
                     return None
             if isinstance(room, discord.TextChannel):
-                print(f"[event_embeds] criando thread p/ evento {event_id} na sala {room.id}")
+                thread_name = t(lang, "ev_thread_title", n=event_id)
+                thread = next((item for item in room.threads if item.name == thread_name), None)
                 try:
-                    # Thread pública sem mensagem-inicial (start_thread_without_message);
-                    # o embed vai DENTRO dela como 1ª mensagem, não no canal pai.
-                    thread = await room.create_thread(
-                        name=t(lang, "ev_thread_title", n=event_id),
-                        type=discord.ChannelType.public_thread,
-                    )
-                    msg = await thread.send(embed=embed, view=view)
+                    if thread is None:
+                        print(f"[event_embeds] criando thread p/ evento {event_id} na sala {room.id}")
+                        # Thread pública sem mensagem-inicial
+                        # (start_thread_without_message); o embed vai dentro.
+                        thread = await room.create_thread(
+                            name=thread_name,
+                            type=discord.ChannelType.public_thread,
+                        )
+                    msg = None
+                    async for candidate in thread.history(limit=20, oldest_first=True):
+                        if candidate.author.id == bot_id and _is_event_message(candidate, event_id):
+                            msg = candidate
+                            break
+                    if msg is None:
+                        msg = await thread.send(embed=embed, view=view)
+                    else:
+                        await msg.edit(embed=embed, view=view)
                     print(f"[event_embeds] ✓ thread {thread.id} + msg {msg.id} p/ evento {event_id}")
                     return msg
                 except Exception as e:
@@ -903,6 +946,13 @@ class EventEmbeds(commands.Cog):
             if not isinstance(channel, discord.TextChannel):
                 return None
             try:
+                async for candidate in channel.history(limit=100):
+                    if (
+                        candidate.author.id == bot_id
+                        and _is_event_message(candidate, event_id)
+                    ):
+                        await candidate.edit(embed=embed, view=view)
+                        return candidate
                 return await channel.send(embed=embed, view=view)
             except (discord.Forbidden, discord.HTTPException):
                 return None

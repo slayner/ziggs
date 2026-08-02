@@ -1,0 +1,5 @@
+# ads.txt — declaracao de publishers autorizados (Google AdSense)
+# Substitua o placeholder pelo seu publisher ID (ca-pub-XXXXXXXXXXXXXXXXX)
+# quando a conta do AdSense estiver aprovada. Sem este arquivo no dominio
+# raiz, o AdSense nao serve anuncios em producao.
+google.com, pub-XXXXXXXXXXXXXXXXX, DIRECT, f08c47fec0942fa0

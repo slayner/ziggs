@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
+import uuid
+from datetime import datetime, timedelta, timezone
 
 from PIL import Image, ImageSequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.claims import RegisteredCharacter
+from app.models.audit import AuditLog
+from app.models.profile_media import ProfileMediaSubmission
 from app.models.tenancy import User
 
 _IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "_profile_images")
@@ -26,8 +31,11 @@ _MIN_SIZE = {"avatar": (128, 128), "banner": (320, 100)}
 # (largura, altura) máximas — thumbnail() preserva proporção, nunca estica.
 _MAX_SIZE = {"avatar": (512, 512), "banner": (1920, 600)}
 _MAX_GIF_FRAMES = 400  # acima disso trunca (não rejeita) — segura memória/CPU
+_MAX_GIF_PIXELS = 25_000_000  # pixels somados após crop/resize, antes de alocar frames
+_MAX_OUTPUT_BYTES = 10 * 1024 * 1024  # precisa caber no upload básico do Discord
 THEMES = {"gold", "blue", "green", "red", "purple", "teal"}
 DEFAULT_THEME = "gold"
+MEDIA_BLOCK_DAYS = 90
 
 # Retângulo de crop como frações 0..1 da imagem original: (x, y, w, h).
 Crop = tuple[float, float, float, float]
@@ -78,7 +86,10 @@ def _save_gif(img: Image.Image, kind: str, crop_px: tuple[int, int, int, int] | 
     frames[0].save(out_path, "GIF", **kwargs)
 
 
-def _save_image(kind: str, user_id: int, image_bytes: bytes, crop: Crop | None = None) -> str:
+def _save_image(
+    kind: str, user_id: int, image_bytes: bytes, crop: Crop | None = None,
+    stem: str | None = None,
+) -> str:
     limit = _MAX_BYTES[kind]
     if len(image_bytes) > limit:
         raise ProfileServiceError(f"imagem grande demais (limite {limit // (1024 * 1024)} MB)")
@@ -94,33 +105,53 @@ def _save_image(kind: str, user_id: int, image_bytes: bytes, crop: Crop | None =
 
     crop_px = _crop_box(img.size, crop) if crop else None
 
+    animated = img.format == "GIF" and getattr(img, "is_animated", False)
+    if animated:
+        frame_w = crop_px[2] - crop_px[0] if crop_px else img.width
+        frame_h = crop_px[3] - crop_px[1] if crop_px else img.height
+        scale = min(1.0, _MAX_SIZE[kind][0] / frame_w, _MAX_SIZE[kind][1] / frame_h)
+        pixels = round(frame_w * scale) * round(frame_h * scale)
+        if pixels * min(getattr(img, "n_frames", 1), _MAX_GIF_FRAMES) > _MAX_GIF_PIXELS:
+            raise ProfileServiceError("GIF complexo demais para processar")
+
     sub = os.path.join(_IMAGES_DIR, str(user_id))
     os.makedirs(sub, exist_ok=True)
-    # Nome fixo por kind — reenviar sobrescreve, sem lixo acumulando. GIF
-    # animado mantém .gif (senão a animação morre); o resto vira .jpg.
-    animated = img.format == "GIF" and getattr(img, "is_animated", False)
+    # GIF animado mantém .gif (senão a animação morre); o resto vira .jpg.
+    # Pendências usam stem único; os helpers legados mantêm nome fixo por kind.
     ext = "gif" if animated else "jpg"
-    out_path = os.path.join(sub, f"{kind}.{ext}")
+    stem = stem or kind
+    out_path = os.path.join(sub, f"{stem}.{ext}")
 
-    if animated:
-        _save_gif(img, kind, crop_px, out_path)
-    else:
-        if crop_px:
-            img = img.crop(crop_px)
-        img.thumbnail(_MAX_SIZE[kind], Image.LANCZOS)
-        if img.mode != "RGB":
-            img = img.convert("RGB")  # RGBA/paleta não salva em JPEG
-        img.save(out_path, "JPEG", quality=88)
+    try:
+        if animated:
+            _save_gif(img, kind, crop_px, out_path)
+        else:
+            if crop_px:
+                img = img.crop(crop_px)
+            img.thumbnail(_MAX_SIZE[kind], Image.LANCZOS)
+            if img.mode != "RGB":
+                img = img.convert("RGB")  # RGBA/paleta não salva em JPEG
+            img.save(out_path, "JPEG", quality=88)
+        if os.path.getsize(out_path) > _MAX_OUTPUT_BYTES:
+            raise ProfileServiceError("imagem processada excede 10 MB")
+    except Exception as error:
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
+        if isinstance(error, ProfileServiceError):
+            raise
+        raise ProfileServiceError("não foi possível processar a imagem") from error
 
     # A extensão varia por formato: apaga a irmã pra troca gif↔jpg nunca
     # deixar arquivo órfão (mesmo se o path no DB estiver dessincronizado).
-    other = os.path.join(sub, f"{kind}.{'jpg' if animated else 'gif'}")
+    other = os.path.join(sub, f"{stem}.{'jpg' if animated else 'gif'}")
     if os.path.isfile(other):
         try:
             os.remove(other)
         except OSError:
             pass
-    return f"{user_id}/{kind}.{ext}"
+    return f"{user_id}/{stem}.{ext}"
 
 
 def image_abs_path(rel: str) -> str:
@@ -136,6 +167,131 @@ def _remove_existing(rel: str | None) -> None:
             os.remove(path)
         except OSError:
             pass
+
+
+def purge_user_images(user_id: int) -> None:
+    shutil.rmtree(os.path.join(_IMAGES_DIR, str(user_id)), ignore_errors=True)
+
+
+def _active_block_until(user: User) -> datetime | None:
+    blocked = user.profile_media_blocked_until
+    if blocked is None:
+        return None
+    if blocked.tzinfo is None:
+        blocked = blocked.replace(tzinfo=timezone.utc)
+    return blocked if blocked > datetime.now(timezone.utc) else None
+
+
+def _lock_user(db: Session, user_id: int) -> User | None:
+    return db.scalar(
+        select(User).where(User.id == user_id)
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
+
+
+def submit_media(
+    db: Session, user: User, kind: str, image_bytes: bytes, crop: Crop | None = None,
+) -> ProfileMediaSubmission:
+    if kind not in ("avatar", "banner"):
+        raise ProfileServiceError("tipo de imagem inválido")
+    user = _lock_user(db, user.id) or user
+    blocked = _active_block_until(user)
+    if blocked:
+        raise ProfileServiceError(
+            f"uploads bloqueados até {blocked.astimezone(timezone.utc).strftime('%d/%m/%Y')}"
+        )
+    existing = db.scalar(select(ProfileMediaSubmission).where(
+        ProfileMediaSubmission.user_id == user.id,
+        ProfileMediaSubmission.kind == kind,
+    ))
+    if existing is not None:
+        raise ProfileServiceError(f"já existe {kind} aguardando aprovação")
+
+    stem = f"pending-{kind}-{uuid.uuid4().hex}"
+    rel = _save_image(kind, user.id, image_bytes, crop, stem=stem)
+    submission = ProfileMediaSubmission(user_id=user.id, kind=kind, path=rel)
+    db.add(submission)
+    return submission
+
+
+def remove_media(db: Session, user: User, kind: str) -> list[str]:
+    user = _lock_user(db, user.id) or user
+    submission = db.scalar(select(ProfileMediaSubmission).where(
+        ProfileMediaSubmission.user_id == user.id,
+        ProfileMediaSubmission.kind == kind,
+    ))
+    paths = [submission.path] if submission else []
+    if submission:
+        db.delete(submission)
+    attr = "profile_avatar_path" if kind == "avatar" else "profile_banner_path"
+    current = getattr(user, attr)
+    if current:
+        paths.append(current)
+    setattr(user, attr, None)
+    return paths
+
+
+def approve_submission(db: Session, submission_id: int, actor_id: int) -> tuple[dict, str | None]:
+    candidate = db.get(ProfileMediaSubmission, submission_id)
+    if candidate is None:
+        raise ProfileServiceError("upload pendente não encontrado")
+    user = _lock_user(db, candidate.user_id)
+    submission = db.scalar(select(ProfileMediaSubmission).where(
+        ProfileMediaSubmission.id == submission_id,
+    ).with_for_update())
+    if submission is None:
+        raise ProfileServiceError("upload pendente não encontrado")
+    if user is None:
+        raise ProfileServiceError("usuário não encontrado")
+
+    attr = "profile_avatar_path" if submission.kind == "avatar" else "profile_banner_path"
+    old_path = getattr(user, attr)
+    setattr(user, attr, submission.path)
+    db.add(AuditLog(
+        guild_id=0, actor_id=actor_id, actor_type="bot", source="bot",
+        action="profile_media.approve", entity="profile_media", entity_id=str(submission.id),
+        before={"kind": submission.kind, "path": old_path},
+        after={"kind": submission.kind, "path": submission.path},
+    ))
+    out = {"decision": "approved", "user_id": user.id, "kind": submission.kind}
+    db.delete(submission)
+    return out, old_path
+
+
+def reject_submission(db: Session, submission_id: int, actor_id: int) -> dict:
+    candidate = db.get(ProfileMediaSubmission, submission_id)
+    if candidate is None:
+        raise ProfileServiceError("upload pendente não encontrado")
+    user = _lock_user(db, candidate.user_id)
+    submission = db.scalar(select(ProfileMediaSubmission).where(
+        ProfileMediaSubmission.id == submission_id,
+    ).with_for_update())
+    if submission is None:
+        raise ProfileServiceError("upload pendente não encontrado")
+    if user is None:
+        raise ProfileServiceError("usuário não encontrado")
+
+    blocked_until = datetime.now(timezone.utc) + timedelta(days=MEDIA_BLOCK_DAYS)
+    user.profile_media_blocked_until = blocked_until
+    user.profile_avatar_path = None
+    user.profile_banner_path = None
+    pending = db.scalars(select(ProfileMediaSubmission).where(
+        ProfileMediaSubmission.user_id == user.id,
+    ).with_for_update()).all()
+    message_ids = [str(item.discord_message_id) for item in pending if item.discord_message_id]
+    for item in pending:
+        db.delete(item)
+    db.add(AuditLog(
+        guild_id=0, actor_id=actor_id, actor_type="bot", source="bot",
+        action="profile_media.reject", entity="profile_media", entity_id=str(submission.id),
+        before={"kind": submission.kind},
+        after={"blocked_until": blocked_until.isoformat(), "all_images_removed": True},
+    ))
+    return {
+        "decision": "rejected", "user_id": user.id, "kind": submission.kind,
+        "blocked_until": blocked_until.isoformat(), "discord_message_ids": message_ids,
+    }
 
 
 def set_theme(user: User, theme: str) -> None:
@@ -177,11 +333,17 @@ def _image_url(user_id: int, rel: str | None, kind: str) -> str | None:
     return f"/profile/image/{kind}/{user_id}?v={v}"
 
 
-def my_profile_dict(user: User) -> dict:
+def my_profile_dict(db: Session, user: User) -> dict:
+    pending = db.scalars(select(ProfileMediaSubmission.kind).where(
+        ProfileMediaSubmission.user_id == user.id,
+    )).all()
+    blocked = _active_block_until(user)
     return {
         "theme": user.profile_theme or DEFAULT_THEME,
         "avatar_url": _image_url(user.id, user.profile_avatar_path, "avatar"),
         "banner_url": _image_url(user.id, user.profile_banner_path, "banner"),
+        "pending_kinds": list(pending),
+        "blocked_until": blocked.isoformat() if blocked else None,
     }
 
 

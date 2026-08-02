@@ -4,13 +4,16 @@ companions direto do jogo (operação AuctionGetItemAverageStats), armazenado no
 NOSSO banco pra não depender do AODP em gráficos.
 
 O pacote do jogo referencia o item por índice numérico; resolvemos pro
-UniqueName (T4_BAG, ...) via o campo `Index` do ao-bin-dump (autoritativo, é o
-mesmo índice que vem no pacote). Se não resolver, guardamos assim mesmo com um
-id de fallback e o índice cru em `albion_id` — nada se perde.
+UniqueName (T4_BAG, ...) pela numeração de documento do `formatted/items.txt`
+do ao-data — o MESMO índice que o pacote carrega e que o `ao-loot-logger` usa
+(NÃO o campo `Index` do items.json, que é outra numeração e dava item errado).
+Se não resolver, guardamos assim mesmo com um id de fallback e o índice cru em
+`albion_id` — nada se perde.
 """
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -23,31 +26,80 @@ from sqlalchemy.orm import Session
 
 from app.models.prices import ItemPriceHistory
 
-_ITEMS_FILE = Path(__file__).resolve().parents[2] / "data" / "ao-bin-dump" / "items.json"
+log = logging.getLogger(__name__)
+
+_DUMP_DIR = Path(__file__).resolve().parents[2] / "data" / "ao-bin-dump"
+_ITEMS_FILE = _DUMP_DIR / "items.json"       # só p/ nomes localizados (PT/ES)
+_ITEMS_TXT_FILE = _DUMP_DIR / "items.txt"    # ÍNDICE DE PACOTE, autoritativo
+_ITEMS_TXT_URL = (
+    "https://raw.githubusercontent.com/ao-data/ao-bin-dumps/master/formatted/items.txt"
+)
+
+
+def _read_items_txt() -> str:
+    """Texto do items.txt: disco; se faltar, baixa 1× do ao-data e cacheia.
+
+    O dump é referência local (gitignored, igual ao items.json). Sem essa
+    rede-de-segurança, um backend sem o arquivo resolveria TODO loot como
+    `IDX_n` calado. Mesma estratégia do ao-loot-logger (fetch com fallback).
+    """
+    try:
+        return _ITEMS_TXT_FILE.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    import httpx
+    resp = httpx.get(_ITEMS_TXT_URL, timeout=60, follow_redirects=True)
+    resp.raise_for_status()
+    text = resp.text
+    try:
+        _DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        _ITEMS_TXT_FILE.write_text(text, encoding="utf-8")
+    except OSError:
+        pass  # sem disco de escrita: usa em memória mesmo
+    return text
+
+
+@lru_cache(maxsize=1)
+def _items_txt_rows() -> list[tuple[int, str, str]]:
+    """Linhas do `formatted/items.txt` do ao-data: (numId, UniqueName, nome_EN).
+
+    O numId é a POSIÇÃO 1-based da linha (a numeração é sequencial pura), e é
+    exatamente o índice que o PACOTE de loot/mercado carrega — o mesmo que o
+    `ao-loot-logger` resolve. Formato de cada linha: `  4172: T8_X : Nome`.
+    """
+    try:
+        text = _read_items_txt()
+    except Exception:
+        return []
+    out: list[tuple[int, str, str]] = []
+    for line in text.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) < 2:
+            continue
+        try:
+            num = int(parts[0].strip())
+        except ValueError:
+            continue
+        uid = parts[1].strip()
+        if not uid:
+            continue
+        name_en = parts[2].strip() if len(parts) > 2 else uid
+        out.append((num, uid, name_en))
+    return out
 
 
 @lru_cache(maxsize=1)
 def _index_to_name() -> dict[int, str]:
-    """Mapa índice-do-jogo → UniqueName, lido uma vez do ao-bin-dump.
+    """Mapa índice-do-jogo → UniqueName.
 
-    O campo `Index` de cada item é o índice que o jogo usa nos pacotes. Alguns
-    itens não têm Index (ex.: itens de sistema) — ignorados.
+    Fonte: `items.txt` (numeração de documento do dump). NÃO usar o campo
+    `Index` do `items.json` — é uma numeração interna DIFERENTE (subconjunto
+    reordenado do dump) que diverge do índice real do jogo, com delta que
+    CRESCE conforme o id (0 no topo, ~600 lá pelo id 4000). Isso saía como item
+    errado no lootlog: pacote 4172 = T8_HEAD_LEATHER_SET3, mas `Index==4172` =
+    T7_HEAD_CLOTH_SET3. Validado contra 286 eventos de um log do ao-loot-logger.
     """
-    try:
-        data = json.loads(_ITEMS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    out: dict[int, str] = {}
-    for entry in data:
-        idx = entry.get("Index")  # vem como string no ao-bin-dump ("101")
-        name = entry.get("UniqueName")
-        if idx is None or not name:
-            continue
-        try:
-            out[int(idx)] = name
-        except (TypeError, ValueError):
-            continue
-    return out
+    return {num: uid for num, uid, _ in _items_txt_rows()}
 
 
 def resolve_item(albion_id: int) -> str:
@@ -123,6 +175,45 @@ def get_catalog() -> list[dict[str, str]]:
     return out
 
 
+@lru_cache(maxsize=1)
+def _localized_names() -> dict[str, dict[str, str]]:
+    """UniqueName → LocalizedNames do `items.json` (só p/ traduzir PT/ES)."""
+    try:
+        data = json.loads(_ITEMS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for entry in data:
+        uid = entry.get("UniqueName")
+        if uid:
+            out[uid] = entry.get("LocalizedNames") or {}
+    return out
+
+
+@lru_cache(maxsize=1)
+def get_index_catalog() -> list[dict[str, Any]]:
+    """Catálogo POR ÍNDICE pro companion: [{i, id, en, pt, es}].
+
+    `i` é o índice de PACOTE (numeração de documento do `items.txt`, ver
+    `_index_to_name`) — o companion casa `item_index` do loot direto nessa
+    chave. Variantes `@enchant` têm índice próprio, então FICAM. Nome EN vem do
+    próprio `items.txt`; PT/ES vêm do `items.json` (join por UniqueName), e só
+    entram quando diferem do inglês, pra não inflar o download.
+    """
+    loc = _localized_names()
+    out: list[dict[str, Any]] = []
+    for num, uid, name_en in _items_txt_rows():
+        names = loc.get(uid, {})
+        en = names.get("EN-US") or name_en or uid
+        row: dict[str, Any] = {"i": num, "id": uid, "en": en}
+        for lang, key in (("pt", "PT-BR"), ("es", "ES-ES")):
+            val = names.get(key)
+            if val and val != en:
+                row[lang] = val
+        out.append(row)
+    return out
+
+
 def ingest_history(db: Session, rows: list[dict[str, Any]]) -> tuple[int, int]:
     """Upserta linhas de histórico reportadas pelo companion.
 
@@ -184,6 +275,8 @@ def ingest_history(db: Session, rows: list[dict[str, Any]]) -> tuple[int, int]:
         obj.albion_id = int(albion_id)
         obj.recorded_at = now
         accepted += 1
+        log.info("market_history: %s q%d @ %s ts%d — %d itens, %d prata",
+                 item_id, quality, location, bucket_ts, item_count, silver_amount)
     if accepted:
         db.commit()
     return (accepted, rejected)
@@ -241,5 +334,16 @@ if __name__ == "__main__":
     some_idx = next(iter(m))
     assert resolve_item(some_idx) == m[some_idx]
     assert resolve_item(-999999).startswith("IDX_"), "fallback deveria ser IDX_"
-    print(f"market_history self-check OK — {len(m)} índices mapeados; "
-          f"ex: {some_idx} -> {m[some_idx]}")
+
+    # TRAVA de regressão: o índice de pacote é a numeração do items.txt, NÃO o
+    # campo `Index` do items.json. Par medido contra um log do ao-loot-logger.
+    assert resolve_item(4172) == "T8_HEAD_LEATHER_SET3", (
+        f"índice de pacote quebrou — 4172 deu {resolve_item(4172)!r}, "
+        "esperado T8_HEAD_LEATHER_SET3 (voltou pro esquema `Index` do json?)"
+    )
+    cat = get_index_catalog()
+    by_i = {r["i"]: r for r in cat}
+    assert by_i[4172]["id"] == "T8_HEAD_LEATHER_SET3"
+    assert by_i[562]["id"] == "T7_POTION_REVIVE", by_i[562]["id"]
+    print(f"market_history self-check OK — {len(m)} índices; catálogo {len(cat)}; "
+          f"4172 -> {resolve_item(4172)}")

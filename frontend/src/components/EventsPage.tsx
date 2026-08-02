@@ -4,13 +4,13 @@ import { useT, type TKey } from "../i18n";
 import { navigate } from "../router";
 import { RoleIcon } from "./RoleIcons";
 
-// Fluxo de 4 estados: agendado → andamento → revisão → concluido.
-const PIPELINE = ["scheduled", "in_progress", "review", "finalized"];
+// Fluxo: rascunho → agendado → andamento → revisão → concluido.
+const PIPELINE = ["draft", "scheduled", "in_progress", "review", "finalized"];
 // Eventos "vivos" ficam expandidos por padrão na lista; finalizado/cancelado/
 // excluído entram colapsados (só a linha resumo) — não pedem mais atenção.
-const ACTIVE_STATES = new Set(["scheduled", "in_progress", "review"]);
+const ACTIVE_STATES = new Set(["draft", "scheduled", "in_progress", "review"]);
 const STATE_KEYS: Record<string, TKey> = {
-  scheduled: "stateScheduled", in_progress: "stateInProgress", review: "stateReview",
+  draft: "stateDraft", scheduled: "stateScheduled", in_progress: "stateInProgress", review: "stateReview",
   finalized: "stateFinalized", cancelled: "stateCancelled", deleted: "stateDeleted",
 };
 // review usa só 2 marcadores opcionais (tab_value + nodes).
@@ -181,33 +181,87 @@ export default function EventsPage({ perms, active = true }: { perms: Permission
   );
 }
 
-// ── Formulário de criação (avançado) ─────────────────────────────────────
+// ── Formulário de criação ────────────────────────────────────────────────
 
-// Horários sempre em UTC: lista slots de 15 em 15 min das próximas 48h a partir
-// do próximo múltiplo de 15min. Hoje (UTC) mostra só "HH:MM"; dias seguintes
-// mostram "HH:MM · dd/MM" — a data só aparece pra horário do próximo dia.
-const SLOT_MS = 15 * 60 * 1000;
-const SLOT_HORIZON_MS = 48 * 60 * 60 * 1000;
-function buildTimeSlots(): { value: string; label: string }[] {
-  const now = new Date();
-  const start = new Date(Math.ceil(now.getTime() / SLOT_MS) * SLOT_MS);
-  const todayStr = now.toISOString().slice(0, 10);
-  const out: { value: string; label: string }[] = [];
-  for (let t = start.getTime(); t <= start.getTime() + SLOT_HORIZON_MS; t += SLOT_MS) {
-    const iso = new Date(t).toISOString();
-    const day = iso.slice(0, 10);
-    const hhmm = iso.slice(11, 16);
-    const label = day === todayStr ? hhmm : `${hhmm} · ${day.slice(8, 10)}/${day.slice(5, 7)}`;
-    out.push({ value: iso, label });
+const EVENT_TZ_MINUTES: Record<string, number> = {
+  UTC: 0, GMT: 0, BRT: -180, BRST: -120, CET: 60, CEST: 120,
+};
+const two = (n: number) => String(n).padStart(2, "0");
+const wallLabel = (y: number, m: number, d: number, h: number, min: number) =>
+  `${two(d)}/${two(m)}/${y} ${two(h)}:${two(min)}`;
+
+type ParsedEventTime = { iso: string; source: string; utc: string; localZone: boolean };
+
+function parseEventTime(raw: string, now = new Date()): ParsedEventTime | null {
+  const m = raw.trim().match(
+    /^(?:(?:(\d{4})-(\d{1,2})-(\d{1,2})|(\d{1,2})[/.](\d{1,2})(?:[/.](\d{4}))?)\s+)?(\d{1,2})(?:h(\d{1,2})?|:(\d{1,2}))?\s*(BRT|BRST|UTC|GMT|CET|CEST)?$/i,
+  );
+  if (!m) return null;
+
+  const hour = Number(m[7]);
+  const minute = Number(m[8] ?? m[9] ?? 0);
+  if (hour > 23 || minute > 59) return null;
+
+  const zone = m[10]?.toUpperCase();
+  const offset = zone ? EVENT_TZ_MINUTES[zone] : null;
+  const shiftedNow = offset == null ? now : new Date(now.getTime() + offset * 60_000);
+  let year = Number(m[1] ?? m[6] ?? (offset == null ? shiftedNow.getFullYear() : shiftedNow.getUTCFullYear()));
+  const month = Number(m[2] ?? m[5] ?? ((offset == null ? shiftedNow.getMonth() : shiftedNow.getUTCMonth()) + 1));
+  const day = Number(m[3] ?? m[4] ?? (offset == null ? shiftedNow.getDate() : shiftedNow.getUTCDate()));
+  const hasDate = Boolean(m[1] || m[4]);
+  const hasYear = Boolean(m[1] || m[6]);
+
+  const make = (y: number) => offset == null
+    ? new Date(y, month - 1, day, hour, minute)
+    : new Date(Date.UTC(y, month - 1, day, hour, minute) - offset * 60_000);
+  let parsed = make(year);
+  const validWall = offset == null
+    ? parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day
+    : new Date(parsed.getTime() + offset * 60_000).getUTCFullYear() === year
+      && new Date(parsed.getTime() + offset * 60_000).getUTCMonth() === month - 1
+      && new Date(parsed.getTime() + offset * 60_000).getUTCDate() === day;
+  if (!validWall) return null;
+
+  if (parsed <= now) {
+    if (hasYear) return null;
+    if (hasDate) {
+      year += 1;
+      parsed = make(year);
+    } else {
+      parsed = offset == null
+        ? new Date(year, month - 1, day + 1, hour, minute)
+        : new Date(Date.UTC(year, month - 1, day + 1, hour, minute) - offset * 60_000);
+      const nextWall = offset == null ? parsed : new Date(parsed.getTime() + offset * 60_000);
+      year = offset == null ? nextWall.getFullYear() : nextWall.getUTCFullYear();
+    }
   }
-  return out;
+
+  const utc = parsed.toISOString();
+  const finalWall = offset == null ? parsed : new Date(parsed.getTime() + offset * 60_000);
+  const sourceYear = hasDate ? year : (offset == null ? finalWall.getFullYear() : finalWall.getUTCFullYear());
+  const sourceMonth = hasDate ? month : ((offset == null ? finalWall.getMonth() : finalWall.getUTCMonth()) + 1);
+  const sourceDay = hasDate ? day : (offset == null ? finalWall.getDate() : finalWall.getUTCDate());
+  return {
+    iso: utc,
+    source: `${wallLabel(sourceYear, sourceMonth, sourceDay, hour, minute)} ${zone ?? ""}`.trim(),
+    utc: `${two(parsed.getUTCDate())}/${two(parsed.getUTCMonth() + 1)}/${parsed.getUTCFullYear()} ${two(parsed.getUTCHours())}:${two(parsed.getUTCMinutes())}`,
+    localZone: !zone,
+  };
+}
+
+if (import.meta.env.DEV) {
+  const checkNow = new Date("2026-07-24T12:00:00Z");
+  console.assert(parseEventTime("21h", checkNow) !== null);
+  console.assert(parseEventTime("21:30 BRT", checkNow)?.iso === "2026-07-25T00:30:00.000Z");
+  console.assert(parseEventTime("24/07/2026 21h BRT", checkNow)?.iso === "2026-07-25T00:00:00.000Z");
+  console.assert(parseEventTime("31/02/2026 21h BRT", checkNow) === null);
 }
 
 function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
-  const [when, setWhen] = useState("");
+  const [whenInput, setWhenInput] = useState("");
   const [comps, setComps] = useState<{ id: number; name: string }[]>([]);
   const [compId, setCompId] = useState("");
   const [msg, setMsg] = useState("");
@@ -217,20 +271,19 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
   useEffect(() => {
     if (open) api.listComps().then(setComps).catch(() => {});
   }, [open]);
-  // Regenera os slots quando o form abre pra começar do "agora".
-  const slots = useMemo(() => open ? buildTimeSlots() : [], [open]);
+  const when = parseEventTime(whenInput);
 
   async function submit() {
+    if (!when) { setError(t("evTimeRequired")); return; }
     setBusy(true); setError(null);
     try {
       const ev = await api.createEvent({
         title: title.trim() || null,
-        // `when` já é ISO UTC (slot do select) — envia direto.
-        scheduled_at: when || null,
+        scheduled_at: when.iso,
         comp_id: compId ? Number(compId) : null,
         message: msg.trim() || null,
       });
-      setTitle(""); setWhen(""); setCompId(""); setMsg("");
+      setTitle(""); setWhenInput(""); setCompId(""); setMsg("");
       setOpen(false);
       onCreated(ev);
     } catch (e) {
@@ -261,16 +314,24 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
       </div>
       <div style={field}>
         <span className="hint" style={label}>{t("evScheduledAtLabel")}</span>
-        <select
-          className="cs-select" style={{ width: "100%" }} value={when}
-          onChange={(e) => setWhen(e.target.value)}
-        >
-          <option value="">{t("evSelectTime")}</option>
-          {slots.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-        </select>
-        <p className="hint" style={{ marginTop: 4, fontSize: 11 }}>
-          <i className="ti ti-info-circle" aria-hidden /> {t("evTimeUtcHint")}
-        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, alignItems: "center" }}>
+          <input
+            className="input" style={{ width: "100%" }}
+            value={whenInput} onChange={(e) => setWhenInput(e.target.value)}
+            placeholder={t("evTimeInputPlaceholder")}
+            aria-describedby="event-time-preview"
+          />
+          <div
+            id="event-time-preview" aria-live="polite"
+            style={{ fontSize: 12, color: when ? "var(--green)" : whenInput ? "#e07a7a" : "var(--hint)" }}
+          >
+            {!whenInput
+              ? t("evTimeInputHint")
+              : when
+                ? `${when.utc} UTC`
+                : t("evTimeInvalid")}
+          </div>
+        </div>
       </div>
       <div style={field}>
         <span className="hint" style={label}>{t("evCompLabel")}</span>
@@ -289,7 +350,10 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
       </div>
       {error && <p style={{ color: "#e07a7a", fontSize: 13, marginBottom: 8 }}>{error}</p>}
       <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn primary" style={{ flex: 1 }} onClick={submit} disabled={busy}>
+        <button
+          className="btn primary" style={{ flex: 1 }} onClick={submit}
+          disabled={busy}
+        >
           <i className="ti ti-plus" aria-hidden /> {t("createBtn")}
         </button>
         <button className="btn" onClick={() => setOpen(false)} disabled={busy}>{t("closeBtn")}</button>
@@ -306,6 +370,79 @@ function StatePill({ state }: { state: string }) {
   return <span className={"state-pill " + cls}>{key ? t(key) : state}</span>;
 }
 
+function utcEventInput(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${two(d.getUTCDate())}/${two(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
+}
+
+function EventEditControls({ detail, act }: {
+  detail: EventDetail;
+  act: (p: Promise<EventDetail>) => void;
+}) {
+  const t = useT();
+  const [comps, setComps] = useState<{ id: number; name: string }[]>([]);
+  const [whenInput, setWhenInput] = useState(() => utcEventInput(detail.scheduled_at));
+  const when = parseEventTime(whenInput);
+  const currentIso = detail.scheduled_at ? new Date(detail.scheduled_at).toISOString() : null;
+
+  useEffect(() => {
+    api.listComps().then(setComps).catch(() => {});
+  }, [detail.id]);
+  useEffect(() => {
+    setWhenInput(utcEventInput(detail.scheduled_at));
+  }, [detail.id, detail.scheduled_at]);
+
+  return (
+    <div className="card" style={{ padding: 10, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1.4fr) minmax(180px, 1fr)", gap: 10 }}>
+        <div>
+          <span className="hint" style={{ display: "block", marginBottom: 4 }}>{t("evScheduledAtLabel")}</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              className="input"
+              style={{ width: "100%" }}
+              value={whenInput}
+              onChange={(e) => setWhenInput(e.target.value)}
+              placeholder={t("evTimeInputPlaceholder")}
+            />
+            <button
+              className="btn"
+              disabled={!when || when.iso === currentIso}
+              onClick={() => when && act(api.updateEvent(detail.id, { scheduled_at: when.iso }))}
+            >
+              {t("save")}
+            </button>
+          </div>
+          <div
+            aria-live="polite"
+            style={{ marginTop: 4, fontSize: 12, color: when ? "var(--green)" : whenInput ? "#e07a7a" : "var(--hint)" }}
+          >
+            {!whenInput ? t("evTimeInputHint") : when ? `${when.utc} UTC` : t("evTimeInvalid")}
+          </div>
+        </div>
+        <div>
+          <span className="hint" style={{ display: "block", marginBottom: 4 }}>{t("evCompLabel")}</span>
+          <select
+            className="cs-select"
+            style={{ width: "100%" }}
+            value={detail.comp_id ?? ""}
+            onChange={(e) => {
+              const compId = e.target.value ? Number(e.target.value) : null;
+              if (compId === detail.comp_id || !window.confirm(t("evCompChangeConfirm"))) return;
+              act(api.updateEvent(detail.id, { comp_id: compId }));
+            }}
+          >
+            <option value="">{t("evNoComp")}</option>
+            {comps.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act: (p: Promise<EventDetail>) => void; canManage: boolean }) {
   const t = useT();
   const curIdx = PIPELINE.indexOf(detail.state);
@@ -317,7 +454,8 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
   // Um único botão primário por estado: a próxima etapa do pipeline.
   const forward = curIdx >= 0 ? PIPELINE[curIdx + 1] : undefined;
   const canForward = !!(canManage && forward && detail.allowed_transitions.includes(forward));
-  const forwardLabel = forward === "review" ? t("endEventBtn")
+  const forwardLabel = detail.state === "draft" ? t("publishEventBtn")
+    : forward === "review" ? t("endEventBtn")
     : forward === "finalized" ? t("finalizeBtn")
     : t("startEventBtn");
 
@@ -347,6 +485,10 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
           </button>
         )}
       </div>
+
+      {canManage && ["scheduled", "in_progress"].includes(detail.state) && (
+        <EventEditControls detail={detail} act={act} />
+      )}
 
       {/* Attendance: movido para a barra de ações, ao lado do botão de
           finalizar (todo mundo que participou recebe a mesma quantidade). */}

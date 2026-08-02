@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useT } from "../i18n";
+import { adsConsent, CONSENT_EVENT } from "./CookieConsent";
 
 // Detecção de adblock via elemento-isca: classes que a maioria das listas de
 // filtro (EasyList etc.) esconde via CSS. O elemento nunca é visto pelo
@@ -105,9 +106,17 @@ export default function AdBanner({ variant, mobileVariant, slot }: {
   const t = useT();
   const blocked = useAdblockDetected();
   const isMobile = useIsMobile();
+  const [consent, setConsent] = useState(adsConsent);
+  useEffect(() => {
+    const update = () => setConsent(adsConsent());
+    window.addEventListener(CONSENT_EVENT, update);
+    return () => window.removeEventListener(CONSENT_EVENT, update);
+  }, []);
   const resolved = isMobile && mobileVariant ? mobileVariant : variant;
   const { w, h } = AD_SIZES[resolved];
-  const live = !import.meta.env.DEV && !!ADS_CLIENT;
+  // Sem consentimento ("all") → não carrega o script do AdSense nem cookies
+  // de terceiro. Mostra placeholder. LGPD/EEA compliance.
+  const live = !import.meta.env.DEV && !!ADS_CLIENT && consent === "all";
 
   return (
     <div className="ad-slot">

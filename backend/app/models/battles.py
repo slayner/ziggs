@@ -124,9 +124,15 @@ class BattleParticipant(Base):
     )
     albion_player_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    guild_id: Mapped[str | None] = mapped_column(String(64))
+    # Indexado: toda query de "membros/roster da guilda X" filtra por aqui.
+    # Sem o índice, o otimizador do SQLite caía no índice de albion_player_id
+    # (ordenar 2.5M rows pra distinct) em vez de filtrar guild_id primeiro —
+    # _members levava 30-42s pra achar 12 membros.
+    guild_id: Mapped[str | None] = mapped_column(String(64), index=True)
     guild_name: Mapped[str | None] = mapped_column(String(255))
-    alliance_id: Mapped[str | None] = mapped_column(String(64))
+    # Indexado pelo mesmo motivo de guild_id: _alliance_roster_log e roster de
+    # aliança filtram por aqui.
+    alliance_id: Mapped[str | None] = mapped_column(String(64), index=True)
     alliance_name: Mapped[str | None] = mapped_column(String(255))
     side_id: Mapped[int | None] = mapped_column(ForeignKey("battle_sides.id", ondelete="SET NULL"))
 

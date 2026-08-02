@@ -20,6 +20,11 @@ T: dict[str, dict[str, str]] = {
         "en": "⚠️ Something went wrong running the command. Try again in a moment — if it keeps happening, tell an admin.",
         "es": "⚠️ Algo salió mal al ejecutar el comando. Inténtalo de nuevo en un momento — si persiste, avisa a un admin.",
     },
+    "backend_unavailable": {
+        "pt": "⚠️ O backend está indisponível no momento. Tente novamente em instantes.",
+        "en": "⚠️ The backend is currently unavailable. Try again in a moment.",
+        "es": "⚠️ El backend no está disponible en este momento. Inténtalo de nuevo en unos instantes.",
+    },
     "cooldown_wait": {
         "pt": "⏳ Calma! Tente de novo em {seconds}s.",
         "en": "⏳ Slow down! Try again in {seconds}s.",
@@ -420,11 +425,6 @@ T: dict[str, dict[str, str]] = {
         "en": "⚠️ You don't have the required role for any of the available functions.",
         "es": "⚠️ No tienes el rol necesario para ninguna de las funciones disponibles.",
     },
-    "signup_category_prompt": {
-        "pt": "Escolha até 3 funções (em ordem de preferência):",
-        "en": "Pick up to 3 functions (in order of preference):",
-        "es": "Elige hasta 3 funciones (en orden de preferencia):",
-    },
     "signup_pick_category_prompt": {
         "pt": "Escolha uma categoria de função:",
         "en": "Pick a function category:",
@@ -444,10 +444,64 @@ T: dict[str, dict[str, str]] = {
     "signup_fn_prev": {"pt": "◀️ Anteriores", "en": "◀️ Previous", "es": "◀️ Anteriores"},
     "signup_fn_next": {"pt": "▶️ Próximos", "en": "▶️ Next", "es": "▶️ Siguientes"},
     "signup_add_more": {"pt": "➕ Adicionar outra", "en": "➕ Add another", "es": "➕ Añadir otra"},
+    "signup_remove_roles": {"pt": "➖ Retirar roles", "en": "➖ Remove roles", "es": "➖ Quitar roles"},
+    "signup_choose_roles": {"pt": "Escolher roles", "en": "Choose roles", "es": "Elegir roles"},
+    "signup_roles_dm_title": {
+        "pt": "Atualize suas roles · Evento #{eid}",
+        "en": "Update your roles · Event #{eid}",
+        "es": "Actualiza tus roles · Evento #{eid}",
+    },
+    "signup_roles_dm_defined": {
+        "pt": "Você confirmou presença quando este evento ainda não tinha composição. Agora a administração definiu a comp e precisa saber onde pode escalar você. Sua inscrição continua ativa: clique abaixo e marque **todas** as roles que você faz.",
+        "en": "You confirmed attendance before this event had a composition. Admins have now set the comp and need to know where they can assign you. Your signup is still active: click below and select **every** role you can play.",
+        "es": "Confirmaste tu presencia cuando este evento aún no tenía composición. La administración ya definió la comp y necesita saber dónde puede asignarte. Tu inscripción sigue activa: haz clic abajo y marca **todos** los roles que puedes jugar.",
+    },
+    "signup_roles_dm_changed": {
+        "pt": "Você já estava inscrito, mas a administração trocou a composição. Sua presença continua confirmada; apenas as roles anteriores foram limpas porque pertenciam à comp antiga. Clique abaixo e marque **todas** as roles que você faz na nova comp.",
+        "en": "You were already signed up, but admins changed the composition. Your attendance is still confirmed; only your previous roles were cleared because they belonged to the old comp. Click below and select **every** role you can play in the new comp.",
+        "es": "Ya estabas inscrito, pero la administración cambió la composición. Tu presencia sigue confirmada; solo se limpiaron los roles anteriores porque pertenecían a la comp antigua. Haz clic abajo y marca **todos** los roles que puedes jugar en la nueva comp.",
+    },
+    "signup_roles_dm_released": {
+        "pt": "Você já confirmou presença e a administração acaba de liberar a escolha de roles desta composição. Clique abaixo e marque **todas** as roles que você faz; isso ajudará a administração a montar a escalação.",
+        "en": "You already confirmed attendance, and admins have now opened role selection for this composition. Click below and select **every** role you can play; this will help admins build the roster.",
+        "es": "Ya confirmaste tu presencia y la administración acaba de habilitar la selección de roles para esta composición. Haz clic abajo y marca **todos** los roles que puedes jugar; esto ayudará a montar la formación.",
+    },
+    "signup_roles_dm_event": {"pt": "Evento", "en": "Event", "es": "Evento"},
+    "signup_roles_dm_comp": {"pt": "Composição", "en": "Composition", "es": "Composición"},
+    "signup_roles_dm_time": {"pt": "Horário", "en": "Time", "es": "Horario"},
+    "signup_roles_dm_footer": {
+        "pt": "Este PM será apagado automaticamente quando o evento entrar em revisão.",
+        "en": "This DM will be deleted automatically when the event enters review.",
+        "es": "Este MD se eliminará automáticamente cuando el evento entre en revisión.",
+    },
+    "signup_presence_success": {
+        "pt": "✅ Presença confirmada. Você receberá outra mensagem quando for hora de escolher as roles.",
+        "en": "✅ Presence confirmed. You will receive another message when it is time to choose roles.",
+        "es": "✅ Presencia confirmada. Recibirás otro mensaje cuando sea hora de elegir roles.",
+    },
+    "signup_admin_assign_prompt": {
+        "pt": "Confirme sua presença agora. Você poderá escolher as roles quando a composição estiver pronta.",
+        "en": "Confirm your attendance now. You can choose roles when the composition is ready.",
+        "es": "Confirma tu asistencia ahora. Podrás elegir roles cuando la composición esté lista.",
+    },
+    "signup_confirm_presence": {
+        "pt": "✅ Confirmar presença",
+        "en": "✅ Confirm presence",
+        "es": "✅ Confirmar presencia",
+    },
+    "signup_remove_roles_prompt": {"pt": "Selecione as roles para retirar do seu perfil:", "en": "Select roles to remove from your profile:", "es": "Selecciona roles para quitar de tu perfil:"},
+    "signup_remove_roles_ph": {"pt": "Roles a retirar…", "en": "Roles to remove…", "es": "Roles a quitar…"},
+    "signup_back_to_review": {"pt": "↩️ Voltar", "en": "↩️ Back", "es": "↩️ Volver"},
     "signup_chosen_header": {
-        "pt": "**Funções escolhidas ({n}/{cap}):**",
-        "en": "**Chosen functions ({n}/{cap}):**",
-        "es": "**Funciones elegidas ({n}/{cap}):**",
+        "pt": "Suas roles · {n} selecionada(s)",
+        "en": "Your roles · {n} selected",
+        "es": "Tus roles · {n} seleccionada(s)",
+    },
+    "signup_roles_field": {"pt": "Roles", "en": "Roles", "es": "Roles"},
+    "signup_minimum_footer": {
+        "pt": "Mínimo exigido: {n}. Não há limite máximo.",
+        "en": "Required minimum: {n}. There is no maximum.",
+        "es": "Mínimo requerido: {n}. No hay límite máximo.",
     },
     "signup_review_prompt": {
         "pt": "Quer **confirmar** essas ou **adicionar mais**?",
@@ -457,15 +511,10 @@ T: dict[str, dict[str, str]] = {
     "signup_none_yet": {"pt": "nenhuma ainda", "en": "none yet", "es": "ninguna aún"},
     "signup_done_btn": {"pt": "✅ Confirmar", "en": "✅ Confirm", "es": "✅ Confirmar"},
     "signup_back_to_categories": {"pt": "◀️ Voltar às categorias", "en": "◀️ Back to categories", "es": "◀️ Volver a categorías"},
-    "signup_pick_at_least_one": {
-        "pt": "❌ Escolha pelo menos uma função antes de confirmar.",
-        "en": "❌ Pick at least one function before confirming.",
-        "es": "❌ Elige al menos una función antes de confirmar.",
-    },
     "signup_min_builds_needed": {
-        "pt": "❌ Escolha ao menos {n} builds não-flex.",
-        "en": "❌ Pick at least {n} non-flex builds.",
-        "es": "❌ Elige al menos {n} builds no flex.",
+        "pt": "❌ Escolha ao menos {n} roles.",
+        "en": "❌ Pick at least {n} roles.",
+        "es": "❌ Elige al menos {n} roles.",
     },
     "signup_fail": {
         "pt": "⚠️ Não consegui salvar sua inscrição agora.",
@@ -590,25 +639,15 @@ T: dict[str, dict[str, str]] = {
 
     # cogs/event_cmd.py — /event criar/deletar/editar/adiar
     "ev_pick_comp": {"pt": "Escolha a comp do evento:", "en": "Pick the event's comp:", "es": "Elige la comp del evento:"},
-    "ev_pick_time": {"pt": "Escolha o horário (UTC):", "en": "Pick the time (UTC):", "es": "Elige la hora (UTC):"},
     "ev_pick_event": {"pt": "Selecione o evento:", "en": "Select the event:", "es": "Selecciona el evento:"},
     "ev_pick_field": {"pt": "O que deseja editar?", "en": "What do you want to edit?", "es": "¿Qué deseas editar?"},
-    "ev_pick_time_range": {
-        "pt": "🕐 Faixa de 25min (pág {page}/{pages})…",
-        "en": "🕐 25-min slot (page {page}/{pages})…",
-        "es": "🕐 Franja de 25min (pág {page}/{pages})…",
-    },
-    "ev_pick_time_minute": {"pt": "🕐 Minuto exato (UTC)…", "en": "🕐 Exact minute (UTC)…", "es": "🕐 Minuto exacto (UTC)…"},
-    "ev_time_prev": {"pt": "◀️ Horários anteriores", "en": "◀️ Earlier", "es": "◀️ Horarios anteriores"},
-    "ev_time_next": {"pt": "▶️ Próximos horários", "en": "▶️ Later", "es": "▶️ Horarios siguientes"},
-    "ev_back": {"pt": "← Voltar", "en": "← Back", "es": "← Volver"},
     "ev_cancel": {"pt": "Cancelar", "en": "Cancel", "es": "Cancelar"},
     "ev_cancelled": {"pt": "❌ Cancelado.", "en": "❌ Cancelled.", "es": "❌ Cancelado."},
-    "ev_confirm": {"pt": "Confirmar", "en": "Confirm", "es": "Confirmar"},
     "ev_no_comp": {"pt": "— Sem comp —", "en": "— No comp —", "es": "— Sin comp —"},
     "ev_no_events": {"pt": "Nenhum evento disponível (apenas eventos não finalizados aparecem aqui).", "en": "No events available (only non-finalized events show up here).", "es": "Ningún evento disponible (solo eventos no finalizados aparecen aquí)."},
     "ev_create_done": {"pt": "✅ Evento #{eid} criado às **{hora}** UTC.", "en": "✅ Event #{eid} created at **{hora}** UTC.", "es": "✅ Evento #{eid} creado a las **{hora}** UTC."},
     "ev_create_fail": {"pt": "❌ Não deu pra criar o evento.", "en": "❌ Couldn't create the event.", "es": "❌ No se pudo crear el evento."},
+    "massinfo_more_events": {"pt": "Ver outro evento…", "en": "View another event…", "es": "Ver otro evento…"},
     "ev_delete_confirm": {"pt": "Deletar este evento?\n**{ev}**", "en": "Delete this event?\n**{ev}**", "es": "¿Eliminar este evento?\n**{ev}**"},
     "ev_delete_btn": {"pt": "🗑️ Deletar", "en": "🗑️ Delete", "es": "🗑️ Eliminar"},
     "ev_delete_done": {"pt": "✅ Evento #{eid} deletado.", "en": "✅ Event #{eid} deleted.", "es": "✅ Evento #{eid} eliminado."},
@@ -616,17 +655,38 @@ T: dict[str, dict[str, str]] = {
     "ev_field_horario": {"pt": "Horário", "en": "Time", "es": "Horario"},
     "ev_field_comp": {"pt": "Comp", "en": "Comp", "es": "Comp"},
     "ev_field_attendance": {"pt": "Pontos de attendance", "en": "Attendance points", "es": "Puntos de asistencia"},
+    "ev_time_input_label": {"pt": "Novo horário", "en": "New time", "es": "Nuevo horario"},
+    "ev_time_input_placeholder": {
+        "pt": "21h, 21:30 BRT ou 24/07/2026 21h",
+        "en": "21h, 21:30 BRT, or 2026-07-24 21:00",
+        "es": "21h, 21:30 BRT o 24/07/2026 21h",
+    },
     "ev_edit_done_field": {"pt": "✅ {field} atualizado(s).", "en": "✅ {field} updated.", "es": "✅ {field} actualizado."},
+    "ev_edit_changed": {
+        "pt": "{field} alterado para **{value}**.",
+        "en": "{field} changed to **{value}**.",
+        "es": "{field} cambiado a **{value}**.",
+    },
+    "ev_edit_history": {
+        "pt": "**Alterações desta edição:**",
+        "en": "**Changes in this edit session:**",
+        "es": "**Cambios de esta edición:**",
+    },
+    "ev_edit_history_line": {
+        "pt": "**{field}:** {before} → {after}",
+        "en": "**{field}:** {before} → {after}",
+        "es": "**{field}:** {before} → {after}",
+    },
     "ev_reschedule_done": {"pt": "✅ Evento #{eid} adiado pra **{hora}** UTC.", "en": "✅ Event #{eid} rescheduled to **{hora}** UTC.", "es": "✅ Evento #{eid} aplazado a las **{hora}** UTC."},
     "ev_comp_changed_summary": {
-        "pt": "✅ Comp alterada pra **{comp}**. {n} inscrição(ões) removida(s) — cada usuário foi avisado por DM pra repingar.",
-        "en": "✅ Comp changed to **{comp}**. {n} signup(s) removed — each user was DM'd to re-sign up.",
-        "es": "✅ Comp cambiada a **{comp}**. {n} inscripción(es) eliminada(s) — cada usuario fue avisado por DM para reinscribirse.",
+        "pt": "✅ Comp alterada pra **{comp}**. {n} inscrição(ões) preservada(s) — os jogadores receberão um PM para escolher as roles.",
+        "en": "✅ Comp changed to **{comp}**. {n} signup(s) preserved — players will receive a DM to choose their roles.",
+        "es": "✅ Comp cambiada a **{comp}**. {n} inscripción(es) preservada(s) — los jugadores recibirán un MD para elegir sus roles.",
     },
     "ev_comp_changed_dm": {
-        "pt": "⚠️ A comp do evento #{eid} ({title}) foi alterada pra **{comp}**. Sua inscrição foi removida — clique no botão do evento no canal de eventos pra se inscrever de novo.",
-        "en": "⚠️ The comp for event #{eid} ({title}) changed to **{comp}**. Your signup was removed — click the event's button in the events channel to sign up again.",
-        "es": "⚠️ La comp del evento #{eid} ({title}) cambió a **{comp}**. Tu inscripción fue eliminada — haz clic en el botón del evento en el canal de eventos para reinscribirte.",
+        "pt": "⚠️ A comp do evento #{eid} ({title}) foi alterada pra **{comp}**. Sua inscrição continua ativa; escolha agora as roles que você faz.",
+        "en": "⚠️ The comp for event #{eid} ({title}) changed to **{comp}**. Your signup is still active; choose the roles you can play.",
+        "es": "⚠️ La comp del evento #{eid} ({title}) cambió a **{comp}**. Tu inscripción sigue activa; elige los roles que puedes jugar.",
     },
 
     # audit_log.py
@@ -639,9 +699,24 @@ T: dict[str, dict[str, str]] = {
     # event_cmd.py — estava por engano no CMD_I18N (dict do Translator), onde
     # t() nunca acha: o usuário via a chave crua "ev_bad_time" no chat.
     "ev_bad_time": {
-        "pt": "Horário inválido — use HH:MM, HHhMM (ex: 18h30) ou uma data completa (2026-07-15 18:30).",
-        "en": "Invalid time — use HH:MM, HHhMM (e.g. 18h30), or a full date (2026-07-15 18:30).",
-        "es": "Hora inválida — usa HH:MM, HHhMM (ej: 18h30) o una fecha completa (2026-07-15 18:30).",
+        "pt": "Horário inválido — use 21h, 21:30 BRT, 11:30 CEST ou uma data completa.",
+        "en": "Invalid time — use 21h, 21:30 BRT, 11:30 CEST, or a full date.",
+        "es": "Hora inválida — usa 21h, 21:30 BRT, 11:30 CEST o una fecha completa.",
+    },
+    "signup_success_self": {
+        "pt": "✅ Preferência registrada: **{functions}**. A vaga será confirmada na escalação.",
+        "en": "✅ Preference recorded: **{functions}**. The slot will be confirmed in the roster.",
+        "es": "✅ Preferencia registrada: **{functions}**. La plaza se confirmará en la escalación.",
+    },
+    "signup_success_hybrid": {
+        "pt": "✅ Preferência registrada: **{functions}**. A administração confirma a build.",
+        "en": "✅ Preference recorded: **{functions}**. Admins will confirm the build.",
+        "es": "✅ Preferencia registrada: **{functions}**. La administración confirmará la build.",
+    },
+    "signup_admin_assign_success": {
+        "pt": "✅ Presença registrada. A administração confirmará sua build.",
+        "en": "✅ Presence registered. Admins will confirm your build.",
+        "es": "✅ Presencia registrada. La administración confirmará tu build.",
     },
 }
 
@@ -736,9 +811,9 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "es": "Gestiona eventos (CTAs): crear, eliminar, editar y aplazar",
     },
     "cmd_desc_event_criar": {
-        "pt": "Cria um novo evento (CTA): objetivo, comp e horário UTC",
-        "en": "Create a new event (CTA): objective, comp and UTC time",
-        "es": "Crea un nuevo evento (CTA): objetivo, comp y hora UTC",
+        "pt": "Cria um evento com inscrições; a comp pode ser definida depois",
+        "en": "Create an event with signups; the comp can be set later",
+        "es": "Crea un evento con inscripciones; la comp puede definirse después",
     },
     "cmd_desc_event_deletar": {
         "pt": "Deleta um evento ainda não finalizado",
@@ -763,14 +838,14 @@ CMD_I18N: dict[str, dict[str, str]] = {
     },
     "opt_name_event_comp": {"pt": "comp", "en": "comp", "es": "comp"},
     "opt_desc_event_comp": {
-        "pt": "Comp do evento (comece a digitar pra buscar)",
-        "en": "The event's comp (start typing to search)",
-        "es": "La comp del evento (empieza a escribir para buscar)",
+        "pt": "Comp opcional; pode ser definida ou trocada depois",
+        "en": "Optional comp; it can be set or changed later",
+        "es": "Comp opcional; puede definirse o cambiarse después",
     },
-    "opt_name_event_utc": {"pt": "utc", "en": "utc", "es": "utc"},
-    "opt_desc_event_utc": {
-        "pt": "Horário UTC: HH:MM, HHhMM ou data completa (YYYY-MM-DD HH:MM)",
-        "en": "UTC time: HH:MM, HHhMM, or full date (YYYY-MM-DD HH:MM)",
-        "es": "Hora UTC: HH:MM, HHhMM o fecha completa (YYYY-MM-DD HH:MM)",
+    "opt_name_event_time": {"pt": "horario", "en": "time", "es": "hora"},
+    "opt_desc_event_time": {
+        "pt": "21h, 21:30 BRT, 11:30 CEST ou data completa",
+        "en": "21h, 21:30 BRT, 11:30 CEST, or a full date",
+        "es": "21h, 21:30 BRT, 11:30 CEST o fecha completa",
     },
 }

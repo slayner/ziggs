@@ -44,11 +44,28 @@ def _wbase(item_id: str | None) -> str | None:
     return base
 
 
+# ponytail: catálogo Weapon é global, ~1000 linhas, só muda em seed (raro).
+# _build_profile_payload chama isto 2x por request (linha 411 + dentro de
+# _top_weapons), e cada abertura de perfil faz mais 2 — sem cache, toda
+# visita a perfil de jogador ativo re-escaneava a tabela inteira. TTL curto
+# em memória cobre as 2 chamadas da mesma request e a rajada de 60s do
+# PROFILE_REFRESH_MS do front (re-render que re-busca o perfil).
+_WEAPON_FN_TTL = 60.0
+_weapon_fn_cache: dict[str, str] | None = None
+_weapon_fn_expires_at: float = 0.0
+
+
 def _weapon_function_map(db: Session) -> dict[str, str]:
+    global _weapon_fn_cache, _weapon_fn_expires_at
+    now = time.monotonic()
+    if _weapon_fn_cache is not None and now < _weapon_fn_expires_at:
+        return _weapon_fn_cache
     out: dict[str, str] = {}
     for item_id, fn in db.execute(select(Weapon.item_id, Weapon.invisible_function)).all():
         if fn:
             out[_wbase(item_id)] = fn
+    _weapon_fn_cache = out
+    _weapon_fn_expires_at = now + _WEAPON_FN_TTL
     return out
 
 
@@ -127,6 +144,15 @@ def _factions_summary(db: Session, battle_id: int) -> list[dict]:
         ).all()
     )
 
+    return _aggregate_factions(guilds, player_counts)
+
+
+def _aggregate_factions(
+    guilds: list[BattleGuild], player_counts: dict[str, int],
+) -> list[dict]:
+    """Núcleo de _factions_summary: agrega guildas por aliança e aplica o corte
+    de _BIG_GUILD_PLAYER_CAP. Separado pra _factions_summary_bulk reusar com
+    dados pré-carregados em 1 query (3 round-trips pra N batalhas → 3 fixo)."""
     # Agrupa por aliança (guildas sem aliança ficam cada uma no seu próprio
     # grupo) — senão uma aliança com várias guildas na luta aparece repetida
     # na bracket, uma vez por guilda, com kills/heatmap fragmentados.
@@ -166,13 +192,85 @@ def _factions_summary(db: Session, battle_id: int) -> list[dict]:
     return rows
 
 
+def _factions_summary_bulk(db: Session, battle_ids: list[int]) -> dict[int, list[dict]]:
+    """Versão em lote de _factions_summary: 3 queries totais pra N batalhas,
+    em vez de 3 por batalha. Pra 10 batalhas na página: 30 queries → 3.
+
+    Retorna dict[battle_id, factions]. Batalhas sem sides reais / sem guildas
+    devolvem []. Mesma semântica de _factions_summary (exclui is_rats, corta
+    zergs > 4 facções, ordena por kills desc)."""
+    ids = [b for b in battle_ids if b]
+    if not ids:
+        return {}
+    # 1 query: sides reais (não-ratos) por batalha.
+    real_sides = db.execute(
+        select(BattleSide.id, BattleSide.battle_id).where(
+            BattleSide.battle_id.in_(ids), BattleSide.is_rats == False
+        )
+    ).all()
+    sides_by_battle: dict[int, list[int]] = {}
+    for side_id, bid in real_sides:
+        sides_by_battle.setdefault(bid, []).append(side_id)
+    if not sides_by_battle:
+        return {bid: [] for bid in ids}
+
+    # 2 query: guildas desses sides. Filtra por battle_id (INDEXADO) e mantém
+    # só os sides reais em Python — battle_guilds.side_id NÃO tem índice, então
+    # WHERE side_id IN (...) varria a tabela INTEIRA (~160ms por chamada, em
+    # toda busca global e listagem de batalha, não só aqui). battle_id já é
+    # indexado e a lista de ids já está em mãos; o resultado é idêntico.
+    real_side_ids = {sid for sides in sides_by_battle.values() for sid in sides}
+    guilds = db.scalars(
+        select(BattleGuild).where(BattleGuild.battle_id.in_(ids))
+    ).all()
+    guilds_by_battle: dict[int, list[BattleGuild]] = {}
+    for g in guilds:
+        if g.side_id in real_side_ids:
+            guilds_by_battle.setdefault(g.battle_id, []).append(g)
+
+    # 3 query: contagem de jogadores por guilda, agrupada por (battle, guild).
+    player_counts_rows = db.execute(
+        select(
+            BattleParticipant.battle_id, BattleParticipant.guild_id,
+            func.count(BattleParticipant.id),
+        )
+        .where(
+            BattleParticipant.battle_id.in_(ids), BattleParticipant.guild_id.isnot(None)
+        )
+        .group_by(BattleParticipant.battle_id, BattleParticipant.guild_id)
+    ).all()
+    # Chave (battle_id, guild_id) → count.
+    pc_by_battle: dict[int, dict[str, int]] = {}
+    for bid, gid, cnt in player_counts_rows:
+        pc_by_battle.setdefault(bid, {})[gid] = cnt
+
+    out: dict[int, list[dict]] = {}
+    for bid in ids:
+        g_list = guilds_by_battle.get(bid, [])
+        if not g_list:
+            out[bid] = []
+            continue
+        out[bid] = _aggregate_factions(g_list, pc_by_battle.get(bid, {}))
+    return out
+
+
 @router.get("/active-players")
 def active_players(db: Session = Depends(deps.db_session)):
     """Jogadores distintos (kill ou morte) nos últimos 7 dias, por região +
     global, comparado com os 7 dias anteriores. A janela anterior é
     recalculada do ledger (PlayerKillEvent), mas o HISTÓRICO ponto-a-ponto
     pro gráfico vem de PlayerCountSnapshot (ver active_players_history
-    abaixo) — o ledger não guarda "quantos estavam ativos às 14h de terça"."""
+    abaixo) — o ledger não guarda "quantos estavam ativos às 14h de terça".
+
+    Servido do precompute de 15min (player_count_snapshot grava CARDS_KEY) —
+    antes eram 8 scans do ledger a cada abertura do dashboard. Fallback ao vivo
+    até o 1º snapshot existir."""
+    from app.services.player_count_snapshot import CARDS_KEY
+
+    cached = db.get(DashboardCache, CARDS_KEY)
+    if cached is not None:
+        return cached.payload
+
     now = datetime.now(timezone.utc)
     week_start = now - timedelta(days=7)
     prev_start = now - timedelta(days=14)

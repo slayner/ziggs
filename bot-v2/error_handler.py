@@ -18,18 +18,36 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import ephemeral_guard
+import http_client
+
 log = logging.getLogger(__name__)
 
 
 async def _reply_ephemeral(interaction: discord.Interaction, msg: str) -> None:
     """Responde ephemeral pelo canal que ainda estiver disponível. Interação
     já expirada (>3s sem ack) não tem conserto — só o log fica."""
+    source = interaction.message
+    if source is not None and source.flags.ephemeral:
+        try:
+            if interaction.response.is_done():
+                await interaction.edit_original_response(
+                    content=msg, embed=None, view=None,
+                )
+            else:
+                await interaction.response.edit_message(
+                    content=msg, embed=None, view=None,
+                )
+            ephemeral_guard.track(interaction, source.id)
+            return
+        except (discord.NotFound, discord.HTTPException):
+            pass
     try:
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
         else:
             await interaction.response.send_message(msg, ephemeral=True)
-    except Exception:
+    except (discord.NotFound, discord.HTTPException):
         pass
 
 
@@ -59,6 +77,12 @@ def install(bot: commands.Bot) -> None:
             # guild_only fora de servidor, permissão de Discord etc. — recusa
             # limpa, sem stack trace (não é um bug).
             await _reply_ephemeral(interaction, t(lang, "no_permission"))
+            return
+        if isinstance(original, http_client.BackendUnavailable):
+            log.warning("backend indisponível durante /%s (guild=%s)",
+                        interaction.command.qualified_name if interaction.command else "?",
+                        interaction.guild_id)
+            await _reply_ephemeral(interaction, t(lang, "backend_unavailable"))
             return
 
         cmd = interaction.command.qualified_name if interaction.command else "?"
@@ -100,7 +124,10 @@ def install(bot: commands.Bot) -> None:
             lang = await guild_lang(interaction)
         except Exception:
             lang = "pt"
-        await _reply_ephemeral(interaction, t(lang, "unexpected_error"))
+        key = "backend_unavailable" if isinstance(
+            error, http_client.BackendUnavailable,
+        ) else "unexpected_error"
+        await _reply_ephemeral(interaction, t(lang, key))
 
     async def _modal_on_error(self, interaction, error):  # noqa: ANN001
         from cogs.general import guild_lang
@@ -111,7 +138,10 @@ def install(bot: commands.Bot) -> None:
             lang = await guild_lang(interaction)
         except Exception:
             lang = "pt"
-        await _reply_ephemeral(interaction, t(lang, "unexpected_error"))
+        key = "backend_unavailable" if isinstance(
+            error, http_client.BackendUnavailable,
+        ) else "unexpected_error"
+        await _reply_ephemeral(interaction, t(lang, key))
 
     discord.ui.View.on_error = _view_on_error
     discord.ui.Modal.on_error = _modal_on_error

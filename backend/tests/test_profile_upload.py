@@ -118,6 +118,24 @@ def test_troca_jpg_gif_nao_deixa_orfao():
     _in_tmp(run)
 
 
+def test_limites_da_imagem_processada_limpam_arquivo_parcial():
+    def run(tmp):
+        old_pixels = user_profile._MAX_GIF_PIXELS
+        old_bytes = user_profile._MAX_OUTPUT_BYTES
+        try:
+            user_profile._MAX_GIF_PIXELS = 1
+            assert "complexo" in _raises(lambda: user_profile.set_avatar(_user(), _gif(200, 200, 3)))
+            user_profile._MAX_GIF_PIXELS = old_pixels
+            user_profile._MAX_OUTPUT_BYTES = 1
+            assert "10 MB" in _raises(lambda: user_profile.set_avatar(_user(), _png(200, 200)))
+            user_dir = os.path.join(tmp, "1")
+            assert not os.path.isdir(user_dir) or not os.listdir(user_dir)
+        finally:
+            user_profile._MAX_GIF_PIXELS = old_pixels
+            user_profile._MAX_OUTPUT_BYTES = old_bytes
+    _in_tmp(run)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

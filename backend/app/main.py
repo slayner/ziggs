@@ -2,7 +2,21 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
+
+# Configura o logger root ANTES de qualquer import de serviços — senão os
+# `log = logging.getLogger(__name__)` no módulo capturam handlers errados.
+# Level INFO mostra: "profile_warmer: iniciando", "warm: nomeando X (Y)",
+# "battle_sweeper: ciclo — N candidatos, M achados", etc — o feed de "o que
+# está acontecendo" que você vê no terminal do backend. DEBUG seria spam
+# demais (1 linha por kill evento, por exemplo); INFO é o ponto doce.
+# Override via env LOG_LEVEL pra DEBUG sem mexer no código.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,8 +27,8 @@ from app.config import get_settings
 from app.domain.states import EventState, allowed_targets
 from app.services import (
     battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, companion_scan, dashboard_cache,
-    gold_price, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
-    search_index, small_battle_discovery, weapon_stats,
+    gold_price, highscores_cache, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
+    search_index, silver_dropped, small_battle_discovery, weapon_stats,
 )
 
 
@@ -32,6 +46,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(battle_tracker.run_backfill_forever()),
             asyncio.create_task(battle_tracker.run_retry_stuck_forever()),
             asyncio.create_task(profile_warmer.run_forever()),
+            asyncio.create_task(profile_warmer.run_refresh_forever()),
             asyncio.create_task(claim_checker.run_forever()),
             asyncio.create_task(registration_checker.run_forever()),
             asyncio.create_task(weapon_stats.run_forever()),
@@ -41,8 +56,10 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(small_battle_discovery.run_forever()),
             asyncio.create_task(player_count_snapshot.run_forever()),
             asyncio.create_task(battle_price_reprocessor.run_forever()),
+            asyncio.create_task(silver_dropped.run_forever()),
             asyncio.create_task(regear_retry.run_forever()),
             asyncio.create_task(dashboard_cache.run_forever()),
+            asyncio.create_task(highscores_cache.run_forever()),
             asyncio.create_task(search_index.run_forever()),
             asyncio.create_task(gold_price.run_forever()),
             asyncio.create_task(market_snapshot.run_forever()),
@@ -109,6 +126,7 @@ app.include_router(profiles.router)
 app.include_router(regear.router)
 app.include_router(render.router)
 app.include_router(user_profile.router)
+app.include_router(user_profile.bot_router)
 
 # SPA + OG por rota — precisa ser o ÚLTIMO registro (catch-all). Só ativa se
 # frontend/dist existir (build do Vite); em dev com Vite server é no-op.

@@ -465,25 +465,33 @@ export const ITEM_BY_ID = new Map<string, AlbionItem>(
 
 // Render via cache local do backend (/render/item/*) — evita bater direto na
 // CDN da Albion a cada carregamento e mantém os ícones de pé mesmo se ela cair.
-export const RENDER_URL = (id: string, quality = 0): string => {
-  const q = quality ? `?quality=${quality}` : "";
-  return `/render/item/${encodeURIComponent(id)}${q}`;
+//
+// `size` (default 128): a CDN serve full-res (~71KB) por padrão, mas os ícones
+// aparecem a 32-68px no site. 128px é nítido até 68px em tela 2× e corta 2.6×
+// (27KB); listas de ícone pequeno (32px) passam ICON_SIZE_SM=64 (7.5KB, 9.5×).
+// O tamanho entra na chave do cache (backend `_s{size}.png` e cache do browser),
+// então trocar o default re-baixa 1× por ícone no novo tamanho.
+export const ICON_SIZE_SM = 64;   // listas de ícone pequeno (~32px de exibição)
+
+export const RENDER_URL = (id: string, quality = 0, size = 128): string => {
+  const q = quality ? `&quality=${quality}` : "";
+  return `/render/item/${encodeURIComponent(id)}?size=${size}${q}`;
 };
 
 // Render URL usando nome em inglês (para crystal weapons)
-export const RENDER_URL_EN = (nameEn: string, itemId: string, quality = 0): string => {
-  const q = quality ? `?quality=${quality}` : "";
+export const RENDER_URL_EN = (nameEn: string, itemId: string, quality = 0, size = 128): string => {
+  const q = quality ? `&quality=${quality}` : "";
   const tier = parseInt(itemId.match(/^T(\d+)_/)?.[1] ?? "8");
   const enchant = itemId.match(/@(\d+)$/)?.[1];
   const name = crystalRenderName(nameEn, tier, enchant ? +enchant : 0);
-  return `/render/item/${encodeURIComponent(name)}${q}`;
+  return `/render/item/${encodeURIComponent(name)}?size=${size}${q}`;
 };
 
 // Escolhe o melhor render URL para um item
-export function itemRenderUrl(item: AlbionItem | string, quality = 0): string {
-  if (typeof item === "string") return RENDER_URL(item, quality);
-  if (item.useEnRender && item.nameEn) return RENDER_URL_EN(item.nameEn, item.id, quality);
-  return RENDER_URL(item.id, quality);
+export function itemRenderUrl(item: AlbionItem | string, quality = 0, size = 128): string {
+  if (typeof item === "string") return RENDER_URL(item, quality, size);
+  if (item.useEnRender && item.nameEn) return RENDER_URL_EN(item.nameEn, item.id, quality, size);
+  return RENDER_URL(item.id, quality, size);
 }
 
 // Ícone usado no lugar da arma em kills/mortes onde o jogador lutou desarmado

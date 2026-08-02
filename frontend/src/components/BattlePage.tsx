@@ -313,7 +313,7 @@ function BuildIcons({ equipment, slots = EQUIP_SLOTS, size = "h-7 w-7" }: { equi
             src={itemRenderUrl(item ?? id, quality)}
             alt={slot}
             title={item?.name ?? id}
-            className={`${size} rounded border border-zinc-800 bg-zinc-950 object-cover`}
+            className={`${size} object-cover`}
             loading="lazy"
             onError={imgRetry()}
           />
@@ -1016,7 +1016,7 @@ function WeaponIcon({ id, quality }: { id: string | null; quality?: number }) {
       src={itemRenderUrl(item ?? weaponId, id ? quality ?? 0 : 0)}
       alt={label}
       title={label}
-      className="h-7 w-7 rounded border border-zinc-700 bg-zinc-950 object-cover shrink-0"
+      className="h-7 w-7 object-cover shrink-0"
       loading="lazy"
       onError={imgRetry()}
     />
@@ -1250,12 +1250,12 @@ function ExtraItemIcon({ id, qty, quality, onClick }: { id: string; qty: number;
   const item = ITEM_BY_ID.get(id);
   return (
     <div
-      className="relative h-9 w-9 shrink-0 rounded border border-zinc-800 bg-zinc-950"
+      className="relative h-9 w-9 shrink-0"
       style={{ cursor: onClick ? "pointer" : undefined }}
       onClick={onClick}
     >
       <img src={itemRenderUrl(item ?? id, quality ?? 0)} alt={item?.name ?? id} title={item?.name ?? id}
-        className="h-full w-full rounded object-contain" loading="lazy" onError={imgRetry()} />
+        className="h-full w-full object-contain" loading="lazy" onError={imgRetry()} />
       {qty > 1 && (
         <span
           className="absolute bottom-0.5 right-0.5 text-[7px] font-extrabold leading-none text-white"

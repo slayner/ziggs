@@ -29,7 +29,9 @@ async def _get(path: str) -> dict | None:
 
 
 async def _post(path: str, body: dict) -> dict | None:
-    return await http_client.post_json(path, body)
+    return await http_client.post_json(
+        path, body, tag="regear_threads", attempts=2,
+    )
 
 
 _cog_ref: "RegearThreads | None" = None
@@ -38,6 +40,8 @@ _cog_ref: "RegearThreads | None" = None
 class RegearThreads(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._guild_locks: dict[int, asyncio.Lock] = {}
+        self._thread_ids: dict[tuple[int, int], int] = {}
 
     async def cog_load(self) -> None:
         global _cog_ref
@@ -60,12 +64,16 @@ class RegearThreads(commands.Cog):
     # já usado pra EventEmbeds/BotAuditLog) — ver on_ready em main.py.
 
     async def sync_guild(self, guild: discord.Guild) -> None:
+        lock = self._guild_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            await self._sync_guild_unlocked(guild)
+
+    async def _sync_guild_unlocked(self, guild: discord.Guild) -> None:
         cfg = await _guild_command_config(guild.id)
         channel_id = cfg.get("regear_thread_channel_id")
         if not channel_id:
-            print(f"[regear_threads] {guild.id}: regear_thread_channel_id não veio na config do bot "
-                  f"(feature off ou /bot/guild-commands não devolveu)")
-            return  # sem canal dedicado configurado → feature off
+            return  # feature off (sem canal) ou backend fora — não logar por-tick
+                    # (queda do backend já é logada 1× por http_client)
         try:
             cid = int(channel_id)
         except (TypeError, ValueError):
@@ -89,10 +97,7 @@ class RegearThreads(commands.Cog):
 
         work = await _get(f"/bot/events/{guild.id}/regear-thread-work")
         if work is None:
-            print(f"[regear_threads] {guild.id}: regear-thread-work sem resposta "
-                  f"(backend fora do ar ou 401) — bot consegue reach? "
-                  f"BOT_SITE_URL={SITE_URL or '(vazio)'}")
-            return
+            return  # backend fora/401 já logado 1× (http_client / tag) — próximo tick cobre
 
         create = work.get("create") or []
         if create:
@@ -113,20 +118,26 @@ class RegearThreads(commands.Cog):
         if not event_id:
             return
         name = t(lang, "ev_regear_thread_title", n=event_id, title=title)[:100]
-        print(f"[regear_threads] criando thread '{name}' p/ evento {event_id} no canal {channel.id}")
-        try:
-            thread = await channel.create_thread(
-                name=name, type=discord.ChannelType.public_thread,
-            )
-        except Exception as e:
-            print(f"[regear_threads] falhou criar thread p/ evento {event_id} "
-                  f"em {channel.id}: {type(e).__name__}: {e}")
-            return
-        print(f"[regear_threads] ✓ thread {thread.id} criada p/ evento {event_id}")
-        try:
-            await thread.send(t(lang, "ev_regear_thread_header", n=event_id))
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+        key = (guild.id, int(event_id))
+        thread = guild.get_thread(self._thread_ids.get(key, 0))
+        if thread is None:
+            thread = next((item for item in channel.threads if item.name == name), None)
+        if thread is None:
+            print(f"[regear_threads] criando thread '{name}' p/ evento {event_id} no canal {channel.id}")
+            try:
+                thread = await channel.create_thread(
+                    name=name, type=discord.ChannelType.public_thread,
+                )
+            except Exception as e:
+                print(f"[regear_threads] falhou criar thread p/ evento {event_id} "
+                      f"em {channel.id}: {type(e).__name__}: {e}")
+                return
+            print(f"[regear_threads] ✓ thread {thread.id} criada p/ evento {event_id}")
+            try:
+                await thread.send(t(lang, "ev_regear_thread_header", n=event_id))
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        self._thread_ids[key] = thread.id
         await _post(
             f"/bot/events/{guild.id}/{event_id}/regear-thread-synced",
             {"regear_thread_id": str(thread.id), "clear_dirty": True},

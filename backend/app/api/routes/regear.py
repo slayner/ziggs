@@ -89,7 +89,9 @@ async def ingest_screenshot(
     guild = db.get(Guild, guild_id)
     if guild is None:
         raise HTTPException(404, "guilda não encontrada")
-    image = await file.read()
+    image = await file.read(10 * 1024 * 1024 + 1)
+    if len(image) > 10 * 1024 * 1024:
+        raise HTTPException(413, "imagem excede o limite de 10 MB")
     if not image:
         raise HTTPException(400, "imagem vazia")
     try:
@@ -153,10 +155,14 @@ def update_request(
     payload: RegearRequestUpdate,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
-    member=Depends(deps.require_permission("events.manage")),
+    member=Depends(deps.require_permission("events.view")),
 ):
     try:
-        return regear.update_request(db, guild.id, request_id, payload.model_dump(exclude_unset=True), member.user_id)
+        return regear.update_request(
+            db, guild.id, request_id, payload.model_dump(exclude_unset=True), member.user_id,
+            actor_role_ids={int(x) for x in (member.discord_role_ids or [])},
+            actor_is_admin=member.is_guild_admin,
+        )
     except regear.RegearServiceError as e:
         raise HTTPException(404, str(e))
 

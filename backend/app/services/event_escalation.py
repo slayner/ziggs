@@ -9,11 +9,13 @@ mass-info do bot-v2)."""
 from __future__ import annotations
 
 import json
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth.permissions import has_permission
+from app.domain.states import EventState
 from app.models.audit import AuditLog
 from app.models.catalog import GameRole, Weapon
 from app.models.comps import Comp, CompParty, CompSlot
@@ -23,11 +25,11 @@ from app.models.tenancy import GuildMember
 from app.services.events import ServiceError
 
 
-def _load_comp_tree(db: Session, comp_id: int | None) -> Comp | None:
+def _load_comp_tree(db: Session, guild_id: int, comp_id: int | None) -> Comp | None:
     if comp_id is None:
         return None
     return db.scalar(
-        select(Comp).where(Comp.id == comp_id)
+        select(Comp).where(Comp.id == comp_id, Comp.guild_id == guild_id)
         .options(selectinload(Comp.parties).selectinload(CompParty.slots).selectinload(CompSlot.roles))
     )
 
@@ -102,7 +104,7 @@ def build_escalation(
     db: Session, guild_id: int, event_id: int, member: GuildMember | None,
 ) -> dict:
     ev = _get_event(db, guild_id, event_id)
-    comp = _load_comp_tree(db, ev.comp_id)
+    comp = _load_comp_tree(db, guild_id, ev.comp_id)
     roles, weapons = _load_roles_and_weapons(db, comp)
 
     parties: list[dict] = []
@@ -161,6 +163,7 @@ def build_escalation(
             "user_id": a.user_id,
             "user_name": _display_name(a.user_id, a.user_name),
             "game_role_id": a.game_role_id,
+            "locked": a.locked,
         }
         for a in ev.assignments
         if a.comp_slot_id is not None and a.comp_slot_id in valid_slot_ids
@@ -190,6 +193,8 @@ def build_escalation(
             "comp_id": ev.comp_id,
             "comp_name": comp_name,
             "functions_released": ev.functions_released,
+            "assignment_mode": ev.assignment_mode,
+            "autofill_mode": ev.autofill_mode,
         },
         "parties": parties,
         "assignments": assignments,
@@ -202,13 +207,14 @@ def assign(
     db: Session, guild_id: int, event_id: int,
     slot_id: int, user_id: int, user_name: str | None, game_role_id: int,
     actor_id: int | None = None,
+    *, locked: bool = True, actor_source: str = "site", autofill_run_id: str | None = None,
 ) -> EventAssignment:
     ev = db.scalar(select(Event).where(Event.id == event_id, Event.guild_id == guild_id))
     if ev is None:
         raise ServiceError("evento não encontrado")
     if ev.comp_id is None:
         raise ServiceError("evento sem comp vinculado")
-    comp = _load_comp_tree(db, ev.comp_id)
+    comp = _load_comp_tree(db, guild_id, ev.comp_id)
     if comp is None:
         raise ServiceError("comp não encontrada")
 
@@ -220,6 +226,9 @@ def assign(
     flex_ids = {csr.game_role_id for csr in slot.roles}
     if game_role_id not in flex_ids:
         raise ServiceError("game_role não é flex desse slot")
+    role = db.get(GameRole, game_role_id)
+    if role is None or role.guild_id != guild_id:
+        raise ServiceError("game_role não pertence à guilda do evento")
 
     # Bump: se o slot já tem outro jogador, ele volta pra piscina de inscritos.
     occupant = db.scalar(select(EventAssignment).where(
@@ -243,18 +252,141 @@ def assign(
         db.add(row)
     row.comp_slot_id = slot_id
     row.user_name = user_name
+    row.locked = locked
+    row.autofill_run_id = autofill_run_id
     row.game_role_id = game_role_id
 
     db.add(AuditLog(
-        guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+        guild_id=guild_id, actor_id=actor_id, actor_type=actor_source, source=actor_source,
         action="escalacao.assign", entity="event_assignment", entity_id=str(row.id),
         event_id=event_id,
         before={"prev_slot": prev_slot, "bumped": bumped},
-        after={"slot_id": slot_id, "user_id": user_id, "game_role_id": game_role_id},
+        after={"slot_id": slot_id, "user_id": user_id, "game_role_id": game_role_id,
+               "locked": locked, "autofill_run_id": autofill_run_id},
     ))
     ev.signup_message_dirty = True
     db.flush()
     return row
+
+
+def _autofill_plan(db: Session, guild_id: int, ev: Event) -> list[dict]:
+    if ev.comp_id is None:
+        return []
+    comp = _load_comp_tree(db, guild_id, ev.comp_id)
+    if comp is None:
+        return []
+    role_ids = {
+        csr.game_role_id for party in comp.parties
+        for slot in party.slots for csr in slot.roles
+    }
+    roles = {
+        r.id: r for r in db.scalars(select(GameRole).where(GameRole.id.in_(role_ids)))
+    } if role_ids else {}
+    occupied = {
+        a.comp_slot_id for a in ev.assignments
+        if a.comp_slot_id is not None
+    }
+    assigned_users = {a.user_id for a in ev.assignments}
+    plan: list[dict] = []
+    for signup in ev.signups:
+        if signup.user_id in assigned_users:
+            continue
+        wanted = set(signup.functions or [])
+        if not wanted:
+            continue
+        match = None
+        for party in comp.parties:
+            for slot in party.slots:
+                if slot.id in occupied:
+                    continue
+                role = next((r for r in slot.roles if roles.get(r.game_role_id) and roles[r.game_role_id].name in wanted), None)
+                if role is not None:
+                    match = (slot, role)
+                    break
+            if match is not None:
+                break
+        if match is None:
+            continue
+        slot, role = match
+        plan.append({
+            "slot_id": slot.id, "user_id": signup.user_id,
+            "user_name": signup.user_name, "game_role_id": role.game_role_id,
+            "game_role_name": roles[role.game_role_id].name,
+        })
+        occupied.add(slot.id)
+        assigned_users.add(signup.user_id)
+    return plan
+
+
+def autofill_signup(
+    db: Session, guild_id: int, event_id: int, user_id: int,
+    user_name: str | None, functions: list[str], *, force: bool = False,
+) -> EventAssignment | None:
+    """Fills one free slot for a signup, never replacing a locked assignment."""
+    ev = _get_event(db, guild_id, event_id)
+    if (not force and ev.autofill_mode != "on_signup") or ev.autofill_mode == "off":
+        return None
+    if ev.assignment_mode == "admin_assign":
+        return None
+    existing = db.scalar(select(EventAssignment).where(
+        EventAssignment.event_id == event_id, EventAssignment.user_id == user_id,
+    ))
+    if existing is not None:
+        return None
+    # Include the just-updated signup in the same deterministic planner.
+    plan = _autofill_plan(db, guild_id, ev)
+    candidate = next((p for p in plan if p["user_id"] == user_id), None)
+    if candidate is None:
+        return None
+    run_id = str(uuid.uuid4())
+    return assign(
+        db, guild_id, event_id, candidate["slot_id"], user_id, user_name,
+        candidate["game_role_id"], actor_id=user_id, locked=False, actor_source="bot",
+        autofill_run_id=run_id,
+    )
+
+
+def preview_autofill(db: Session, guild_id: int, event_id: int) -> list[dict]:
+    ev = _get_event(db, guild_id, event_id)
+    return _autofill_plan(db, guild_id, ev)
+
+
+def autofill_event(db: Session, guild_id: int, event_id: int, actor_id: int | None = None) -> dict:
+    """Fills free slots from signups; administrative rows remain locked."""
+    ev = _get_event(db, guild_id, event_id)
+    run_id = str(uuid.uuid4())
+    assigned = 0
+    for candidate in _autofill_plan(db, guild_id, ev):
+        assign(
+            db, guild_id, event_id, candidate["slot_id"], candidate["user_id"],
+            candidate["user_name"], candidate["game_role_id"], actor_id=actor_id,
+            locked=False, actor_source="site", autofill_run_id=run_id,
+        )
+        assigned += 1
+    return {"assigned": assigned, "run_id": run_id if assigned else None}
+
+
+def undo_autofill(
+    db: Session, guild_id: int, event_id: int, run_id: str, actor_id: int | None,
+) -> int:
+    ev = _get_event(db, guild_id, event_id)
+    if ev.state in (EventState.REVIEW, EventState.FINALIZED, EventState.CANCELLED, EventState.DELETED):
+        raise ServiceError("autofill só pode ser desfeito antes do callout")
+    rows = list(db.scalars(select(EventAssignment).where(
+        EventAssignment.event_id == event_id,
+        EventAssignment.autofill_run_id == run_id,
+        EventAssignment.locked.is_(False),
+    )))
+    for row in rows:
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+            action="escalacao.autofill_undo", entity="event_assignment", entity_id=str(row.id),
+            event_id=event_id, before={"user_id": row.user_id, "slot_id": row.comp_slot_id},
+        ))
+        db.delete(row)
+    ev.signup_message_dirty = True
+    db.flush()
+    return len(rows)
 
 
 def unassign_slot(db: Session, guild_id: int, event_id: int, slot_id: int, actor_id: int | None = None) -> None:

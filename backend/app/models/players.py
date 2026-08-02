@@ -39,6 +39,18 @@ class AlbionPlayer(Base):
     pve_fame: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
     crafting_fame: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
     gathering_fame: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
+    # Coleta por recurso, extraída de LifetimeStatistics.Gathering.{Wood,Hide,
+    # Ore,Rock,Fiber}.Total no upsert_player (igual gathering_fame total).
+    # Indexados — rankings de highscore de coleta ordenam por cada um com
+    # filtro de região. 0 = blob sem esse recurso ou ainda não sincronizado.
+    gather_wood: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
+    gather_hide: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
+    gather_ore: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
+    gather_rock: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
+    gather_fiber: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
+    # Pesca (FishingFame) — escalar solto no LifetimeStatistics (irmão de
+    # Gathering.All), não dentro de Gathering. Ranking de highscore de pesca.
+    fishing_fame: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
     # Blob cru de LifetimeStatistics da API do Albion — guarda o detalhe que os
     # escalares acima não cobrem (coleta por recurso Wood/Ore/..., FishingFame,
     # FarmingFame). Só preenchido quando o payload tem LifetimeStatistics
@@ -108,6 +120,12 @@ class PlayerKillEvent(Base):
     # numberOfParticipants do evento cru — quantos jogadores do lado do
     # matador ganharam crédito de assist. is_solo = matou sem ajuda de ninguém.
     participant_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Snapshot oficial de Participants[]: nomes/IDs dos assistentes para embeds.
+    participants: Mapped[list[dict] | None] = mapped_column(json_type())
+    # groupMemberCount é o tamanho do grupo do matador, independente de
+    # guilda/aliança. Diferente de participant_count, não inclui terceiros que
+    # contribuíram numa luta entre vários grupos.
+    group_member_count: Mapped[int | None] = mapped_column(Integer)
     is_solo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Link fraco pra Battle.albion_id da mesma região — pode não existir
@@ -127,10 +145,20 @@ class PlayerKillEvent(Base):
     # atual) — usado pra reconstruir o histórico de guildas a partir das
     # datas reais de kill/morte (ver routes/players.py _guild_history), bem
     # mais granular que confiar só nos PlayerSnapshot esparsos.
-    killer_guild_id: Mapped[str | None] = mapped_column(String(64))
+    killer_guild_id: Mapped[str | None] = mapped_column(String(64), index=True)
     killer_guild_name: Mapped[str | None] = mapped_column(String(255))
-    victim_guild_id: Mapped[str | None] = mapped_column(String(64))
+    victim_guild_id: Mapped[str | None] = mapped_column(String(64), index=True)
     victim_guild_name: Mapped[str | None] = mapped_column(String(255))
+
+    # Prata aproximada perdida na morte (preço dos itens equipados + carregados
+    # no momento do evento). Precificada no processamento pelo worker
+    # silver_dropped (services/silver_dropped.py), em vez de on-demand só ao
+    # abrir o perfil — permite ranking de highscore "mais prata dropada" por
+    # jogador (SUM(silver_dropped) GROUP BY victim_player_id).
+    # NULL = ainda não precificado (pendente no worker); 0 = precificado e deu
+    # zero (vítima sem gear, ou itens sem cotação); >0 = prata real. Usar 0 como
+    # "pendente" causaria loop infinito no worker (ver migration docstring).
+    silver_dropped: Mapped[int | None] = mapped_column(BigInt(), nullable=True)
 
 
 class PlayerWeaponStat(Base):
@@ -211,6 +239,12 @@ class SearchEntry(Base):
         UniqueConstraint("entity_type", "entity_id"),
         Index("ix_search_entries_type_norm", "entity_type", "norm_name"),
         Index("ix_search_entries_type_len", "entity_type", "name_len"),
+        # Passe de substring/fuzzy da busca (`norm_name LIKE '%x%' ORDER BY
+        # weight DESC LIMIT k`): sem este índice o LIKE-wildcard varria as 87k
+        # linhas de jogador e ainda ordenava num temp b-tree (~200ms/tecla).
+        # Com ele o banco caminha em ordem de weight e para no LIMIT — nome
+        # comum (peso alto) resolve em ~1ms; pior caso (poucos matches) ~46ms.
+        Index("ix_search_entries_type_weight", "entity_type", "weight"),
     )
 
     id: Mapped[int] = pk()

@@ -153,6 +153,11 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [battleFeedChannelId, setBattleFeedChannelId] = useState<string>("");
   const [battleFeedMinPlayers, setBattleFeedMinPlayers] = useState<string>("10");
   const [battleFeedEnabled, setBattleFeedEnabled] = useState(false);
+  const [juicyKillChannelId, setJuicyKillChannelId] = useState("");
+  const [juicyKillMinSilver, setJuicyKillMinSilver] = useState("50000000");
+  const [juicyKillMinFame, setJuicyKillMinFame] = useState("0");
+  const [juicyKillRegions, setJuicyKillRegions] = useState<string[]>([]);
+  const [juicyKillEnabled, setJuicyKillEnabled] = useState(false);
   // Canal de logs do bot (retransmissão do AuditLog) — o bot cria e mantém
   // sozinho quando ligado (ver cogs/audit_log.py); aqui é só leitura pro admin
   // saber onde olhar. Toggle mestre em botLogsEnabled (default true).
@@ -184,9 +189,8 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [channelsErr, setChannelsErr] = useState<string | null>(null);
   const [gameRoles, setGameRoles] = useState<CatalogRole[]>([]);
   const [eventRoleGates, setEventRoleGates] = useState<Record<string, string[]>>({});
-  // Mín/máx de builds (funções) ao se inscrever. Ver backend upsert_signup.
+  // Mínimo de builds (funções) ao se inscrever. Não existe limite máximo.
   const [signupMinBuilds, setSignupMinBuilds] = useState<string>("");
-  const [signupMaxBuilds, setSignupMaxBuilds] = useState<string>("");
   // Regear: canal de screenshots, % de cobertura, categorias cobertas, override
   // de itens e cargos aprovadores. Salvo em Guild.settings.regear (JSONB).
   const [regear, setRegear] = useState<RegearSettings | null>(null);
@@ -280,9 +284,14 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setBattleFeedChannelId(bfCh);
       setBattleFeedEnabled(!!bfCh);
       setBattleFeedMinPlayers(String(g.settings.battle_feed_min_players ?? 10));
+      const jkCh = (g.settings.juicy_kill_channel_id as string | undefined) ?? "";
+      setJuicyKillChannelId(jkCh);
+      setJuicyKillEnabled(!!jkCh);
+      setJuicyKillMinSilver(String(g.settings.juicy_kill_min_silver ?? 50_000_000));
+      setJuicyKillMinFame(String(g.settings.juicy_kill_min_fame ?? 0));
+      setJuicyKillRegions((g.settings.juicy_kill_regions as string[] | undefined) ?? []);
       setEventRoleGates((g.settings.event_role_gates as Record<string, string[]> | undefined) ?? {});
       setSignupMinBuilds(String(g.settings.signup_min_builds ?? ""));
-      setSignupMaxBuilds(String(g.settings.signup_max_builds ?? ""));
       const commandRoles = g.settings.command_roles as Record<string, string[]> | undefined;
       // Sem nada salvo ainda, o default é admin-only (ver DEFAULT_ALLOWED_ROLES
       // no backend) — mostra isso já marcado em vez de aparentar "ninguém".
@@ -523,6 +532,40 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     }
   }
 
+  // ── Juicy Kills: kills lethais acima dos filtros configurados ──
+  async function saveJuicyKillChannel(value: string) {
+    setJuicyKillChannelId(value);
+    setJuicyKillEnabled(!!value);
+    await api.updateGuildSettings(guildId, { juicy_kill_channel_id: value || null });
+  }
+
+  function toggleJuicyKillFeature(v: boolean) {
+    setJuicyKillEnabled(v);
+    if (v) {
+      if (juicyKillChannelId) api.updateGuildSettings(guildId, { juicy_kill_channel_id: juicyKillChannelId });
+      else openFeat("juicykills");
+    } else {
+      api.updateGuildSettings(guildId, { juicy_kill_channel_id: null });
+    }
+  }
+
+  async function saveJuicyKillMinSilver() {
+    const n = Math.max(0, Number(juicyKillMinSilver) || 0);
+    setJuicyKillMinSilver(String(n));
+    await api.updateGuildSettings(guildId, { juicy_kill_min_silver: n });
+  }
+
+  async function saveJuicyKillMinFame() {
+    const n = Math.max(0, Number(juicyKillMinFame) || 0);
+    setJuicyKillMinFame(String(n));
+    await api.updateGuildSettings(guildId, { juicy_kill_min_fame: n || null });
+  }
+
+  async function saveJuicyKillRegions(regions: string[]) {
+    setJuicyKillRegions(regions);
+    await api.updateGuildSettings(guildId, { juicy_kill_regions: regions });
+  }
+
   // ── Nodes: tipos de node + mapas (a antiga aba Nodes virou esta seção) ──
   async function refreshNodeDefs() {
     try {
@@ -623,13 +666,10 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       .then(() => { setPingTriggersSaved(true); setTimeout(() => setPingTriggersSaved(false), 1500); });
   }
 
-  // Auto-save: min/max builds aplicados no blur dos inputs.
-  async function saveSignupMinMax() {
+  // Auto-save: mínimo aplicado no blur. A quantidade máxima é irrestrita.
+  async function saveSignupMinimum() {
     const minN = signupMinBuilds === "" ? null : Math.max(1, parseInt(signupMinBuilds, 10) || 0);
-    const maxN = signupMaxBuilds === "" ? null : Math.max(1, parseInt(signupMaxBuilds, 10) || 0);
-    await api.updateGuildSettings(guildId, {
-      signup_min_builds: minN, signup_max_builds: maxN,
-    });
+    await api.updateGuildSettings(guildId, { signup_min_builds: minN });
   }
 
   // Auto-save de regear: aplica local (otimista) + manda só o campo mudado pro
@@ -1048,25 +1088,16 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
 
                 <div className="flex items-center gap-3 mt-5 mb-2">
                   <i className="ti ti-target text-emerald-400 text-base" aria-hidden="true" />
-                  <h3 className="text-sm font-semibold text-zinc-100">{t("cfgSignupMin")} / {t("cfgSignupMax")}</h3>
+                  <h3 className="text-sm font-semibold text-zinc-100">{t("cfgSignupMin")}</h3>
                 </div>
-                <p className="text-xs text-zinc-500 mb-3">{t("cfgSignupMinMaxHint")}</p>
-                <div className="flex items-end gap-2">
-                  <label className="flex-1">
+                <p className="text-xs text-zinc-500 mb-3">{t("cfgSignupMinHint")}</p>
+                <div className="flex items-end gap-2 max-w-xs">
+                  <label className="w-full">
                     <span className="block text-xs text-zinc-500 mb-1">{t("cfgSignupMin")}</span>
                     <input
                       type="number" min={1} value={signupMinBuilds}
                       onChange={e => setSignupMinBuilds(e.target.value)}
-                      onBlur={() => void saveSignupMinMax()}
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200"
-                    />
-                  </label>
-                  <label className="flex-1">
-                    <span className="block text-xs text-zinc-500 mb-1">{t("cfgSignupMax")}</span>
-                    <input
-                      type="number" min={1} value={signupMaxBuilds}
-                      onChange={e => setSignupMaxBuilds(e.target.value)}
-                      onBlur={() => void saveSignupMinMax()}
+                      onBlur={() => void saveSignupMinimum()}
                       className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200"
                     />
                   </label>
@@ -1685,6 +1716,53 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
                 onChange={e => saveBattleFeedMinPlayers(e.target.value)}
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200"
               />
+            </FeatureRow>
+
+            {/* ── Juicy Kills — loot valioso em kills lethais ── */}
+            <FeatureRow
+              icon="ti-coin" iconColor="text-amber-400"
+              title={t("juicyKillsTitle")} desc={t("featJuicyKillsDesc")}
+              on={juicyKillEnabled}
+              onToggle={toggleJuicyKillFeature}
+              statusHint={juicyKillEnabled && juicyKillChannelId ? chName(juicyKillChannelId) : (featOpen.has("juicykills") ? undefined : t("featNeedsSetup"))}
+              open={featOpen.has("juicykills")} onOpen={() => toggleFeat("juicykills")}
+            >
+              <label className="block text-xs text-zinc-400 mb-1">{t("juicyKillsChannelLabel")}</label>
+              <p className="text-[11px] text-zinc-600 mb-2">{t("juicyKillsChannelDesc")}</p>
+              {channelSelect(juicyKillChannelId, saveJuicyKillChannel, "mb-3")}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <label className="block text-xs text-zinc-400">
+                  {t("juicyKillsMinSilverLabel")}
+                  <span className="block text-[11px] text-zinc-600 my-1">{t("juicyKillsMinSilverDesc")}</span>
+                  <input type="number" min={0} value={juicyKillMinSilver}
+                    onChange={e => setJuicyKillMinSilver(e.target.value)} onBlur={saveJuicyKillMinSilver}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200" />
+                </label>
+                <label className="block text-xs text-zinc-400">
+                  {t("juicyKillsMinFameLabel")}
+                  <span className="block text-[11px] text-zinc-600 my-1">{t("juicyKillsMinFameDesc")}</span>
+                  <input type="number" min={0} value={juicyKillMinFame}
+                    onChange={e => setJuicyKillMinFame(e.target.value)} onBlur={saveJuicyKillMinFame}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200" />
+                </label>
+              </div>
+
+              <label className="block text-xs text-zinc-400 mb-2">{t("juicyKillsRegionsLabel")}</label>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => saveJuicyKillRegions([])}
+                  className={`badge ${juicyKillRegions.length === 0 ? "border-amber-500 text-amber-300" : ""}`}>
+                  {t("juicyKillsAllRegions")}
+                </button>
+                {ALBION_REGIONS.map(region => {
+                  const selected = juicyKillRegions.includes(region);
+                  return <button type="button" key={region}
+                    onClick={() => saveJuicyKillRegions(selected ? juicyKillRegions.filter(r => r !== region) : [...juicyKillRegions, region])}
+                    className={`badge ${selected ? "border-amber-500 text-amber-300" : ""}`}>
+                    {REGION_LABELS[lang][region]}
+                  </button>;
+                })}
+              </div>
             </FeatureRow>
 
           </div>

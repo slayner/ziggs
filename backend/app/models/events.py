@@ -28,6 +28,7 @@ class Event(Base, TimestampMixin):
     __tablename__ = "events"
 
     id: Mapped[int] = pk()
+    bot_request_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     guild_id: Mapped[int] = mapped_column(
         ForeignKey("guilds.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -38,8 +39,12 @@ class Event(Base, TimestampMixin):
         nullable=False,
         index=True,
     )
+    signup_mode: Mapped[str] = mapped_column(String(32), default="signup", nullable=False)
+    assignment_mode: Mapped[str] = mapped_column(String(32), default="hybrid", nullable=False)
+    autofill_mode: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # NULL até a fase de definição — mas pode vir preenchido já na criação
-    # (ver EventCreate) e é só re-confirmado/ajustado na definição depois.
+    # (ver EventCreate) e é só re-confirmado/ajustado depois.
     type: Mapped[EventType | None] = mapped_column(Enum(EventType, name="event_type"))
 
     comp_id: Mapped[int | None] = mapped_column(
@@ -94,6 +99,7 @@ class Event(Base, TimestampMixin):
     # IN_PROGRESS (denominador do base_percent de cada participante). Só cresce
     # via /bot/events/.../voice-snapshot. Ver app/services/events.py.
     total_snapshots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_voice_snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Pontos de attendance (economia/leaderboard do bot) que TODO participante
     # deste evento recebe igualmente, não importa o percent do split — editável
@@ -155,7 +161,7 @@ class EventSignup(Base, TimestampMixin):
 
     `functions` é uma lista ordenada por preferência (functions[0] = primeira
     escolha, usada pelo gate de quantidade). Antes era 3 colunas function_1/2/3;
-    virou JSON pra o máximo de builds ser configurável pela guilda (>3)."""
+    virou JSON para guardar todas as roles declaradas pelo jogador, sem teto."""
     __tablename__ = "event_signups"
     __table_args__ = (UniqueConstraint("event_id", "user_id"),)
 
@@ -296,6 +302,10 @@ class EventAssignment(Base, TimestampMixin):
     )
     user_id: Mapped[int] = mapped_column(Snowflake, nullable=False)
     user_name: Mapped[str | None] = mapped_column(String(255))
+    # Admin assignments are immutable from automatic filling. Existing rows are
+    # manual assignments, so the migration defaults them to locked=True.
+    locked: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    autofill_run_id: Mapped[str | None] = mapped_column(String(36), index=True)
     # Flex role escolhida (uma dos CompSlotRole.game_role_id do slot).
     game_role_id: Mapped[int | None] = mapped_column(
         ForeignKey("game_roles.id", ondelete="SET NULL"), index=True

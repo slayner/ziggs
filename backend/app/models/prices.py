@@ -29,6 +29,14 @@ class ItemPrice(Base):
     sell_price_min: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
     price_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Instalação que reportou (header X-Ziggs-Install). NULL = veio do nosso
+    # próprio sync (AODP/oficial), não de companion.
+    #
+    # Não é autenticação — o cliente escolhe o próprio id e pode trocá-lo. Serve
+    # pra ATRIBUIR: dado ruim deixa de ser "fomos envenenados" e vira "veio
+    # desta instalação, apaga tudo dela". Como o histórico é append-only, o
+    # expurgo retroativo é um DELETE por esta coluna. Indexado por isso.
+    source_install: Mapped[str | None] = mapped_column(String(32), index=True)
 
 
 class ItemPriceLatest(Base):

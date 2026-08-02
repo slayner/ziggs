@@ -104,13 +104,35 @@ export function RecentBattleRow({ b, isNew, onGlowEnd }: { b: RecentBattle; isNe
 
 // ── Busca global ─────────────────────────────────────────────────────────
 interface SearchPlayer   { albion_id: string; name: string; guild_name: string | null; alliance_name: string | null; battles: number; region: string }
-interface SearchGuild    { albion_id: string; name: string; alliance_name: string | null; battles: number }
-interface SearchAlliance { albion_id: string; name: string; guild_count: number; battles: number }
+interface SearchGuild    { albion_id: string; name: string; alliance_name: string | null; battles: number; region: string | null }
+interface SearchAlliance { albion_id: string; name: string; guild_count: number; battles: number; region: string | null }
 // SearchBattle é compatível com RecentBattle — mesmos campos, reutiliza RecentBattleRow
 type SearchBattle = RecentBattle;
 interface SearchResults  { players: SearchPlayer[]; guilds: SearchGuild[]; alliances: SearchAlliance[]; battles: SearchBattle[] }
 
 const SEARCH_REGION_PREFIX: Record<string, string> = { americas: "am", asia: "as", europe: "eu" };
+// Sinônimos que o usuário pode digitar depois do nick pra filtrar região.
+// "slayner america" / "slayner west" / "slayner am" → todos viram americas.
+const REGION_ALIASES: Record<string, string> = {
+  americas: "americas", america: "americas", am: "americas", west: "americas",
+  europe: "europe", eu: "europe", east: "asia",
+  asia: "asia", as: "asia", asian: "asia",
+};
+
+/** "slayner americas" → { q: "slayner", region: "americas" }. "slayner" →
+ *  { q: "slayner", region: null }. O usuário pode digitar o servidor no final
+ *  pra restringir — nomes não são únicos entre servidores da Albion. */
+function parseRegionFromQuery(raw: string): { q: string; region: string | null } {
+  const parts = raw.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    const last = parts[parts.length - 1].toLowerCase();
+    const region = REGION_ALIASES[last];
+    if (region) {
+      return { q: parts.slice(0, -1).join(" "), region };
+    }
+  }
+  return { q: raw.trim(), region: null };
+}
 
 function SectionHeader({ label, count }: { label: string; count: number }) {
   return (
@@ -128,17 +150,25 @@ function SearchInitial({ char, className }: { char: string; className?: string }
   );
 }
 
-function SearchCard({ onClick, left, title, sub, meta, delay }: {
+function SearchCard({ onClick, left, title, sub, meta, delay, region }: {
   onClick: () => void; left: React.ReactNode;
-  title: string; sub?: string; meta: string; delay: number;
+  title: string; sub?: string; meta: string; delay: number; region?: string | null;
 }) {
+  const { lang } = useLang();
   return (
     <button onClick={onClick} style={{ animationDelay: `${delay}ms` }}
       className="search-row w-full rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-900">
       <div className="flex items-center gap-3">
         {left}
         <div className="min-w-0 flex-1">
-          <div className="truncate font-semibold text-zinc-100">{title}</div>
+          <div className="flex items-center gap-2">
+            <span className="truncate font-semibold text-zinc-100">{title}</span>
+            {region && (
+              <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-400">
+                {REGION_LABELS[lang][region] ?? region}
+              </span>
+            )}
+          </div>
           {sub && <div className="truncate text-xs text-zinc-500">{sub}</div>}
         </div>
         <span className="shrink-0 whitespace-nowrap text-xs text-zinc-500 tabular-nums">{meta}</span>
@@ -166,34 +196,89 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
   const [query, setQuery]   = useState("");
   const [results, setResults] = useState<SearchResults | null>(null);
   const [loading, setLoading] = useState(false);
+  // Busca externa (Albion API) — disparada 8s depois da local se ainda não
+  // tem resultado. Mantém o spinner pra indicar "haverão mais opções".
+  const [extLoading, setExtLoading] = useState(false);
   // key muda a cada resultado novo → React remonta o container → animação retrigger
   const [animKey, setAnimKey] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const extTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Digitação rápida dispara várias requests em voo — aborta a anterior (evita
   // gastar backend/rede à toa) e ainda guarda um id monotônico como cinto de
   // segurança contra a resposta antiga chegar DEPOIS da mais nova mesmo assim.
   const abortRef = useRef<AbortController | null>(null);
+  const extAbortRef = useRef<AbortController | null>(null);
   const reqIdRef = useRef(0);
+  const extReqIdRef = useRef(0);
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const q = e.target.value;
     setQuery(q);
     onQueryChange?.(q);
     if (timer.current) clearTimeout(timer.current);
+    if (extTimer.current) clearTimeout(extTimer.current);
     abortRef.current?.abort();
+    extAbortRef.current?.abort();
+    setExtLoading(false);
     if (q.trim().length < 2) { setResults(null); setLoading(false); return; }
     setLoading(true);
+    // Parse de região no final do query: "slayner americas" → q="slayner",
+    // region="americas". O backend filtra por região (nomes não são únicos
+    // entre servidores da Albion); sem região, busca em todas.
+    const { q: parsedQ, region } = parseRegionFromQuery(q.trim());
+    if (parsedQ.length < 2) { setResults(null); setLoading(false); return; }
+    const trimmed = parsedQ;
+    const regionParam = region ? `&region=${region}` : "";
     timer.current = setTimeout(() => {
       const controller = new AbortController();
       abortRef.current = controller;
       const reqId = ++reqIdRef.current;
-      fetch(`${BATTLES_API}/public/search?q=${encodeURIComponent(q.trim())}`, { signal: controller.signal })
+      fetch(`${BATTLES_API}/public/search?q=${encodeURIComponent(trimmed)}${regionParam}`, { signal: controller.signal })
         .then(r => r.json())
         .then((d: SearchResults) => {
           if (reqId !== reqIdRef.current) return; // resposta antiga — ignora
-          setResults(d); setLoading(false); setAnimKey(k => k + 1);
+          setResults(d); setAnimKey(k => k + 1);
+          // Loading local desliga (a 1ª resposta já chegou); extLoading cuida
+          // do spinner restante enquanto a busca externa roda.
+          setLoading(false);
+          setExtLoading(true);
+          extTimer.current = setTimeout(() => {
+            const ec = new AbortController();
+            extAbortRef.current = ec;
+            const ereqId = ++extReqIdRef.current;
+            fetch(`${BATTLES_API}/public/search/external?q=${encodeURIComponent(trimmed)}${regionParam}`, { signal: ec.signal })
+              .then(r => r.json())
+              .then((ed: Partial<SearchResults>) => {
+                if (ereqId !== extReqIdRef.current) return;
+                // Merge: só adiciona quem NÃO está já nos resultados locais
+                // (Albion pode devolver os mesmos que já tínhamos).
+                setResults(prev => {
+                  if (!prev) return prev;
+                  const knownP = new Set(prev.players.map(p => p.albion_id));
+                  const knownG = new Set(prev.guilds.map(g => g.albion_id));
+                  const knownA = new Set(prev.alliances.map(a => a.albion_id));
+                  const newP = (ed.players ?? []).filter(p => !knownP.has(p.albion_id));
+                  const newG = (ed.guilds ?? []).filter(g => !knownG.has(g.albion_id));
+                  const newA = (ed.alliances ?? []).filter(a => !knownA.has(a.albion_id));
+                  if (!newP.length && !newG.length && !newA.length) return prev; // nada novo
+                  setAnimKey(k => k + 1);
+                  return {
+                    ...prev,
+                    players: [...prev.players, ...newP],
+                    guilds: [...prev.guilds, ...newG],
+                    alliances: [...prev.alliances, ...newA],
+                  };
+                });
+                setExtLoading(false);
+              })
+              .catch((err: unknown) => {
+                if (ereqId !== extReqIdRef.current) return;
+                if ((err as { name?: string })?.name !== "AbortError") setExtLoading(false);
+              });
+          }, 8000);
         })
         .catch((err: unknown) => {
+          if (reqId !== reqIdRef.current) return;
           if ((err as { name?: string })?.name !== "AbortError") setLoading(false);
         });
     }, 300);
@@ -201,6 +286,7 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
 
   const active  = query.trim().length >= 2;
   const total   = results ? results.players.length + results.guilds.length + results.alliances.length + results.battles.length : 0;
+  const anyLoading = loading || extLoading;
 
   // índice global para delay de stagger entre todas as linhas
   let rowIdx = 0;
@@ -215,8 +301,8 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
           <input type="text" value={query} onChange={handleChange}
             placeholder={t("searchPlaceholderGlobal")}
             className="w-full bg-transparent py-1.5 pl-7 pr-7 text-sm text-zinc-100 placeholder-zinc-600 outline-none" />
-          {loading && <i className="ti ti-loader-2 absolute right-1.5 top-1/2 -translate-y-1/2 animate-spin text-sm text-zinc-500" />}
-          {!loading && active && (
+          {anyLoading && <i className="ti ti-loader-2 absolute right-1.5 top-1/2 -translate-y-1/2 animate-spin text-sm text-zinc-500" />}
+          {!anyLoading && active && (
             <button onClick={() => { setQuery(""); setResults(null); onQueryChange?.(""); }}
               className="absolute right-1.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400">
               <i className="ti ti-x text-xs" />
@@ -231,13 +317,21 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
         )}
       </div>
 
-      {/* resultados */}
+      {/* resultados — mostra o que já temos enquanto a busca externa roda
+          (extLoading), indicando que haverão mais opções. Loading local
+          (primeiro fetch) esconde até ter a 1ª resposta. */}
       {active && !loading && results && (
         <div key={animKey} className="search-expand mt-3 space-y-5">
           {total === 0 ? (
-            <p className="py-8 text-center text-sm text-zinc-600">
-              {t("noResultsFor")} "{query}".
-            </p>
+            extLoading ? (
+              <p className="py-8 text-center text-sm text-zinc-500">
+                {t("searchLookingFor")} "{query}"...
+              </p>
+            ) : (
+              <p className="py-8 text-center text-sm text-zinc-600">
+                {t("noResultsFor")} "{query}".
+              </p>
+            )
           ) : (
             <>
               {results.players.length > 0 && (
@@ -250,7 +344,8 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
                         left={<SearchInitial char={p.name[0]} />}
                         title={p.name}
                         sub={[p.alliance_name ? `[${p.alliance_name}]` : "", p.guild_name ?? ""].filter(Boolean).join(" ") || undefined}
-                        meta={`${p.battles} ${t("battlesCountSuffix")}`} />
+                        meta={`${p.battles} ${t("battlesCountSuffix")}`}
+                        region={p.region} />
                     ))}
                   </div>
                 </div>
@@ -266,7 +361,8 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
                         left={<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800"><i className="ti ti-shield text-sm text-zinc-400" /></div>}
                         title={g.name}
                         sub={g.alliance_name ? `[${g.alliance_name}]` : undefined}
-                        meta={`${g.battles} ${t("battlesCountSuffix")}`} />
+                        meta={`${g.battles} ${t("battlesCountSuffix")}`}
+                        region={g.region} />
                     ))}
                   </div>
                 </div>
@@ -282,7 +378,8 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
                         left={<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800"><i className="ti ti-users text-sm text-zinc-400" /></div>}
                         title={a.name}
                         sub={`${a.guild_count} ${a.guild_count !== 1 ? t("guildWordPlural") : t("guildWordSingular")}`}
-                        meta={`${a.battles} ${t("battlesCountSuffix")}`} />
+                        meta={`${a.battles} ${t("battlesCountSuffix")}`}
+                        region={a.region} />
                     ))}
                   </div>
                 </div>
@@ -306,6 +403,12 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
                 </div>
               )}
             </>
+          )}
+          {extLoading && (
+            <div className="flex items-center justify-center gap-2 py-3 text-xs text-zinc-500">
+              <i className="ti ti-loader-2 animate-spin" />
+              {t("searchLookingForMore")}
+            </div>
           )}
         </div>
       )}

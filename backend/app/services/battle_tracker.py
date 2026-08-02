@@ -1,11 +1,15 @@
 """Background task — sincroniza feed global de batalhas dos 3 servidores Albion.
 
 Dois níveis de processamento (ver CLAUDE.md/plano):
-- "light": resumo por guilda (kills/deaths/fame) — todas as batalhas, quase grátis.
-- "deep": eventos de kill paginados + builds + detecção de lados — TODA
-  batalha, sem mínimo de jogadores (ver DEEP_PROCESS_MIN_PLAYERS), pra
-  alimentar os contadores de arma all-time (app.services.weapon_stats) com
-  toda aparição, inclusive as não-elegíveis pro KB.
+- "light": resumo por guilda (kills/deaths/fame) — todas as batalhas com >=
+  DEEP_PROCESS_MIN_PLAYERS jogadores, quase grátis.
+- "deep": eventos de kill paginados + builds + detecção de lados — toda
+  batalha que qualifica (>= DEEP_PROCESS_MIN_PLAYERS), pra alimentar os
+  contadores de arma all-time (app.services.weapon_stats) com aparições em
+  lutas reais. Batalhas pequenas (< DEEP_PROCESS_MIN_PLAYERS) NEM são
+  armazenadas — o upsert_battle_light retorna None e o ID vira BattleIdProbe
+  'missing' pra não re-sondar. Kills continuam vindo do PlayerKillEvent
+  (independente de batalha), então 1v1/gank ainda conta pro weapon_stats.
   O corte de "30 vs 30" (is_zvz) é um rótulo aplicado por cima, confirmado
   depois da análise de lados — não é critério pra processar ou não.
 """
@@ -25,6 +29,7 @@ from app.models.battles import (
     Battle, BattleGuild, BattleKillEvent, BattleParticipant, BattleSide, BattleSyncCursor,
 )
 from app.services import battle_sides, search_index
+from app.services.lethality import ORANGE_GROUP_LIMIT, is_likely_lethal
 from app.services.albion_gate import (
     NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, albion_scope, battle_priority, slot,
 )
@@ -33,7 +38,12 @@ from app.services.player_tracker import HOSTS, make_client
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL = 60  # 1 min — pedido explícito; deep-process é paralelo e compete no bg pool do albion_gate (6 slots), sobra folga
-DEEP_PROCESS_MIN_PLAYERS = 0    # sem mínimo — toda batalha é deep-processada, até 1v1/gank
+DEEP_PROCESS_MIN_PLAYERS = 10   # abaixo disto: nem armazena (upsert_battle_light devolve None).
+# Histórico: era 0 (toda batalha deep-processada, até 1v1/gank) pra alimentar
+# weapon_stats com toda aparição. Subiu pra 10 porque batalhas pequenas são a
+# MAIORIA do feed e consumiam deep-process à toa; kills continuam vindo do
+# PlayerKillEvent (independente de batalha), então 1v1/gank ainda conta pro
+# weapon_stats — só appearances/assists/healing de lutas <10 somem.
 
 # Motivos de reprocess_reason marcados pelo caminho de DESCOBERTA AO VIVO
 # (bateu em algo agora, batalha nova fica "invisível" pro usuário até
@@ -87,11 +97,6 @@ _EQUIP_SLOT_MAP = {
     "Armor": "armor", "Shoes": "boots", "Cape": "cape",
     "Food": "food", "Potion": "potion", "Mount": "mount", "Bag": "bag",
 }
-# Só os slots de gear "de verdade" (exclui comida/poção/montaria/bag) — usado
-# pra checar se uma vítima estava equipada de verdade (ver is_lethal).
-_CORE_GEAR_SLOTS = ("weapon", "offhand", "helmet", "armor", "boots", "cape")
-
-
 def _parse_dt(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -172,7 +177,13 @@ def upsert_battle_light(db: Session, raw: dict, region: str) -> Battle | None:
     por batalha (até ~400/região por ciclo agora) significava centenas de
     fsyncs/WAL-checkpoints por ciclo, disputando o lock do SQLite com todo
     outro serviço de fundo — era o maior gargalo do sync "recente" ficando
-    lento e deixando batalha nova pra trás."""
+    lento e deixando batalha nova pra trás.
+
+    Batalhas com < DEEP_PROCESS_MIN_PLAYERS jogadores NÃO são armazenadas:
+    retorna None. Se a batalha já existia (de quando o mínimo era 0), é
+    deletada aqui — CASCADE limpa participants/sides/events/guilds. Quem
+    chamou deve tratar None como 'missing' (grava BattleIdProbe) pra não
+    re-sondar o mesmo ID pra sempre."""
     albion_id = str(raw.get("id", ""))
     if not albion_id:
         return None
@@ -182,6 +193,14 @@ def upsert_battle_light(db: Session, raw: dict, region: str) -> Battle | None:
     battle = db.scalar(
         select(Battle).where(Battle.region == region, Battle.albion_id == albion_id)
     )
+
+    # Batalha pequena: se já existia (mínimo antigo era 0), purge. Se é nova,
+    # nem cria — retorna None e o caller grava probe 'missing'.
+    if players_total < DEEP_PROCESS_MIN_PLAYERS:
+        if battle is not None:
+            db.delete(battle)
+            db.flush()
+        return None
 
     if battle is None:
         battle = Battle(
@@ -396,7 +415,7 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
     participants: dict[str, dict] = _seed_from_summary(raw) if raw else {}
     kills_between: dict[tuple[str, str], int] = {}
     kill_rows: list[tuple[
-        str, str, int, str | None, str | None,
+        str, str, int, int | None, str | None, str | None,
         dict | None, dict | None, list[dict] | None, list[dict] | None,
     ]] = []
 
@@ -424,13 +443,15 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
             )
 
         fame = int(ev.get("TotalVictimKillFame") or 0)
+        group_member_count = ev.get("groupMemberCount")
+        group_member_count = int(group_member_count) if group_member_count is not None else None
         if krow is not None and vrow is not None:
             kf = battle_sides.faction_key(krow["guild_id"], krow["alliance_id"], krow["albion_player_id"])
             vf = battle_sides.faction_key(vrow["guild_id"], vrow["alliance_id"], vrow["albion_player_id"])
             kills_between[(kf, vf)] = kills_between.get((kf, vf), 0) + 1
 
         kill_rows.append((
-            str(ev.get("EventId")), ev.get("TimeStamp"), fame,
+            str(ev.get("EventId")), ev.get("TimeStamp"), fame, group_member_count,
             killer.get("Id") or killer.get("id"),
             victim.get("Id") or victim.get("id"),
             _simplify_equipment(killer["Equipment"]) if killer.get("Equipment") else None,
@@ -478,8 +499,10 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
         )
     db.flush()
 
-    is_lethal = True
-    for albion_event_id, ts, fame, kid, vid, killer_equipment, victim_equipment, killer_inventory, victim_inventory in kill_rows:
+    has_large_group = False
+    small_group_failed = False
+    zero_fame = False
+    for albion_event_id, ts, fame, group_member_count, kid, vid, killer_equipment, victim_equipment, killer_inventory, victim_inventory in kill_rows:
         krow, vrow = participant_rows.get(kid), participant_rows.get(vid)
         db.add(BattleKillEvent(
             battle_id=battle.id, albion_event_id=albion_event_id,
@@ -493,11 +516,20 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
             killer_inventory=killer_inventory,
             victim_inventory=victim_inventory,
         ))
-        # Cada Battle.albion_id é UM mapa só — uma morte de jogador com
-        # equipamento (não pelado) que deu fama 0 já prova que a zona inteira
-        # não é letal (duelo/arena). Pelado com fama 0 é normal, não conta.
-        if fame == 0 and victim_equipment and any(victim_equipment.get(s) for s in _CORE_GEAR_SLOTS):
-            is_lethal = False
+        if fame <= 0:
+            zero_fame = True
+        elif group_member_count is not None and group_member_count > ORANGE_GROUP_LIMIT:
+            # groupMemberCount é o grupo real do matador, não guilda nem todos
+            # os contributors. Zona laranja limita grupo a 3; um evento acima
+            # disso prova que o mapa é lethal.
+            has_large_group = True
+        elif not is_likely_lethal(fame, victim_equipment, group_member_count):
+            small_group_failed = True
+
+    # Cada Battle.albion_id é um mapa só. Fame zero prova não-lethal; grupo >3
+    # prova que não é laranja. Sem essa prova, todos os grupos pequenos precisam
+    # passar pela estimativa conservadora.
+    is_lethal = not zero_fame and (has_large_group or not small_group_failed)
 
     for bg in db.scalars(select(BattleGuild).where(BattleGuild.battle_id == battle.id)):
         # BattleGuild só existe pra guilda de verdade (albion_guild_id nunca
@@ -512,6 +544,25 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
     b_count = analysis.player_count.get("B", 0)
     battle.is_zvz = a_count >= ZVZ_MIN_PLAYERS_PER_SIDE and b_count >= ZVZ_MIN_PLAYERS_PER_SIDE
     battle.is_lethal = is_lethal
+
+    # Batalha não-letal (arena/duelo) com >=10 jogadores: deep-processamos pra
+    # descobrir que NÃO é lethal, mas não armazenamos — é a mesma doutrina das
+    # batalhas pequenas. CASCADE limpa participants/sides/events/guilds que
+    # acabamos de gravar. Grava probe 'missing' pra o sweeper/companion não
+    # re-sondar o ID (se não existir ainda — batalhas do feed normal não têm
+    # probe). Retorna False pra o caller não tentar re-deep-processar.
+    if not is_lethal:
+        from app.models.battles import BattleIdProbe
+        aid = battle.albion_id
+        if db.get(BattleIdProbe, aid) is None:
+            db.add(BattleIdProbe(
+                albion_id=aid, status="missing", region=battle.region,
+                probed_at=datetime.now(timezone.utc),
+            ))
+        db.delete(battle)
+        db.commit()
+        return True  # deep-processou de verdade (e descartou)
+
     db.commit()
     return True
 
@@ -918,6 +969,28 @@ async def _reverse_startup_sweep(client: httpx.AsyncClient, db: Session, region:
 
 RECENT_PAGES_PER_CYCLE = 8  # 8*51=408 batalhas/região por ciclo — deep_process roda em paralelo
 
+# Delay de PUBLICAÇÃO da API do Albion por região: quanto tempo a API demora pra
+# expor uma batalha depois que ela termina. ~5min num dia normal; em dia de
+# tráfego alto a API sobrecarrega e atrasa (já observado 8h). Medido de graça no
+# sync_recent — a batalha MAIS NOVA do feed recente vs agora (o feed é a verdade
+# da API: se ela está atrasada, a mais nova que mostra terminou há muito tempo).
+# Usa end_time (imutável), não fetched_at. Em memória: perde no restart, reenche
+# no 1º ciclo (~1min). region -> (medido_em, delay_segundos).
+_api_delay: dict[str, tuple[datetime, float]] = {}
+
+
+def publish_delay_status() -> dict:
+    """Delay aproximado da API por região (segundos) + idade da amostra. Pro
+    dashboard de ops e o dropdown do site. Vazio até o 1º sync_recent medir."""
+    now = datetime.now(timezone.utc)
+    return {
+        region: {
+            "delay_secs": round(secs),
+            "measured_age_secs": round((now - at).total_seconds()),
+        }
+        for region, (at, secs) in _api_delay.items()
+    }
+
 
 async def sync_recent() -> int:
     """Busca e salva as batalhas mais recentes dos 3 servidores e processa em
@@ -967,6 +1040,15 @@ async def sync_recent() -> int:
                         if len(batch) < BACKFILL_PAGE_SIZE:
                             break
 
+                # Delay de publicação da API: a mais nova do feed vs agora.
+                try:
+                    ends = [_parse_dt(r["endTime"]) for r in battles if r.get("endTime")]
+                    if ends:
+                        measured = datetime.now(timezone.utc)
+                        _api_delay[region] = (measured, max(0.0, (measured - max(ends)).total_seconds()))
+                except Exception:
+                    pass
+
                 qualifying: list[Battle] = []
                 raw_by_battle: dict[int, dict] = {}
                 for raw in battles:
@@ -978,6 +1060,8 @@ async def sync_recent() -> int:
                     if battle is None:
                         continue
                     count += 1
+                    log.info("battle: %s (%s) — %d jogadores, is_zvz=%s",
+                             battle.albion_id, region, battle.players_total or 0, battle.is_zvz)
                     if battle.players_total < DEEP_PROCESS_MIN_PLAYERS or _is_frozen(battle, now):
                         continue
                     qualifying.append(battle)

@@ -237,6 +237,8 @@ export interface MyProfile {
   theme: ProfileTheme;
   avatar_url: string | null;
   banner_url: string | null;
+  pending_kinds: ("avatar" | "banner")[];
+  blocked_until: string | null;
 }
 
 export interface DiscordGuild {
@@ -293,6 +295,10 @@ export interface EventSummary {
   comp_id: number | null;
   seriousness: string;
   participation_mode: string;
+  signup_mode: string;
+  assignment_mode: string;
+  autofill_mode: string;
+  published_at: string | null;
 }
 export interface VerificationStep {
   step: string;
@@ -508,6 +514,10 @@ export interface EventDetail {
   battleboard_url: string | null;
   seriousness: string;
   participation_mode: string;
+  signup_mode: string;
+  assignment_mode: string;
+  autofill_mode: string;
+  published_at: string | null;
   functions_released: boolean;
   total_snapshots: number;
   // Pontos de attendance — UM valor por evento, igual pra todo participante
@@ -607,6 +617,7 @@ export interface Assignment {
   user_id: number;
   user_name: string | null;
   game_role_id: number | null;
+  locked: boolean;
 }
 export interface EscalationSignup {
   user_id: number;
@@ -623,6 +634,8 @@ export interface EscalationOut {
     comp_id: number | null;
     comp_name: string | null;
     functions_released: boolean;
+    assignment_mode: string;
+    autofill_mode: string;
   };
   parties: EscalationParty[];
   assignments: Assignment[];
@@ -781,7 +794,7 @@ export const api = {
     albion_guild_name?: string | null; albion_guild_region?: string | null; register_role_id?: string | null;
     ally_role_id?: string | null; ally_allowed_guilds?: string[] | null; bot_language?: string | null;
     events_channel_id?: string | null; event_review_channel_id?: string | null; event_role_gates?: Record<string, string[]> | null;
-    signup_min_builds?: number | null; signup_max_builds?: number | null;
+    signup_min_builds?: number | null;
     nodes_calendar_channel_id?: string | null;
     voice_cta_channel_id?: string | null; trial_percent?: number | null;
     trial_role_id?: string | null;
@@ -811,6 +824,11 @@ export const api = {
     battle_feed_channel_id?: string | null;
     // Mínimo de jogadores pra uma batalha ser postada no feed (default 10).
     battle_feed_min_players?: number | null;
+    // ── Juicy kills: kills com silver_dropped >= min postadas numa sala.
+    juicy_kill_channel_id?: string | null;
+    juicy_kill_min_silver?: number | null;
+    juicy_kill_min_fame?: number | null;
+    juicy_kill_regions?: string[] | null;
   }) =>
     req<{ ok: boolean; albion_guild_resolved: boolean }>(`/auth/guild-settings/${guild_id}`, {
       method: "PATCH",
@@ -902,6 +920,7 @@ export const api = {
   createEvent: (payload: {
     title?: string | null; scheduled_at?: string | null; comp_id?: number | null;
     message?: string | null;
+    publish?: boolean; signup_mode?: string; assignment_mode?: string; autofill_mode?: string;
   }) =>
     req<EventDetail>(`/guilds/${g()}/events`, {
       method: "POST",
@@ -921,10 +940,11 @@ export const api = {
       body: JSON.stringify({ value }),
     }),
   // PATCH parcial: só os campos passados são atualizados. comp_id=null
-  // desvincula a comp; trocar a comp limpa os signups (o bot avisa por DM).
+  // desvincula a comp; trocar a comp preserva inscritos e pede novas roles por DM.
   updateEvent: (id: number, payload: {
     title?: string | null; scheduled_at?: string | null;
-    comp_id?: number | null; attendance?: number;
+    comp_id?: number | null; attendance?: number; signup_mode?: string;
+    assignment_mode?: string; autofill_mode?: string; confirm_comp_reset?: boolean;
   }) =>
     req<EventDetail>(`/guilds/${g()}/events/${id}`, {
       method: "PATCH",
@@ -942,6 +962,14 @@ export const api = {
     req<Assignment>(`/guilds/${guildId}/events/${eventId}/escalacao/assign`, {
       method: "POST", body: JSON.stringify(payload),
     }),
+  autofillEscalacao: (guildId: string, eventId: number) =>
+    req<{ assigned: number; run_id: string | null }>(`/guilds/${guildId}/events/${eventId}/escalacao/autofill`, { method: "POST" }),
+  previewAutofillEscalacao: (guildId: string, eventId: number) =>
+    req<{ assignments: { user_name: string | null; game_role_name: string; slot_id: number }[] }>(
+      `/guilds/${guildId}/events/${eventId}/escalacao/autofill/preview`,
+    ),
+  undoAutofillEscalacao: (guildId: string, eventId: number, runId: string) =>
+    req<{ removed: number }>(`/guilds/${guildId}/events/${eventId}/escalacao/autofill/undo?run_id=${encodeURIComponent(runId)}`, { method: "POST" }),
   unassignSlot: (guildId: string, eventId: number, slotId: number) =>
     req<{ ok: boolean }>(`/guilds/${guildId}/events/${eventId}/escalacao/slot/${slotId}`, { method: "DELETE" }),
   unassignUser: (guildId: string, eventId: number, userId: number) =>

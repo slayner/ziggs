@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
@@ -30,6 +33,15 @@ log = logging.getLogger(__name__)
 
 REBUILD_INTERVAL = 6 * 3600
 _CHUNK = 5000
+
+# Enquanto o rebuild (delete-all + reinsert em lote) roda, ele segura o write
+# lock do SQLite em rajadas e reescreve TODA a search_entries a partir da fonte.
+# O write-path (upsert por batalha/jogador) não deve brigar por esse lock: o
+# rebuild já vai conter tudo que o upsert escreveria. Sem isso, cada upsert
+# concorrente estourava "database is locked" — e como roda dentro da transação
+# longa do tracker, é conflito de snapshot que `busy_timeout` nem resolve.
+_rebuilding = threading.Event()
+_last_lock_log = 0.0
 
 
 def upsert_entry(
@@ -71,8 +83,21 @@ def upsert_entry(
 def safe_upsert_entry(db: Session, **kwargs) -> None:
     """Como upsert_entry, mas nunca propaga — a ingestão de batalhas/
     jogadores não pode quebrar por causa do índice de busca."""
+    if _rebuilding.is_set():
+        return  # rebuild reconcilia tudo da fonte; não disputar o lock com ele
     try:
         upsert_entry(db, **kwargs)
+    except OperationalError as e:
+        if "database is locked" not in str(e).lower():
+            log.exception("search_index: falha ao indexar %s", kwargs.get("entity_id"))
+            return
+        # Lock é benigno e esperado sob concorrência — o rebuild periódico
+        # reconcilia. Só não floodar o log: 1 aviso curto por minuto, sem stack.
+        global _last_lock_log
+        now = time.monotonic()
+        if now - _last_lock_log > 60:
+            _last_lock_log = now
+            log.warning("search_index: SQLite ocupado, upsert pulado (rebuild reconcilia)")
     except Exception:
         log.exception("search_index: falha ao indexar %s", kwargs.get("entity_id"))
 
@@ -138,7 +163,9 @@ def rebuild(db: Session) -> dict[str, int]:
     # ── Guildas ──────────────────────────────────────────────────────────
     # Mesma (guild_id, nome, aliança) que mais aparece vence — igual ao dedup
     # do _search antigo (guilda pode ter trocado de nome/aliança ao longo do
-    # tempo, a variante mais comum é a exibida).
+    # tempo, a variante mais comum é a exibida). Região = a mais frequente
+    # entre as batalhas onde a guilda apareceu (guildas da Albion existem em
+    # UMA região só — servidores separados; a mais frequente é a correta).
     g_best: dict[str, dict] = {}
     for gid, name, aname, battles in db.execute(
         select(BattleGuild.albion_guild_id, BattleGuild.guild_name, BattleGuild.alliance_name,
@@ -149,13 +176,25 @@ def rebuild(db: Session) -> dict[str, int]:
         if cur is None or battles > cur["battles"]:
             g_best[gid] = {"name": name, "alliance_name": aname, "battles": battles}
 
+    # Região mais frequente por guilda (uma guilda = uma região; mas pode
+    # aparecer em batalha de outra região por bug/migração rara — moda resolve).
+    g_region: dict[str, str] = {}
+    for gid, region in db.execute(
+        select(BattleGuild.albion_guild_id, Battle.region)
+        .join(Battle, Battle.id == BattleGuild.battle_id)
+    ):
+        # count manual — moda simples: a primeira que aparece mais vezes.
+        g_region.setdefault(gid, {})
+        g_region[gid][region] = g_region[gid].get(region, 0) + 1
+
     rows = []
     for gid, agg in g_best.items():
         norm = normalize(agg["name"])
+        region = max(g_region.get(gid, {}), key=g_region.get(gid, {}).get, default=None) if g_region.get(gid) else None
         rows.append({
             "entity_type": "guild", "entity_id": gid,
             "display_name": agg["name"], "norm_name": norm, "name_len": len(norm),
-            "region": None, "guild_name": None, "alliance_name": agg["alliance_name"],
+            "region": region, "guild_name": None, "alliance_name": agg["alliance_name"],
             "guild_count": None, "weight": agg["battles"],
         })
         counts["guild"] += 1
@@ -181,13 +220,24 @@ def rebuild(db: Session) -> dict[str, int]:
         if cur is None or battles > cur["battles"]:
             a_best[aid] = {"name": aname, "battles": battles}
 
+    # Região mais frequente por aliança (mesma lógica de guilda).
+    a_region: dict[str, dict[str, int]] = {}
+    for aid, region in db.execute(
+        select(BattleGuild.alliance_id, Battle.region)
+        .join(Battle, Battle.id == BattleGuild.battle_id)
+        .where(BattleGuild.alliance_id.isnot(None))
+    ):
+        a_region.setdefault(aid, {})
+        a_region[aid][region] = a_region[aid].get(region, 0) + 1
+
     rows = []
     for aid, agg in a_best.items():
         norm = normalize(agg["name"])
+        region = max(a_region.get(aid, {}), key=a_region.get(aid, {}).get, default=None) if a_region.get(aid) else None
         rows.append({
             "entity_type": "alliance", "entity_id": aid,
             "display_name": agg["name"], "norm_name": norm, "name_len": len(norm),
-            "region": None, "guild_name": None, "alliance_name": None,
+            "region": region, "guild_name": None, "alliance_name": None,
             "guild_count": len(a_guild_ids.get(aid, ())), "weight": agg["battles"],
         })
         counts["alliance"] += 1
@@ -199,6 +249,7 @@ def rebuild(db: Session) -> dict[str, int]:
 
 
 def _rebuild_sync() -> dict[str, int]:
+    _rebuilding.set()  # write-path pausa upserts enquanto reescrevemos tudo
     db = SessionLocal()
     try:
         return rebuild(db)
@@ -207,6 +258,7 @@ def _rebuild_sync() -> dict[str, int]:
         raise
     finally:
         db.close()
+        _rebuilding.clear()
 
 
 async def run_forever() -> None:

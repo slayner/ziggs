@@ -67,7 +67,7 @@ export function parseBattleRoute(loc: string): BattleRoute | null {
   return null;
 }
 
-export interface PlayerRoute { region: string; name: string }
+export interface PlayerRoute { region: string; name: string; activityId?: string }
 export interface GuildRoute { type: "guild" | "alliance"; albionId: string }
 
 const PLAYER_PREFIXES: Record<string, string> = { am: "americas", as: "asia", eu: "europe" };
@@ -85,10 +85,14 @@ export function parseGuildRoute(loc: string): GuildRoute | null {
 // entre Americas/Europe/Asia — são servidores separados): /am/Slayner,
 // /as/Slayner e /eu/Slayner podem ser 3 jogadores diferentes.
 export function parsePlayerRoute(loc: string): PlayerRoute | null {
-  const [path] = loc.split("?");
+  const [path, search] = loc.split("?");
   const m = path.match(PLAYER_RE);
   if (!m) return null;
-  return { region: PLAYER_PREFIXES[m[1]], name: decodeURIComponent(m[2]) };
+  return {
+    region: PLAYER_PREFIXES[m[1]],
+    name: decodeURIComponent(m[2]),
+    activityId: new URLSearchParams(search ?? "").get("activity") || undefined,
+  };
 }
 
 // Página de escalação de um evento (deep link): /events/{guildId}/{eventId}[/escalation].

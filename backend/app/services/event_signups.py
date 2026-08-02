@@ -16,7 +16,8 @@ from sqlalchemy.orm import Session, selectinload
 from app.domain.states import EventState
 from app.models.audit import AuditLog
 from app.models.catalog import GameRole, Weapon
-from app.models.comps import Comp, CompParty, CompSlot
+from app.models.comp_preferences import CompRolePreference
+from app.models.comps import Comp, CompParty, CompSlot, CompSlotRole
 from app.models.events import Event, EventSignup
 from app.models.tenancy import Guild, GuildRolePermission
 from app.services import event_gates
@@ -29,6 +30,17 @@ FALLBACK_CATEGORY = "other"
 # Estados em que um evento ainda aparece no mass-info (aceita inscrição).
 # Fluxo novo: review é pós-raid (verificações) — não aceita mais signups.
 ACTIVE_STATES = frozenset({EventState.SCHEDULED, EventState.IN_PROGRESS})
+
+
+def signup_block_reason(
+    state: EventState, comp_id: int | None, signup_mode: str = "signup",
+) -> str | None:
+    """Retorna o motivo de um evento não aceitar signup, se houver."""
+    if state not in ACTIVE_STATES:
+        return "evento não aceita inscrições neste estado"
+    if signup_mode != "signup":
+        return "evento é apenas anúncio"
+    return None
 
 # Janela "lupa" do bot antigo: T-10min até o evento começar, e mais um tempo
 # rodando (aqui, até 1h depois do horário marcado) — período em que a prévia
@@ -162,6 +174,97 @@ def get_pending_ping_triggers(settings: dict | None) -> list[dict]:
     return list((settings or {}).get("pending_ping_triggers") or [])
 
 
+def get_pending_function_prompts(settings: dict | None) -> list[dict]:
+    return list((settings or {}).get("pending_function_prompts") or [])
+
+
+def get_pending_function_prompt_deletes(settings: dict | None) -> list[dict]:
+    return list((settings or {}).get("pending_function_prompt_deletes") or [])
+
+
+def ack_function_prompts(db: Session, guild_id: int) -> None:
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        return
+    settings = dict(g.settings or {})
+    if settings.get("pending_function_prompts"):
+        settings["pending_function_prompts"] = []
+        g.settings = settings
+        db.flush()
+
+
+def record_function_prompt_messages(
+    db: Session, guild_id: int, messages: list[dict],
+) -> None:
+    """Persiste DMs para removê-las em review ou antes de uma nova troca de comp."""
+    g = db.get(Guild, guild_id)
+    if g is None:
+        return
+    settings = dict(g.settings or {})
+    active = list(settings.get("function_prompt_messages") or [])
+    pending = list(settings.get("pending_function_prompt_deletes") or [])
+    active_ids = {str(item.get("message_id")) for item in active}
+    pending_ids = {str(item.get("message_id")) for item in pending}
+    for item in messages:
+        event_id = int(item["event_id"])
+        message_id = str(item["message_id"])
+        record = {
+            "event_id": event_id,
+            "user_id": int(item["user_id"]),
+            "message_id": message_id,
+        }
+        ev = db.get(Event, event_id)
+        if ev is None or ev.guild_id != guild_id or ev.state not in ACTIVE_STATES:
+            if message_id not in pending_ids:
+                pending.append(record)
+                pending_ids.add(message_id)
+        elif message_id not in active_ids:
+            active.append(record)
+            active_ids.add(message_id)
+    settings["function_prompt_messages"] = active
+    settings["pending_function_prompt_deletes"] = pending
+    g.settings = settings
+    db.flush()
+
+
+def queue_function_prompt_deletes(db: Session, guild_id: int, event_id: int) -> None:
+    """Move as DMs rastreadas do evento para o outbox de exclusão."""
+    g = db.get(Guild, guild_id)
+    if g is None:
+        return
+    settings = dict(g.settings or {})
+    active = list(settings.get("function_prompt_messages") or [])
+    due = [item for item in active if int(item.get("event_id") or 0) == event_id]
+    if not due:
+        return
+    pending = list(settings.get("pending_function_prompt_deletes") or [])
+    pending_ids = {str(item.get("message_id")) for item in pending}
+    pending.extend(item for item in due if str(item.get("message_id")) not in pending_ids)
+    settings["function_prompt_messages"] = [
+        item for item in active if int(item.get("event_id") or 0) != event_id
+    ]
+    settings["pending_function_prompt_deletes"] = pending
+    g.settings = settings
+    db.flush()
+
+
+def ack_function_prompt_deletes(
+    db: Session, guild_id: int, message_ids: set[str],
+) -> None:
+    g = db.get(Guild, guild_id)
+    if g is None:
+        return
+    settings = dict(g.settings or {})
+    pending = list(settings.get("pending_function_prompt_deletes") or [])
+    remaining = [
+        item for item in pending if str(item.get("message_id")) not in message_ids
+    ]
+    if remaining != pending:
+        settings["pending_function_prompt_deletes"] = remaining
+        g.settings = settings
+        db.flush()
+
+
 def ack_ping_triggers(db: Session, guild_id: int) -> None:
     """Esvazia o outbox de pings — chamado pelo bot depois de fazer o bump/ping,
     pra o próximo poll não repetir o mesmo @everyone."""
@@ -177,16 +280,12 @@ def ack_ping_triggers(db: Session, guild_id: int) -> None:
 
 def _load_party_defs(
     db: Session, comp_id: int | None,
-) -> tuple[list[event_gates.PartyDef], dict[str, str], set[str]]:
-    """(parties, {nome_da_funcao: categoria}, flex_names) — categoria vem de
+) -> tuple[list[event_gates.PartyDef], dict[str, str]]:
+    """(parties, {nome_da_funcao: categoria}) — categoria vem de
     GameRole.weapon_id -> Weapon.invisible_function (tank/healer/support/dps/
     pierce), usada pro bot agrupar o picker. O bot antigo usava um emoji
     prefixado no nome da função pra isso; os GameRole reais daqui não têm essa
     convenção (conferido direto no banco antes de portar).
-
-    `flex_names` = nomes das funções que pertencem a algum slot com >1 role
-    (flex é emergente da estrutura do slot, sem flag no banco). Usado pela
-    validação de min/max builds: roles flex contam no máx mas não no min (>1).
 
     Cache: 3 queries pesadas (Comp selectinload + GameRole batch + Weapon
     batch) por clique de botão. Durante clique-massa (30 pessoas em 10s) a
@@ -194,7 +293,7 @@ def _load_party_defs(
     lidação por TTL: se o admin editar a comp no meio, expira em até 30s,
     sem acoplar esse serviço a cada mutação de comp/role/weapon."""
     if comp_id is None:
-        return [], {}, set()
+        return [], {}
     now = time.monotonic()
     cached = _party_defs_cache.get(comp_id)
     if cached and (now - cached[1]) < _PARTY_DEFS_TTL:
@@ -204,20 +303,20 @@ def _load_party_defs(
     return result
 
 
-_party_defs_cache: dict[int, tuple[tuple[list, dict, set], float]] = {}
+_party_defs_cache: dict[int, tuple[tuple[list, dict], float]] = {}
 _PARTY_DEFS_TTL = 30.0  # segundos
 
 
 def _load_party_defs_uncached(
     db: Session, comp_id: int,
-) -> tuple[list[event_gates.PartyDef], dict[str, str], set[str]]:
+) -> tuple[list[event_gates.PartyDef], dict[str, str]]:
     comp = db.scalar(
         select(Comp)
         .where(Comp.id == comp_id)
         .options(selectinload(Comp.parties).selectinload(CompParty.slots).selectinload(CompSlot.roles))
     )
     if comp is None:
-        return [], {}, set()
+        return [], {}
 
     game_role_ids = {
         csr.game_role_id
@@ -242,19 +341,15 @@ def _load_party_defs_uncached(
         categories[r.name] = weapon_functions.get(r.weapon_id, FALLBACK_CATEGORY) if r.weapon_id else FALLBACK_CATEGORY
 
     parties: list[event_gates.PartyDef] = []
-    flex_names: set[str] = set()
     for party in comp.parties:
         names: set[str] = set()
         for slot in party.slots:
-            is_flex_slot = len(slot.roles) > 1
             for csr in slot.roles:
                 role = game_roles.get(csr.game_role_id)
                 if role:
                     names.add(role.name)
-                    if is_flex_slot:
-                        flex_names.add(role.name)
         parties.append(event_gates.PartyDef(total_slots=len(party.slots), role_names=names))
-    return parties, categories, flex_names
+    return parties, categories
 
 
 def _is_staff(db: Session, guild_id: int, discord_role_ids: set[int]) -> bool:
@@ -282,17 +377,78 @@ def signup_count(db: Session, event_id: int) -> int:
     ) or 0
 
 
+def get_role_profile(db: Session, guild_id: int, comp_id: int | None, user_id: int) -> list[str]:
+    """Return the active role profile for one player and composition."""
+    if comp_id is None:
+        return []
+    comp_roles = list(db.scalars(
+        select(GameRole)
+        .join(CompSlotRole, CompSlotRole.game_role_id == GameRole.id)
+        .join(CompSlot, CompSlot.id == CompSlotRole.slot_id)
+        .join(CompParty, CompParty.id == CompSlot.party_id)
+        .where(CompParty.comp_id == comp_id, GameRole.guild_id == guild_id)
+        .order_by(CompParty.position, CompSlot.position, CompSlotRole.position, GameRole.name)
+    ).unique())
+    role_ids = {r.id for r in comp_roles}
+    if not role_ids:
+        return []
+    saved = set(db.scalars(select(CompRolePreference.game_role_id).where(
+        CompRolePreference.guild_id == guild_id,
+        CompRolePreference.comp_id == comp_id,
+        CompRolePreference.user_id == user_id,
+        CompRolePreference.game_role_id.in_(role_ids),
+    )))
+    return [r.name for r in comp_roles if r.id in saved]
+
+
+def _save_role_profile(
+    db: Session, guild_id: int, comp_id: int | None, user_id: int, functions: list[str],
+) -> None:
+    """Replace the active profile with the roles selected in this CTA."""
+    if comp_id is None:
+        return
+    roles = list(db.scalars(
+        select(GameRole)
+        .join(CompSlotRole, CompSlotRole.game_role_id == GameRole.id)
+        .join(CompSlot, CompSlot.id == CompSlotRole.slot_id)
+        .join(CompParty, CompParty.id == CompSlot.party_id)
+        .where(CompParty.comp_id == comp_id, GameRole.guild_id == guild_id)
+    ).unique())
+    by_name = {r.name: r.id for r in roles}
+    selected_ids = {by_name[f] for f in functions if f in by_name}
+    existing = list(db.scalars(select(CompRolePreference).where(
+        CompRolePreference.guild_id == guild_id,
+        CompRolePreference.comp_id == comp_id,
+        CompRolePreference.user_id == user_id,
+    )))
+    for row in existing:
+        if row.game_role_id not in selected_ids:
+            db.delete(row)
+    existing_ids = {row.game_role_id for row in existing}
+    for role_id in selected_ids - existing_ids:
+        db.add(CompRolePreference(
+            guild_id=guild_id, comp_id=comp_id, user_id=user_id, game_role_id=role_id,
+        ))
+
+
 def get_eligible_functions(
     db: Session, guild_id: int, event_id: int,
     discord_user_id: int, discord_role_ids: set[int],
     event_role_gates: dict[str, list[str]],
-) -> tuple[list[str], str | None, EventSignup | None, dict[str, str], int | None, int | None, set[str]]:
+) -> tuple[list[str], str | None, EventSignup | None, dict[str, str], int | None]:
     """(funções elegíveis pra ESTE usuário agora, motivo_da_recusa, sua
-    inscrição atual, {nome_da_funcao: categoria}, min_builds, max_builds,
-    flex_names). min/max vêm de Guild.settings (signup_min/max_builds);
-    flex_names é o conjunto de funções que pertencem a slot com >1 role."""
+    inscrição atual, {nome_da_funcao: categoria}, min_builds). Não existe
+    limite máximo."""
     ev = _get_event(db, guild_id, event_id)
-    parties, categories, flex_names = _load_party_defs(db, ev.comp_id)
+    if reason := signup_block_reason(ev.state, ev.comp_id, ev.signup_mode):
+        raise ServiceError(reason)
+    if ev.assignment_mode == "admin_assign":
+        current = db.scalar(select(EventSignup).where(
+            EventSignup.event_id == event_id,
+            EventSignup.user_id == discord_user_id,
+        ))
+        return [], None, current, {}, None
+    parties, categories = _load_party_defs(db, ev.comp_id)
     all_signups = db.scalars(select(EventSignup).where(EventSignup.event_id == event_id)).all()
     signup_function_1s = [s.functions[0] for s in all_signups if s.functions]
     current = next((s for s in all_signups if s.user_id == discord_user_id), None)
@@ -305,8 +461,14 @@ def get_eligible_functions(
     g = db.scalar(select(Guild).where(Guild.id == guild_id))
     settings = (g.settings or {}) if g else {}
     min_builds = settings.get("signup_min_builds")
-    max_builds = settings.get("signup_max_builds")
-    return functions, reason, current, categories, min_builds, max_builds, flex_names
+    return functions, reason, current, categories, min_builds
+
+
+def validate_role_minimum(functions: list[str], min_builds: int | None) -> None:
+    if min_builds is None:
+        return
+    if len(functions) < min_builds:
+        raise ServiceError(f"escolha ao menos {min_builds} roles")
 
 
 def upsert_signup(
@@ -315,24 +477,16 @@ def upsert_signup(
     discord_role_ids: set[int], event_role_gates: dict[str, list[str]],
 ) -> EventSignup:
     ev = _get_event(db, guild_id, event_id)
-    eligible, _reason, _current, _categories, min_builds, max_builds, flex_names = get_eligible_functions(
+    eligible, _reason, _current, _categories, min_builds = get_eligible_functions(
         db, guild_id, event_id, user_id, discord_role_ids, event_role_gates,
     )
     # Corta pra interseção com o que É elegível agora — resistência a um
     # botão desatualizado (o usuário viu a lista antes de outra pessoa
     # preencher a vaga entretanto).
     trimmed = [f for f in functions if f in eligible]
-    total = len(trimmed)
-    non_flex = [f for f in trimmed if f not in flex_names]
-    # max: total de builds (flex conta). min: quando >1, só builds não-flex
-    # contam (flex é opcional por cima); quando ==1, exige ao menos 1 build.
-    if max_builds is not None and total > max_builds:
-        raise ServiceError(f"máximo de {max_builds} builds")
-    if min_builds is not None:
-        if min_builds > 1 and len(non_flex) < min_builds:
-            raise ServiceError(f"escolha ao menos {min_builds} builds não-flex")
-        if min_builds == 1 and total < 1:
-            raise ServiceError("escolha ao menos 1 build")
+    if set(trimmed) != set(functions):
+        raise ServiceError("uma ou mais roles não estão mais disponíveis")
+    validate_role_minimum(trimmed, min_builds)
 
     # _current já é a linha deste usuário (veio do load de get_eligible_functions)
     # — sem segunda query pelo mesmo registro.
@@ -343,6 +497,10 @@ def upsert_signup(
         db.add(row)
     row.user_name = user_name
     row.functions = trimmed
+    # Confirmar presença antes da liberação manda functions=[] e não deve apagar
+    # um perfil já conhecido. Depois da liberação, [] é uma escolha explícita.
+    if ev.functions_released or functions:
+        _save_role_profile(db, guild_id, ev.comp_id, user_id, trimmed)
 
     db.add(AuditLog(
         guild_id=guild_id, actor_id=user_id, actor_type="bot", source="bot",
@@ -353,11 +511,19 @@ def upsert_signup(
     ))
     ev.signup_message_dirty = True
     db.flush()
+    if ev.autofill_mode == "on_signup":
+        from app.services import event_escalation
+        db.expire(ev, ["signups"])
+        event_escalation.autofill_signup(
+            db, guild_id, event_id, user_id, user_name, trimmed,
+        )
     return row
 
 
 def remove_signup(db: Session, guild_id: int, event_id: int, user_id: int) -> None:
     ev = _get_event(db, guild_id, event_id)
+    if reason := signup_block_reason(ev.state, ev.comp_id, ev.signup_mode):
+        raise ServiceError(reason)
     row = db.scalar(
         select(EventSignup).where(EventSignup.event_id == event_id, EventSignup.user_id == user_id)
     )
@@ -472,7 +638,7 @@ def build_pending_work(db: Session, guild_id: int, events: list[Event] | None = 
         ev_signups = signups_by_event.get(e.id, [])
         parties_payload = None
         if lupa and e.comp_id:
-            parties, _categories, _flex = _load_party_defs(db, e.comp_id)
+            parties, _categories = _load_party_defs(db, e.comp_id)
             fns = [s.functions[0] for s in ev_signups if s.functions]
             parties_payload = [
                 {
@@ -486,6 +652,9 @@ def build_pending_work(db: Session, guild_id: int, events: list[Event] | None = 
             "state": e.state.value,
             "title": e.title,
             "message": e.message,
+            "signup_mode": e.signup_mode,
+            "assignment_mode": e.assignment_mode,
+            "autofill_mode": e.autofill_mode,
             "scheduled_at": _ensure_utc(e.scheduled_at).isoformat() if e.scheduled_at else None,
             "comp_id": e.comp_id,
             "comp_name": comp_names.get(e.comp_id) if e.comp_id else None,

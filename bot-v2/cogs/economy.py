@@ -86,11 +86,13 @@ def _set_tx_footer(embed: discord.Embed, lang: str, tx_ids: list[int]) -> None:
 
 
 async def _get(path: str) -> Optional[dict]:
-    return await http_client.get_json(path)
+    return await http_client.get_json(path, tag="economy")
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
-    return await http_client.post_json(path, body)
+    return await http_client.post_json(
+        path, body, tag="economy", attempts=2, queue_on_failure=False,
+    )
 
 
 async def _resolve_target(interaction: Interaction, raw: Optional[str], lang: str):
@@ -163,6 +165,7 @@ class Economy(commands.Cog):
 
         result = await _post(f"/bot/economy/pay/{interaction.guild_id}", {
             "from_user_id": interaction.user.id, "to_user_id": target.id, "amount": amount,
+            "request_id": str(interaction.id),
         })
         if result is None:
             await interaction.response.send_message(t(lang, "pay_process_fail"), ephemeral=True)
@@ -207,7 +210,8 @@ class Economy(commands.Cog):
         for target in targets:
             result = await _post(f"/bot/economy/add/{interaction.guild_id}",
                                   {"discord_user_id": target.id, "amount": amount,
-                                   "actor_discord_id": interaction.user.id})
+                                   "actor_discord_id": interaction.user.id,
+                                   "request_id": f"{interaction.id}:{target.id}"})
             if result is not None:
                 ok_targets.append(target)
                 tx_ids.append(result.get("transaction_id"))
@@ -287,6 +291,7 @@ class Economy(commands.Cog):
         result = await _post(f"/bot/economy/remove/{interaction.guild_id}", {
             "discord_user_id": target.id, "amount": amount, "allow_negative": allow_negative,
             "actor_discord_id": interaction.user.id,
+            "request_id": str(interaction.id),
         })
         if result is None:
             await interaction.response.send_message(t(lang, "remove_fail"), ephemeral=True)
@@ -306,7 +311,10 @@ class Economy(commands.Cog):
         if not await check_command_access(interaction, "undo"):
             return
         lang = await guild_lang(interaction)
-        result = await _post(f"/bot/economy/undo/{interaction.guild_id}/{id}", {})
+        result = await _post(
+            f"/bot/economy/undo/{interaction.guild_id}/{id}",
+            {"request_id": str(interaction.id)},
+        )
         if result is None:
             await interaction.response.send_message(t(lang, "undo_fail"), ephemeral=True)
             return
@@ -409,6 +417,7 @@ class ConfirmRemoveMoneyView(discord.ui.View):
             result = await _post(f"/bot/economy/remove/{self.guild_id}", {
                 "discord_user_id": member.id, "amount": amount, "allow_negative": allow_negative,
                 "actor_discord_id": self.author_id,
+                "request_id": f"{interaction.id}:{member.id}",
             })
             if result is not None and result.get("transaction_id") is not None:
                 ok_targets.append(member)

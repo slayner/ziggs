@@ -25,6 +25,8 @@ export type CraftPlace = "city" | "island" | "hideout";
 
 /** Flat crafting production bonus in every royal city / Caerleon / Brecilien. */
 const CITY_BASE_PTS = 18;
+/** Outlands Rests (Arthur's/Merlyn's/Morgana's) têm base menor que cidades reais. */
+const REST_BASE_PTS = 15;
 /** Crafting an item in its bonus city (or refining biome), in points. */
 const SPEC_CITY_PTS = 15;
 /** Focus adds a flat +59 production points to the stack before conversion. */
@@ -50,6 +52,8 @@ export const EVENT_BONUS = [
 
 export interface LocationConfig {
   place: CraftPlace;
+  /** Cidade real onde o usuário está produzindo (city/island). */
+  city?: string;
   /** Item is specialized in this city/biome (the +15 / hideout spec bonus). */
   specialized: boolean;
   /** Event/daily bonus fraction (0, 0.1, 0.2). */
@@ -60,13 +64,17 @@ export interface LocationConfig {
   hideoutLevel?: number;
 }
 
+import { isRest } from "./location";
+
 /** Total additive production bonus, in percentage points (no focus). */
 export function bonusPoints(loc: LocationConfig): number {
   let pts = loc.eventBonus * 100;
   if (loc.place === "island") {
     pts += loc.specialized ? SPEC_CITY_PTS : 0;
   } else if (loc.place === "city") {
-    pts += CITY_BASE_PTS + (loc.specialized ? SPEC_CITY_PTS : 0);
+    // Rests têm base 15, cidades reais têm base 18.
+    const base = loc.city && isRest(loc.city) ? REST_BASE_PTS : CITY_BASE_PTS;
+    pts += base + (loc.specialized ? SPEC_CITY_PTS : 0);
   } else {
     const quality = HIDEOUT_QUALITY[(loc.hideoutQuality ?? 1) - 1] ?? 0;
     const level = HIDEOUT_LEVEL[(loc.hideoutLevel ?? 1) - 1] ?? 0;
