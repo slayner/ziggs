@@ -18,7 +18,7 @@
 .docs-brand small { color: var(--gold); font-size: 9px; letter-spacing: .16em; margin-left: 3px; }
 .docs-brand-mark { display: grid; place-items: center; width: 28px; height: 28px; color: var(--gold); border: 1px solid var(--gold); font-size: 15px; }
 .docs-header-actions { display: flex; align-items: center; gap: 14px; }
-.docs-site-link { color: var(--muted); font-size: 12px; }
+.docs-site-link { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
 .docs-site-link:hover { color: var(--gold); }
 .docs-header select { color: var(--text); background: var(--surface); border: 1px solid var(--border); padding: 6px 8px; font: inherit; font-size: 11px; }
 .docs-layout { display: grid; grid-template-columns: minmax(180px, 220px) minmax(0, 760px); gap: clamp(24px, 5vw, 64px); width: min(100% - 40px, 1180px); margin: 0 auto; padding: 48px 0 80px; }
@@ -70,7 +70,9 @@
 }
 @media (max-width: 760px) {
   .docs-header { padding: 11px 16px; }
-  .docs-site-link { display: none; }
+  .docs-site-link { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--border); }
+  .docs-site-link span { display: none; }
+  .docs-site-link i { font-size: 15px; }
   .docs-layout { display: block; width: min(100% - 28px, 680px); padding-top: 28px; }
   .docs-sidebar { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 36px; }
   .docs-kicker, .docs-sidebar-note { grid-column: 1 / -1; }

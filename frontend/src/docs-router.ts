@@ -15,5 +15,7 @@ export function readDocsLocation(pathname = window.location.pathname, hash = win
 
 export function docsPath(lang: DocsLocale, slug = ""): string {
   const path = `/${lang}${slug ? `/${slug}` : "/"}`;
-  return window.location.pathname === "/docs.html" ? `/docs.html#${path}` : path;
+  const from = new URLSearchParams(window.location.search).get("from");
+  const query = from ? `?${new URLSearchParams({ from })}` : "";
+  return window.location.pathname === "/docs.html" ? `/docs.html${query}#${path}` : `${path}${query}`;
 }

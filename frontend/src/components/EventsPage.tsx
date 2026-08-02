@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, g, type CatalogRole, type EventDetail, type EventSummary, type NodeEventLog, type Participant, type Permissions, type RegearEstimate, type RegearItemEstimate, type RegearRequest, type VerificationStep } from "../api";
-import { useT, type TKey } from "../i18n";
+import { useLang, useT, type TKey } from "../i18n";
 import { navigate } from "../router";
 import { RoleIcon } from "./RoleIcons";
 
@@ -20,6 +20,15 @@ const STEP_KEYS: Record<string, TKey> = {
 
 function fmt(n: number): string {
   return n.toLocaleString("pt-BR");
+}
+
+function eventTime(iso: string | null, locale: string): string {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(locale, {
+    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC",
+  }).format(date) + " UTC";
 }
 
 // Indicador de origem além da escalação — sempre visível ao lado do nome (não
@@ -45,7 +54,9 @@ function OriginBadge({ origin }: { origin: string }) {
 
 export default function EventsPage({ perms, active = true }: { perms: Permissions; active?: boolean }) {
   const t = useT();
+  const { lang } = useLang();
   const [events, setEvents] = useState<EventSummary[]>([]);
+  const [listLoading, setListLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   // undefined = ainda não buscado, null = falhou, EventDetail = carregado.
   const [details, setDetails] = useState<Record<number, EventDetail | null | undefined>>({});
@@ -61,7 +72,10 @@ export default function EventsPage({ perms, active = true }: { perms: Permission
   const detailsRef = useRef(details); detailsRef.current = details;
 
   function refreshList() {
-    api.listEvents().then(setEvents).catch((e) => setError(String(e.message)));
+    api.listEvents()
+      .then(data => { setEvents(data); setError(null); })
+      .catch((e) => setError(String(e.message)))
+      .finally(() => setListLoading(false));
   }
   useEffect(refreshList, []);
 
@@ -73,7 +87,7 @@ export default function EventsPage({ perms, active = true }: { perms: Permission
   useEffect(() => {
     if (!active) return;
     const iv = setInterval(() => {
-      api.listEvents().then(setEvents).catch(() => {});
+      api.listEvents().then(data => { setEvents(data); setError(null); }).catch(() => {});
       for (const id of expandedRef.current) {
         const d = detailsRef.current[id];
         if (d && !ACTIVE_STATES.has(d.state)) continue;
@@ -130,10 +144,57 @@ export default function EventsPage({ perms, active = true }: { perms: Permission
     }).catch((e) => setError(String(e.message)));
   }
 
+  const activeEvents = events.filter(e => ACTIVE_STATES.has(e.state));
+  const historyEvents = events.filter(e => !ACTIVE_STATES.has(e.state));
+
+  function renderEvent(e: EventSummary) {
+    const isExpanded = expanded.has(e.id);
+    const det = details[e.id];
+    return (
+      <article key={e.id} className={`ev-card state-${e.state}`}>
+        <button className="event-row ev-card-trigger" onClick={() => toggle(e.id)} aria-expanded={isExpanded}>
+          <span className="ev-card-symbol"><i className="ti ti-calendar-event" aria-hidden="true" /></span>
+          <span className="ev-card-copy">
+            <strong>{e.title || `Event #${e.id}`}</strong>
+            <small>
+              <span><i className="ti ti-clock" aria-hidden="true" /> {eventTime(e.scheduled_at ?? e.started_at, lang)}</span>
+              {e.caller_name && <span><i className="ti ti-user" aria-hidden="true" /> {e.caller_name}</span>}
+            </small>
+          </span>
+          {e.seriousness === "serious" && (
+            <i className="ti ti-alert-triangle ev-serious" title={t("evSeriousnessSerious")} aria-hidden="true" />
+          )}
+          <StatePill state={e.state} />
+          <i className={"ti ev-card-chevron " + (isExpanded ? "ti-chevron-up" : "ti-chevron-down")} aria-hidden="true" />
+        </button>
+        {isExpanded && (
+          <div className="ev-card-body">
+            {det === undefined && <div className="ev-detail-state"><i className="ti ti-loader-2 spin" aria-hidden="true" /> {t("loading")}</div>}
+            {det === null && <div className="ev-detail-state error"><i className="ti ti-alert-circle" aria-hidden="true" /> {t("evLoadError")}</div>}
+            {det && <EventDetailCard detail={det} act={(p) => actFor(e.id, p)} canManage={perms["events.manage"]} />}
+          </div>
+        )}
+      </article>
+    );
+  }
+
   return (
-    <div className="container">
+    <div className="container events-command">
+      <header className="events-command-head">
+        <div>
+          <small>{t("managementKicker")}</small>
+          <h2>{t("eventsCommandTitle")}</h2>
+          <p>{t("eventsCommandIntro")}</p>
+        </div>
+        {active && <span className="events-live"><i aria-hidden="true" /> {t("eventsLive")}</span>}
+        <dl className="events-command-stats">
+          <div><dt>{t("eventsActiveGroup")}</dt><dd>{activeEvents.length}</dd></div>
+          <div><dt>{t("eventsHistoryGroup")}</dt><dd>{historyEvents.length}</dd></div>
+        </dl>
+      </header>
+
       {perms["events.create"] && (
-        <div className="card" style={{ marginBottom: 10 }}>
+        <section className="card ev-create-panel">
           <CreateEventForm onCreated={(ev) => {
             refreshList();
             seenIds.current.add(ev.id);
@@ -141,42 +202,21 @@ export default function EventsPage({ perms, active = true }: { perms: Permission
             setExpanded((prev) => new Set(prev).add(ev.id));
             setDetails((prev) => ({ ...prev, [ev.id]: ev }));
           }} />
-        </div>
+        </section>
       )}
 
-      {error && <p style={{ color: "#e07a7a", fontSize: 13, marginBottom: 10 }}>{error}</p>}
-      {events.length === 0 && <div className="card"><p className="muted">{t("noEventsYet")}</p></div>}
+      {error && <div className="ev-list-error" role="alert"><i className="ti ti-alert-circle" aria-hidden="true" /> {error}</div>}
+      {listLoading && <div className="ev-list-loading"><i className="ti ti-loader-2 spin" aria-hidden="true" /> {t("loading")}</div>}
+      {!listLoading && !error && events.length === 0 && <div className="card ev-empty"><i className="ti ti-calendar-off" aria-hidden="true" /><p className="muted">{t("noEventsYet")}</p></div>}
 
-      {events.map((e) => {
-        const isExpanded = expanded.has(e.id);
-        const det = details[e.id];
-        return (
-          <div key={e.id} className="card" style={{ marginBottom: 10, padding: 0, overflow: "hidden" }}>
-            <button
-              className="event-row"
-              style={{ border: "none", marginBottom: 0, borderRadius: 0 }}
-              onClick={() => toggle(e.id)}
-            >
-              <i className="ti ti-calendar-event" style={{ color: "var(--muted)" }} aria-hidden />
-              <span style={{ flex: 1 }}>{e.title || `Event #${e.id}`}</span>
-              {e.seriousness === "serious" && (
-                <i className="ti ti-alert-triangle" style={{ color: "var(--gold)" }} title={t("evSeriousnessSerious")} aria-hidden />
-              )}
-              <StatePill state={e.state} />
-              <i className={"ti " + (isExpanded ? "ti-chevron-up" : "ti-chevron-down")} style={{ color: "var(--hint)" }} aria-hidden />
-            </button>
-            {isExpanded && (
-              <div style={{ padding: "0 14px 14px", borderTop: "1px solid var(--border)" }}>
-                {det === undefined && <p className="muted" style={{ marginTop: 12 }}>{t("loading")}</p>}
-                {det === null && <p style={{ color: "#e07a7a", marginTop: 12 }}>{t("evLoadError")}</p>}
-                {det && (
-                  <EventDetailCard detail={det} act={(p) => actFor(e.id, p)} canManage={perms["events.manage"]} />
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {activeEvents.length > 0 && <section className="ev-group">
+        <div className="ev-group-title"><span>{t("eventsActiveGroup")}</span><i /><b>{activeEvents.length}</b></div>
+        <div className="ev-card-list">{activeEvents.map(renderEvent)}</div>
+      </section>}
+      {historyEvents.length > 0 && <section className="ev-group history">
+        <div className="ev-group-title"><span>{t("eventsHistoryGroup")}</span><i /><b>{historyEvents.length}</b></div>
+        <div className="ev-card-list">{historyEvents.map(renderEvent)}</div>
+      </section>}
     </div>
   );
 }

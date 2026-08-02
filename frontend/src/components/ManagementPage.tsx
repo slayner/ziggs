@@ -1,6 +1,7 @@
 import { lazy, useEffect, useState } from "react";
 import { useT, type TKey } from "../i18n";
 import { api, type Permissions } from "../api";
+import { DOCS_URL } from "../docs-url";
 import AdBanner from "./AdBanner";
 
 const CompBuilder = lazy(() => import("./CompBuilder"));
@@ -15,11 +16,11 @@ type Tab = "comps" | "events" | "regear" | "reconcile";
 // "comps" só faz sentido com Eventos ativo (é lá que uma comp é atribuída a
 // um evento) — eventsActive vem de settings.events_channel_id configurado,
 // mesmo sinal que GuildConfig usa pra "Eventos ligado".
-const TABS: { id: Tab; icon: string; label: TKey; show: (p: Permissions, eventsActive: boolean) => boolean }[] = [
-  { id: "comps",     icon: "ti-layout-grid",     label: "comps",  show: (p, ev) => p["comps.view"] && ev },
-  { id: "events",    icon: "ti-calendar-event",  label: "events", show: p => p["events.view"] },
-  { id: "regear",    icon: "ti-receipt-refund",  label: "regear", show: p => p["events.manage"] },
-  { id: "reconcile", icon: "ti-scale",           label: "rec",    show: p => p["events.manage"] },
+const TABS: { id: Tab; icon: string; label: TKey; desc: TKey; show: (p: Permissions, eventsActive: boolean) => boolean }[] = [
+  { id: "comps",     icon: "ti-layout-grid",     label: "comps",  desc: "managementCompsDesc", show: (p, ev) => p["comps.view"] && ev },
+  { id: "events",    icon: "ti-calendar-event",  label: "events", desc: "managementEventsDesc", show: p => p["events.view"] },
+  { id: "regear",    icon: "ti-receipt-refund",  label: "regear", desc: "managementRegearDesc", show: p => p["events.manage"] },
+  { id: "reconcile", icon: "ti-scale",           label: "rec",    desc: "managementReconcileDesc", show: p => p["events.manage"] },
 ];
 
 export default function ManagementPage({ guildId, perms, active = true }: Props) {
@@ -46,33 +47,65 @@ export default function ManagementPage({ guildId, perms, active = true }: Props)
   // enquanto uma comp estiver aberta, devolve a largura toda pro editor.
   const [compOpen, setCompOpen] = useState(false);
   const hideTabs = activeTab === "comps" && compOpen;
+  const activeMeta = visible.find(tb => tb.id === activeTab);
+
+  const docsOrigin = `${window.location.origin}/?view=management`;
+  const docsHref = (() => {
+    const url = new URL(DOCS_URL, window.location.href);
+    url.searchParams.set("from", docsOrigin);
+    return url.toString();
+  })();
 
   if (visible.length === 0) {
     return <div className="lootlog-page"><p className="hint">{t("escNoAccess")}</p></div>;
   }
 
   return (
-    <div className="lootlog-page">
-      <div className={hideTabs ? undefined : "grid items-start gap-5 md:grid-cols-[220px_1fr]"}>
+    <div className="lootlog-page management-shell">
+      {!hideTabs && (
+        <header className="management-hero">
+          <span className="management-hero-icon"><i className="ti ti-command" aria-hidden="true" /></span>
+          <span>
+            <small>{t("managementKicker")}</small>
+            <h1>{t("management")}</h1>
+            <p>{t("managementIntro")}</p>
+          </span>
+        </header>
+      )}
+      <div className={hideTabs ? undefined : "management-layout"}>
         {!hideTabs && (
-          <div className="flex flex-col gap-3">
-            <aside className="flex flex-col gap-1 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-              {visible.map(tb => (
+          <div className="management-rail-wrap">
+            <aside className="management-rail" aria-label={t("management")}>
+              {visible.map((tb, index) => (
                 <button
                   key={tb.id}
-                  className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left transition-colors ${
-                    activeTab === tb.id ? "bg-zinc-700/60 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
-                  }`}
+                  className={activeTab === tb.id ? "active" : ""}
                   onClick={() => setTab(tb.id)}
                 >
-                  <i className={`ti ${tb.icon}`} aria-hidden="true" /> {t(tb.label)}
+                  <span className="management-rail-index">{String(index + 1).padStart(2, "0")}</span>
+                  <i className={`ti ${tb.icon}`} aria-hidden="true" />
+                  <span><strong>{t(tb.label)}</strong><small>{t(tb.desc)}</small></span>
                 </button>
               ))}
+              <a className="management-docs-link" href={docsHref}
+                onClick={() => sessionStorage.setItem("ziggs-docs-origin", docsOrigin)}>
+                <span className="management-rail-index">{String(visible.length + 1).padStart(2, "0")}</span>
+                <i className="ti ti-book-2" aria-hidden="true" />
+                <span><strong>{t("docsNav")}</strong><small>{t("managementDocsDesc")}</small></span>
+                <i className="ti ti-arrow-up-right management-external" aria-hidden="true" />
+              </a>
             </aside>
             <AdBanner variant="skyscraper" />
           </div>
         )}
-        <div>
+        <div className="management-workspace">
+          {!hideTabs && activeMeta && (
+            <div className="management-workspace-head">
+              <span><i className={`ti ${activeMeta.icon}`} aria-hidden="true" /></span>
+              <div><small>{t("managementWorkspace")}</small><h2>{t(activeMeta.label)}</h2></div>
+              <p>{t(activeMeta.desc)}</p>
+            </div>
+          )}
           {visible.map(tb => {
             // Só monta se já foi visitada (ou é a ativa); visited mantém
             // ela viva depois. Inativa → display:none, estado preservado.

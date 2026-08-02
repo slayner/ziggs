@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState, lazy, Suspense, Component, type ReactNode } from "react";
 import { useLocation, navigate, navigateReplace, goBack, parseBattleRoute, parsePlayerRoute, parseGuildRoute, parseEventRoute, parseRegearRoute, parseRegearEventFilter } from "./router";
 import { api, setGuild, onBackendDown, setBackendDown, NO_PERMS, type Me, type Permissions, type SiteGuild } from "./api";
-import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, REGION_LABELS, type Lang, type GameServer } from "./i18n";
+import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, REGION_LABELS, type Lang, type GameServer, type TKey } from "./i18n";
 import AdBanner from "./components/AdBanner";
 import CookieConsent from "./components/CookieConsent";
 import { TermsPage, PrivacyPage, CookiesPage, AboutPage, ContactPage } from "./components/LegalPages";
-import { DOCS_URL } from "./docs-url";
 
 // code-split por página: cada view só baixa seu próprio JS quando é aberta
 // pela primeira vez, em vez de tudo (CompBuilder ~2000 linhas incluso) no bundle inicial.
@@ -28,6 +27,14 @@ const CompanionPage = lazy(() => import("./components/CompanionPage"));
 type PublicView = "dashboard" | "craft" | "market" | "battles" | "highscores";
 type GuildView = "config" | "management";
 type View = PublicView | GuildView;
+
+const COMPANION_CTA_FEATURES: { icon: string; label: TKey }[] = [
+  { icon: "ti-radar-2", label: "companionFeatScanTitle" },
+  { icon: "ti-world-bolt", label: "companionFeatDnsTitle" },
+  { icon: "ti-route", label: "companionFeatTunnelTitle" },
+  { icon: "ti-clipboard-text", label: "companionFeatLootlogTitle" },
+  { icon: "ti-layout-bottombar", label: "companionFeatTrayTitle" },
+];
 
 // ponytail: boundary mínimo — sem ele, qualquer throw no render de uma página
 // (lazy ou não) derruba a árvore inteira e vira tela branca sem mensagem. Aqui
@@ -125,7 +132,9 @@ export default function App() {
   const { server, setServer, servers, toggleServer } = useServer();
   const t = useT();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
-  const [view, setView] = useState<View>("dashboard");
+  const [view, setView] = useState<View>(() => window.location.pathname === "/market" ? "market" : "dashboard");
+  const [companionCtaIndex, setCompanionCtaIndex] = useState(0);
+  const [discordMenuMode, setDiscordMenuMode] = useState(() => sessionStorage.getItem("ziggs-discord-menu") === "1");
   // Deep link pro Highscores a partir do perfil de um jogador: /highscores?
   // kind=gather_wood&player=ID&rank=481&regions=americas. Abre na kind certa,
   // na página certa (calculada do rank) e destaca a linha do jogador. Sem
@@ -189,6 +198,28 @@ export default function App() {
   // URL própria; o App seta a view e os params, e limpa a URL em seguida pra
   // não ficar presa na barra de endereço.
   const hsDeep = loc.split("?")[0] === "/highscores";
+  const marketDeep = loc.split("?")[0] === "/market";
+
+  useEffect(() => {
+    const query = loc.split("?")[1];
+    if (loc.split("?")[0] !== "/" || !query) return;
+    const returnView = new URLSearchParams(query).get("view");
+    if (returnView === "management" || returnView === "config") {
+      setView(returnView);
+      navigateReplace("/");
+    }
+  }, [loc]);
+
+  useEffect(() => {
+    if (!marketDeep) return;
+    setView("market");
+  }, [marketDeep]);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const id = setInterval(() => setCompanionCtaIndex(i => (i + 1) % COMPANION_CTA_FEATURES.length), 3200);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     // a página de batalha também mostra o topbar (login/idioma/servidor), então
@@ -365,6 +396,8 @@ export default function App() {
 
   async function logout() {
     await fetch("/auth/logout", { method: "POST", credentials: "include" });
+    sessionStorage.removeItem("ziggs-discord-menu");
+    setDiscordMenuMode(false);
     setMe(null); setSiteGuilds([]); setPerms(NO_PERMS);
     setView("dashboard");
   }
@@ -420,7 +453,30 @@ export default function App() {
       ).join(" · ")}. ${t("apiDelayHint")}`
     : "";
 
-  const userMenu = (
+  function engageDiscordMenu() {
+    sessionStorage.setItem("ziggs-discord-menu", "1");
+    setDiscordMenuMode(true);
+  }
+
+  const discordPromo = !discordMenuMode ? (
+    <div className="discord-mini-promo">
+      {loggedIn ? (
+        <button type="button" onClick={() => { engageDiscordMenu(); setUserDropOpen(true); }}>
+          <span className="discord-mini-icon"><i className="ti ti-brand-discord" aria-hidden="true" /></span>
+          <span><strong>{t("discordPromoTitle")}</strong><small>{t("discordPromoLogged")}</small></span>
+          <i className="ti ti-chevron-right discord-mini-arrow" aria-hidden="true" />
+        </button>
+      ) : (
+        <a href="/auth/discord/login" onClick={engageDiscordMenu}>
+          <span className="discord-mini-icon"><i className="ti ti-brand-discord" aria-hidden="true" /></span>
+          <span><strong>{t("discordPromoTitle")}</strong><small>{t("discordPromoGuest")}</small></span>
+          <i className="ti ti-arrow-up-right discord-mini-arrow" aria-hidden="true" />
+        </a>
+      )}
+    </div>
+  ) : null;
+
+  const userMenu = (discordMenuMode || !loggedIn) ? (
     <div className="topbar-dropdown" ref={userRef}>
       <button className="topbar-dropdown-btn" onClick={() => { setUserDropOpen(o => !o); setUserPanel("main"); }}>
         <i className={`ti ${loggedIn ? "ti-user-circle" : "ti-settings"}`} />
@@ -532,9 +588,26 @@ export default function App() {
         </div>
       )}
     </div>
-  );
+  ) : null;
 
   // ── Conteúdo ─────────────────────────────────────────────────────────────
+  const companionCtaFeature = COMPANION_CTA_FEATURES[companionCtaIndex];
+  const companionCta = (
+    <button
+      type="button"
+      className={`companion-nav-cta${companionActive ? " active" : ""}`}
+      onClick={() => navigate("/download")}
+      aria-label={`${t("companionCtaLabel")}: ${t(companionCtaFeature.label)}`}
+    >
+      <span className="companion-nav-cta-orbit" aria-hidden="true"><i className="ti ti-device-desktop" /></span>
+      <span className="companion-nav-cta-copy">
+        <strong>{t("companionCtaLabel")}</strong>
+        <small key={companionCtaFeature.label}><i className={`ti ${companionCtaFeature.icon}`} aria-hidden="true" /> {t(companionCtaFeature.label)}</small>
+      </span>
+      <i className="ti ti-arrow-right companion-nav-cta-arrow" aria-hidden="true" />
+    </button>
+  );
+
   let content: React.ReactNode;
 
   if (eventRoute) {
@@ -673,16 +746,11 @@ export default function App() {
           {nb("battles", "ti-shield-bolt",    t("battles"))}
           {nb("highscores", "ti-trophy",      t("highscores"))}
           {nb("craft",   "ti-hammer",         t("craft"))}
-          {nb("market",  "ti-chart-line",     t("market"))}
-          <button className={companionActive ? "active" : ""} onClick={() => navigate("/download")}>
-            <i className="ti ti-download" aria-hidden="true" /> {t("companionNav")}
-          </button>
-          <a className="nav-docs-link" href={DOCS_URL}>
-            <i className="ti ti-book-2" aria-hidden="true" /> {t("docsNav")}
-          </a>
         </nav>
 
         <div className="nav-sep" />
+
+        {companionCta}
 
         {showGuildBox && (
           <div className={`nav-guild-box${loggedIn && hasGuild && !hasAnyGuildPerm ? " locked" : (!loggedIn ? " locked" : "")}`}>
@@ -734,6 +802,7 @@ export default function App() {
             </div>
           )}
           {serverQuickSwitch}
+          {discordPromo}
           {userMenu}
         </div>
       </div>
