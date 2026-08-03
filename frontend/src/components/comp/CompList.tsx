@@ -197,7 +197,7 @@ export function CompList({ perms, offline, compList, setCompList, onOpen }: {
                   <div className="comp-card-icon"><i className="ti ti-layout-list" aria-hidden /></div>
                   <span className="comp-card-name">{c.name}</span>
                   <div className="comp-card-stats">
-                    {s === null
+                    {!s
                       ? <span className="comp-card-stat muted">{t("compLoadingStats")}</span>
                       : <>
                           <span className="comp-card-stat">
