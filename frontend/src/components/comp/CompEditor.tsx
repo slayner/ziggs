@@ -514,29 +514,14 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
 
   if (!draft) return <div className="container"><p className="muted">{t("loading")}</p></div>;
 
-  // ── Painel de detalhe (master-detail) ──────────────────────
-  // Clicar num slot seleciona; o formulário de edição sempre renderiza aqui
-  // (sempre modo edit), organizado em 5 seções com headers editoriais:
+  // ── Conteúdo de edição inline (accordion) ──────────────────
+  // Antes um painel direito (master-detail de 2 quadrantes); agora renderiza
+  // DENTRO do card expandido (1 quadrante só). 5 seções com headers editoriais:
   // (a) Identidade, (b) Equipamento, (c) Habilidades, (d) Alts, (e) Notas.
-  function renderDetailPanel() {
-    if (!draft || !openCard) {
-      return (
-        <div className="comp-right comp-detail comp-right-hint">
-          <i className="ti ti-hand-click" aria-hidden style={{ fontSize: 22, opacity: 0.5 }} />
-          <span>{t("selectRoleHint")}</span>
-        </div>
-      );
-    }
-    const [pi, si] = openCard;
+  function renderCardDetail(pi: number, si: number) {
+    if (!draft) return null;
     const slot = draft.parties[pi]?.slots[si];
-    if (!slot) {
-      return (
-        <div className="comp-right comp-detail comp-right-hint">
-          <i className="ti ti-hand-click" aria-hidden style={{ fontSize: 22, opacity: 0.5 }} />
-          <span>{t("selectRoleHint")}</span>
-        </div>
-      );
-    }
+    if (!slot) return null;
     const role = slot.roles[0];
     const formRole = slot.roles[editRi] ?? role;
     const formWeapBase = formRole?.equip_loaded && formRole.equip.weapon?.id
@@ -550,16 +535,15 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
       .filter(s => !(s.key === "offhand" && is2H(formRole?.equip.weapon?.id)));
 
     return (
-      <div className="comp-right comp-detail" onClick={e => e.stopPropagation()}>
-        {/* Cabeçalho sticky — preview vivo do equipamento (atualiza a cada
-            item escolhido; o formulário rola por baixo dele). */}
-        <div className="comp-detail-head">
+      <div className="rc-card-detail" onClick={e => e.stopPropagation()}>
+        {/* Cabeçalho — preview vivo do equipamento + abas de build (a aba
+            "+" é a porta de entrada do flex). Antes sticky; agora embutido. */}
+        <div className="rc-card-detail-head">
           {formRole?.equip_loaded && (
             <div className="rc-equip-strip">
               <EquipStrip equip={formRole.equip} weaponIs2H={is2H(formRole.equip.weapon?.id)} />
             </div>
           )}
-          {/* Abas de build — a aba "+" é a porta de entrada do flex. */}
           <BuildTabs roles={slot.roles}
             active={editRi}
             onSelect={setEditRi}
@@ -572,7 +556,7 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
             addOpen={flexMenu?.[0] === pi && flexMenu?.[1] === si} />
         </div>
 
-        <div className="comp-detail-body">
+        <div className="rc-card-detail-body">
           {/* Flex picker — ancorado logo abaixo das abas */}
           {flexMenu?.[0] === pi && flexMenu?.[1] === si && (() => {
             const pickable = getPickableRoles(pi, si);
@@ -1023,102 +1007,106 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
           </div>
         ))}
 
-        {/* Parties */}
+        {/* Parties — 1 quadrante só (accordion inline); sem painel direito. */}
         <div className="comp-layout comp-builder-layout">
-          <div className="comp-left">
-        <div className="comp-body">
-          {draft.parties.map((party, pi) => {
-            const isCollapsed = collapsedParties.has(pi);
-            return (
-              <div key={pi} className="party-card">
+          <div className="comp-body">
+            {draft.parties.map((party, pi) => {
+              const isCollapsed = collapsedParties.has(pi);
+              return (
+                <div key={pi} className="party-card">
 
-                {/* Party header */}
-                <div className="party-card-head">
-                  <button className="party-collapse-btn"
-                    onClick={() => togglePartyCollapse(pi)}
-                    title={isCollapsed ? t("expandBtn") : t("collapseBtn")}>
-                    <i className={`ti ti-chevron-${isCollapsed ? "right" : "down"}`} aria-hidden />
-                  </button>
-                  <input className="party-name-input" value={party.name}
-                    placeholder={`Party ${pi + 1}`}
-                    onFocus={captureHistory} onBlur={releaseFocus}
-                    onChange={e => updQuiet(d => ({
-                      ...d,
-                      parties: d.parties.map((p, i) => i !== pi ? p : { ...p, name: e.target.value }),
-                    }))} />
-                  <span className={"party-count" + (party.slots.length >= MAX_SLOTS ? " full" : "")}>
-                    {party.slots.length}/{MAX_SLOTS}
-                  </span>
-                  {draft.parties.length > 1 && (
-                    <button className="cs-xbtn" onClick={() => removeParty(pi)} title={t("removePartyTitle")}>
-                      <i className="ti ti-x" aria-hidden />
+                  {/* Party header */}
+                  <div className="party-card-head">
+                    <button className="party-collapse-btn"
+                      onClick={() => togglePartyCollapse(pi)}
+                      title={isCollapsed ? t("expandBtn") : t("collapseBtn")}>
+                      <i className={`ti ti-chevron-${isCollapsed ? "right" : "down"}`} aria-hidden />
                     </button>
-                  )}
-                </div>
+                    <input className="party-name-input" value={party.name}
+                      placeholder={`Party ${pi + 1}`}
+                      onFocus={captureHistory} onBlur={releaseFocus}
+                      onChange={e => updQuiet(d => ({
+                        ...d,
+                        parties: d.parties.map((p, i) => i !== pi ? p : { ...p, name: e.target.value }),
+                      }))} />
+                    <span className={"party-count" + (party.slots.length >= MAX_SLOTS ? " full" : "")}>
+                      {party.slots.length}/{MAX_SLOTS}
+                    </span>
+                    {draft.parties.length > 1 && (
+                      <button className="cs-xbtn" onClick={() => removeParty(pi)} title={t("removePartyTitle")}>
+                        <i className="ti ti-x" aria-hidden />
+                      </button>
+                    )}
+                  </div>
 
-                {/* Party body */}
-                {!isCollapsed && (
-                  <div className="party-card-body">
-                    {party.slots.map((slot, si) => {
-                      const role       = slot.roles[0];
-                      const isSelected = openCard?.[0] === pi && openCard?.[1] === si;
-                      const chipColor  = slot.fn ? (getFnDef(slot.fn, fnTypes)?.color ?? "#888") : undefined;
+                  {/* Party body */}
+                  {!isCollapsed && (
+                    <div className="party-card-body">
+                      {party.slots.map((slot, si) => {
+                        const role       = slot.roles[0];
+                        const isSelected = openCard?.[0] === pi && openCard?.[1] === si;
+                        const chipColor  = slot.fn ? (getFnDef(slot.fn, fnTypes)?.color ?? "#888") : undefined;
 
-                      return (
-                        <div key={si}
-                          className={`role-card${isSelected ? " rc-open" : ""}`}
-                          style={{ "--chip-color": chipColor ?? "var(--border-strong)", cursor: "pointer" } as CSSProperties}
-                          onClick={() => toggleCard(pi, si)}>
+                        return (
+                          <div key={si}
+                            className={`role-card${isSelected ? " rc-open" : ""}`}
+                            style={{ "--chip-color": chipColor ?? "var(--border-strong)", cursor: "pointer" } as CSSProperties}
+                            onClick={() => toggleCard(pi, si)}>
 
-                          {/* Card head — weapon icon + name + equip strip + badge (preview compacto, edição no painel) */}
-                          <div className="rc-head">
-                            {role ? (
-                              <>
-                                {/* Weapon icon — vira "pilha" quando o slot tem builds flex */}
-                                {role.equip.weapon?.id && (
-                                  <span className={"rc-weapon-stack" + (slot.roles.length > 1 && slot.roles[1]?.equip.weapon?.id ? " has-alt" : "")}>
-                                    {slot.roles.length > 1 && slot.roles[1]?.equip.weapon?.id && (
-                                      <img className="rc-weapon-icon rc-weapon-behind"
-                                        src={itemUrl(slot.roles[1].equip.weapon!.id)} alt=""
-                                        onError={imgRetry(img => { img.style.opacity = "0"; })} />
-                                    )}
-                                    <img className="rc-weapon-icon"
-                                      src={itemUrl(role.equip.weapon.id)} alt=""
-                                      onError={imgRetry(img => { img.style.opacity = "0.15"; })} />
-                                  </span>
-                                )}
-                                <span className="rc-name">{role.name || t("noNamePlaceholder")}</span>
-                                {/* Badge de builds flex */}
-                                {slot.roles.length > 1 && (
-                                  <span className="rc-flex-badge"
-                                    style={{
-                                      color: chipColor ?? "var(--muted)",
-                                      borderColor: (chipColor ?? "#888888") + "55",
-                                    }}
-                                    title={`${t("cbBuildsCountTitle")}: ${slot.roles.map(r => r.name || "—").join(" · ")}`}>
-                                    <i className="ti ti-stack-2" aria-hidden /> {slot.roles.length}
-                                  </span>
-                                )}
-                                {role.equip_loaded && (
-                                  <div style={{ marginLeft: 6, flexShrink: 0 }}>
-                                    <EquipStrip equip={role.equip} weaponIs2H={is2H(role.equip.weapon?.id)} />
-                                  </div>
-                                )}
-                              </>
-                            ) : (
-                              <span className="chip-empty" style={{ fontSize: 12 }}>{t("noRoleAssigned")}</span>
-                            )}
+                            {/* Card head — weapon icon + name + equip strip + flex badge.
+                                Função NÃO aparece como badge: a borda esquerda colorida
+                                do card (.role-card border-left: var(--chip-color)) já diz. */}
+                            <div className="rc-head">
+                              {role ? (
+                                <>
+                                  {role.equip.weapon?.id && (
+                                    <span className={"rc-weapon-stack" + (slot.roles.length > 1 && slot.roles[1]?.equip.weapon?.id ? " has-alt" : "")}>
+                                      {slot.roles.length > 1 && slot.roles[1]?.equip.weapon?.id && (
+                                        <img className="rc-weapon-icon rc-weapon-behind"
+                                          src={itemUrl(slot.roles[1].equip.weapon!.id)} alt=""
+                                          onError={imgRetry(img => { img.style.opacity = "0"; })} />
+                                      )}
+                                      <img className="rc-weapon-icon"
+                                        src={itemUrl(role.equip.weapon.id)} alt=""
+                                        onError={imgRetry(img => { img.style.opacity = "0.15"; })} />
+                                    </span>
+                                  )}
+                                  <span className="rc-name">{role.name || t("noNamePlaceholder")}</span>
+                                  {slot.roles.length > 1 && (
+                                    <span className="rc-flex-badge"
+                                      style={{
+                                        color: chipColor ?? "var(--muted)",
+                                        borderColor: (chipColor ?? "#888888") + "55",
+                                      }}
+                                      title={`${t("cbBuildsCountTitle")}: ${slot.roles.map(r => r.name || "—").join(" · ")}`}>
+                                      <i className="ti ti-stack-2" aria-hidden /> {slot.roles.length}
+                                    </span>
+                                  )}
+                                  {role.equip_loaded && (
+                                    <div style={{ marginLeft: 6, flexShrink: 0 }}>
+                                      <EquipStrip equip={role.equip} weaponIs2H={is2H(role.equip.weapon?.id)} />
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <span className="chip-empty" style={{ fontSize: 12 }}>{t("noRoleAssigned")}</span>
+                              )}
+                            </div>
+
+                            {/* Conteúdo expandido inline (accordion) — só a role
+                                aberta renderiza. Substitui o antigo painel direito. */}
+                            {isSelected && renderCardDetail(pi, si)}
+
+                            {/* Remove slot button — fora do rc-head pra não
+                                disparar toggleCard no click do botão. */}
+                            <button className="cs-xbtn rc-card-remove"
+                              onClick={e => { e.stopPropagation(); removeSlot(pi, si); }}
+                              title={t("removeFromCompTitle")}>
+                              <i className="ti ti-x" aria-hidden />
+                            </button>
                           </div>
-                          {/* Remove slot button — fora do rc-head pra não
-                              disparar toggleCard no click do botão. */}
-                          <button className="cs-xbtn rc-card-remove"
-                            onClick={e => { e.stopPropagation(); removeSlot(pi, si); }}
-                            title={t("removeFromCompTitle")}>
-                            <i className="ti ti-x" aria-hidden />
-                          </button>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
 
                     {/* Add role — 1 clique cria role vazia e abre o painel.
                         Copiar de outra role virou botão secundário (addCopyMenu). */}
@@ -1210,9 +1198,7 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
           <button className="party-col-add" onClick={addParty}>
             <i className="ti ti-plus" aria-hidden /> {t("newPartyBtn")}
           </button>
-        </div>
           </div>
-          {renderDetailPanel()}
         </div>
       </div>
     </div>

@@ -367,23 +367,19 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   border: 1px dashed var(--border); border-radius: var(--radius); min-height: 120px;
 }
 
-/* Painel de detalhe do CompBuilder (master-detail, ver comp/CompEditor.tsx
-   renderDetailPanel) — só existe em modo Edição agora (Ver não abre painel
-   nenhum), então pode ser mais largo que o .comp-right padrão pra dar
-   espaço de verdade ao formulário (abas de build, colunas de itens alt,
-   spell pickers); a lista à esquerda encolhe de propósito pra dar destaque
-   a ele. Rola independente da lista. */
-.comp-detail {
-  width: 460px; max-height: calc(100vh - 32px); overflow-y: auto;
-  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
-}
-/* Cabeçalho sticky do painel: identidade da build (nome/arma/tipo) + preview
-   vivo do equipamento ficam visíveis enquanto o formulário rola. */
-.comp-detail-head {
-  position: sticky; top: 0; z-index: 5;
+/* CompBuilder: 1 quadrante só (accordion inline) — sem painel direito.
+   O .comp-builder-layout vira coluna única; .comp-body ocupa a largura toda. */
+.comp-builder-layout { flex-direction: column; }
+.comp-builder-layout .comp-left { width: 100%; }
+
+/* Conteúdo expandido dentro do card (accordion). Antes era o painel direito
+   (master-detail, sticky, scroll próprio); agora embutido no card, fluindo
+   com a página. Mesmas seções tituladas (.detail-section). */
+.rc-card-detail { border-top: 1px solid var(--border); }
+.rc-card-detail-head {
   background: var(--surface); border-bottom: 1px solid var(--border);
 }
-.comp-detail-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.rc-card-detail-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 
 /* Seções tituladas do formulário de edição */
 .detail-section {
@@ -397,11 +393,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   text-transform: uppercase; letter-spacing: .5px;
 }
 .detail-section-title .ti { font-size: 13px; color: var(--hint); }
-
-@media (max-width: 1100px) {
-  .comp-builder-layout { flex-direction: column; }
-  .comp-builder-layout .comp-detail { position: static; width: 100%; max-height: none; }
-}
 
 /* ── Escalação: painel direito (título do evento + inscritos) ──────────── */
 /* esc-layout estica o painel direito pra acompanhar a altura da planilha,
@@ -1104,22 +1095,27 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .party-col-add:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Role card */
+/* Role card — função expressa pela borda esquerda colorida (var --chip-color,
+   setada inline pelo JS), não por badge. Slots sem fn ficam com a cor padrão
+   (var(--border-strong), passada pelo JS quando slot.fn é null). */
 .role-card {
   border: 1px solid var(--border);
-  border-left: 3px solid var(--chip-color, var(--border-strong));
+  border-left: 4px solid var(--chip-color, var(--border-strong));
   border-radius: var(--radius-sm); background: var(--surface);
-  overflow: hidden; cursor: pointer; transition: border-color 0.1s;
+  overflow: hidden; cursor: pointer; transition: border-color 0.1s, box-shadow 0.1s;
 }
 .role-card:hover:not(.rc-open) {
   border-top-color: var(--border-strong);
   border-right-color: var(--border-strong);
   border-bottom-color: var(--border-strong);
 }
+/* Card expandido (accordion) — destaque dourado pra se destacar dos recolhidos. */
 .role-card.rc-open {
-  border-top-color: var(--border-strong);
-  border-right-color: var(--border-strong);
-  border-bottom-color: var(--border-strong);
+  border-top-color: var(--gold);
+  border-right-color: var(--gold);
+  border-bottom-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold-soft, rgba(212,168,50,.25));
+  background: var(--surface-2);
 }
 .role-card.rc-editing { background: var(--surface-2); }
 
