@@ -527,7 +527,14 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
     }
     const [pi, si] = openCard;
     const slot = draft.parties[pi]?.slots[si];
-    if (!slot) return null;
+    if (!slot) {
+      return (
+        <div className="comp-right comp-detail comp-right-hint">
+          <i className="ti ti-hand-click" aria-hidden style={{ fontSize: 22, opacity: 0.5 }} />
+          <span>{t("selectRoleHint")}</span>
+        </div>
+      );
+    }
     const role = slot.roles[0];
     const formRole = slot.roles[editRi] ?? role;
     const formWeapBase = formRole?.equip_loaded && formRole.equip.weapon?.id
@@ -933,55 +940,60 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
   // ── Render (builder) ──────────────────────────────────────
   return (
     <div className="container">
-      <div className="card">
+      <div className="card comp-editor-card">
 
-        {/* Header */}
-        <div className="comp-header">
-          <button className="btn" style={{ padding: "5px 10px" }}
-            onClick={onBack}
-            title={t("backToListTitle")}>
-            <i className="ti ti-arrow-left" aria-hidden />
-          </button>
-          {editing ? (
-            <input className="comp-name-input" value={draft.name}
-              onFocus={captureHistory} onBlur={releaseFocus}
-              onChange={e => updQuiet(d => ({ ...d, name: e.target.value }))} />
-          ) : (
-            <span style={{ fontWeight: 600, fontSize: 16 }}>{draft.name}</span>
-          )}
-          {offline && <span className="badge">{t("demoBadge")}</span>}
-          {error && <span style={{ color: "#e07a7a", fontSize: 12 }}>{error}</span>}
-
-          <div className="comp-view-toggle">
-            <button className={!editing ? "active" : ""} onClick={() => setEditing(false)}>
-              <i className="ti ti-eye" aria-hidden /> {t("viewBtn")}
+        {/* Header — duas faixas: identidade (voltar + nome + view/edit) e
+            toolbar (funções + undo + salvar). Separar dá respiro e hierarquia. */}
+        <div className="comp-header comp-header-2row">
+          <div className="comp-header-title">
+            <button className="btn" style={{ padding: "5px 10px" }}
+              onClick={onBack}
+              title={t("backToListTitle")}>
+              <i className="ti ti-arrow-left" aria-hidden />
             </button>
-            {perms["comps.manage"] && (
-              <button className={editing ? "active" : ""} onClick={() => setEditing(true)}>
-                <i className="ti ti-pencil" aria-hidden /> {t("editBtn")}
+            {editing ? (
+              <input className="comp-name-input" value={draft.name}
+                onFocus={captureHistory} onBlur={releaseFocus}
+                onChange={e => updQuiet(d => ({ ...d, name: e.target.value }))} />
+            ) : (
+              <span className="comp-name-label">{draft.name}</span>
+            )}
+            {offline && <span className="badge">{t("demoBadge")}</span>}
+            {error && <span className="comp-header-error">{error}</span>}
+
+            <div className="comp-view-toggle" style={{ marginLeft: "auto" }}>
+              <button className={!editing ? "active" : ""} onClick={() => setEditing(false)}>
+                <i className="ti ti-eye" aria-hidden /> {t("viewBtn")}
+              </button>
+              {perms["comps.manage"] && (
+                <button className={editing ? "active" : ""} onClick={() => setEditing(true)}>
+                  <i className="ti ti-pencil" aria-hidden /> {t("editBtn")}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="comp-header-tools">
+            <button className="btn comp-tool-btn"
+              onClick={() => setShowFnPanel(p => !p)} title={t("configFnTypesTitle")}>
+              <i className="ti ti-palette" aria-hidden /> {t("compFnTypesToolbarBtn")}
+            </button>
+
+            <button className="btn comp-tool-btn" onClick={undo} disabled={!history.length}
+              title={t("undoLastTitle")}>
+              <i className="ti ti-arrow-back-up" aria-hidden /> {t("undoLastTitle")}
+            </button>
+
+            {editing && (
+              <button className={"btn comp-save-btn" + (dirty ? " primary" : "")}
+                onClick={save} disabled={!dirty || saving}>
+                {saveOk
+                  ? <><i className="ti ti-check" aria-hidden /> {t("saved")}</>
+                  : saving ? t("saving")
+                  : <><i className="ti ti-device-floppy" aria-hidden /> {t("save")}</>}
               </button>
             )}
           </div>
-
-          <button className="btn" style={{ marginLeft: "auto" }}
-            onClick={() => setShowFnPanel(p => !p)} title={t("configFnTypesTitle")}>
-            <i className="ti ti-palette" aria-hidden />
-          </button>
-
-          <button className="btn" onClick={undo} disabled={!history.length}
-            title={t("undoLastTitle")}>
-            <i className="ti ti-arrow-back-up" aria-hidden />
-          </button>
-
-          {editing && (
-            <button className={"btn" + (dirty ? " primary" : "")}
-              onClick={save} disabled={!dirty || saving}>
-              {saveOk
-                ? <><i className="ti ti-check" aria-hidden /> {t("saved")}</>
-                : saving ? t("saving")
-                : <><i className="ti ti-device-floppy" aria-hidden /> {t("save")}</>}
-            </button>
-          )}
         </div>
 
         {/* Function type CRUD panel — fn-types agora são da guilda (Guild.settings

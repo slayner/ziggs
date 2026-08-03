@@ -1545,8 +1545,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .events-command-stats div:last-child { border-right: 0; }
 .events-command-stats dt { color: var(--hint); font-size: 8px; letter-spacing: .08em; text-transform: uppercase; }
 .events-command-stats dd { margin: 1px 0 0; color: var(--text); font: 700 18px ui-monospace, monospace; }
-.ev-create-panel { margin-bottom: 14px; padding: 10px; background: linear-gradient(90deg, rgba(212,163,56,.05), var(--surface)); }
-.ev-create-panel > .btn { margin-bottom: 0 !important; }
+.ev-create-panel { margin-bottom: 14px; padding: 12px; background: linear-gradient(90deg, rgba(212,163,56,.05), var(--surface)); }
+.ev-create-panel > .ev-create-cta { width: 100%; justify-content: center; padding: 11px; font-size: 14px; }
 .ev-group { margin-top: 16px; }
 .ev-group-title { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); }
 .ev-group-title span { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
@@ -1574,8 +1574,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .ev-card-copy > small span { display: inline-flex; align-items: center; gap: 4px; }
 .ev-serious { color: var(--gold); }
 .ev-card-chevron { color: var(--hint); }
-.ev-card-body { padding: 0 14px 14px; border-top: 1px solid var(--border); background: rgba(14,15,19,.2); }
-.ev-card-body > .pipe { padding-top: 12px; }
+.ev-card-body { padding: 12px 14px 14px; border-top: 1px solid var(--border); background: rgba(14,15,19,.2); }
 .ev-detail-state, .ev-list-loading, .ev-list-error {
   display: flex; align-items: center; gap: 7px; padding: 12px; color: var(--muted); font-size: 12px;
 }
@@ -1590,6 +1589,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   .events-command-stats { grid-column: 1 / -1; justify-self: stretch; }
   .events-command-stats div { flex: 1; }
   .ev-card-body .pipe { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px; }
+  .ev-policy-group { grid-template-columns: 1fr; }
+  .ev-stage-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
   .events-command-head { padding: 13px; }
@@ -1604,6 +1605,113 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 @media (prefers-reduced-motion: reduce) {
   .events-live i { animation: none; }
 }
+
+/* ── EventsPage: remoldar UX (ago/2026) ──────────────────────────────────
+   Hierarquia: ativos ganham barra de acento mais grossa; histórico fica
+   mutado e COLAPSÁVEL (não rouba foco dos CTAs vivos). Form de criação
+   virou seções (objetivo / data / comp / políticas / mensagem). Detalhe
+   agora mostra o recado do caller (antes enterrado no objeto) + meta das
+   políticas. Prefixo evt-/ev- conforme o resto da página. */
+
+/* ── Form de criação ── */
+.ev-create { border: 1px solid var(--border); background: var(--surface); }
+.ev-create-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(90deg, rgba(212,163,56,.06), transparent 60%);
+}
+.ev-create-head strong { display: inline-flex; align-items: center; gap: 7px; flex: 1; font-size: 13px; }
+.ev-create-head strong .ti { color: var(--gold); }
+.ev-create-close { background: none; border: 0; color: var(--hint); cursor: pointer; padding: 2px 6px; font-size: 15px; }
+.ev-create-close:hover { color: var(--text); }
+.ev-create-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.ev-field { display: flex; flex-direction: column; gap: 4px; }
+.ev-field-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--hint);
+}
+.ev-time-preview { font-size: 11px; }
+.ev-time-preview.ok { color: var(--green); }
+.ev-time-preview.bad { color: var(--red); }
+.ev-time-preview.empty { color: var(--hint); }
+/* Fieldset de políticas: dois selects lado a lado, marcador dourado à esquerda. */
+.ev-policy-group {
+  border: 1px solid var(--border); border-left: 2px solid var(--gold);
+  padding: 10px 12px 4px; margin: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  background: rgba(212,163,56,.03);
+}
+.ev-policy-group > legend {
+  padding: 0 6px; font-size: 10px; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--gold);
+}
+.ev-create-error { color: var(--red); font-size: 12px; margin: 0; display: flex; align-items: center; gap: 6px; }
+.ev-create-foot { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface-2); }
+.ev-create-foot .btn.primary { flex: 1; justify-content: center; }
+
+/* ── Lista: ativos com mais ênfase, histórico mutado e recolhível ── */
+.ev-group-active .ev-card { box-shadow: inset 3px 0 var(--ev-accent); }
+.ev-group.history { margin-top: 28px; }
+.ev-group.history .ev-card { opacity: .64; box-shadow: inset 2px 0 var(--border-strong); }
+.ev-group.history .ev-card:hover { opacity: .92; }
+/* Header do histórico vira botão de recolher. Override do `.ev-group-title i`
+   (que vira a régua de 1px) só no chevron, que carrega .ti. */
+.ev-group-toggle {
+  width: 100%; background: none; border: 0; cursor: pointer; text-align: left;
+  padding: 4px 0; color: inherit; font: inherit;
+}
+.ev-group-toggle:hover span { color: var(--text); }
+.ev-group-toggle > .ti { flex: 0 0 auto; width: auto; height: auto; background: none; color: var(--hint); font-size: 12px; }
+.ev-group-toggle.collapsed { margin-bottom: 0; }
+.ev-group-hint { font-size: 9px; font-weight: 600; letter-spacing: .08em; color: var(--hint); text-transform: uppercase; }
+
+/* ── Detalhe: banner do recado do caller (antes nunca exibido) ── */
+.ev-detail-message {
+  display: flex; align-items: flex-start; gap: 8px; margin: 0 0 10px;
+  padding: 9px 12px; border: 1px solid rgba(212,163,56,.3); border-left: 2px solid var(--gold);
+  background: rgba(212,163,56,.06); color: var(--text); font-size: 13px;
+}
+.ev-detail-message .ti { color: var(--gold); flex-shrink: 0; margin-top: 1px; }
+/* Meta compacta: comp / inscritos / escalação / autofill como chips. */
+.ev-detail-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.ev-meta-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
+  font-size: 11px; color: var(--muted); border: 1px solid var(--border); background: var(--surface-2);
+}
+.ev-meta-chip .ti { color: var(--hint); font-size: 11px; }
+/* Pipeline row + X de excluir. */
+.ev-detail-pipe { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+.ev-detail-delete { background: none; border: 0; color: var(--hint); cursor: pointer; padding: 2px 4px; font-size: 16px; flex-shrink: 0; }
+.ev-detail-delete:hover { color: var(--red); }
+/* Stage (review / finalized): header editorial + grade de 2 células. */
+.ev-stage { margin-bottom: 16px; }
+.ev-stage-h {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 10px;
+  font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+}
+.ev-stage-h .ti { color: var(--gold); font-size: 13px; }
+.ev-finalized-h { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: #6bbf73; font-weight: 600; font-size: 13px; }
+.ev-finalized-h .ti { color: #6bbf73; }
+.ev-stage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.ev-stage-cell { padding: 10px; }
+/* Barra de ações do detalhe. */
+.ev-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
+.ev-action-btn { font-size: 12px; }
+.ev-actions-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.ev-attendance { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.ev-attendance > .ti { color: var(--hint); font-size: 12px; }
+.ev-attendance-input { width: 48px; font-size: 12.5px; padding: 2px 5px; text-align: right; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); }
+
+/* ── Participantes: header com quebra (escalados / inscritos / ausentes) ── */
+.ev-participants { border-top: 1px solid var(--border); padding-top: 12px; margin: 4px 0 12px; }
+.ev-part-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ev-part-title { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.ev-part-stats { display: inline-flex; align-items: center; gap: 10px; margin-left: auto; font-size: 11px; }
+.ev-part-stats b { color: var(--text); font-family: ui-monospace, monospace; }
+.ev-part-stats .muted { display: inline-flex; align-items: center; gap: 3px; }
+.ev-part-add { display: flex; gap: 4px; margin-top: 8px; }
+.ev-part-add .input { font-size: 12px; padding: 3px 6px; }
+.ev-part-add .input:not(.ev-part-add-pct) { flex: 1; min-width: 0; }
+.ev-part-add-pct { width: 44px; }
 
 /* ── Design v2: war-room / blueprint ─────────────────────────────────────
    Assinatura visual do site: cantos RETOS, colchetes de canto (TL+BR) que
@@ -2103,3 +2211,57 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .legal-body strong { color: var(--text); font-weight: 600; }
 .legal-body a { color: var(--info); text-decoration: none; }
 .legal-body a:hover { text-decoration: underline; }
+
+/* ─── CompBuilder — remodelação UX (jul/2026) ──────────────────────────── */
+.comp-list-hero { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+.comp-list-hero-text { flex: 1; min-width: 0; }
+.comp-list-hero-text .comp-kicker { color: var(--gold); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; margin: 0 0 4px; }
+.comp-list-hero-text h2 { margin: 0 0 4px; font-size: 22px; color: var(--text); font-weight: 700; }
+.comp-list-hero-text p { margin: 0; color: var(--hint); font-size: 13px; }
+.comp-list-hero-tools { flex-shrink: 0; }
+.comp-list-hero-tools .input { width: 220px; }
+
+.comp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+
+.comp-card { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
+.comp-card:hover { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(212,163,56,.15); }
+
+.comp-card-create { border-style: dashed; border-color: var(--border); align-items: center; justify-content: center; text-align: center; padding: 28px 16px; cursor: pointer; color: var(--hint); }
+.comp-card-create:hover { border-color: var(--gold); color: var(--gold); }
+.comp-card-create-icon { font-size: 28px; margin-bottom: 10px; display: block; }
+.comp-card-create .comp-card-name { font-size: 14px; font-weight: 600; display: block; }
+.comp-card-create .comp-card-sub { font-size: 12px; color: var(--hint); display: block; margin-top: 3px; }
+
+.comp-card-main { flex: 1; text-align: left; padding: 16px; background: none; border: none; cursor: pointer; display: flex; flex-direction: column; gap: 8px; }
+.comp-card-main:hover { background: var(--surface-2); }
+.comp-card-icon { font-size: 22px; color: var(--gold); }
+.comp-card-name { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comp-card-stats { display: flex; gap: 12px; flex-wrap: wrap; }
+.comp-card-stat { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+.comp-card-stat.muted { color: var(--hint); font-style: italic; }
+.comp-card-actions { display: flex; gap: 4px; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--surface-2); }
+.comp-card-actions button { background: none; border: 0; color: var(--hint); cursor: pointer; padding: 4px 8px; font-size: 13px; border-radius: 4px; }
+.comp-card-actions button:hover { color: var(--text); background: rgba(255,255,255,.05); }
+.comp-card-actions button.danger:hover { color: var(--red); }
+.comp-card-confirm { padding: 10px 12px; font-size: 12px; color: var(--red); display: flex; align-items: center; gap: 8px; }
+.comp-card-deleting { border-color: var(--red); }
+
+.comp-list-empty { grid-column: 1 / -1; text-align: center; padding: 48px 20px; color: var(--hint); }
+.comp-list-empty h3 { margin: 0 0 6px; font-size: 16px; color: var(--text); }
+.comp-list-empty p { margin: 0; font-size: 13px; }
+
+.comp-create-modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 200; }
+.comp-create-modal-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: 380px; max-width: 90vw; display: flex; flex-direction: column; gap: 14px; }
+.comp-create-modal-head { display: flex; align-items: center; justify-content: space-between; }
+.comp-create-modal-title { font-size: 16px; font-weight: 700; color: var(--text); }
+.comp-create-modal-input { width: 100%; }
+.comp-create-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.comp-create-modal-hint { font-size: 12px; color: var(--hint); margin: 0; }
+
+.comp-header-2row { display: flex; flex-direction: column; gap: 0; padding: 0; border: 0; }
+.comp-header-title { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+.comp-header-title h2 { margin: 0; font-size: 18px; color: var(--text); }
+.comp-header-tools { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--surface-2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.comp-header-tools .comp-tool-btn { font-size: 12px; padding: 6px 12px; }
+.comp-header-tools .comp-save-btn { margin-left: auto; }
+.comp-save-btn { font-weight: 700; }

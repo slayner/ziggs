@@ -58,6 +58,10 @@ export default function EventsPage({ perms, active = true }: { perms: Permission
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  // Histórico começa colapsado quando há operações ativas — essas é que
+  // pedem atenção; o passado fica a um clique de distância, sem roubar foco.
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const historyInit = useRef(false);
   // undefined = ainda não buscado, null = falhou, EventDetail = carregado.
   const [details, setDetails] = useState<Record<number, EventDetail | null | undefined>>({});
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +151,16 @@ export default function EventsPage({ perms, active = true }: { perms: Permission
   const activeEvents = events.filter(e => ACTIVE_STATES.has(e.state));
   const historyEvents = events.filter(e => !ACTIVE_STATES.has(e.state));
 
+  // No primeiro carregamento com operações ativas, recolha o histórico pra
+  // manter o foco no que importa. Só decide uma vez — depois o usuário manda.
+  useEffect(() => {
+    if (historyInit.current || listLoading) return;
+    if (activeEvents.length > 0) {
+      historyInit.current = true;
+      setHistoryCollapsed(true);
+    }
+  }, [listLoading, activeEvents.length]);
+
   function renderEvent(e: EventSummary) {
     const isExpanded = expanded.has(e.id);
     const det = details[e.id];
@@ -209,13 +223,22 @@ export default function EventsPage({ perms, active = true }: { perms: Permission
       {listLoading && <div className="ev-list-loading"><i className="ti ti-loader-2 spin" aria-hidden="true" /> {t("loading")}</div>}
       {!listLoading && !error && events.length === 0 && <div className="card ev-empty"><i className="ti ti-calendar-off" aria-hidden="true" /><p className="muted">{t("noEventsYet")}</p></div>}
 
-      {activeEvents.length > 0 && <section className="ev-group">
+      {activeEvents.length > 0 && <section className="ev-group ev-group-active">
         <div className="ev-group-title"><span>{t("eventsActiveGroup")}</span><i /><b>{activeEvents.length}</b></div>
         <div className="ev-card-list">{activeEvents.map(renderEvent)}</div>
       </section>}
       {historyEvents.length > 0 && <section className="ev-group history">
-        <div className="ev-group-title"><span>{t("eventsHistoryGroup")}</span><i /><b>{historyEvents.length}</b></div>
-        <div className="ev-card-list">{historyEvents.map(renderEvent)}</div>
+        <button
+          type="button"
+          className={"ev-group-title ev-group-toggle" + (historyCollapsed ? " collapsed" : "")}
+          onClick={() => setHistoryCollapsed(v => !v)}
+          aria-expanded={!historyCollapsed}
+        >
+          <i className={"ti " + (historyCollapsed ? "ti-chevron-right" : "ti-chevron-down")} aria-hidden />
+          <span>{t("eventsHistoryGroup")}</span><i /><b>{historyEvents.length}</b>
+          <span className="ev-group-hint">{historyCollapsed ? t("evHistoryShow") : t("evHistoryHide")}</span>
+        </button>
+        {!historyCollapsed && <div className="ev-card-list">{historyEvents.map(renderEvent)}</div>}
       </section>}
     </div>
   );
@@ -304,6 +327,8 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
   const [whenInput, setWhenInput] = useState("");
   const [comps, setComps] = useState<{ id: number; name: string }[]>([]);
   const [compId, setCompId] = useState("");
+  const [assignmentMode, setAssignmentMode] = useState("hybrid");
+  const [autofillMode, setAutofillMode] = useState("manual");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -322,8 +347,11 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
         scheduled_at: when.iso,
         comp_id: compId ? Number(compId) : null,
         message: msg.trim() || null,
+        assignment_mode: assignmentMode,
+        autofill_mode: autofillMode,
       });
       setTitle(""); setWhenInput(""); setCompId(""); setMsg("");
+      setAssignmentMode("hybrid"); setAutofillMode("manual");
       setOpen(false);
       onCreated(ev);
     } catch (e) {
@@ -335,65 +363,88 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
 
   if (!open) {
     return (
-      <button className="btn primary" style={{ width: "100%", marginBottom: 14 }} onClick={() => setOpen(true)}>
+      <button className="btn primary ev-create-cta" onClick={() => setOpen(true)}>
         <i className="ti ti-plus" aria-hidden /> {t("evNewEventBtn")}
       </button>
     );
   }
 
-  const field = { marginBottom: 10 } as const;
-  const label = { display: "block", marginBottom: 4 } as const;
-
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 12, marginBottom: 14 }}>
-      <div style={field}>
-        <input
-          className="input" style={{ width: "100%" }} placeholder={t("evCtaNamePlaceholder")}
-          value={title} onChange={(e) => setTitle(e.target.value)} autoFocus
-        />
+    <div className="ev-create">
+      <div className="ev-create-head">
+        <strong><i className="ti ti-plus" aria-hidden /> {t("evNewEventBtn")}</strong>
+        <button className="ev-create-close" onClick={() => setOpen(false)} disabled={busy} title={t("closeBtn")} aria-label={t("closeBtn")}>
+          <i className="ti ti-x" aria-hidden />
+        </button>
       </div>
-      <div style={field}>
-        <span className="hint" style={label}>{t("evScheduledAtLabel")}</span>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, alignItems: "center" }}>
+
+      <div className="ev-create-body">
+        <label className="ev-field">
+          <span className="ev-field-label">{t("evFieldObjective")}</span>
           <input
-            className="input" style={{ width: "100%" }}
+            className="input" placeholder={t("evCtaNamePlaceholder")}
+            value={title} onChange={(e) => setTitle(e.target.value)} autoFocus
+          />
+        </label>
+
+        <label className="ev-field">
+          <span className="ev-field-label">{t("evScheduledAtLabel")}</span>
+          <input
+            className="input"
             value={whenInput} onChange={(e) => setWhenInput(e.target.value)}
             placeholder={t("evTimeInputPlaceholder")}
             aria-describedby="event-time-preview"
           />
-          <div
+          <span
             id="event-time-preview" aria-live="polite"
-            style={{ fontSize: 12, color: when ? "var(--green)" : whenInput ? "#e07a7a" : "var(--hint)" }}
+            className={"ev-time-preview " + (!whenInput ? "empty" : when ? "ok" : "bad")}
           >
-            {!whenInput
-              ? t("evTimeInputHint")
-              : when
-                ? `${when.utc} UTC`
-                : t("evTimeInvalid")}
-          </div>
-        </div>
+            {!whenInput ? t("evTimeInputHint") : when ? `${when.utc} UTC` : t("evTimeInvalid")}
+          </span>
+        </label>
+
+        <label className="ev-field">
+          <span className="ev-field-label">{t("evCompLabel")}</span>
+          <select className="cs-select" value={compId} onChange={(e) => setCompId(e.target.value)}>
+            <option value="">{t("evNoComp")}</option>
+            {comps.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </label>
+
+        <fieldset className="ev-policy-group">
+          <legend>{t("evSectionPolicies")}</legend>
+          <label className="ev-field">
+            <span className="ev-field-label">{t("evAssignmentModeLabel")}</span>
+            <select className="cs-select" value={assignmentMode} onChange={(e) => setAssignmentMode(e.target.value)}>
+              <option value="hybrid">{t("evHybridAssignment")}</option>
+              <option value="admin_assign">{t("evAdminAssignment")}</option>
+              <option value="self_assign">{t("evSelfAssignment")}</option>
+            </select>
+          </label>
+          <label className="ev-field">
+            <span className="ev-field-label">{t("evAutofillModeLabel")}</span>
+            <select className="cs-select" value={autofillMode} onChange={(e) => setAutofillMode(e.target.value)}>
+              <option value="manual">{t("evManualAutofill")}</option>
+              <option value="off">{t("evAutofillOff")}</option>
+              <option value="on_signup">{t("evAutofillSignup")}</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <label className="ev-field">
+          <span className="ev-field-label">{t("evMessageLabel")}</span>
+          <textarea
+            className="input" style={{ minHeight: 52, resize: "vertical" }}
+            placeholder={t("evMessagePlaceholder")}
+            value={msg} onChange={(e) => setMsg(e.target.value)}
+          />
+        </label>
+
+        {error && <p className="ev-create-error"><i className="ti ti-alert-circle" aria-hidden /> {error}</p>}
       </div>
-      <div style={field}>
-        <span className="hint" style={label}>{t("evCompLabel")}</span>
-        <select className="cs-select" style={{ width: "100%" }} value={compId} onChange={(e) => setCompId(e.target.value)}>
-          <option value="">{t("evNoComp")}</option>
-          {comps.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      </div>
-      <div style={field}>
-        <span className="hint" style={label}>{t("evMessageLabel")}</span>
-        <textarea
-          className="input" style={{ width: "100%", minHeight: 52, resize: "vertical" }}
-          placeholder={t("evMessagePlaceholder")}
-          value={msg} onChange={(e) => setMsg(e.target.value)}
-        />
-      </div>
-      {error && <p style={{ color: "#e07a7a", fontSize: 13, marginBottom: 8 }}>{error}</p>}
-      <div style={{ display: "flex", gap: 8 }}>
-        <button
-          className="btn primary" style={{ flex: 1 }} onClick={submit}
-          disabled={busy}
-        >
+
+      <div className="ev-create-foot">
+        <button className="btn primary" onClick={submit} disabled={busy || !when}>
           <i className="ti ti-plus" aria-hidden /> {t("createBtn")}
         </button>
         <button className="btn" onClick={() => setOpen(false)} disabled={busy}>{t("closeBtn")}</button>
@@ -499,13 +550,44 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
     : forward === "finalized" ? t("finalizeBtn")
     : t("startEventBtn");
 
+  // Rótulos legíveis pras políticas (detail traz o enum cru do backend).
+  const assignLabel =
+    detail.assignment_mode === "admin_assign" ? t("evAdminAssignment")
+    : detail.assignment_mode === "self_assign" ? t("evSelfAssignment")
+    : t("evHybridAssignment");
+  const autofillLabel =
+    detail.autofill_mode === "off" ? t("evAutofillOff")
+    : detail.autofill_mode === "on_signup" ? t("evAutofillSignup")
+    : t("evManualAutofill");
+
   return (
     <>
-      {/* Título/estado/tipo já aparecem na linha de cabeçalho da lista (fora
-          deste componente) — aqui só o que é específico do detalhe.
-          Pipeline à esquerda, X de excluir no canto superior direito. */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginTop: 12 }}>
-        <div className="pipe" style={{ flex: 1, margin: "0 0 16px" }}>
+      {/* Cabeçalho do detalhe: recado do caller em destaque (antes NUNCA era
+          renderizado — ficava enterrado no objeto) + meta compacta das
+          políticas e inscritos. Título/horário/estado já vivem na linha da
+          lista (fora deste componente), então não se repetem aqui. */}
+      {detail.message && (
+        <div className="ev-detail-message">
+          <i className="ti ti-megaphone" aria-hidden />
+          <span>{detail.message}</span>
+        </div>
+      )}
+      <div className="ev-detail-meta">
+        <span className="ev-meta-chip" title={t("evAssignmentModeLabel")}>
+          <i className="ti ti-users-group" aria-hidden />
+          {t("evAssignmentModeLabel")}: {assignLabel}
+        </span>
+        <span className="ev-meta-chip" title={t("evAutofillModeLabel")}>
+          <i className="ti ti-wand" aria-hidden />
+          {t("evAutofillModeLabel")}: {autofillLabel}
+        </span>
+      </div>
+
+      {/* Pipeline: estado atual dourado, passados verde. X de excluir à direita
+          (cancelado/excluído viram o mesmo gesto — o backend aceita "deleted"
+          de qualquer estado, estornando pagamentos se já finalizado). */}
+      <div className="ev-detail-pipe">
+        <div className="pipe" style={{ flex: 1, margin: 0 }}>
           {PIPELINE.map((s, i) => (
             <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               <span className={"state-pill " + (i === curIdx ? "cur" : curIdx >= 0 && i < curIdx ? "done" : "")}>
@@ -517,11 +599,11 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
         </div>
         {canDelete && (
           <button
+            className="ev-detail-delete"
             title={t("deleteEventTitle")}
-            style={{ background: "none", border: "none", color: "var(--hint)", cursor: "pointer", padding: "2px 4px", flexShrink: 0 }}
             onClick={() => { if (confirm(t("deleteEventConfirm"))) act(api.transition(detail.id, "deleted")); }}
           >
-            <i className="ti ti-x" style={{ fontSize: 16 }} aria-hidden />
+            <i className="ti ti-x" aria-hidden />
           </button>
         )}
       </div>
@@ -535,9 +617,10 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
 
       {/* Revisão: valor da tab + nodes lado a lado, payout, concluir. */}
       {detail.state === "review" && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-            <div className="card" style={{ padding: 10 }}>
+        <div className="ev-stage ev-stage-review">
+          <div className="ev-stage-h"><i className="ti ti-clipboard-check" aria-hidden />{t("reviewTitle")}</div>
+          <div className="ev-stage-grid">
+            <div className="card ev-stage-cell">
               {/* Valor da tab (marcador opcional). */}
               {detail.verification.map((v) =>
                 v.step === "tab_value" ? (
@@ -545,7 +628,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
                 ) : null
               )}
             </div>
-            <div className="card" style={{ padding: 10 }}>
+            <div className="card ev-stage-cell">
               {/* Nodes próximos do timer: capturamos? quanto vendemos? (% do
                   scout sai do valor vendido aqui — ver NodeDef.weight). */}
               <NodeClaimSection detail={detail} act={act} canManage={canManage} />
@@ -558,9 +641,9 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
 
       {/* Finalizado: resumo */}
       {detail.state === "finalized" && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
-            <i className="ti ti-circle-check" aria-hidden style={{ color: "#6bbf73" }} />
+        <div className="ev-stage ev-stage-finalized">
+          <div className="ev-finalized-h">
+            <i className="ti ti-circle-check" aria-hidden />
             {t("eventFinalized")}
           </div>
           <EventRegearsRow detail={detail} act={act} canManage={canManage} />
@@ -572,37 +655,35 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
       {/* Barra de ações: roster + liberar funções + UM botão primário (a
           próxima etapa do pipeline). Cancelar/excluir viraram o X lá em cima. */}
       {(detail.comp_id || canManage) && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
+        <div className="ev-actions">
           {detail.comp_id && (
-            <button className="btn" style={{ fontSize: 12 }}
+            <button className="btn ev-action-btn"
               title={t("rosterSignupCountTitle")}
               onClick={() => navigate(`/events/${g()}/${detail.id}/escalation`)}>
               <i className="ti ti-users" aria-hidden /> {t("escBtn")}
               {/* Inscritos (Discord), não escalados — o roster pode ter mais
                   gente esperando vaga do que slots preenchidos. */}
-              {detail.signups.length > 0 && <span className="badge info" style={{ marginLeft: 4 }}>{detail.signups.length}</span>}
+              {detail.signups.length > 0 && <span className="badge info">{detail.signups.length}</span>}
             </button>
           )}
           {canManage && ["scheduled", "in_progress"].includes(detail.state) && (
             <button
-              className={"btn" + (detail.functions_released ? " primary" : "")}
-              style={{ fontSize: 12 }}
+              className={"btn ev-action-btn" + (detail.functions_released ? " primary" : "")}
               onClick={() => act(api.releaseFunctions(detail.id, !detail.functions_released))}
             >
-              <i className={"ti " + (detail.functions_released ? "ti-lock-open" : "ti-lock")} aria-hidden />{" "}
+              <i className={"ti " + (detail.functions_released ? "ti-lock-open" : "ti-lock")} aria-hidden />
               {detail.functions_released ? t("functionsReleasedOn") : t("releaseFunctionsBtn")}
             </button>
           )}
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="ev-actions-right">
             {/* Attendance: valor único do evento, sentado à esquerda do finalizar. */}
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
-              <i className="ti ti-info-circle" style={{ color: "var(--hint)", fontSize: 12 }} title={t("eventAttendanceHint")} aria-hidden />
+            <span className="ev-attendance" title={t("eventAttendanceHint")}>
+              <i className="ti ti-info-circle" aria-hidden />
               <span className="hint">{t("eventAttendanceLabel")}</span>
               {canManage ? (
                 <input
-                  type="text" inputMode="decimal"
+                  type="text" inputMode="decimal" className="ev-attendance-input"
                   defaultValue={String(detail.attendance).replace(".", ",")}
-                  style={{ width: 48, fontSize: 12.5, padding: "2px 5px", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)", textAlign: "right" }}
                   onBlur={(e) => {
                     const v = parseFloat(e.target.value.replace(",", ".").trim());
                     if (Number.isFinite(v) && v !== detail.attendance) act(api.setEventAttendance(detail.id, v));
@@ -616,7 +697,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
             {canForward && (
               <button className="btn primary"
                 onClick={() => act(api.transition(detail.id, forward!))}>
-                <i className={"ti " + (forward === "finalized" ? "ti-circle-check" : "ti-player-play")} aria-hidden />{" "}
+                <i className={"ti " + (forward === "finalized" ? "ti-circle-check" : "ti-player-play")} aria-hidden />
                 {forwardLabel}
               </button>
             )}
@@ -1048,12 +1129,29 @@ function ParticipantsSection({ detail, act, canManage }: {
     );
   }
 
+  // Quebra pra dar hierarquia: quantos são escalados de verdade vs. inscritos
+  // sem presença vs. ausentes em batalha. As três populações se misturam numa
+  // lista só (ordenada por %); o resumo deixa a composição visível num relance.
+  const realCount = detail.participants.length;
+  const signupCount = unassignedSignups.length;
+  const absenteeCount = detail.battle_absentees.filter(a => !assignedIds.has(a.user_id)).length;
+  const hasBreakdown = signupCount > 0 || absenteeCount > 0;
+
   return (
-    <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4, marginBottom: 12 }}>
-      <div style={{ color: "var(--muted)", fontSize: 13, display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-        <i className="ti ti-users" aria-hidden />
-        {t("participantsLabel")}
-        {rows.length > 0 && <span className="badge info" style={{ marginLeft: 4 }}>{rows.length}</span>}
+    <div className="ev-participants">
+      <div className="ev-part-head">
+        <span className="ev-part-title">
+          <i className="ti ti-users" aria-hidden />
+          {t("participantsLabel")}
+          {rows.length > 0 && <span className="badge info">{rows.length}</span>}
+        </span>
+        {hasBreakdown && (
+          <span className="ev-part-stats">
+            <span><b>{realCount}</b></span>
+            {signupCount > 0 && <span className="muted" title={t("originSignupNoCall")}><i className="ti ti-notebook" aria-hidden /> {signupCount}</span>}
+            {absenteeCount > 0 && <span className="muted" title={t("originBattleNoCall")}><i className="ti ti-swords" aria-hidden /> {absenteeCount}</span>}
+          </span>
+        )}
       </div>
       {rows.length === 0 ? (
         <p className="hint" style={{ marginBottom: 8 }}>{t("participantsAutoAddHint")}</p>
@@ -1063,14 +1161,14 @@ function ParticipantsSection({ detail, act, canManage }: {
         </div>
       )}
       {isActive && canManage && (
-        <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
-          <input className="input" style={{ flex: 1, minWidth: 0, fontSize: 12, padding: "3px 6px" }} placeholder={t("nameWord")}
+        <div className="ev-part-add">
+          <input className="input" placeholder={t("nameWord")}
             value={newName} onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
-          <input className="input" style={{ width: 44, fontSize: 12, padding: "3px 4px" }} placeholder="%"
+          <input className="input ev-part-add-pct" placeholder="%"
             value={newPct} onChange={(e) => setNewPct(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
-          <button className="btn" style={{ padding: "3px 8px" }} onClick={submitAdd} disabled={!newName.trim()} title={t("addBtn")}>
+          <button className="btn" onClick={submitAdd} disabled={!newName.trim()} title={t("addBtn")}>
             <i className="ti ti-plus" aria-hidden />
           </button>
         </div>

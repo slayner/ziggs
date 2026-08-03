@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type Permissions } from "../../api";
 import { useLang, useT } from "../../i18n";
 import { mockApiComp } from "../../mock";
@@ -9,6 +9,13 @@ import type { CompCode, Draft } from "./types";
 // completo ANTES de avisar o pai (onOpen), pra manter o comportamento
 // original de não trocar de tela até os dados estarem prontos (sem flash de
 // "carregando" no editor).
+//
+// Remodelação UX (jul/2026): grid de cards em vez de lista linear. Cada card
+// mostra nome + contagens (parties/roles) carregadas em paralelo, e a criação
+// vira um card próprio no grid. Busca por nome filtra em memória.
+type CompStats = { parties: number; roles: number };
+type StatsState = Record<number, CompStats | null>;
+
 export function CompList({ perms, offline, compList, setCompList, onOpen }: {
   perms: Permissions;
   offline: boolean;
@@ -19,16 +26,38 @@ export function CompList({ perms, offline, compList, setCompList, onOpen }: {
   const t = useT();
   const { lang } = useLang();
   const [creatingComp, setCreatingComp] = useState(false);
+  const [importMode, setImportMode] = useState(false);
   const [newCompName, setNewCompName] = useState("");
   const [deletingCompId, setDeletingCompId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copyingId, setCopyingId] = useState<number | null>(null);
   const [codeMsg, setCodeMsg] = useState<string | null>(null);
+  const [stats, setStats] = useState<StatsState>({});
+  const [query, setQuery] = useState("");
 
   function flashCodeMsg(msg: string) {
     setCodeMsg(msg);
     setTimeout(() => setCodeMsg(null), 1500);
   }
+
+  // Carrega contagens (parties/roles) de todas as comps da lista em paralelo,
+  // só pra exibição no card. Não bloqueia a abertura (openComp busca o draft
+  // completo na hora do clique). Roda quando a lista muda.
+  useEffect(() => {
+    if (!compList) return;
+    for (const c of compList) {
+      if (stats[c.id] !== undefined) continue;
+      setStats(prev => ({ ...prev, [c.id]: null }));
+      api.getComp(c.id)
+        .then(full => {
+          const parties = full.parties.length;
+          const roles = full.parties.reduce((n, p) => n + p.slots.reduce((m, s) => m + s.roles.length, 0), 0);
+          setStats(prev => ({ ...prev, [c.id]: { parties, roles } }));
+        })
+        .catch(() => setStats(prev => ({ ...prev, [c.id]: { parties: 0, roles: 0 } })));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compList]);
 
   // Copia o código da comp INTEIRA (todas as parties/slots/roles) — não uma
   // build isolada. O código de uma build individual continua no menu de
@@ -66,7 +95,7 @@ export function CompList({ perms, offline, compList, setCompList, onOpen }: {
     try {
       const c = await api.createComp({ name: newCompName.trim() });
       setCompList(prev => [...(prev ?? []), { id: c.id, name: c.name }]);
-      setCreatingComp(false); setNewCompName("");
+      setCreatingComp(false); setImportMode(false); setNewCompName("");
       onOpen(c.id, compToDraft(c), true, code);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("createCompError"));
@@ -91,7 +120,7 @@ export function CompList({ perms, offline, compList, setCompList, onOpen }: {
     try {
       const c = await api.createComp({ name: newCompName.trim() });
       setCompList(prev => [...(prev ?? []), { id: c.id, name: c.name }]);
-      setCreatingComp(false); setNewCompName("");
+      setCreatingComp(false); setImportMode(false); setNewCompName("");
       await openComp(c.id, true);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("createCompError"));
@@ -103,90 +132,178 @@ export function CompList({ perms, offline, compList, setCompList, onOpen }: {
       await api.deleteComp(id);
       setCompList(prev => prev?.filter(c => c.id !== id) ?? prev);
       setDeletingCompId(null);
+      setStats(prev => { const n = { ...prev }; delete n[id]; return n; });
     } catch (e) {
       setError(e instanceof Error ? e.message : t("deleteCompError"));
     }
   }
 
+  const filtered = (compList ?? []).filter(c =>
+    c.name.toLowerCase().includes(query.trim().toLowerCase())
+  );
+  const canCreate = !!perms["comps.create"];
+
   return (
-    <div className="container">
-      <div className="card">
-        <div className="comp-header">
-          <span style={{ fontWeight: 600, fontSize: 16 }}>{t("compsTitle")}</span>
+    <div className="container comp-list-wrap">
+      {/* Hero editorial — título da seção + busca + criação */}
+      <div className="comp-list-hero">
+        <div className="comp-list-hero-text">
+          <small>{t("compListKicker")}</small>
+          <h1>{t("compsTitle")}</h1>
+          <p>{t("compListSub")}</p>
+        </div>
+        <div className="comp-list-hero-tools">
+          <div className="item-picker-field comp-list-search">
+            <i className="ti ti-search" aria-hidden style={{ opacity: 0.5, fontSize: 13 }} />
+            <input className="item-picker-input"
+              placeholder={t("compSearchPlaceholder")}
+              value={query}
+              onChange={e => setQuery(e.target.value)} />
+          </div>
           {offline && <span className="badge">{t("demoBadge")}</span>}
-          {perms["comps.create"] && (
-            <button className="btn" style={{ marginLeft: "auto" }}
-              onClick={() => { setCreatingComp(p => !p); setError(null); }}>
-              <i className="ti ti-plus" aria-hidden /> {t("newCompBtn")}
-            </button>
+        </div>
+      </div>
+
+      {codeMsg && <p className="comp-list-msg">{codeMsg}</p>}
+      {error && <p className="comp-list-msg err">{error}</p>}
+
+      {!compList && <p className="muted comp-list-loading">{t("loading")}</p>}
+
+      {compList && (
+        <div className="comp-grid">
+          {/* Cards de criação — só aparecem quando não há busca ativa filtrando */}
+          {canCreate && !query.trim() && (
+            <>
+              <button className="comp-card comp-card-create" onClick={() => { setCreatingComp(p => !p); setImportMode(false); setError(null); }}>
+                <span className="comp-card-create-icon"><i className="ti ti-plus" aria-hidden /></span>
+                <span className="comp-card-name">{t("compCreateCardTitle")}</span>
+                <span className="comp-card-sub">{t("compCreateCardDesc")}</span>
+              </button>
+              <button className="comp-card comp-card-create" onClick={() => { setCreatingComp(true); setImportMode(true); setError(null); }}>
+                <span className="comp-card-create-icon"><i className="ti ti-clipboard" aria-hidden /></span>
+                <span className="comp-card-name">{t("compImportCardTitle")}</span>
+                <span className="comp-card-sub">{t("compImportCardDesc")}</span>
+              </button>
+            </>
+          )}
+
+          {filtered.map(c => {
+            const s = stats[c.id];
+            const deleting = deletingCompId === c.id;
+            return (
+              <div key={c.id} className={"comp-card" + (deleting ? " comp-card-deleting" : "")}>
+                <button className="comp-card-main"
+                  onClick={() => { setDeletingCompId(null); openComp(c.id, false); }}>
+                  <div className="comp-card-icon"><i className="ti ti-layout-list" aria-hidden /></div>
+                  <span className="comp-card-name">{c.name}</span>
+                  <div className="comp-card-stats">
+                    {s === null
+                      ? <span className="comp-card-stat muted">{t("compLoadingStats")}</span>
+                      : <>
+                          <span className="comp-card-stat">
+                            <i className="ti ti-layout-grid" aria-hidden />
+                            {s.parties} {s.parties === 1 ? t("compPartyCountShort") : t("compPartyCountPlural")}
+                          </span>
+                          <span className="comp-card-stat">
+                            <i className="ti ti-users" aria-hidden />
+                            {s.roles} {s.roles === 1 ? t("compRoleCountShort") : t("compRoleCountPlural")}
+                          </span>
+                        </>
+                    }
+                  </div>
+                </button>
+                <div className="comp-card-actions">
+                  <button className="cs-xbtn" title={t("copyCompCodeBtn")} disabled={copyingId === c.id}
+                    onClick={e => { e.stopPropagation(); copyCompCodeFn(c.id); }}>
+                    <i className="ti ti-copy" aria-hidden />
+                  </button>
+                  {perms["comps.manage"] && (
+                    deleting ? (
+                      <div className="comp-card-confirm">
+                        <button className="cs-xbtn danger-act"
+                          onClick={e => { e.stopPropagation(); deleteCompFn(c.id); }}>
+                          <i className="ti ti-check" aria-hidden />
+                        </button>
+                        <button className="cs-xbtn"
+                          onClick={e => { e.stopPropagation(); setDeletingCompId(null); }}>
+                          <i className="ti ti-x" aria-hidden />
+                        </button>
+                      </div>
+                    ) : (
+                      <button className="cs-xbtn" title={t("deleteCompTitle")}
+                        onClick={e => { e.stopPropagation(); setDeletingCompId(c.id); }}>
+                        <i className="ti ti-trash" aria-hidden />
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {compList.length === 0 && !(canCreate && !query.trim()) && (
+            <div className="comp-list-empty">
+              <i className="ti ti-layout-list" aria-hidden />
+              <h3>{t("compEmptyTitle")}</h3>
+              <p>{t("compEmptyDesc")}</p>
+            </div>
+          )}
+          {compList.length > 0 && filtered.length === 0 && (
+            <p className="muted comp-list-loading">{t("noCompsYet")}</p>
           )}
         </div>
+      )}
 
-        {creatingComp && (
-          <div style={{ padding: "8px 14px", borderTop: "1px solid var(--border)", display: "flex", gap: 8 }}>
-            <input className="input" style={{ flex: 1, fontSize: 13, padding: "6px 10px" }}
+      {/* Modal de criação — sobreposto ao grid, mantém o fluxo antigo
+          (nome + importar código) */}
+      {creatingComp && (
+        <div className="comp-create-modal" onClick={e => {
+          if (e.target === e.currentTarget) { setCreatingComp(false); setImportMode(false); setNewCompName(""); }
+        }}>
+          <div className="comp-create-modal-card" onClick={e => e.stopPropagation()}>
+            <div className="comp-create-modal-head">
+              <span className="comp-create-modal-title">
+                {importMode ? t("compImportCardTitle") : t("compCreateCardTitle")}
+              </span>
+              <button className="cs-xbtn" onClick={() => { setCreatingComp(false); setImportMode(false); setNewCompName(""); }}>
+                <i className="ti ti-x" aria-hidden />
+              </button>
+            </div>
+            <input className="input comp-create-modal-input"
               placeholder={t("compNamePlaceholder")}
               value={newCompName}
               autoFocus
               onChange={e => setNewCompName(e.target.value)}
               onKeyDown={e => {
-                if (e.key === "Enter") createCompFn();
-                if (e.key === "Escape") { setCreatingComp(false); setNewCompName(""); }
+                if (e.key === "Enter") importMode ? importCompFn() : createCompFn();
+                if (e.key === "Escape") { setCreatingComp(false); setImportMode(false); setNewCompName(""); }
               }} />
-            <button className="btn primary" onClick={createCompFn} disabled={!newCompName.trim()}>{t("createBtn")}</button>
-            <button className="btn" style={{ flexShrink: 0 }} onClick={importCompFn} disabled={!newCompName.trim()}
-              title={t("importCompCodeHint")}>
-              <i className="ti ti-clipboard" aria-hidden /> {t("importCompCodeBtn")}
-            </button>
-            <button className="btn" onClick={() => { setCreatingComp(false); setNewCompName(""); }}>{t("cancel")}</button>
-          </div>
-        )}
-
-        {codeMsg && <p style={{ color: "var(--hint)", padding: "0 16px", margin: 0, fontSize: 12 }}>{codeMsg}</p>}
-        {error && <p style={{ color: "#e07a7a", padding: "8px 16px", margin: 0, fontSize: 12 }}>{error}</p>}
-
-        {!compList && <p className="muted" style={{ padding: "16px 14px" }}>{t("loading")}</p>}
-        {compList?.length === 0 && !creatingComp && (
-          <p className="muted" style={{ padding: "16px 14px" }}>
-            {t("noCompsYet")}{perms["comps.create"] ? ` ${t("createFirstOneSuffix")}` : ""}
-          </p>
-        )}
-        {compList?.map(c => (
-          <div key={c.id} className="comp-list-item" style={{ display: "flex", alignItems: "center" }}>
-            <button style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: "10px 14px", color: "inherit", textAlign: "left" }}
-              onClick={() => { setDeletingCompId(null); openComp(c.id, false); }}>
-              <i className="ti ti-layout-list" style={{ color: "var(--hint)", flexShrink: 0 }} aria-hidden />
-              <span style={{ flex: 1 }}>{c.name}</span>
-              <i className="ti ti-chevron-right" style={{ color: "var(--hint)" }} aria-hidden />
-            </button>
-            <button className="btn" style={{ fontSize: 12, padding: "3px 8px", marginRight: 10, flexShrink: 0, opacity: 0.5 }}
-              title={t("copyCompCodeBtn")} disabled={copyingId === c.id}
-              onClick={e => { e.stopPropagation(); copyCompCodeFn(c.id); }}>
-              <i className="ti ti-copy" aria-hidden />
-            </button>
-            {perms["comps.manage"] && (
-              deletingCompId === c.id ? (
-                <div style={{ display: "flex", gap: 6, padding: "0 10px", flexShrink: 0 }}>
-                  <button className="btn" style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a", borderColor: "#e07a7a" }}
-                    onClick={() => deleteCompFn(c.id)}>
-                    {t("confirmBtn")}
-                  </button>
-                  <button className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
-                    onClick={() => setDeletingCompId(null)}>
-                    {t("cancel")}
-                  </button>
-                </div>
-              ) : (
-                <button className="btn" style={{ fontSize: 12, padding: "3px 8px", marginRight: 10, flexShrink: 0, opacity: 0.5 }}
-                  title={t("deleteCompTitle")}
-                  onClick={e => { e.stopPropagation(); setDeletingCompId(c.id); }}>
-                  <i className="ti ti-trash" />
+            <div className="comp-create-modal-actions">
+              {importMode ? (
+                <button className="btn primary" onClick={importCompFn} disabled={!newCompName.trim()}>
+                  <i className="ti ti-clipboard" aria-hidden /> {t("importCompCodeBtn")}
                 </button>
-              )
+              ) : (
+                <button className="btn primary" onClick={createCompFn} disabled={!newCompName.trim()}>
+                  {t("createBtn")}
+                </button>
+              )}
+              <button className="btn" onClick={() => { setCreatingComp(false); setImportMode(false); setNewCompName(""); }}>
+                {t("cancel")}
+              </button>
+              {!importMode && (
+                <button className="btn" onClick={() => setImportMode(true)} disabled={!newCompName.trim()}
+                  title={t("importCompCodeHint")}>
+                  <i className="ti ti-clipboard" aria-hidden /> {t("importCompCodeBtn")}
+                </button>
+              )}
+            </div>
+            {importMode && (
+              <p className="comp-create-modal-hint">{t("importCompCodeHint")}</p>
             )}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
