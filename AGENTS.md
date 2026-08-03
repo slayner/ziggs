@@ -7,30 +7,48 @@ Plataforma web para guildas de Albion Online: gerencia composições de batalha 
 > passadas, migrations criadas, arquitetura de perfis/highscores/companion, ou
 > pendências em aberto — evita re-explicar o que já foi decidido.
 
-## Entrada automática de tarefas
+## Sistema de equipe (team orchestrator)
 
-Para todo pedido relacionado ao Ziggs, use o command `/ziggs` como porta de
-entrada antes de editar ou delegar (`.opencode/command/ziggs.md`). Pedidos
-vagos, incompletos ou que toquem áreas maduras passam primeiro por
-`/ziggs-intake` (`.opencode/command/ziggs-intake.md`). O dispatcher pode
-resolver diretamente pedidos triviais; não crie agentes só para cumprir rito.
+O trabalho no Ziggs é despachado pelo agente **`team`** (`.opencode/agents/team.md`),
+um agente primário que tria a dificuldade e delega pra um worker. Troque pra
+ele com **Tab** no TUI (ou invoque com `@team`).
 
-O dispatcher tria em 3 faixas: **trivial** (resolve inline), **vago/área madura**
-(manda pro intake clarificar), ou **claro+substancial** (delega pra um worker).
-O worker é um Traycer child agent (`traycer_create_agent` + `traycer_send_message`
-com `expectReply: true`) e recebe no briefing: teto de escopo, orçamento de
-tentativas, e o critério de "pronto". Cada tier tem **4 providers** em cadeia
-de fallback — se um falhar (tokens esgotados, conexão perdida), o dispatcher
-detecta e recria com o próximo provider do mesmo tier (ver Step 4.5 do
-`.opencode/command/ziggs.md`). Se o trabalho ultrapassar esse teto, o
-worker para e devolve `NEEDS_ESCALATION` com evidências (o que tentou, onde
-travou, próximo passo mínimo); ele não amplia escopo nem continua tentando em
-silêncio. O agente pai decide entre fornecer contexto, perguntar ao usuário ou
-promover o worker pra um modelo mais capaz. Quando uma resposta entre agentes
-for esperada, ela deve ser entregue via `traycer_send_message` no thread
-original.
+**3 tiers × 3 providers = 9 workers** (todos em `.opencode/agents/worker-*.md`):
+
+| Tier | Primary (provider 1) | Fallback 1 | Fallback 2 | Quando |
+|------|----------------------|------------|------------|-------|
+| **Hard** | `worker-hard-zai` (zai-coding-plan/glm-5.2) | `worker-hard-ollama` (ollama-cloud/glm-5.2) | `worker-hard-go` (opencode-go/glm-5.2) | substancial/maduro/sensível, design, migrations |
+| **Medium** | `worker-medium-zai` (zai-coding-plan/glm-5-turbo) | `worker-medium-ollama` (ollama-cloud/kimi-k2.7-code) | `worker-medium-go` (opencode-go/kimi-k2.7-code) | claro+delimitado, feature single-file, refactor mecânico |
+| **Easy** | `worker-easy-ollama` (ollama-cloud/deepseek-v4-pro) | `worker-easy-go` (opencode-go/deepseek-v4-pro) | `worker-easy-zai` (zai-coding-plan/glm-4.7) | trivial, grep-and-report, doc edits, lookups |
+
+**Failover (mesmo tier, próximo provider):** se um worker falha por tokens
+esgotados / erro de provider (resposta vazia ou erro de credit/limit/quota),
+o orchestrator re-envia a MESMA task pro próximo worker do mesmo tier. Se os 3
+providers falharem, escala pro usuário.
+
+**Escalada (sobe de tier):** se o worker devolve `NEEDS_ESCALATION` (a task é
+genuinamente difícil demais pra o tier, não falha de infra), o orchestrator
+promove: Easy→Medium→Hard. No Hard, se ainda escalou, relaxa o teto ou pergunta
+o usuário.
+
+**Não confundir:** worker que **falhou pra rodar** (token/provider) = failover
+(mesmo tier). Worker que **trabalhou mas travou** (tarefa difícil) =
+escalada (sobe tier).
+
+O worker recebe no briefing: teto de escopo, orçamento (2 retries por
+sub-task), e o critério de "pronto". Ele lê `AGENTS.md` antes de começar.
+Se o trabalho ultrapassar o teto, ele para e devolve `NEEDS_ESCALATION` com
+evidências — não amplia escopo nem continua tentando em silêncio.
 
 Esta regra vale somente para trabalho no Ziggs, não para outros projetos.
+
+### Comandos legados
+
+`/ziggs` e `/ziggs-intake` (`.opencode/command/`) ainda existem como wrappers
+de triagem, mas o agente `team` é agora a porta de entrada preferida — ele faz
+a mesma triagem inline e despacha direto pros workers via Task tool do opencode
+nativo, sem depender do mecanismo Traycer (que é bugado e não avisa quando os
+tokens do z.ai-coding-plan acabam).
 
 ## Estrutura do projeto
 

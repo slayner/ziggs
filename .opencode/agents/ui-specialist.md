@@ -4,7 +4,8 @@ description: >-
   task involves component design, CSS styling, layout, responsive design,
   animations, UI state management, or frontend architecture decisions.
 mode: all
-model: zhipuai/glm-5.2
+model: zai-coding-plan/glm-5.2
+reasoningEffort: high
 permission:
   read: allow
   edit: allow
