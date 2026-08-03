@@ -314,6 +314,8 @@ a { color: var(--info); text-decoration: none; }
 .state-pill.cur { background: var(--gold-soft); color: var(--gold); }
 .state-pill.done { background: #16291b; color: #6bbf73; }
 .state-pill.bad { background: #2c1618; color: #e07a7a; }
+/* Passo futuro do pipeline: apagado (o foco é a etapa atual). */
+.state-pill.future { opacity: .42; background: transparent; border: 1px dashed var(--border); }
 
 .pipe { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 16px; }
 .pipe .arrow { color: var(--hint); font-size: 14px; }
@@ -1589,7 +1591,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   .events-command-stats { grid-column: 1 / -1; justify-self: stretch; }
   .events-command-stats div { flex: 1; }
   .ev-card-body .pipe { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px; }
-  .ev-policy-group { grid-template-columns: 1fr; }
   .ev-stage-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
@@ -1633,17 +1634,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .ev-time-preview.ok { color: var(--green); }
 .ev-time-preview.bad { color: var(--red); }
 .ev-time-preview.empty { color: var(--hint); }
-/* Fieldset de políticas: dois selects lado a lado, marcador dourado à esquerda. */
-.ev-policy-group {
-  border: 1px solid var(--border); border-left: 2px solid var(--gold);
-  padding: 10px 12px 4px; margin: 0;
-  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
-  background: rgba(212,163,56,.03);
-}
-.ev-policy-group > legend {
-  padding: 0 6px; font-size: 10px; font-weight: 700; letter-spacing: .1em;
-  text-transform: uppercase; color: var(--gold);
-}
 .ev-create-error { color: var(--red); font-size: 12px; margin: 0; display: flex; align-items: center; gap: 6px; }
 .ev-create-foot { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface-2); }
 .ev-create-foot .btn.primary { flex: 1; justify-content: center; }
@@ -1671,15 +1661,31 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   background: rgba(212,163,56,.06); color: var(--text); font-size: 13px;
 }
 .ev-detail-message .ti { color: var(--gold); flex-shrink: 0; margin-top: 1px; }
-/* Meta compacta: comp / inscritos / escalação / autofill como chips. */
-.ev-detail-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+/* Meta compacta: horário + contagem de presença (presentes/ausentes/intrusos). */
+.ev-detail-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px;
+}
 .ev-meta-chip {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
   font-size: 11px; color: var(--muted); border: 1px solid var(--border); background: var(--surface-2);
 }
 .ev-meta-chip .ti { color: var(--hint); font-size: 11px; }
-/* Pipeline row + X de excluir. */
-.ev-detail-pipe { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+.ev-meta-counts { display: inline-flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); }
+.ev-meta-counts > span { display: inline-flex; align-items: center; gap: 4px; }
+.ev-meta-counts .ti { font-size: 12px; }
+.ev-meta-counts .absent { color: var(--red); }
+.ev-meta-counts .intruder { color: var(--gold); }
+/* Pipeline: etapa atual em destaque óbvio (dourada + maior), o botão de avançar
+   fica colado — é a ação dona do passo, não um botão solto no rodapé. */
+.ev-detail-pipe { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; flex-wrap: wrap; }
+.ev-pipe-track { flex: 1; margin: 0; min-width: 0; }
+.ev-pipe-step { display: inline-flex; align-items: center; gap: 6px; }
+/* Etapa atual cresce pra saltar entre as apagadas. */
+.ev-pipe-step .state-pill.cur {
+  font-size: 12px; padding: 4px 12px; font-weight: 700;
+  border: 1px solid var(--gold); box-shadow: 0 0 0 2px rgba(212,163,56,.12);
+}
+.ev-pipe-forward { flex-shrink: 0; }
 .ev-detail-delete { background: none; border: 0; color: var(--hint); cursor: pointer; padding: 2px 4px; font-size: 16px; flex-shrink: 0; }
 .ev-detail-delete:hover { color: var(--red); }
 /* Stage (review / finalized): header editorial + grade de 2 células. */
@@ -1701,17 +1707,34 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .ev-attendance > .ti { color: var(--hint); font-size: 12px; }
 .ev-attendance-input { width: 48px; font-size: 12.5px; padding: 2px 5px; text-align: right; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); }
 
-/* ── Participantes: header com quebra (escalados / inscritos / ausentes) ── */
+/* ── Participantes: ausentes/intrusos em destaque, presentes em lista compacta ── */
 .ev-participants { border-top: 1px solid var(--border); padding-top: 12px; margin: 4px 0 12px; }
 .ev-part-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .ev-part-title { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
-.ev-part-stats { display: inline-flex; align-items: center; gap: 10px; margin-left: auto; font-size: 11px; }
-.ev-part-stats b { color: var(--text); font-family: ui-monospace, monospace; }
-.ev-part-stats .muted { display: inline-flex; align-items: center; gap: 3px; }
 .ev-part-add { display: flex; gap: 4px; margin-top: 8px; }
 .ev-part-add .input { font-size: 12px; padding: 3px 6px; }
 .ev-part-add .input:not(.ev-part-add-pct) { flex: 1; min-width: 0; }
 .ev-part-add-pct { width: 44px; }
+
+/* Grupo (ausente/intrusos/presentes): borda a esquerda colorida dá o contexto
+   sem roubar a leitura das linhas. Header editorial com régua. */
+.ev-part-group { margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--border); border-left-width: 3px; background: var(--surface); }
+.ev-part-group:last-child { margin-bottom: 0; }
+.ev-part-ghead { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+.ev-part-ghead .ti { font-size: 13px; }
+.ev-part-gtitle { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.ev-part-ghead b { color: var(--text); font: 600 11px ui-monospace, monospace; }
+.ev-part-ghint { margin-left: auto; font-size: 10px; color: var(--hint); text-align: right; }
+.ev-tone-absent { border-left-color: var(--red); }
+.ev-tone-absent .ev-part-ghead .ti { color: var(--red); }
+.ev-tone-intruder { border-left-color: var(--gold); }
+.ev-tone-intruder .ev-part-ghead .ti { color: var(--gold); }
+.ev-tone-ok { border-left-color: var(--border-strong); }
+.ev-tone-ok .ev-part-ghead .ti { color: var(--green); }
+/* Ausentes/intrusos: uma coluna (cada linha tem controles, merece espaço). */
+.ev-part-list { display: flex; flex-direction: column; gap: 2px; }
+/* Presentes: grid denso (lista secundária, compacta). */
+.ev-part-grid-ok { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
 
 /* ── Design v2: war-room / blueprint ─────────────────────────────────────
    Assinatura visual do site: cantos RETOS, colchetes de canto (TL+BR) que

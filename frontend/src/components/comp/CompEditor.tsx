@@ -40,11 +40,12 @@ function isDefaultFnTypes(list: FnTypeDef[]): boolean {
     t.key === DEFAULT_FN_TYPES[i].key && t.label === DEFAULT_FN_TYPES[i].label && t.color === DEFAULT_FN_TYPES[i].color);
 }
 
-export function CompEditor({ initialDraft, initialEditing, initialImportCode, perms, offline, weapons, onBack }: {
+// A área de comps é só de administradores — não há modo view, o editor está
+// SEMPRE em modo edit. `initialEditing` é mantido na assinatura pra não
+// quebrar o caller (CompBuilder), mas ignorado.
+export function CompEditor({ initialDraft, initialImportCode, perms, offline, weapons, onBack }: {
   initialDraft: Draft;
-  initialEditing: boolean;
-  // Comp recém-criada a partir de um código colado no CompList — aplicada
-  // uma vez ao abrir (ver useEffect abaixo).
+  initialEditing?: boolean;
   initialImportCode: CompCode | null;
   perms: Permissions;
   offline: boolean;
@@ -54,7 +55,6 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
   const t = useT();
   const EQUIP_SLOTS = useEquipSlots();
   const [draft,            setDraft]            = useState<Draft | null>(initialDraft);
-  const [editing,          setEditing]          = useState(initialEditing);
   const [openCard,         setOpenCard]         = useState<[number, number] | null>(null);
   const [dirty,            setDirty]            = useState(false);
   const [saving,           setSaving]           = useState(false);
@@ -72,7 +72,7 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
   const [collapsedParties, setCollapsedParties] = useState<Set<number>>(new Set());
   const [history,          setHistory]          = useState<Draft[]>([]);
   const [flexMenu,         setFlexMenu]         = useState<[number, number] | null>(null);
-  const [addSlotMenu,      setAddSlotMenu]      = useState<number | null>(null);
+  const [addCopyMenu,      setAddCopyMenu]      = useState<number | null>(null);
   const [editRi,           setEditRi]           = useState(0);
 
   // ── fn-types: carrega da guilda, migra localStorage antigo uma vez só ────
@@ -198,10 +198,9 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
   }
 
   // ── Open / close card + lazy equip load ───────────────────
-  // Painel de detalhe só existe em modo Edição — em Ver a lista já mostra
-  // tudo que importa (ícone, nome, EquipStrip), clicar não faz nada.
+  // Painel de detalhe: clicar num slot seleciona; o formulário de edição
+  // sempre renderiza no painel direito (master-detail).
   async function toggleCard(pi: number, si: number) {
-    if (!editing) return;
     if (openCard?.[0] === pi && openCard?.[1] === si) {
       setOpenCard(null); setFlexMenu(null); return;
     }
@@ -275,8 +274,8 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
   }
 
   // Carrega o equip de uma role do catálogo por catalog_id, sem depender de
-  // (pi,si,ri) — usado pelos menus de "copiar build/slot existente"
-  // (getPickableRoles / addSlotMenu), que listam roles de QUALQUER parte da
+  // (pi,si,ri) — usado pelo menu de "copiar build/slot existente"
+  // (getPickableRoles / addCopyMenu), que listam roles de QUALQUER parte da
   // comp: muitas nunca tiveram o card aberto nesta sessão, então
   // equip_loaded ainda é false e o EquipStrip da sugestão fica vazio.
   async function ensureCatalogRoleLoaded(catalogId: number) {
@@ -418,6 +417,9 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
       return next;
     });
   }
+  // Cria uma role VAZIA direto e abre o painel de edição nela — caminho
+  // principal de "adicionar role". 1 clique. (O menu de copiar de outra role
+  // virou botão secundário — addCopyMenu.)
   function addSlot(pi: number) {
     if (!draft || draft.parties[pi].slots.length >= MAX_SLOTS) return;
     const idx = draft.parties[pi].slots.length;
@@ -428,6 +430,7 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
       ),
     }));
     setOpenCard([pi, idx]);
+    setAddCopyMenu(null);
   }
   function removeSlot(pi: number, si: number) {
     upd(d => ({
@@ -512,11 +515,10 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
   if (!draft) return <div className="container"><p className="muted">{t("loading")}</p></div>;
 
   // ── Painel de detalhe (master-detail) ──────────────────────
-  // Substitui a expansão inline do card antigo — clicar num card só
-  // seleciona (openCard), o conteúdo completo (form de edição / view) sempre
-  // renderiza aqui, uma vez só, sem empurrar o resto da lista (reflow).
+  // Clicar num slot seleciona; o formulário de edição sempre renderiza aqui
+  // (sempre modo edit), organizado em 5 seções com headers editoriais:
+  // (a) Identidade, (b) Equipamento, (c) Habilidades, (d) Alts, (e) Notas.
   function renderDetailPanel() {
-    if (!editing) return null;
     if (!draft || !openCard) {
       return (
         <div className="comp-right comp-detail comp-right-hint">
@@ -541,397 +543,390 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
       ? wBase(formRole.equip.weapon.id) : null;
     const formSpells = formWeapBase ? spellCache[formWeapBase] : undefined;
 
+    // Equipamento (gear com kit próprio): offhand/helmet/armor/boots/cape —
+    // weapon e consumíveis ficam em suas próprias seções.
+    const gearSlots = EQUIP_SLOTS
+      .filter(s => ["offhand", "helmet", "armor", "boots", "cape"].includes(s.key))
+      .filter(s => !(s.key === "offhand" && is2H(formRole?.equip.weapon?.id)));
+
     return (
       <div className="comp-right comp-detail" onClick={e => e.stopPropagation()}>
-        {/* Cabeçalho sticky — nome editável, tipo de função, remover, e um
-            preview vivo do equipamento (atualiza a cada item escolhido; o
-            formulário rola por baixo dele). */}
+        {/* Cabeçalho sticky — preview vivo do equipamento (atualiza a cada
+            item escolhido; o formulário rola por baixo dele). */}
         <div className="comp-detail-head">
-          <div className="rc-head">
-            {role ? (
-              <>
-                {formRole?.equip.weapon?.id && (
-                  <img className="rc-weapon-icon" src={itemUrl(formRole.equip.weapon.id)} alt=""
-                    onError={imgRetry(img => { img.style.opacity = "0.15"; })} />
-                )}
-                <input className="input"
-                  style={{ flex: 1, minWidth: 0, padding: "2px 6px", fontSize: 13, height: 26 }}
-                  placeholder={t("noNamePlaceholder")}
-                  value={formRole.name}
-                  onFocus={captureHistory} onBlur={releaseFocus}
-                  onChange={e => updRoleQuiet(pi, si, editRi, r => ({ ...r, name: e.target.value }))} />
-              </>
-            ) : (
-              <span className="chip-empty" style={{ fontSize: 12 }}>{t("noRoleAssigned")}</span>
-            )}
-            <select className="fn-type-select"
-              value={slot.fn ?? ""}
-              onChange={e => {
-                const v = e.target.value || null;
-                updSlot(pi, si, s => ({ ...s, fn: v, roles: s.roles.map((r, i) => i === editRi ? { ...r, fn: v } : r) }));
-              }}
-              style={{ color: getFnDef(slot.fn, fnTypes)?.color ?? "var(--muted)" }}>
-              <option value="">—</option>
-              {fnTypes.map(ft => (
-                <option key={ft.key} value={ft.key}>{fnLabel(ft)}</option>
-              ))}
-            </select>
-            <button className="cs-xbtn"
-              onClick={() => removeSlot(pi, si)}
-              title={t("removeFromCompTitle")}>
-              <i className="ti ti-x" aria-hidden />
-            </button>
-          </div>
           {formRole?.equip_loaded && (
             <div className="rc-equip-strip">
               <EquipStrip equip={formRole.equip} weaponIs2H={is2H(formRole.equip.weapon?.id)} />
             </div>
           )}
+          {/* Abas de build — a aba "+" é a porta de entrada do flex. */}
+          <BuildTabs roles={slot.roles}
+            active={editRi}
+            onSelect={setEditRi}
+            onAdd={() => setFlexMenu(prev => {
+              const next: [number, number] | null =
+                prev?.[0] === pi && prev?.[1] === si ? null : [pi, si];
+              if (next) ensurePickableRolesLoaded(getPickableRoles(pi, si));
+              return next;
+            })}
+            addOpen={flexMenu?.[0] === pi && flexMenu?.[1] === si} />
         </div>
 
         <div className="comp-detail-body">
-                              {/* Fn type picker — shown when slot has no type yet */}
-                              {slot.fn === null ? (
-                                <div className="fn-type-picker">
-                                  <p className="fn-picker-hint">{t("selectFnTypeHint")}</p>
-                                  {fnTypes.map((ft, fti) => (
-                                    <div key={ft.key} className="fn-picker-row">
-                                      <button className="fn-type-assign-btn"
-                                        style={{ background: ft.color + "25", color: ft.color, borderColor: ft.color + "60" }}
-                                        onClick={() => updSlot(pi, si, s => ({
-                                          ...s, fn: ft.key,
-                                          roles: s.roles.map((r, i) => i === 0 ? { ...r, fn: ft.key } : r),
-                                        }))}>
-                                        {fnLabel(ft)}
-                                      </button>
-                                      <ColorPicker value={ft.color}
-                                        onChange={c => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, color: c } : t))} />
-                                      <input className="fn-emoji-input" value={ft.emoji ?? ""} placeholder="😀" maxLength={4}
-                                        title="Emoji"
-                                        onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, emoji: e.target.value || undefined } : t))} />
-                                      <input className="fn-type-name-input" value={ft.label} style={{ color: ft.color, flex: 1 }}
-                                        onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, label: e.target.value } : t))} />
-                                      <button className="cs-xbtn" title={t("moveUpTitle")} disabled={fti === 0}
-                                        onClick={() => { if (fti > 0) { const n = [...fnTypes]; [n[fti-1], n[fti]] = [n[fti], n[fti-1]]; saveFnTypes(n); } }}>
-                                        <i className="ti ti-chevron-up" aria-hidden />
-                                      </button>
-                                      <button className="cs-xbtn" title={t("moveDownTitle")} disabled={fti === fnTypes.length - 1}
-                                        onClick={() => { if (fti < fnTypes.length - 1) { const n = [...fnTypes]; [n[fti], n[fti+1]] = [n[fti+1], n[fti]]; saveFnTypes(n); } }}>
-                                        <i className="ti ti-chevron-down" aria-hidden />
-                                      </button>
-                                      <button className="cs-xbtn" title={t("deleteTypeTitle")} onClick={() => deleteFnType(ft.key)}>
-                                        <i className="ti ti-trash" aria-hidden />
-                                      </button>
-                                    </div>
-                                  ))}
-                                  <button className="btn" style={{ marginTop: 8, fontSize: 11, padding: "3px 9px" }}
-                                    onClick={() => saveFnTypes([...fnTypes, { key: `custom_${Date.now()}`, label: t("newFnTypeLabel"), color: "#888888" }])}>
-                                    <i className="ti ti-plus" aria-hidden /> {t("newTypeBtn")}
-                                  </button>
-                                </div>
-                              ) : (
+          {/* Flex picker — ancorado logo abaixo das abas */}
+          {flexMenu?.[0] === pi && flexMenu?.[1] === si && (() => {
+            const pickable = getPickableRoles(pi, si);
+            return (
+              <div className="flex-picker-menu">
+                <button className="flex-picker-item flex-picker-new"
+                  onClick={() => {
+                    const newRi = slot.roles.length;
+                    updSlot(pi, si, s => ({ ...s, roles: [...s.roles, emptyRole()] }));
+                    setEditRi(newRi);
+                    setFlexMenu(null);
+                  }}>
+                  <i className="ti ti-plus" aria-hidden /> {t("newBuildBtn")}
+                </button>
+                {pickable.map((r, idx) => (
+                  <button key={idx} className="flex-picker-item"
+                    onClick={() => {
+                      const newRi = slot.roles.length;
+                      const copy = JSON.parse(JSON.stringify(r));
+                      copy.catalog_id = null;
+                      copy.flex_of = r.name || r.flex_of;
+                      copy.name = r.name ? `${r.name} (flex)` : "";
+                      updSlot(pi, si, s => ({ ...s, roles: [...s.roles, copy] }));
+                      setEditRi(newRi);
+                      setFlexMenu(null);
+                    }}>
+                    {r.equip.weapon?.id
+                      ? <img src={itemUrl(r.equip.weapon.id)} alt=""
+                          style={{ width: 20, height: 20, flexShrink: 0 }}
+                          onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
+                      : <span style={{ width: 20, flexShrink: 0 }} />}
+                    <span className="flex-picker-name">
+                      {r.name || t("noNamePlaceholder")}
+                      {r.flex_of && <span style={{ color: "var(--muted)", fontSize: 10 }}> ({t("flexOfPrefix")} {r.flex_of})</span>}
+                    </span>
+                    {r.fn && (() => { const ft = getFnDef(r.fn, fnTypes); return ft ? (
+                      <span className="rc-fn-badge" style={{
+                        background: ft.color + "25", color: ft.color, flexShrink: 0,
+                      }}>{fnLabel(ft)}</span>
+                    ) : null; })()}
+                    {r.equip_loaded && <EquipStrip equip={r.equip} />}
+                  </button>
+                ))}
+                {!pickable.length && (
+                  <span className="flex-picker-empty">{t("noOtherBuildInComp")}</span>
+                )}
+              </div>
+            );
+          })()}
 
-                                /* ── Edit form ─────────────────────────── */
-                                <>
-                                  {/* Abas de build — sempre visíveis na edição: a aba "+"
-                                      é a porta de entrada do flex (antes era um botão
-                                      enterrado no fim do formulário) */}
-                                  <BuildTabs roles={slot.roles}
-                                    active={editRi}
-                                    onSelect={setEditRi}
-                                    onAdd={() => setFlexMenu(prev => {
-                                      const next: [number, number] | null =
-                                        prev?.[0] === pi && prev?.[1] === si ? null : [pi, si];
-                                      if (next) ensurePickableRolesLoaded(getPickableRoles(pi, si));
-                                      return next;
-                                    })}
-                                    addOpen={flexMenu?.[0] === pi && flexMenu?.[1] === si} />
+          {/* ── (a) Identidade: nome + função + cor do slot ─────── */}
+          <div className="detail-section">
+            <h4 className="detail-section-title"><i className="ti ti-id-badge-2" aria-hidden /> {t("identityLabel")}</h4>
+            <div className="rc-head">
+              {formRole?.equip.weapon?.id && (
+                <img className="rc-weapon-icon" src={itemUrl(formRole.equip.weapon.id)} alt=""
+                  onError={imgRetry(img => { img.style.opacity = "0.15"; })} />
+              )}
+              <input className="input"
+                style={{ flex: 1, minWidth: 0, padding: "2px 6px", fontSize: 13, height: 26 }}
+                placeholder={t("noNamePlaceholder")}
+                value={formRole.name}
+                onFocus={captureHistory} onBlur={releaseFocus}
+                onChange={e => updRoleQuiet(pi, si, editRi, r => ({ ...r, name: e.target.value }))} />
+            </div>
+            {role ? null : <span className="chip-empty" style={{ fontSize: 12 }}>{t("noRoleAssigned")}</span>}
+            <div className="equip-field">
+              <label className="equip-field-label">{t("compFnTypesToolbarBtn")}</label>
+              <select className="fn-type-select"
+                value={slot.fn ?? ""}
+                onChange={e => {
+                  const v = e.target.value || null;
+                  updSlot(pi, si, s => ({ ...s, fn: v, roles: s.roles.map((r, i) => i === editRi ? { ...r, fn: v } : r) }));
+                }}
+                style={{ color: getFnDef(slot.fn, fnTypes)?.color ?? "var(--muted)" }}>
+                <option value="">—</option>
+                {fnTypes.map(ft => (
+                  <option key={ft.key} value={ft.key}>{fnLabel(ft)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-                                  {/* Flex picker — ancorado logo abaixo das abas */}
-                                  {flexMenu?.[0] === pi && flexMenu?.[1] === si && (() => {
-                                    const pickable = getPickableRoles(pi, si);
-                                    return (
-                                      <div className="flex-picker-menu">
-                                        <button className="flex-picker-item flex-picker-new"
-                                          onClick={() => {
-                                            const newRi = slot.roles.length;
-                                            updSlot(pi, si, s => ({ ...s, roles: [...s.roles, emptyRole()] }));
-                                            setEditRi(newRi);
-                                            setFlexMenu(null);
-                                          }}>
-                                          <i className="ti ti-plus" aria-hidden /> {t("newBuildBtn")}
-                                        </button>
-                                        {pickable.map((r, idx) => (
-                                          <button key={idx} className="flex-picker-item"
-                                            onClick={() => {
-                                              const newRi = slot.roles.length;
-                                              const copy = JSON.parse(JSON.stringify(r));
-                                              copy.catalog_id = null;
-                                              copy.flex_of = r.name || r.flex_of;
-                                              copy.name = r.name ? `${r.name} (flex)` : "";
-                                              updSlot(pi, si, s => ({ ...s, roles: [...s.roles, copy] }));
-                                              setEditRi(newRi);
-                                              setFlexMenu(null);
-                                            }}>
-                                            {r.equip.weapon?.id
-                                              ? <img src={itemUrl(r.equip.weapon.id)} alt=""
-                                                  style={{ width: 20, height: 20, flexShrink: 0 }}
-                                                  onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
-                                              : <span style={{ width: 20, flexShrink: 0 }} />}
-                                            <span className="flex-picker-name">
-                                              {r.name || t("noNamePlaceholder")}
-                                              {r.flex_of && <span style={{ color: "var(--muted)", fontSize: 10 }}> ({t("flexOfPrefix")} {r.flex_of})</span>}
-                                            </span>
-                                            {r.fn && (() => { const ft = getFnDef(r.fn, fnTypes); return ft ? (
-                                              <span className="rc-fn-badge" style={{
-                                                background: ft.color + "25", color: ft.color, flexShrink: 0,
-                                              }}>{fnLabel(ft)}</span>
-                                            ) : null; })()}
-                                            {r.equip_loaded && <EquipStrip equip={r.equip} />}
-                                          </button>
-                                        ))}
-                                        {!pickable.length && (
-                                          <span className="flex-picker-empty">{t("noOtherBuildInComp")}</span>
-                                        )}
-                                      </div>
-                                    );
-                                  })()}
+          {/* Fn type picker — só aparece quando o slot ainda não tem tipo. */}
+          {slot.fn === null && (
+            <div className="fn-type-picker">
+              <p className="fn-picker-hint">{t("selectFnTypeHint")}</p>
+              {fnTypes.map((ft, fti) => (
+                <div key={ft.key} className="fn-picker-row">
+                  <button className="fn-type-assign-btn"
+                    style={{ background: ft.color + "25", color: ft.color, borderColor: ft.color + "60" }}
+                    onClick={() => updSlot(pi, si, s => ({
+                      ...s, fn: ft.key,
+                      roles: s.roles.map((r, i) => i === 0 ? { ...r, fn: ft.key } : r),
+                    }))}>
+                    {fnLabel(ft)}
+                  </button>
+                  <ColorPicker value={ft.color}
+                    onChange={c => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, color: c } : t))} />
+                  <input className="fn-emoji-input" value={ft.emoji ?? ""} placeholder="😀" maxLength={4}
+                    title="Emoji"
+                    onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, emoji: e.target.value || undefined } : t))} />
+                  <input className="fn-type-name-input" value={ft.label} style={{ color: ft.color, flex: 1 }}
+                    onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, label: e.target.value } : t))} />
+                  <button className="cs-xbtn" title={t("moveUpTitle")} disabled={fti === 0}
+                    onClick={() => { if (fti > 0) { const n = [...fnTypes]; [n[fti-1], n[fti]] = [n[fti], n[fti-1]]; saveFnTypes(n); } }}>
+                    <i className="ti ti-chevron-up" aria-hidden />
+                  </button>
+                  <button className="cs-xbtn" title={t("moveDownTitle")} disabled={fti === fnTypes.length - 1}
+                    onClick={() => { if (fti < fnTypes.length - 1) { const n = [...fnTypes]; [n[fti], n[fti+1]] = [n[fti+1], n[fti]]; saveFnTypes(n); } }}>
+                    <i className="ti ti-chevron-down" aria-hidden />
+                  </button>
+                  <button className="cs-xbtn" title={t("deleteTypeTitle")} onClick={() => deleteFnType(ft.key)}>
+                    <i className="ti ti-trash" aria-hidden />
+                  </button>
+                </div>
+              ))}
+              <button className="btn" style={{ marginTop: 8, fontSize: 11, padding: "3px 9px" }}
+                onClick={() => saveFnTypes([...fnTypes, { key: `custom_${Date.now()}`, label: t("newFnTypeLabel"), color: "#888888" }])}>
+                <i className="ti ti-plus" aria-hidden /> {t("newTypeBtn")}
+              </button>
+            </div>
+          )}
 
+          {/* ── (b) Equipamento: weapon + gear grid ───────────── */}
+          <div className="detail-section">
+            <h4 className="detail-section-title"><i className="ti ti-shirt" aria-hidden /> {t("equipmentLabel")}</h4>
+            <div className="equip-field">
+              <label className="equip-field-label">{t("cbSlotWeapon")}</label>
+              <ItemPicker slot="weapon"
+                valueId={formRole?.equip.weapon?.id ?? ""}
+                valueName={formRole?.equip.weapon?.name ?? ""}
+                placeholder={t("selectWeaponPlaceholder")}
+                onChange={(id, name) => onWeaponChange(pi, si, editRi, id, name)} />
+            </div>
+            <div className="equip-grid-narrow">
+              {gearSlots.map(({ key, label }) => {
+                const gearBase = formRole?.equip[key]?.id ? wBase(formRole.equip[key]!.id) : null;
+                const gearSpells = gearBase ? spellCache[gearBase] : undefined;
+                return (
+                  <div className="equip-field" key={key}>
+                    <label className="equip-field-label">{label}</label>
+                    <ItemPicker slot={key}
+                      valueId={formRole?.equip[key]?.id ?? ""}
+                      valueName={formRole?.equip[key]?.name ?? ""}
+                      placeholder={label}
+                      onChange={(id, name) => {
+                        updRole(pi, si, editRi, r => ({
+                          ...r,
+                          equip: {
+                            ...r.equip,
+                            [key]: id ? { id, name } : undefined,
+                            ...(!id && ALT_CAPABLE.has(key) ? { [`${key}_alt`]: undefined as unknown } : {}),
+                          },
+                          gear_spells: Object.fromEntries(Object.entries(r.gear_spells).filter(([k]) => !k.startsWith(`${key}_`))),
+                        }));
+                        if (id) loadSpells(wBase(id));
+                      }} />
+                    {ALT_CAPABLE.has(key) && formRole?.equip[key]?.id && (() => {
+                      const rawAlt = (formRole.equip as Record<string, unknown>)[`${key}_alt`];
+                      const alts: (EquipItem | undefined)[] = Array.isArray(rawAlt) ? rawAlt : [];
+                      const usedIds = [formRole.equip[key]!.id, ...alts.map(a => a?.id).filter(Boolean) as string[]];
+                      return (
+                        <>
+                          {alts.map((alt, ai) => (
+                            <div key={ai} style={{ marginTop: 4 }}>
+                              <ItemPicker slot={key}
+                                valueId={alt?.id ?? ""}
+                                valueName={alt?.name ?? ""}
+                                placeholder={t("alternativePlaceholder")}
+                                excludeIds={usedIds.filter(id => id !== alt?.id)}
+                                onChange={(id, name) => {
+                                  updRole(pi, si, editRi, r => {
+                                    const rawA = (r.equip as Record<string, unknown>)[`${key}_alt`];
+                                    const prev: (EquipItem | undefined)[] = Array.isArray(rawA) ? rawA : [];
+                                    const next = [...prev];
+                                    next[ai] = id ? { id, name } : undefined;
+                                    const filtered = next.filter((a): a is EquipItem => !!(a?.id));
+                                    return { ...r, equip: { ...r.equip, [`${key}_alt`]: filtered.length ? filtered : undefined } };
+                                  });
+                                  if (id) loadSpells(wBase(id));
+                                }} />
+                            </div>
+                          ))}
+                          {alts.length < 2 && (
+                            <button className="btn" style={{ fontSize: 11, padding: "2px 6px", marginTop: 4 }}
+                              onClick={e => {
+                                e.stopPropagation();
+                                updRole(pi, si, editRi, r => {
+                                  const rawA = (r.equip as Record<string, unknown>)[`${key}_alt`];
+                                  const prev: (EquipItem | undefined)[] = Array.isArray(rawA) ? rawA : [];
+                                  return { ...r, equip: { ...r.equip, [`${key}_alt`]: [...prev, { id: "", name: "" }] } };
+                                });
+                              }}>
+                              <i className="ti ti-plus" /> Alt
+                            </button>
+                          )}
+                        </>
+                      );
+                    })()}
+                    {gearSpells && gearSpells.length > 0 && (["helmet","armor","boots"] as const).includes(key as "helmet"|"armor"|"boots") && (() => {
+                      const alts = safeAltArr((formRole?.equip as Record<string, unknown> | undefined)?.[`${key}_alt`]);
+                      const altCols = alts.map((alt, ai) => {
+                        const sp = alt.id ? spellCache[wBase(alt.id)] : null;
+                        return sp?.length ? { ai, sp } : null;
+                      }).filter((x): x is { ai: number; sp: WeaponSpell[] } => x !== null);
+                      return (
+                        <div style={{ display: "flex", gap: 0, alignItems: "flex-start", marginTop: 4 }}>
+                          <div className="rc-spells" style={{ paddingRight: altCols.length ? 10 : 0 }}>
+                            {[...new Set(gearSpells.map(s => s.slot))].map(slotName => (
+                              <SpellPicker key={slotName} spells={gearSpells} slot={slotName}
+                                selected={formRole?.gear_spells[`${key}_${slotName}`] ?? null}
+                                onChange={id => updRole(pi, si, editRi, r => ({
+                                  ...r, gear_spells: { ...r.gear_spells, [`${key}_${slotName}`]: id },
+                                }))} />
+                            ))}
+                          </div>
+                          {altCols.map(({ ai, sp }) => (
+                            <div key={ai} style={{ borderLeft: "1px solid var(--border)", paddingLeft: 10 }}>
+                              <div className="rc-spells">
+                                {[...new Set(sp.map(s => s.slot))].map(slotName => (
+                                  <SpellPicker key={slotName} spells={sp} slot={slotName}
+                                    selected={formRole?.gear_spells[`${key}_alt_${ai}_${slotName}`] ?? null}
+                                    onChange={id => updRole(pi, si, editRi, r => ({
+                                      ...r, gear_spells: { ...r.gear_spells, [`${key}_alt_${ai}_${slotName}`]: id },
+                                    }))} />
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
-                                  {/* Arma + habilidades Q/W/Passiva */}
-                                  <div className="detail-section">
-                                    <h4 className="detail-section-title"><i className="ti ti-sword" aria-hidden /> {t("cbSlotWeapon")}</h4>
-                                    <ItemPicker slot="weapon"
-                                      valueId={formRole?.equip.weapon?.id ?? ""}
-                                      valueName={formRole?.equip.weapon?.name ?? ""}
-                                      placeholder={t("selectWeaponPlaceholder")}
-                                      onChange={(id, name) => onWeaponChange(pi, si, editRi, id, name)} />
-                                    {formSpells && formSpells.length > 0 && (
-                                      <div className="equip-field">
-                                        <label className="equip-field-label">{t("abilitiesQwpLabel")}</label>
-                                        <div className="rc-spells">
-                                          <SpellPicker spells={formSpells} slot="Q"
-                                            selected={formRole?.q_spell ?? null}
-                                            onChange={id => updRole(pi, si, editRi, r => ({ ...r, q_spell: id }))} />
-                                          <SpellPicker spells={formSpells} slot="W"
-                                            selected={formRole?.w_spell ?? null}
-                                            onChange={id => updRole(pi, si, editRi, r => ({ ...r, w_spell: id }))} />
-                                          <SpellPicker spells={formSpells} slot="passive"
-                                            selected={formRole?.passive_spell ?? null}
-                                            onChange={id => updRole(pi, si, editRi, r => ({ ...r, passive_spell: id }))} />
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
+          {/* ── (c) Habilidades: Q/W/Passive da arma ───────────── */}
+          {formSpells && formSpells.length > 0 && (
+            <div className="detail-section">
+              <h4 className="detail-section-title"><i className="ti ti-bolt" aria-hidden /> {t("abilitiesQwpLabel")}</h4>
+              <div className="rc-spells">
+                <SpellPicker spells={formSpells} slot="Q"
+                  selected={formRole?.q_spell ?? null}
+                  onChange={id => updRole(pi, si, editRi, r => ({ ...r, q_spell: id }))} />
+                <SpellPicker spells={formSpells} slot="W"
+                  selected={formRole?.w_spell ?? null}
+                  onChange={id => updRole(pi, si, editRi, r => ({ ...r, w_spell: id }))} />
+                <SpellPicker spells={formSpells} slot="passive"
+                  selected={formRole?.passive_spell ?? null}
+                  onChange={id => updRole(pi, si, editRi, r => ({ ...r, passive_spell: id }))} />
+              </div>
+            </div>
+          )}
 
-                                  {/* Equipamento (peças com alts + habilidades de gear) */}
-                                  <div className="detail-section">
-                                    <h4 className="detail-section-title"><i className="ti ti-shirt" aria-hidden /> {t("equipmentLabel")}</h4>
-                                    <div className="equip-grid-narrow">
-                                      {EQUIP_SLOTS.filter(s => !["weapon", "food", "potion"].includes(s.key)).filter(s => !(s.key === "offhand" && is2H(formRole?.equip.weapon?.id))).map(({ key, label }) => {
-                                        const gearBase = formRole?.equip[key]?.id ? wBase(formRole.equip[key]!.id) : null;
-                                        const gearSpells = gearBase ? spellCache[gearBase] : undefined;
-                                        return (
-                                          <div className="equip-field" key={key}>
-                                            <label className="equip-field-label">{label}</label>
-                                            <ItemPicker slot={key}
-                                              valueId={formRole?.equip[key]?.id ?? ""}
-                                              valueName={formRole?.equip[key]?.name ?? ""}
-                                              placeholder={label}
-                                              onChange={(id, name) => {
-                                                updRole(pi, si, editRi, r => ({
-                                                  ...r,
-                                                  equip: {
-                                                    ...r.equip,
-                                                    [key]: id ? { id, name } : undefined,
-                                                    ...(!id && ALT_CAPABLE.has(key) ? { [`${key}_alt`]: undefined as unknown } : {}),
-                                                  },
-                                                  gear_spells: Object.fromEntries(Object.entries(r.gear_spells).filter(([k]) => !k.startsWith(`${key}_`))),
-                                                }));
-                                                if (id) loadSpells(wBase(id));
-                                              }} />
-                                            {ALT_CAPABLE.has(key) && formRole?.equip[key]?.id && (() => {
-                                              const rawAlt = (formRole.equip as Record<string, unknown>)[`${key}_alt`];
-                                              const alts: (EquipItem | undefined)[] = Array.isArray(rawAlt) ? rawAlt : [];
-                                              const usedIds = [formRole.equip[key]!.id, ...alts.map(a => a?.id).filter(Boolean) as string[]];
-                                              return (
-                                                <>
-                                                  {alts.map((alt, ai) => (
-                                                    <div key={ai} style={{ marginTop: 4 }}>
-                                                      <ItemPicker slot={key}
-                                                        valueId={alt?.id ?? ""}
-                                                        valueName={alt?.name ?? ""}
-                                                        placeholder={t("alternativePlaceholder")}
-                                                        excludeIds={usedIds.filter(id => id !== alt?.id)}
-                                                        onChange={(id, name) => {
-                                                          updRole(pi, si, editRi, r => {
-                                                            const rawA = (r.equip as Record<string, unknown>)[`${key}_alt`];
-                                                            const prev: (EquipItem | undefined)[] = Array.isArray(rawA) ? rawA : [];
-                                                            const next = [...prev];
-                                                            next[ai] = id ? { id, name } : undefined;
-                                                            const filtered = next.filter((a): a is EquipItem => !!(a?.id));
-                                                            return { ...r, equip: { ...r.equip, [`${key}_alt`]: filtered.length ? filtered : undefined } };
-                                                          });
-                                                          if (id) loadSpells(wBase(id));
-                                                        }} />
-                                                    </div>
-                                                  ))}
-                                                  {alts.length < 2 && (
-                                                    <button className="btn" style={{ fontSize: 11, padding: "2px 6px", marginTop: 4 }}
-                                                      onClick={e => {
-                                                        e.stopPropagation();
-                                                        updRole(pi, si, editRi, r => {
-                                                          const rawA = (r.equip as Record<string, unknown>)[`${key}_alt`];
-                                                          const prev: (EquipItem | undefined)[] = Array.isArray(rawA) ? rawA : [];
-                                                          return { ...r, equip: { ...r.equip, [`${key}_alt`]: [...prev, { id: "", name: "" }] } };
-                                                        });
-                                                      }}>
-                                                      <i className="ti ti-plus" /> Alt
-                                                    </button>
-                                                  )}
-                                                </>
-                                              );
-                                            })()}
-                                            {gearSpells && gearSpells.length > 0 && (["helmet","armor","boots"] as const).includes(key as "helmet"|"armor"|"boots") && (() => {
-                                              const alts = safeAltArr((formRole?.equip as Record<string, unknown> | undefined)?.[`${key}_alt`]);
-                                              const altCols = alts.map((alt, ai) => {
-                                                const sp = alt.id ? spellCache[wBase(alt.id)] : null;
-                                                return sp?.length ? { ai, sp } : null;
-                                              }).filter((x): x is { ai: number; sp: WeaponSpell[] } => x !== null);
-                                              return (
-                                                <div style={{ display: "flex", gap: 0, alignItems: "flex-start", marginTop: 4 }}>
-                                                  <div className="rc-spells" style={{ paddingRight: altCols.length ? 10 : 0 }}>
-                                                    {[...new Set(gearSpells.map(s => s.slot))].map(slotName => (
-                                                      <SpellPicker key={slotName} spells={gearSpells} slot={slotName}
-                                                        selected={formRole?.gear_spells[`${key}_${slotName}`] ?? null}
-                                                        onChange={id => updRole(pi, si, editRi, r => ({
-                                                          ...r, gear_spells: { ...r.gear_spells, [`${key}_${slotName}`]: id },
-                                                        }))} />
-                                                    ))}
-                                                  </div>
-                                                  {altCols.map(({ ai, sp }) => (
-                                                    <div key={ai} style={{ borderLeft: "1px solid var(--border)", paddingLeft: 10 }}>
-                                                      <div className="rc-spells">
-                                                        {[...new Set(sp.map(s => s.slot))].map(slotName => (
-                                                          <SpellPicker key={slotName} spells={sp} slot={slotName}
-                                                            selected={formRole?.gear_spells[`${key}_alt_${ai}_${slotName}`] ?? null}
-                                                            onChange={id => updRole(pi, si, editRi, r => ({
-                                                              ...r, gear_spells: { ...r.gear_spells, [`${key}_alt_${ai}_${slotName}`]: id },
-                                                            }))} />
-                                                        ))}
-                                                      </div>
-                                                    </div>
-                                                  ))}
-                                                </div>
-                                              );
-                                            })()}
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
+          {/* ── (d) Consumíveis — comida/poção com qtd inline ── */}
+          <div className="detail-section">
+            <h4 className="detail-section-title"><i className="ti ti-flask" aria-hidden /> {t("consumablesLabel")}</h4>
+            {(["food", "potion"] as const).map(key => (
+              <div className="equip-field" key={key}>
+                <label className="equip-field-label">{EQUIP_SLOTS.find(s => s.key === key)?.label}</label>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <ItemPicker slot={key}
+                      valueId={formRole?.equip[key]?.id ?? ""}
+                      valueName={formRole?.equip[key]?.name ?? ""}
+                      placeholder={EQUIP_SLOTS.find(s => s.key === key)?.label}
+                      onChange={(id, name) => updRole(pi, si, editRi, r => ({
+                        ...r, equip: { ...r.equip, [key]: id ? { id, name } : undefined },
+                      }))} />
+                  </div>
+                  <input type="number" className="input"
+                    title={t("qtyShortLabel")}
+                    style={{ width: 58, fontSize: 13, padding: "2px 6px", textAlign: "center", flexShrink: 0 }}
+                    min={1} max={999}
+                    value={key === "potion" ? (formRole?.potion_qty ?? 10) : (formRole?.food_qty ?? 1)}
+                    onFocus={captureHistory} onBlur={releaseFocus}
+                    onChange={e => {
+                      const v = Math.max(1, parseInt(e.target.value) || 1);
+                      updRoleQuiet(pi, si, editRi, r => key === "potion"
+                        ? { ...r, potion_qty: v }
+                        : { ...r, food_qty: v });
+                    }} />
+                </div>
+              </div>
+            ))}
+          </div>
 
-                                  {/* Consumíveis — comida/poção com qtd inline */}
-                                  <div className="detail-section">
-                                    <h4 className="detail-section-title"><i className="ti ti-flask" aria-hidden /> {t("consumablesLabel")}</h4>
-                                    {(["food", "potion"] as const).map(key => (
-                                      <div className="equip-field" key={key}>
-                                        <label className="equip-field-label">{EQUIP_SLOTS.find(s => s.key === key)?.label}</label>
-                                        <div style={{ display: "flex", gap: 6 }}>
-                                          <div style={{ flex: 1, minWidth: 0 }}>
-                                            <ItemPicker slot={key}
-                                              valueId={formRole?.equip[key]?.id ?? ""}
-                                              valueName={formRole?.equip[key]?.name ?? ""}
-                                              placeholder={EQUIP_SLOTS.find(s => s.key === key)?.label}
-                                              onChange={(id, name) => updRole(pi, si, editRi, r => ({
-                                                ...r, equip: { ...r.equip, [key]: id ? { id, name } : undefined },
-                                              }))} />
-                                          </div>
-                                          <input type="number" className="input"
-                                            title={t("qtyShortLabel")}
-                                            style={{ width: 58, fontSize: 13, padding: "2px 6px", textAlign: "center", flexShrink: 0 }}
-                                            min={1} max={999}
-                                            value={key === "potion" ? (formRole?.potion_qty ?? 10) : (formRole?.food_qty ?? 1)}
-                                            onFocus={captureHistory} onBlur={releaseFocus}
-                                            onChange={e => {
-                                              const v = Math.max(1, parseInt(e.target.value) || 1);
-                                              updRoleQuiet(pi, si, editRi, r => key === "potion"
-                                                ? { ...r, potion_qty: v }
-                                                : { ...r, food_qty: v });
-                                            }} />
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
+          {/* ── (e) Notas: playstyle + observações ────────────── */}
+          <div className="detail-section">
+            <h4 className="detail-section-title"><i className="ti ti-notes" aria-hidden /> {t("notesLabel")}</h4>
+            <div className="equip-field">
+              <label className="equip-field-label">{t("playStyleTitle")}</label>
+              <textarea className="input" rows={2}
+                style={{ fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
+                placeholder={t("playStylePlaceholder")}
+                value={formRole?.play_style ?? ""}
+                onFocus={captureHistory} onBlur={releaseFocus}
+                onChange={e => updRoleQuiet(pi, si, editRi, r => ({
+                  ...r, play_style: e.target.value || null,
+                }))} />
+            </div>
+            <div className="equip-field">
+              <label className="equip-field-label">{t("obsTitle")}</label>
+              <textarea className="input" rows={2}
+                style={{ fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
+                placeholder={t("obsPlaceholder")}
+                value={formRole?.obs ?? ""}
+                onFocus={captureHistory} onBlur={releaseFocus}
+                onChange={e => updRoleQuiet(pi, si, editRi, r => ({
+                  ...r, obs: e.target.value || null,
+                }))} />
+            </div>
+          </div>
 
-                                  {/* Notas — playstyle + observações */}
-                                  <div className="detail-section">
-                                    <h4 className="detail-section-title"><i className="ti ti-notes" aria-hidden /> {t("notesLabel")}</h4>
-                                    <div className="equip-field">
-                                      <label className="equip-field-label">{t("playStyleTitle")}</label>
-                                      <textarea className="input" rows={2}
-                                        style={{ fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
-                                        placeholder={t("playStylePlaceholder")}
-                                        value={formRole?.play_style ?? ""}
-                                        onFocus={captureHistory} onBlur={releaseFocus}
-                                        onChange={e => updRoleQuiet(pi, si, editRi, r => ({
-                                          ...r, play_style: e.target.value || null,
-                                        }))} />
-                                    </div>
-                                    <div className="equip-field">
-                                      <label className="equip-field-label">{t("obsTitle")}</label>
-                                      <textarea className="input" rows={2}
-                                        style={{ fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
-                                        placeholder={t("obsPlaceholder")}
-                                        value={formRole?.obs ?? ""}
-                                        onFocus={captureHistory} onBlur={releaseFocus}
-                                        onChange={e => updRoleQuiet(pi, si, editRi, r => ({
-                                          ...r, obs: e.target.value || null,
-                                        }))} />
-                                    </div>
-                                  </div>
-
-                                  {/* Actions — só renderiza quando há ação disponível */}
-                                  {((editRi === 0 && role?.catalog_id !== null && role?.catalog_id !== undefined) || editRi > 0) && (
-                                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-                                    {editRi === 0 && role?.catalog_id !== null && role?.catalog_id !== undefined && (
-                                      delConfirm === role.catalog_id ? (
-                                        <>
-                                          <button className="btn"
-                                            style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a" }}
-                                            onClick={() => deleteFromCatalog(role.catalog_id!, pi, si)}>
-                                            {t("confirmDeleteBtn")}
-                                          </button>
-                                          <button className="btn"
-                                            style={{ fontSize: 11, padding: "3px 8px" }}
-                                            onClick={() => setDelConfirm(null)}>
-                                            {t("cancel")}
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <button className="btn"
-                                          style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a" }}
-                                          onClick={() => setDelConfirm(role.catalog_id)}>
-                                          <i className="ti ti-trash" aria-hidden /> {t("deleteFromCatalogBtn")}
-                                        </button>
-                                      )
-                                    )}
-                                    {editRi > 0 && (
-                                      <button className="btn"
-                                        style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a" }}
-                                        onClick={() => {
-                                          updSlot(pi, si, s => ({ ...s, roles: s.roles.filter((_, i) => i !== editRi) }));
-                                          setEditRi(0);
-                                        }}>
-                                        <i className="ti ti-x" aria-hidden /> {t("removeFlexBtn")}
-                                      </button>
-                                    )}
-                                  </div>
-                                  )}
-
-                                </>
-
-                              )}
+          {/* Actions — só renderiza quando há ação disponível */}
+          {((editRi === 0 && role?.catalog_id !== null && role?.catalog_id !== undefined) || editRi > 0) && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+            {editRi === 0 && role?.catalog_id !== null && role?.catalog_id !== undefined && (
+              delConfirm === role.catalog_id ? (
+                <>
+                  <button className="btn"
+                    style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a" }}
+                    onClick={() => deleteFromCatalog(role.catalog_id!, pi, si)}>
+                    {t("confirmDeleteBtn")}
+                  </button>
+                  <button className="btn"
+                    style={{ fontSize: 11, padding: "3px 8px" }}
+                    onClick={() => setDelConfirm(null)}>
+                    {t("cancel")}
+                  </button>
+                </>
+              ) : (
+                <button className="btn"
+                  style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a" }}
+                  onClick={() => setDelConfirm(role.catalog_id)}>
+                  <i className="ti ti-trash" aria-hidden /> {t("deleteFromCatalogBtn")}
+                </button>
+              )
+            )}
+            {editRi > 0 && (
+              <button className="btn"
+                style={{ fontSize: 11, padding: "3px 8px", color: "#e07a7a" }}
+                onClick={() => {
+                  updSlot(pi, si, s => ({ ...s, roles: s.roles.filter((_, i) => i !== editRi) }));
+                  setEditRi(0);
+                }}>
+                <i className="ti ti-x" aria-hidden /> {t("removeFlexBtn")}
+              </button>
+            )}
+          </div>
+          )}
         </div>
       </div>
     );
@@ -942,8 +937,8 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
     <div className="container">
       <div className="card comp-editor-card">
 
-        {/* Header — duas faixas: identidade (voltar + nome + view/edit) e
-            toolbar (funções + undo + salvar). Separar dá respiro e hierarquia. */}
+        {/* Header — duas faixas: identidade (voltar + nome) e toolbar
+            (funções + undo + salvar). Sem toggle view/edit — só edit. */}
         <div className="comp-header comp-header-2row">
           <div className="comp-header-title">
             <button className="btn" style={{ padding: "5px 10px" }}
@@ -951,26 +946,11 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
               title={t("backToListTitle")}>
               <i className="ti ti-arrow-left" aria-hidden />
             </button>
-            {editing ? (
-              <input className="comp-name-input" value={draft.name}
-                onFocus={captureHistory} onBlur={releaseFocus}
-                onChange={e => updQuiet(d => ({ ...d, name: e.target.value }))} />
-            ) : (
-              <span className="comp-name-label">{draft.name}</span>
-            )}
+            <input className="comp-name-input" value={draft.name}
+              onFocus={captureHistory} onBlur={releaseFocus}
+              onChange={e => updQuiet(d => ({ ...d, name: e.target.value }))} />
             {offline && <span className="badge">{t("demoBadge")}</span>}
             {error && <span className="comp-header-error">{error}</span>}
-
-            <div className="comp-view-toggle" style={{ marginLeft: "auto" }}>
-              <button className={!editing ? "active" : ""} onClick={() => setEditing(false)}>
-                <i className="ti ti-eye" aria-hidden /> {t("viewBtn")}
-              </button>
-              {perms["comps.manage"] && (
-                <button className={editing ? "active" : ""} onClick={() => setEditing(true)}>
-                  <i className="ti ti-pencil" aria-hidden /> {t("editBtn")}
-                </button>
-              )}
-            </div>
           </div>
 
           <div className="comp-header-tools">
@@ -984,15 +964,13 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
               <i className="ti ti-arrow-back-up" aria-hidden /> {t("undoLastTitle")}
             </button>
 
-            {editing && (
-              <button className={"btn comp-save-btn" + (dirty ? " primary" : "")}
-                onClick={save} disabled={!dirty || saving}>
-                {saveOk
-                  ? <><i className="ti ti-check" aria-hidden /> {t("saved")}</>
-                  : saving ? t("saving")
-                  : <><i className="ti ti-device-floppy" aria-hidden /> {t("save")}</>}
-              </button>
-            )}
+            <button className={"btn comp-save-btn" + (dirty ? " primary" : "")}
+              onClick={save} disabled={!dirty || saving}>
+              {saveOk
+                ? <><i className="ti ti-check" aria-hidden /> {t("saved")}</>
+                : saving ? t("saving")
+                : <><i className="ti ti-device-floppy" aria-hidden /> {t("save")}</>}
+            </button>
           </div>
         </div>
 
@@ -1061,21 +1039,17 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
                     title={isCollapsed ? t("expandBtn") : t("collapseBtn")}>
                     <i className={`ti ti-chevron-${isCollapsed ? "right" : "down"}`} aria-hidden />
                   </button>
-                  {editing ? (
-                    <input className="party-name-input" value={party.name}
-                      placeholder={`Party ${pi + 1}`}
-                      onFocus={captureHistory} onBlur={releaseFocus}
-                      onChange={e => updQuiet(d => ({
-                        ...d,
-                        parties: d.parties.map((p, i) => i !== pi ? p : { ...p, name: e.target.value }),
-                      }))} />
-                  ) : (
-                    <span className="party-name-label">{party.name || `Party ${pi + 1}`}</span>
-                  )}
+                  <input className="party-name-input" value={party.name}
+                    placeholder={`Party ${pi + 1}`}
+                    onFocus={captureHistory} onBlur={releaseFocus}
+                    onChange={e => updQuiet(d => ({
+                      ...d,
+                      parties: d.parties.map((p, i) => i !== pi ? p : { ...p, name: e.target.value }),
+                    }))} />
                   <span className={"party-count" + (party.slots.length >= MAX_SLOTS ? " full" : "")}>
                     {party.slots.length}/{MAX_SLOTS}
                   </span>
-                  {editing && draft.parties.length > 1 && (
+                  {draft.parties.length > 1 && (
                     <button className="cs-xbtn" onClick={() => removeParty(pi)} title={t("removePartyTitle")}>
                       <i className="ti ti-x" aria-hidden />
                     </button>
@@ -1085,14 +1059,7 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
                 {/* Party body */}
                 {!isCollapsed && (
                   <div className="party-card-body">
-                    {(editing
-                      ? party.slots.map((slot, si) => ({ slot, si }))
-                      : [...party.slots.map((slot, si) => ({ slot, si }))].sort((a, b) => {
-                          const iA = fnTypes.findIndex(t => t.key === (a.slot.fn ?? ""));
-                          const iB = fnTypes.findIndex(t => t.key === (b.slot.fn ?? ""));
-                          return (iA < 0 ? 999 : iA) - (iB < 0 ? 999 : iB);
-                        })
-                    ).map(({ slot, si }) => {
+                    {party.slots.map((slot, si) => {
                       const role       = slot.roles[0];
                       const isSelected = openCard?.[0] === pi && openCard?.[1] === si;
                       const chipColor  = slot.fn ? (getFnDef(slot.fn, fnTypes)?.color ?? "#888") : undefined;
@@ -1100,10 +1067,10 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
                       return (
                         <div key={si}
                           className={`role-card${isSelected ? " rc-open" : ""}`}
-                          style={{ "--chip-color": chipColor ?? "var(--border-strong)", cursor: editing ? "pointer" : "default" } as CSSProperties}
+                          style={{ "--chip-color": chipColor ?? "var(--border-strong)", cursor: "pointer" } as CSSProperties}
                           onClick={() => toggleCard(pi, si)}>
 
-                          {/* Card head — weapon icon + name + equip strip + badge (preview compacto, sempre igual, edição/detalhe fica no painel) */}
+                          {/* Card head — weapon icon + name + equip strip + badge (preview compacto, edição no painel) */}
                           <div className="rc-head">
                             {role ? (
                               <>
@@ -1132,18 +1099,6 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
                                     <i className="ti ti-stack-2" aria-hidden /> {slot.roles.length}
                                   </span>
                                 )}
-                                {/* badge + strip primário — em edição o nome some (lista
-                                    fica mais estreita; o tipo já está indicado pela cor
-                                    da borda esquerda da bracket) */}
-                                {slot.fn && !editing && (() => {
-                                  const ft = getFnDef(slot.fn, fnTypes);
-                                  const color = ft?.color ?? "#888";
-                                  return (
-                                    <span className="rc-fn-badge" style={{ background: color + "25", color }}>
-                                      {ft ? fnLabel(ft) : slot.fn}
-                                    </span>
-                                  );
-                                })()}
                                 {role.equip_loaded && (
                                   <div style={{ marginLeft: 6, flexShrink: 0 }}>
                                     <EquipStrip equip={role.equip} weaponIs2H={is2H(role.equip.weapon?.id)} />
@@ -1154,89 +1109,97 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
                               <span className="chip-empty" style={{ fontSize: 12 }}>{t("noRoleAssigned")}</span>
                             )}
                           </div>
+                          {/* Remove slot button — fora do rc-head pra não
+                              disparar toggleCard no click do botão. */}
+                          <button className="cs-xbtn rc-card-remove"
+                            onClick={e => { e.stopPropagation(); removeSlot(pi, si); }}
+                            title={t("removeFromCompTitle")}>
+                            <i className="ti ti-x" aria-hidden />
+                          </button>
                         </div>
                       );
                     })}
 
-                    {/* Add role button */}
-                    {editing && (
-                      <>
-                        {addSlotMenu === pi && (() => {
-                          const seen = new Set<string>();
-                          const pickableSlots: { fn: string | null; roles: DraftRole[]; primary: DraftRole }[] = [];
-                          for (const p of (draft?.parties ?? [])) {
-                            for (const s of p.slots) {
-                              const primary = s.roles[0];
-                              if (!primary) continue;
-                              const key = roleIdentityKey(primary);
-                              if (!seen.has(key) && (primary.catalog_id != null || primary.name.trim())) {
-                                seen.add(key);
-                                pickableSlots.push({ fn: s.fn, roles: s.roles, primary });
-                              }
-                            }
+                    {/* Add role — 1 clique cria role vazia e abre o painel.
+                        Copiar de outra role virou botão secundário (addCopyMenu). */}
+                    {addCopyMenu === pi && (() => {
+                      const seen = new Set<string>();
+                      const pickableSlots: { fn: string | null; roles: DraftRole[]; primary: DraftRole }[] = [];
+                      for (const p of (draft?.parties ?? [])) {
+                        for (const s of p.slots) {
+                          const primary = s.roles[0];
+                          if (!primary) continue;
+                          const key = roleIdentityKey(primary);
+                          if (!seen.has(key) && (primary.catalog_id != null || primary.name.trim())) {
+                            seen.add(key);
+                            pickableSlots.push({ fn: s.fn, roles: s.roles, primary });
                           }
-                          return (
-                            <div className="flex-picker-menu">
-                              <button className="flex-picker-item flex-picker-new"
-                                onClick={() => { addSlot(pi); setAddSlotMenu(null); }}>
-                                <i className="ti ti-plus" aria-hidden /> {t("createNewRoleBtn")}
-                              </button>
-                              {pickableSlots.map((item, idx) => (
-                                <button key={idx} className="flex-picker-item"
-                                  onClick={() => {
-                                    if (!draft || draft.parties[pi].slots.length >= MAX_SLOTS) return;
-                                    const newSlotIdx = draft.parties[pi].slots.length;
-                                    const copiedRoles: DraftRole[] = JSON.parse(JSON.stringify(item.roles));
-                                    copiedRoles.forEach(r => { r.catalog_id = null; });
-                                    upd(d => ({
-                                      ...d,
-                                      parties: d.parties.map((p, i) =>
-                                        i !== pi ? p : { ...p, slots: [...p.slots, { fn: item.fn, roles: copiedRoles }] }
-                                      ),
-                                    }));
-                                    setOpenCard([pi, newSlotIdx]);
-                                    setAddSlotMenu(null);
-                                  }}>
-                                  {item.primary.equip.weapon?.id
-                                    ? <img src={itemUrl(item.primary.equip.weapon.id)} alt=""
-                                        style={{ width: 20, height: 20, flexShrink: 0 }}
-                                        onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
-                                    : <span style={{ width: 20, flexShrink: 0 }} />}
-                                  <span className="flex-picker-name">{item.primary.name || t("noNamePlaceholder")}</span>
-                                  {item.fn && (() => { const ft = getFnDef(item.fn, fnTypes); return ft ? (
-                                    <span className="rc-fn-badge" style={{ background: ft.color + "25", color: ft.color, flexShrink: 0 }}>
-                                      {fnLabel(ft)}
-                                    </span>
-                                  ) : null; })()}
-                                  {item.roles.length > 1 && (
-                                    <span style={{ fontSize: 10, color: "var(--muted)", flexShrink: 0 }}>
-                                      +{item.roles.length - 1} flex
-                                    </span>
-                                  )}
-                                  {item.primary.equip_loaded && <EquipStrip equip={item.primary.equip} />}
-                                </button>
-                              ))}
-                              {!pickableSlots.length && (
-                                <span className="flex-picker-empty">{t("noRoleInComp")}</span>
+                        }
+                      }
+                      return (
+                        <div className="flex-picker-menu">
+                          {pickableSlots.map((item, idx) => (
+                            <button key={idx} className="flex-picker-item"
+                              onClick={() => {
+                                if (!draft || draft.parties[pi].slots.length >= MAX_SLOTS) return;
+                                const newSlotIdx = draft.parties[pi].slots.length;
+                                const copiedRoles: DraftRole[] = JSON.parse(JSON.stringify(item.roles));
+                                copiedRoles.forEach(r => { r.catalog_id = null; });
+                                upd(d => ({
+                                  ...d,
+                                  parties: d.parties.map((p, i) =>
+                                    i !== pi ? p : { ...p, slots: [...p.slots, { fn: item.fn, roles: copiedRoles }] }
+                                  ),
+                                }));
+                                setOpenCard([pi, newSlotIdx]);
+                                setAddCopyMenu(null);
+                              }}>
+                              {item.primary.equip.weapon?.id
+                                ? <img src={itemUrl(item.primary.equip.weapon.id)} alt=""
+                                    style={{ width: 20, height: 20, flexShrink: 0 }}
+                                    onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
+                                : <span style={{ width: 20, flexShrink: 0 }} />}
+                              <span className="flex-picker-name">{item.primary.name || t("noNamePlaceholder")}</span>
+                              {item.fn && (() => { const ft = getFnDef(item.fn, fnTypes); return ft ? (
+                                <span className="rc-fn-badge" style={{ background: ft.color + "25", color: ft.color, flexShrink: 0 }}>
+                                  {fnLabel(ft)}
+                                </span>
+                              ) : null; })()}
+                              {item.roles.length > 1 && (
+                                <span style={{ fontSize: 10, color: "var(--muted)", flexShrink: 0 }}>
+                                  +{item.roles.length - 1} flex
+                                </span>
                               )}
-                            </div>
-                          );
-                        })()}
-                        <button className="party-col-add"
-                          onClick={() => {
-                            const opening = addSlotMenu !== pi;
-                            setAddSlotMenu(opening ? pi : null);
-                            if (opening) {
-                              const primaries = (draft?.parties ?? []).flatMap(p => p.slots.map(s => s.roles[0]).filter(Boolean));
-                              ensurePickableRolesLoaded(primaries);
-                            }
-                          }}
-                          disabled={party.slots.length >= MAX_SLOTS}>
-                          <i className="ti ti-plus" aria-hidden />
-                          {party.slots.length >= MAX_SLOTS ? t("fullLabel") : t("addRoleBtn")}
-                        </button>
-                      </>
-                    )}
+                              {item.primary.equip_loaded && <EquipStrip equip={item.primary.equip} />}
+                            </button>
+                          ))}
+                          {!pickableSlots.length && (
+                            <span className="flex-picker-empty">{t("noRoleInComp")}</span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    <div className="party-add-row">
+                      <button className="party-col-add party-col-add-primary"
+                        onClick={() => addSlot(pi)}
+                        disabled={party.slots.length >= MAX_SLOTS}>
+                        <i className="ti ti-plus" aria-hidden />
+                        {party.slots.length >= MAX_SLOTS ? t("fullLabel") : t("addRoleBtn")}
+                      </button>
+                      <button className="party-col-add party-col-add-secondary"
+                        onClick={() => {
+                          const opening = addCopyMenu !== pi;
+                          setAddCopyMenu(opening ? pi : null);
+                          if (opening) {
+                            const primaries = (draft?.parties ?? []).flatMap(p => p.slots.map(s => s.roles[0]).filter(Boolean));
+                            ensurePickableRolesLoaded(primaries);
+                          }
+                        }}
+                        disabled={party.slots.length >= MAX_SLOTS}
+                        title={t("createNewRoleBtn")}>
+                        <i className="ti ti-copy" aria-hidden />
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1244,11 +1207,9 @@ export function CompEditor({ initialDraft, initialEditing, initialImportCode, pe
           })}
 
           {/* Add party */}
-          {editing && (
-            <button className="party-col-add" onClick={addParty}>
-              <i className="ti ti-plus" aria-hidden /> {t("newPartyBtn")}
-            </button>
-          )}
+          <button className="party-col-add" onClick={addParty}>
+            <i className="ti ti-plus" aria-hidden /> {t("newPartyBtn")}
+          </button>
         </div>
           </div>
           {renderDetailPanel()}

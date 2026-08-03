@@ -327,8 +327,6 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
   const [whenInput, setWhenInput] = useState("");
   const [comps, setComps] = useState<{ id: number; name: string }[]>([]);
   const [compId, setCompId] = useState("");
-  const [assignmentMode, setAssignmentMode] = useState("hybrid");
-  const [autofillMode, setAutofillMode] = useState("manual");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -338,6 +336,9 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
   }, [open]);
   const when = parseEventTime(whenInput);
 
+  // assignment_mode fixo em "admin_assign" — a escalação é toda feita na aba
+  // de roster por um admin (botão de autofill já existe lá). autofill_mode não
+  // vai no create: o backend aplica o default e o controle fica na escalação.
   async function submit() {
     if (!when) { setError(t("evTimeRequired")); return; }
     setBusy(true); setError(null);
@@ -347,11 +348,9 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
         scheduled_at: when.iso,
         comp_id: compId ? Number(compId) : null,
         message: msg.trim() || null,
-        assignment_mode: assignmentMode,
-        autofill_mode: autofillMode,
+        assignment_mode: "admin_assign",
       });
       setTitle(""); setWhenInput(""); setCompId(""); setMsg("");
-      setAssignmentMode("hybrid"); setAutofillMode("manual");
       setOpen(false);
       onCreated(ev);
     } catch (e) {
@@ -410,26 +409,6 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
             {comps.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </label>
-
-        <fieldset className="ev-policy-group">
-          <legend>{t("evSectionPolicies")}</legend>
-          <label className="ev-field">
-            <span className="ev-field-label">{t("evAssignmentModeLabel")}</span>
-            <select className="cs-select" value={assignmentMode} onChange={(e) => setAssignmentMode(e.target.value)}>
-              <option value="hybrid">{t("evHybridAssignment")}</option>
-              <option value="admin_assign">{t("evAdminAssignment")}</option>
-              <option value="self_assign">{t("evSelfAssignment")}</option>
-            </select>
-          </label>
-          <label className="ev-field">
-            <span className="ev-field-label">{t("evAutofillModeLabel")}</span>
-            <select className="cs-select" value={autofillMode} onChange={(e) => setAutofillMode(e.target.value)}>
-              <option value="manual">{t("evManualAutofill")}</option>
-              <option value="off">{t("evAutofillOff")}</option>
-              <option value="on_signup">{t("evAutofillSignup")}</option>
-            </select>
-          </label>
-        </fieldset>
 
         <label className="ev-field">
           <span className="ev-field-label">{t("evMessageLabel")}</span>
@@ -536,6 +515,7 @@ function EventEditControls({ detail, act }: {
 
 function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act: (p: Promise<EventDetail>) => void; canManage: boolean }) {
   const t = useT();
+  const { lang } = useLang();
   const curIdx = PIPELINE.indexOf(detail.state);
 
   // X = excluir. Cancelado/excluído são a mesma coisa na prática pro usuário
@@ -550,53 +530,67 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
     : forward === "finalized" ? t("finalizeBtn")
     : t("startEventBtn");
 
-  // Rótulos legíveis pras políticas (detail traz o enum cru do backend).
-  const assignLabel =
-    detail.assignment_mode === "admin_assign" ? t("evAdminAssignment")
-    : detail.assignment_mode === "self_assign" ? t("evSelfAssignment")
-    : t("evHybridAssignment");
-  const autofillLabel =
-    detail.autofill_mode === "off" ? t("evAutofillOff")
-    : detail.autofill_mode === "on_signup" ? t("evAutofillSignup")
-    : t("evManualAutofill");
+  // Contagem de presença pro meta strip — presentes (escalados/inscritos que
+  // apareceram), ausentes (inscritos/registrados sem presença) e intrusos
+  // (participaram sem escalação). partitionRoster é a fonte única, reaproveitada
+  // pelo ParticipantsSection.
+  const roster = partitionRoster(detail);
+  const presentCount = detail.participants.length;
+  const absentCount = roster.absentSignups.length + roster.absentBattle.length;
+  const intruderCount = roster.intruders.length;
+  const hasCounts = presentCount > 0 || absentCount > 0 || intruderCount > 0;
 
   return (
     <>
-      {/* Cabeçalho do detalhe: recado do caller em destaque (antes NUNCA era
-          renderizado — ficava enterrado no objeto) + meta compacta das
-          políticas e inscritos. Título/horário/estado já vivem na linha da
-          lista (fora deste componente), então não se repetem aqui. */}
+      {/* Recado do caller em destaque (antes ficava enterrado no objeto). */}
       {detail.message && (
         <div className="ev-detail-message">
           <i className="ti ti-megaphone" aria-hidden />
           <span>{detail.message}</span>
         </div>
       )}
+
+      {/* Meta strip: horário + contagem de presença. Sem chips de política
+          (a escalação é sempre admin_assign hoje; autofill fica na aba de
+          roster). Título/horário da linha da lista não se repetem aqui, mas o
+          horário volta como referência rápida ao lado de quem está/menção. */}
       <div className="ev-detail-meta">
-        <span className="ev-meta-chip" title={t("evAssignmentModeLabel")}>
-          <i className="ti ti-users-group" aria-hidden />
-          {t("evAssignmentModeLabel")}: {assignLabel}
+        <span className="ev-meta-chip" title={t("evScheduledAtLabel")}>
+          <i className="ti ti-clock" aria-hidden />
+          {eventTime(detail.scheduled_at ?? detail.started_at, lang)}
         </span>
-        <span className="ev-meta-chip" title={t("evAutofillModeLabel")}>
-          <i className="ti ti-wand" aria-hidden />
-          {t("evAutofillModeLabel")}: {autofillLabel}
-        </span>
+        {hasCounts && (
+          <span className="ev-meta-counts">
+            <span title={t("evGroupPresent")}><i className="ti ti-user-check" aria-hidden /> {presentCount}</span>
+            {absentCount > 0 && <span className="absent" title={t("evGroupAbsent")}><i className="ti ti-user-minus" aria-hidden /> {absentCount}</span>}
+            {intruderCount > 0 && <span className="intruder" title={t("evGroupIntruder")}><i className="ti ti-user-exclamation" aria-hidden /> {intruderCount}</span>}
+          </span>
+        )}
       </div>
 
-      {/* Pipeline: estado atual dourado, passados verde. X de excluir à direita
-          (cancelado/excluído viram o mesmo gesto — o backend aceita "deleted"
-          de qualquer estado, estornando pagamentos se já finalizado). */}
+      {/* Pipeline: estado atual ganha destaque óbvio (borda dourada + fundo),
+          passados ficam verdes, futuros apagados. O botão primário (avançar)
+          vive COLADO ao pipeline — é a ação dona daquele passo, não um botão
+          solto no rodapé. X de excluir à direita. */}
       <div className="ev-detail-pipe">
-        <div className="pipe" style={{ flex: 1, margin: 0 }}>
-          {PIPELINE.map((s, i) => (
-            <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span className={"state-pill " + (i === curIdx ? "cur" : curIdx >= 0 && i < curIdx ? "done" : "")}>
-                {t(STATE_KEYS[s])}
+        <div className="pipe ev-pipe-track">
+          {PIPELINE.map((s, i) => {
+            const cls = i === curIdx ? "cur" : curIdx >= 0 && i < curIdx ? "done" : "future";
+            return (
+              <span key={s} className="ev-pipe-step">
+                <span className={"state-pill " + cls}>{t(STATE_KEYS[s])}</span>
+                {i < PIPELINE.length - 1 && <i className="ti ti-chevron-right arrow" aria-hidden />}
               </span>
-              {i < PIPELINE.length - 1 && <i className="ti ti-chevron-right arrow" aria-hidden />}
-            </span>
-          ))}
+            );
+          })}
         </div>
+        {canForward && (
+          <button className="btn primary ev-pipe-forward"
+            onClick={() => act(api.transition(detail.id, forward!))}>
+            <i className={"ti " + (forward === "finalized" ? "ti-circle-check" : "ti-player-play")} aria-hidden />
+            {forwardLabel}
+          </button>
+        )}
         {canDelete && (
           <button
             className="ev-detail-delete"
@@ -612,10 +606,8 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
         <EventEditControls detail={detail} act={act} />
       )}
 
-      {/* Attendance: movido para a barra de ações, ao lado do botão de
-          finalizar (todo mundo que participou recebe a mesma quantidade). */}
-
-      {/* Revisão: valor da tab + nodes lado a lado, payout, concluir. */}
+      {/* Revisão: tab value (log) + nodes + regears, cada um no seu painel com
+          header editorial e borda — não blocos soltos. */}
       {detail.state === "review" && (
         <div className="ev-stage ev-stage-review">
           <div className="ev-stage-h"><i className="ti ti-clipboard-check" aria-hidden />{t("reviewTitle")}</div>
@@ -635,7 +627,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
             </div>
           </div>
           <EventRegearsRow detail={detail} act={act} canManage={canManage} />
-          {/* Concluir vive na barra de ações no rodapé — um botão só. */}
+          {/* Concluir vive colado ao pipeline lá em cima. */}
         </div>
       )}
 
@@ -652,8 +644,9 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
 
       <ParticipantsSection detail={detail} act={act} canManage={canManage} />
 
-      {/* Barra de ações: roster + liberar funções + UM botão primário (a
-          próxima etapa do pipeline). Cancelar/excluir viraram o X lá em cima. */}
+      {/* Barra de ações: roster + liberar funções + attendance. O botão primário
+          (avançar o pipeline) vive colado ao pipeline lá em cima — não aqui.
+          Cancelar/excluir viraram o X no canto do pipeline. */}
       {(detail.comp_id || canManage) && (
         <div className="ev-actions">
           {detail.comp_id && (
@@ -676,7 +669,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
             </button>
           )}
           <div className="ev-actions-right">
-            {/* Attendance: valor único do evento, sentado à esquerda do finalizar. */}
+            {/* Attendance: valor único do evento (todo participante recebe igual). */}
             <span className="ev-attendance" title={t("eventAttendanceHint")}>
               <i className="ti ti-info-circle" aria-hidden />
               <span className="hint">{t("eventAttendanceLabel")}</span>
@@ -694,13 +687,6 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
                 <strong>{detail.attendance}</strong>
               )}
             </span>
-            {canForward && (
-              <button className="btn primary"
-                onClick={() => act(api.transition(detail.id, forward!))}>
-                <i className={"ti " + (forward === "finalized" ? "ti-circle-check" : "ti-player-play")} aria-hidden />
-                {forwardLabel}
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -946,10 +932,31 @@ function EventRegearsRow({ detail, act, canManage }: {
 
 // ── Inscrições (auto-inscrição via Discord, só leitura) ──────────────────
 
-// ── Participantes (lista única, ordenada por percent) ─────────────────────
-// Inscritos sem presença e ausentes-em-batalha NÃO são mais seções à parte —
-// contam como participante (percent 0) na MESMA lista, misturados por %.
-// Editar o % de uma linha virtual materializa ela (api.addParticipant).
+// ── Participantes ─────────────────────────────────────────────────────────
+// A gestão importa nos dois extremos, não no meio: AUSENTES (inscritos /
+// registrados que não apareceram) e INTRUSOS (participaram sem escalação). Quem
+// está em dia (escalado/inscrito + presente) é uma lista secundária, compacta.
+// Editar o % de uma linha virtual (ausente) a materializa (api.addParticipant).
+
+// Origens "além da escalação": participou sem ser escalado. call_signup fica de
+// fora — o cara estava inscrito (cumpriu o esperado), não é intruso. manual é
+// ação da staff, também não conta.
+const INTRUDER_ORIGINS = new Set(["call_no_signup", "call_outsider", "battle_no_call"]);
+
+// Fonte única da divisão do roster — reaproveitada pelo meta strip do detalhe
+// e pelo ParticipantsSection, pra as duas contagens nunca divergirem.
+function partitionRoster(detail: EventDetail) {
+  const assignedIds = new Set(detail.participants.map((p) => p.user_id));
+  const intruders: Participant[] = [];
+  const ok: Participant[] = [];
+  for (const p of detail.participants) {
+    if (p.origin && INTRUDER_ORIGINS.has(p.origin)) intruders.push(p);
+    else ok.push(p);
+  }
+  const absentSignups = detail.signups.filter((s) => !assignedIds.has(s.user_id));
+  const absentBattle = detail.battle_absentees.filter((a) => !assignedIds.has(a.user_id));
+  return { assignedIds, intruders, ok, absentSignups, absentBattle };
+}
 
 interface VirtualParticipantRow {
   virtual: true;
@@ -975,32 +982,38 @@ function ParticipantsSection({ detail, act, canManage }: {
   const [newName, setNewName] = useState("");
   const [newPct, setNewPct] = useState("100");
   const isActive = !["finalized", "cancelled", "deleted"].includes(detail.state);
-  const assignedIds = useMemo(() => new Set(detail.participants.map((p) => p.user_id)), [detail.participants]);
-  const unassignedSignups = detail.signups.filter((s) => !assignedIds.has(s.user_id));
+  const roster = useMemo(() => partitionRoster(detail), [detail]);
   const roleFnById = useMemo(
     () => Object.fromEntries(roles.map((r) => [r.id, r.invisible_function])) as Record<number, string | null>,
     [roles],
   );
-  // Lista única (sem seções à parte) — participantes de verdade + inscritos
-  // sem presença + ausentes-em-batalha, todos como uma linha (virtual=true
-  // pros dois últimos, percent 0), ordenada junto por % desc / nome.
-  const rows = useMemo<ParticipantRow[]>(() => {
-    const real: ParticipantRow[] = detail.participants.map((p) => ({ ...p, virtual: false }));
-    const signupRows: ParticipantRow[] = unassignedSignups.map((s) => ({
+  const byName = (a: { user_name: string | null }, b: { user_name: string | null }) =>
+    (a.user_name || "").localeCompare(b.user_name || "", undefined, { sensitivity: "base" });
+  const byPercent = (a: ParticipantRow, b: ParticipantRow) =>
+    b.percent - a.percent || byName(a, b);
+
+  // Três populações. Ausentes = linhas virtuais (sem EventParticipant) —
+  // editar o % as materializa. Intrusos/OK = participantes reais, separados
+  // pelo origin. A ordenação mantém % desc dentro de cada grupo.
+  const absentRows = useMemo<ParticipantRow[]>(() => {
+    const signups: ParticipantRow[] = roster.absentSignups.map((s) => ({
       virtual: true, rowKey: `signup-${s.user_id}`, user_id: s.user_id, user_name: s.user_name,
       percent: 0, origin: "signup_no_call", functions: s.functions,
     }));
-    const absenteeRows: ParticipantRow[] = detail.battle_absentees
-      .filter((a) => !assignedIds.has(a.user_id))
-      .map((a) => ({
-        virtual: true, rowKey: `absentee-${a.user_id}`, user_id: a.user_id, user_name: a.user_name,
-        percent: 0, origin: "battle_no_call",
-      }));
-    return [...real, ...signupRows, ...absenteeRows].sort((a, b) =>
-      b.percent - a.percent ||
-      (a.user_name || "").localeCompare(b.user_name || "", undefined, { sensitivity: "base" })
-    );
-  }, [detail.participants, unassignedSignups, detail.battle_absentees, assignedIds]);
+    const battle: ParticipantRow[] = roster.absentBattle.map((a) => ({
+      virtual: true, rowKey: `absentee-${a.user_id}`, user_id: a.user_id, user_name: a.user_name,
+      percent: 0, origin: "battle_no_call",
+    }));
+    return [...signups, ...battle].sort(byName);
+  }, [roster]);
+  const intruderRows = useMemo<ParticipantRow[]>(
+    () => roster.intruders.map((p): ParticipantRow => ({ ...p, virtual: false })).sort(byPercent),
+    [roster],
+  );
+  const okRows = useMemo<ParticipantRow[]>(
+    () => roster.ok.map((p): ParticipantRow => ({ ...p, virtual: false })).sort(byPercent),
+    [roster],
+  );
 
   useEffect(() => {
     api.listRoles().then(setRoles).catch(() => {});
@@ -1129,13 +1142,9 @@ function ParticipantsSection({ detail, act, canManage }: {
     );
   }
 
-  // Quebra pra dar hierarquia: quantos são escalados de verdade vs. inscritos
-  // sem presença vs. ausentes em batalha. As três populações se misturam numa
-  // lista só (ordenada por %); o resumo deixa a composição visível num relance.
-  const realCount = detail.participants.length;
-  const signupCount = unassignedSignups.length;
-  const absenteeCount = detail.battle_absentees.filter(a => !assignedIds.has(a.user_id)).length;
-  const hasBreakdown = signupCount > 0 || absenteeCount > 0;
+  // Contagem total (tudo que vira linha) pro badge do header.
+  const total = absentRows.length + intruderRows.length + okRows.length;
+  const empty = total === 0;
 
   return (
     <div className="ev-participants">
@@ -1143,22 +1152,51 @@ function ParticipantsSection({ detail, act, canManage }: {
         <span className="ev-part-title">
           <i className="ti ti-users" aria-hidden />
           {t("participantsLabel")}
-          {rows.length > 0 && <span className="badge info">{rows.length}</span>}
+          {total > 0 && <span className="badge info">{total}</span>}
         </span>
-        {hasBreakdown && (
-          <span className="ev-part-stats">
-            <span><b>{realCount}</b></span>
-            {signupCount > 0 && <span className="muted" title={t("originSignupNoCall")}><i className="ti ti-notebook" aria-hidden /> {signupCount}</span>}
-            {absenteeCount > 0 && <span className="muted" title={t("originBattleNoCall")}><i className="ti ti-swords" aria-hidden /> {absenteeCount}</span>}
-          </span>
-        )}
       </div>
-      {rows.length === 0 ? (
+      {empty ? (
         <p className="hint" style={{ marginBottom: 8 }}>{t("participantsAutoAddHint")}</p>
       ) : (
-        <div className="ev-participants-grid">
-          {rows.map(renderRow)}
-        </div>
+        <>
+          {/* Ausentes primeiro — é o que pede ação. Linhas virtuais: editar o %
+              as materializa como participante. */}
+          {absentRows.length > 0 && (
+            <section className="ev-part-group ev-tone-absent">
+              <div className="ev-part-ghead">
+                <i className="ti ti-user-minus" aria-hidden />
+                <span className="ev-part-gtitle">{t("evGroupAbsent")}</span>
+                <b>{absentRows.length}</b>
+                <span className="ev-part-ghint">{t("evAbsentHint")}</span>
+              </div>
+              <div className="ev-part-list">{absentRows.map(renderRow)}</div>
+            </section>
+          )}
+          {/* Intrusos: participaram sem escalação. Origem fica visível no badge
+              de cada linha (tooltip explica o caso específico). */}
+          {intruderRows.length > 0 && (
+            <section className="ev-part-group ev-tone-intruder">
+              <div className="ev-part-ghead">
+                <i className="ti ti-user-exclamation" aria-hidden />
+                <span className="ev-part-gtitle">{t("evGroupIntruder")}</span>
+                <b>{intruderRows.length}</b>
+                <span className="ev-part-ghint">{t("evIntruderHint")}</span>
+              </div>
+              <div className="ev-part-list">{intruderRows.map(renderRow)}</div>
+            </section>
+          )}
+          {/* Presentes em dia — lista secundária, compacta (grid denso). */}
+          {okRows.length > 0 && (
+            <section className="ev-part-group ev-tone-ok">
+              <div className="ev-part-ghead">
+                <i className="ti ti-user-check" aria-hidden />
+                <span className="ev-part-gtitle">{t("evGroupPresent")}</span>
+                <b>{okRows.length}</b>
+              </div>
+              <div className="ev-participants-grid ev-part-grid-ok">{okRows.map(renderRow)}</div>
+            </section>
+          )}
+        </>
       )}
       {isActive && canManage && (
         <div className="ev-part-add">
