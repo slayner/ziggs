@@ -536,14 +536,19 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
 
     return (
       <div className="rc-card-detail" onClick={e => e.stopPropagation()}>
-        {/* Cabeçalho — preview vivo do equipamento + abas de build (a aba
-            "+" é a porta de entrada do flex). Antes sticky; agora embutido. */}
+        {/* Cabeçalho — preview vivo do equipamento (a EquipStrip do head do
+            card some no aberto; esta é a versão completa do detail). */}
         <div className="rc-card-detail-head">
           {formRole?.equip_loaded && (
             <div className="rc-equip-strip">
               <EquipStrip equip={formRole.equip} weaponIs2H={is2H(formRole.equip.weapon?.id)} />
             </div>
           )}
+        </div>
+
+        {/* Abas de build (flex) — integradas visualmente ao card expandido,
+            logo abaixo do head, antes das seções. A aba "+" abre o flex picker. */}
+        <div className="rc-card-buildtabs">
           <BuildTabs roles={slot.roles}
             active={editRi}
             onSelect={setEditRi}
@@ -640,13 +645,15 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
             </div>
           </div>
 
-          {/* Fn type picker — só aparece quando o slot ainda não tem tipo. */}
+          {/* Fn type picker — só botões de escolha (um por fn-type). O painel
+              de editar/criar/deletar fn-types fica no botão "Funções" da toolbar
+              (showFnPanel); aqui é só atribuir, não configurar. */}
           {slot.fn === null && (
             <div className="fn-type-picker">
               <p className="fn-picker-hint">{t("selectFnTypeHint")}</p>
-              {fnTypes.map((ft, fti) => (
-                <div key={ft.key} className="fn-picker-row">
-                  <button className="fn-type-assign-btn"
+              <div className="fn-picker-btns">
+                {fnTypes.map(ft => (
+                  <button key={ft.key} className="fn-type-assign-btn"
                     style={{ background: ft.color + "25", color: ft.color, borderColor: ft.color + "60" }}
                     onClick={() => updSlot(pi, si, s => ({
                       ...s, fn: ft.key,
@@ -654,30 +661,8 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
                     }))}>
                     {fnLabel(ft)}
                   </button>
-                  <ColorPicker value={ft.color}
-                    onChange={c => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, color: c } : t))} />
-                  <input className="fn-emoji-input" value={ft.emoji ?? ""} placeholder="😀" maxLength={4}
-                    title="Emoji"
-                    onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, emoji: e.target.value || undefined } : t))} />
-                  <input className="fn-type-name-input" value={ft.label} style={{ color: ft.color, flex: 1 }}
-                    onChange={e => saveFnTypes(fnTypes.map((t, i) => i === fti ? { ...t, label: e.target.value } : t))} />
-                  <button className="cs-xbtn" title={t("moveUpTitle")} disabled={fti === 0}
-                    onClick={() => { if (fti > 0) { const n = [...fnTypes]; [n[fti-1], n[fti]] = [n[fti], n[fti-1]]; saveFnTypes(n); } }}>
-                    <i className="ti ti-chevron-up" aria-hidden />
-                  </button>
-                  <button className="cs-xbtn" title={t("moveDownTitle")} disabled={fti === fnTypes.length - 1}
-                    onClick={() => { if (fti < fnTypes.length - 1) { const n = [...fnTypes]; [n[fti], n[fti+1]] = [n[fti+1], n[fti]]; saveFnTypes(n); } }}>
-                    <i className="ti ti-chevron-down" aria-hidden />
-                  </button>
-                  <button className="cs-xbtn" title={t("deleteTypeTitle")} onClick={() => deleteFnType(ft.key)}>
-                    <i className="ti ti-trash" aria-hidden />
-                  </button>
-                </div>
-              ))}
-              <button className="btn" style={{ marginTop: 8, fontSize: 11, padding: "3px 9px" }}
-                onClick={() => saveFnTypes([...fnTypes, { key: `custom_${Date.now()}`, label: t("newFnTypeLabel"), color: "#888888" }])}>
-                <i className="ti ti-plus" aria-hidden /> {t("newTypeBtn")}
-              </button>
+                ))}
+              </div>
             </div>
           )}
 
@@ -1053,12 +1038,16 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
                             style={{ "--chip-color": chipColor ?? "var(--border-strong)", cursor: "pointer" } as CSSProperties}
                             onClick={() => toggleCard(pi, si)}>
 
-                            {/* Card head — weapon icon + name + equip strip + flex badge.
-                                Função NÃO aparece como badge: a borda esquerda colorida
-                                do card (.role-card border-left: var(--chip-color)) já diz. */}
+                            {/* Card head — fn dot + weapon icon + name + equip strip + flex badge + remove.
+                                Função expressa pela borda esquerda larga (6px) + um dot colorido
+                                no canto superior esquerdo (.rc-fn-dot). EquipStrip some no card
+                                aberto (a do detail basta) — ver .role-card.rc-open .rc-head-strip. */}
                             <div className="rc-head">
                               {role ? (
                                 <>
+                                  <span className="rc-fn-dot"
+                                    style={{ background: chipColor ?? "transparent" }}
+                                    title={slot.fn ? (getFnDef(slot.fn, fnTypes)?.label ?? t("noFnTitle")) : t("noFnTitle")} />
                                   {role.equip.weapon?.id && (
                                     <span className={"rc-weapon-stack" + (slot.roles.length > 1 && slot.roles[1]?.equip.weapon?.id ? " has-alt" : "")}>
                                       {slot.roles.length > 1 && slot.roles[1]?.equip.weapon?.id && (
@@ -1083,27 +1072,29 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
                                     </span>
                                   )}
                                   {role.equip_loaded && (
-                                    <div style={{ marginLeft: 6, flexShrink: 0 }}>
+                                    <div className="rc-head-strip" style={{ marginLeft: 6, flexShrink: 0 }}>
                                       <EquipStrip equip={role.equip} weaponIs2H={is2H(role.equip.weapon?.id)} />
                                     </div>
                                   )}
                                 </>
                               ) : (
-                                <span className="chip-empty" style={{ fontSize: 12 }}>{t("noRoleAssigned")}</span>
+                                <>
+                                  <span className="rc-fn-dot" style={{ background: "transparent" }} />
+                                  <span className="chip-empty" style={{ fontSize: 12 }}>{t("noRoleAssigned")}</span>
+                                </>
                               )}
+                              {/* Remove slot — no header, à direita. stopPropagation
+                                  pra não disparar toggleCard. */}
+                              <button className="cs-xbtn rc-card-remove"
+                                onClick={e => { e.stopPropagation(); removeSlot(pi, si); }}
+                                title={t("removeFromCompTitle")}>
+                                <i className="ti ti-x" aria-hidden />
+                              </button>
                             </div>
 
                             {/* Conteúdo expandido inline (accordion) — só a role
                                 aberta renderiza. Substitui o antigo painel direito. */}
                             {isSelected && renderCardDetail(pi, si)}
-
-                            {/* Remove slot button — fora do rc-head pra não
-                                disparar toggleCard no click do botão. */}
-                            <button className="cs-xbtn rc-card-remove"
-                              onClick={e => { e.stopPropagation(); removeSlot(pi, si); }}
-                              title={t("removeFromCompTitle")}>
-                              <i className="ti ti-x" aria-hidden />
-                            </button>
                           </div>
                         );
                       })}

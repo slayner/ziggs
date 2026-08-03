@@ -678,7 +678,7 @@ const S = {
     buildCodeInvalid: "Código inválido", buildCodePasteFail: "Não consegui ler a área de transferência",
     importCompCodeBtn: "Importar código", importCompCodeHint: "Cola o código de uma composição copiada como ponto de partida",
     fullLabel: "Cheio", addRoleBtn: "Adicionar papel", newPartyBtn: "Nova party",
-    noRoleAssigned: "Sem papel", orWord: "OU", newFnTypeLabel: "Novo", removeFromCompTitle: "Remover do comp",
+    noRoleAssigned: "Sem papel", orWord: "OU", newFnTypeLabel: "Novo", removeFromCompTitle: "Remover do comp", noFnTitle: "Sem função",
     selectRoleHint: "Selecione uma função à esquerda para ver ou editar os detalhes",
     createNewRoleBtn: "Criar novo papel",
 
@@ -1437,7 +1437,7 @@ const S = {
     buildCodeInvalid: "Invalid code", buildCodePasteFail: "Couldn't read clipboard",
     importCompCodeBtn: "Import code", importCompCodeHint: "Paste a copied composition's code as a starting point",
     fullLabel: "Full", addRoleBtn: "Add role", newPartyBtn: "New party",
-    noRoleAssigned: "No role", orWord: "OR", newFnTypeLabel: "New", removeFromCompTitle: "Remove from comp",
+    noRoleAssigned: "No role", orWord: "OR", newFnTypeLabel: "New", removeFromCompTitle: "Remove from comp", noFnTitle: "No function",
     selectRoleHint: "Select a role on the left to view or edit its details",
     createNewRoleBtn: "Create new role",
 
@@ -2195,7 +2195,7 @@ const S = {
     buildCodeInvalid: "Código inválido", buildCodePasteFail: "No pude leer el portapapeles",
     importCompCodeBtn: "Importar código", importCompCodeHint: "Pega el código de una composición copiada como punto de partida",
     fullLabel: "Lleno", addRoleBtn: "Agregar role", newPartyBtn: "Nuevo party",
-    noRoleAssigned: "Sin role", orWord: "O", newFnTypeLabel: "Nuevo", removeFromCompTitle: "Quitar de la comp",
+    noRoleAssigned: "Sin role", orWord: "O", newFnTypeLabel: "Nuevo", removeFromCompTitle: "Quitar de la comp", noFnTitle: "Sin función",
     selectRoleHint: "Selecciona una función a la izquierda para ver o editar los detalles",
     createNewRoleBtn: "Crear nuevo role",
 

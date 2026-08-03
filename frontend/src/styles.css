@@ -375,22 +375,38 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 /* Conteúdo expandido dentro do card (accordion). Antes era o painel direito
    (master-detail, sticky, scroll próprio); agora embutido no card, fluindo
    com a página. Mesmas seções tituladas (.detail-section). */
-.rc-card-detail { border-top: 1px solid var(--border); }
+.rc-card-detail {
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
 .rc-card-detail-head {
   background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 4px 2px 0; /* EquipStrip já traz seu próprio padding */
 }
-.rc-card-detail-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+/* Abas de build integradas ao card expandido — logo abaixo do head, com
+   fundo próprio pra separar das seções de edição. */
+.rc-card-buildtabs {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 0 10px;
+}
+.rc-card-buildtabs .build-tabs { margin-bottom: 0; }
+.rc-card-detail-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 
-/* Seções tituladas do formulário de edição */
+/* Seções tituladas do formulário de edição — blocos com respiro, títulos
+   editoriais (uppercase + régua embaixo). */
 .detail-section {
-  display: flex; flex-direction: column; gap: 8px;
-  padding: 9px 10px; border: 1px solid var(--border);
-  border-radius: var(--radius-sm); background: rgba(255,255,255,0.02);
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--surface);
+  margin-bottom: 2px;
 }
+.detail-section:last-child { margin-bottom: 0; }
 .detail-section-title {
-  display: flex; align-items: center; gap: 6px; margin: 0;
-  font-size: 10px; font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .5px;
+  display: flex; align-items: center; gap: 6px; margin: 0 0 2px;
+  font-size: 11px; font-weight: 700; color: var(--gold-soft);
+  text-transform: uppercase; letter-spacing: .6px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border);
 }
 .detail-section-title .ti { font-size: 13px; color: var(--hint); }
 
@@ -654,7 +670,11 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 
 /* ── Grid de equipamento (painel estreito) ───────────────── */
 .equip-grid-narrow {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; min-width: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; min-width: 0;
+}
+/* Tela larga (accordion ocupa largura toda): 3 colunas pra não desperdiçar. */
+@media (min-width: 720px) {
+  .equip-grid-narrow { grid-template-columns: 1fr 1fr 1fr; }
 }
 .equip-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;
@@ -1097,12 +1117,15 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 
 /* Role card — função expressa pela borda esquerda colorida (var --chip-color,
    setada inline pelo JS), não por badge. Slots sem fn ficam com a cor padrão
-   (var(--border-strong), passada pelo JS quando slot.fn é null). */
+   (var(--border-strong), passada pelo JS quando slot.fn é null). Borda larga
+   (6px) + dot colorido no canto do head pra deixar a função óbvia sem voltar
+   ao badge grande. */
 .role-card {
   border: 1px solid var(--border);
-  border-left: 4px solid var(--chip-color, var(--border-strong));
+  border-left: 6px solid var(--chip-color, var(--border-strong));
   border-radius: var(--radius-sm); background: var(--surface);
   overflow: hidden; cursor: pointer; transition: border-color 0.1s, box-shadow 0.1s;
+  position: relative;
 }
 .role-card:hover:not(.rc-open) {
   border-top-color: var(--border-strong);
@@ -1119,7 +1142,23 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .role-card.rc-editing { background: var(--surface-2); }
 
+/* Botão de remover slot — no header, à direita. Não absoluto, pra não
+   sobrepor conteúdo no card expandido. Sutil por padrão, aparece no hover. */
+.rc-card-remove {
+  margin-left: auto; padding: 3px 6px; opacity: 0.5; transition: opacity 0.1s;
+  flex-shrink: 0;
+}
+.rc-card-remove:hover { opacity: 1; }
+
 .rc-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; }
+/* Dot colorido da função no canto superior esquerdo do head — complementa a
+   borda esquerda. Transparente quando o slot não tem fn. */
+.rc-fn-dot {
+  width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0;
+  background: var(--chip-color, transparent); align-self: center;
+}
+/* EquipStrip do head some quando o card está aberto — a do detail basta. */
+.role-card.rc-open .rc-head-strip { display: none; }
 .rc-name {
   flex: 1; font-size: 13px; font-weight: 600; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1191,19 +1230,26 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .fn-emoji-input:focus { outline: none; }
 
-/* Fn type picker (inline inside new bracket card) */
+/* Fn type picker (inline inside new bracket card) — SÓ botões de escolha.
+   O painel de editar/criar/deletar fn-types fica no botão "Funções" da toolbar
+   (.fn-colors-panel); aqui é só atribuir. */
 .fn-type-picker {
   display: flex; flex-direction: column; gap: 6px;
+  padding: 12px 14px; margin-bottom: 2px;
 }
 .fn-picker-hint {
-  margin: 0 0 4px; font-size: 12px; color: var(--muted);
+  margin: 0 0 4px; font-size: 11px; color: var(--hint);
+  text-transform: uppercase; letter-spacing: .4px;
 }
-.fn-picker-row {
-  display: flex; align-items: center; gap: 6px;
+.fn-picker-btns {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.fn-picker-btns .fn-type-assign-btn {
+  padding: 7px 16px; font-size: 12px; min-width: 0;
 }
 .fn-type-assign-btn {
-  padding: 4px 14px; border-radius: 5px; border: 1px solid transparent;
-  font-size: 12px; font-weight: 600; cursor: pointer; flex-shrink: 0; min-width: 80px;
+  border-radius: 5px; border: 1px solid transparent;
+  font-size: 12px; font-weight: 600; cursor: pointer; flex-shrink: 0;
   transition: filter .15s;
 }
 .fn-type-assign-btn:hover { filter: brightness(1.15); }
