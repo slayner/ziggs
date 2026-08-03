@@ -60,7 +60,6 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
   const [delConfirm,       setDelConfirm]       = useState<number | null>(null);
   const [fnTypes,          setFnTypes]          = useState<FnTypeDef[]>(() => [...DEFAULT_FN_TYPES]);
   const [showFnPanel,      setShowFnPanel]      = useState(false);
-  const [collapsedParties, setCollapsedParties] = useState<Set<number>>(new Set());
   const [history,          setHistory]          = useState<Draft[]>([]);
   // fn-dot dropdown: [pi, si] | null — aberto no card cujo dot foi clicado.
   const [fnDropdown,       setFnDropdown]       = useState<[number, number] | null>(null);
@@ -151,13 +150,6 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
       }));
       setOpenCard(null);
     }
-  }
-  function togglePartyCollapse(pi: number) {
-    setCollapsedParties(prev => {
-      const next = new Set(prev);
-      if (next.has(pi)) next.delete(pi); else next.add(pi);
-      return next;
-    });
   }
 
   // ── Open / close card + lazy equip load ───────────────────
@@ -346,19 +338,6 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
   function addParty() {
     upd(d => ({ ...d, parties: [...d.parties, { name: `Party ${d.parties.length + 1}`, slots: [] }] }));
   }
-  function removeParty(pi: number) {
-    if (!draft || draft.parties.length <= 1) return;
-    upd(d => ({ ...d, parties: d.parties.filter((_, i) => i !== pi) }));
-    if (openCard?.[0] === pi) setOpenCard(null);
-    setCollapsedParties(prev => {
-      const next = new Set<number>();
-      for (const i of prev) {
-        if (i < pi) next.add(i);
-        else if (i > pi) next.add(i - 1);
-      }
-      return next;
-    });
-  }
   function addSlot(pi: number) {
     if (!draft || draft.parties[pi].slots.length >= MAX_SLOTS) return;
     const idx = draft.parties[pi].slots.length;
@@ -531,8 +510,7 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
             <h4 className="detail-section-title"><i className="ti ti-notes" aria-hidden /> {t("notesLabel")}</h4>
             <div className="equip-field">
               <label className="equip-field-label">{t("playStyleTitle")}</label>
-              <textarea className="input" rows={2}
-                style={{ fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
+              <textarea className="input rc-autosize"
                 placeholder={t("playStylePlaceholder")}
                 value={role.play_style ?? ""}
                 onFocus={captureHistory} onBlur={releaseFocus}
@@ -540,8 +518,7 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
             </div>
             <div className="equip-field">
               <label className="equip-field-label">{t("obsTitle")}</label>
-              <textarea className="input" rows={2}
-                style={{ fontSize: 13, resize: "vertical", fontFamily: "inherit" }}
+              <textarea className="input rc-autosize"
                 placeholder={t("obsPlaceholder")}
                 value={role.obs ?? ""}
                 onFocus={captureHistory} onBlur={releaseFocus}
@@ -577,6 +554,41 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
                     }));
                     if (id) loadSpells(wBase(id));
                   }} />
+                {/* Skills abaixo do item selecionado */}
+                {gearSpells && gearSpells.length > 0 && (["helmet","armor","boots"] as const).includes(key as "helmet"|"armor"|"boots") && (() => {
+                  const alts = safeAltArr((role.equip as Record<string, unknown> | undefined)?.[`${key}_alt`]);
+                  const altCols = alts.map((alt, ai) => {
+                    const sp = alt.id ? spellCache[wBase(alt.id)] : null;
+                    return sp?.length ? { ai, sp } : null;
+                  }).filter((x): x is { ai: number; sp: WeaponSpell[] } => x !== null);
+                  return (
+                    <div style={{ display: "flex", gap: 0, alignItems: "flex-start", marginTop: 4 }}>
+                      <div className="rc-spells" style={{ paddingRight: altCols.length ? 10 : 0 }}>
+                        {[...new Set(gearSpells.map(s => s.slot))].map(slotName => (
+                          <SpellPicker key={slotName} spells={gearSpells} slot={slotName}
+                            selected={role.gear_spells[`${key}_${slotName}`] ?? null}
+                            onChange={id => updRole(pi, si, r => ({
+                              ...r, gear_spells: { ...r.gear_spells, [`${key}_${slotName}`]: id },
+                            }))} />
+                        ))}
+                      </div>
+                      {altCols.map(({ ai, sp }) => (
+                        <div key={ai} style={{ borderLeft: "1px solid var(--border)", paddingLeft: 10 }}>
+                          <div className="rc-spells">
+                            {[...new Set(sp.map(s => s.slot))].map(slotName => (
+                              <SpellPicker key={slotName} spells={sp} slot={slotName}
+                                selected={role.gear_spells[`${key}_alt_${ai}_${slotName}`] ?? null}
+                                onChange={id => updRole(pi, si, r => ({
+                                  ...r, gear_spells: { ...r.gear_spells, [`${key}_alt_${ai}_${slotName}`]: id },
+                                }))} />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {/* Sugestão de item alternativo abaixo das skills */}
                 {ALT_CAPABLE.has(key) && role.equip[key]?.id && (() => {
                   const rawAlt = (role.equip as Record<string, unknown>)[`${key}_alt`];
                   const alts: (EquipItem | undefined)[] = Array.isArray(rawAlt) ? rawAlt : [];
@@ -617,39 +629,6 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
                         </button>
                       )}
                     </>
-                  );
-                })()}
-                {gearSpells && gearSpells.length > 0 && (["helmet","armor","boots"] as const).includes(key as "helmet"|"armor"|"boots") && (() => {
-                  const alts = safeAltArr((role.equip as Record<string, unknown> | undefined)?.[`${key}_alt`]);
-                  const altCols = alts.map((alt, ai) => {
-                    const sp = alt.id ? spellCache[wBase(alt.id)] : null;
-                    return sp?.length ? { ai, sp } : null;
-                  }).filter((x): x is { ai: number; sp: WeaponSpell[] } => x !== null);
-                  return (
-                    <div style={{ display: "flex", gap: 0, alignItems: "flex-start", marginTop: 4 }}>
-                      <div className="rc-spells" style={{ paddingRight: altCols.length ? 10 : 0 }}>
-                        {[...new Set(gearSpells.map(s => s.slot))].map(slotName => (
-                          <SpellPicker key={slotName} spells={gearSpells} slot={slotName}
-                            selected={role.gear_spells[`${key}_${slotName}`] ?? null}
-                            onChange={id => updRole(pi, si, r => ({
-                              ...r, gear_spells: { ...r.gear_spells, [`${key}_${slotName}`]: id },
-                            }))} />
-                        ))}
-                      </div>
-                      {altCols.map(({ ai, sp }) => (
-                        <div key={ai} style={{ borderLeft: "1px solid var(--border)", paddingLeft: 10 }}>
-                          <div className="rc-spells">
-                            {[...new Set(sp.map(s => s.slot))].map(slotName => (
-                              <SpellPicker key={slotName} spells={sp} slot={slotName}
-                                selected={role.gear_spells[`${key}_alt_${ai}_${slotName}`] ?? null}
-                                onChange={id => updRole(pi, si, r => ({
-                                  ...r, gear_spells: { ...r.gear_spells, [`${key}_alt_${ai}_${slotName}`]: id },
-                                }))} />
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
                   );
                 })()}
               </div>
@@ -765,183 +744,164 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
           </div>
         ))}
 
-        {/* Parties */}
+        {/* Parties — lista com número lateral, linhas separadoras, slots livres */}
         <div className="comp-layout comp-builder-layout">
           <div className="comp-body">
+            <div className="party-list">
             {draft.parties.map((party, pi) => {
-              const isCollapsed = collapsedParties.has(pi);
               return (
-                <div key={pi} className="party-card">
-
-                  <div className="party-card-head">
-                    <button className="party-collapse-btn"
-                      onClick={() => togglePartyCollapse(pi)}
-                      title={isCollapsed ? t("expandBtn") : t("collapseBtn")}>
-                      <i className={`ti ti-chevron-${isCollapsed ? "right" : "down"}`} aria-hidden />
-                    </button>
-                    <input className="party-name-input" value={party.name}
-                      placeholder={`Party ${pi + 1}`}
-                      onFocus={captureHistory} onBlur={releaseFocus}
-                      onChange={e => updQuiet(d => ({
-                        ...d,
-                        parties: d.parties.map((p, i) => i !== pi ? p : { ...p, name: e.target.value }),
-                      }))} />
-                    <span className={"party-count" + (party.slots.length >= MAX_SLOTS ? " full" : "")}>
-                      {party.slots.length}/{MAX_SLOTS}
-                    </span>
-                    {draft.parties.length > 1 && (
-                      <button className="cs-xbtn" onClick={() => removeParty(pi)} title={t("removePartyTitle")}>
-                        <i className="ti ti-x" aria-hidden />
-                      </button>
+                <div key={pi} className="party-row">
+                  <div className="party-num">
+                    {pi + 1}
+                    {party.slots.length < MAX_SLOTS && (
+                      <span className="party-num-sub">{party.slots.length}/{MAX_SLOTS}</span>
                     )}
                   </div>
+                  <div className="party-slots">
+                    {party.slots.map((slot, si) => {
+                      const role = slot.role;
+                      const isSelected = openCard?.[0] === pi && openCard?.[1] === si;
+                      const chipColor = slot.fn ? (getFnDef(slot.fn, fnTypes)?.color ?? "#888") : undefined;
+                      const fnDef = slot.fn ? getFnDef(slot.fn, fnTypes) : undefined;
 
-                  {!isCollapsed && (
-                    <div className="party-card-body">
-                      {party.slots.map((slot, si) => {
-                        const role = slot.role;
-                        const isSelected = openCard?.[0] === pi && openCard?.[1] === si;
-                        const chipColor = slot.fn ? (getFnDef(slot.fn, fnTypes)?.color ?? "#888") : undefined;
-                        const fnDef = slot.fn ? getFnDef(slot.fn, fnTypes) : undefined;
-
-                        return (
-                          <div key={si}
-                            className={`role-card${isSelected ? " rc-open" : ""}`}
-                            style={{ "--chip-color": chipColor ?? "var(--border-strong)", cursor: "pointer" } as CSSProperties}
-                            onClick={() => toggleCard(pi, si)}>
-
-                            {/* Card head — fn dot (clicável) + weapon icon + name (editável) + equip strip + remove. */}
-                            <div className="rc-head">
-                              <span className={"rc-fn-dot" + (slot.fn ? "" : " rc-fn-empty")}
-                                style={{ background: chipColor ?? "transparent" }}
-                                title={slot.fn ? (fnDef?.label ?? t("noFnTitle")) : t("noFnTitle")}
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  setFnDropdown(prev => prev?.[0] === pi && prev?.[1] === si ? null : [pi, si]);
-                                }} />
-                              {/* fn-dropdown — menu de fn-types ancorado ao dot */}
-                              {fnDropdown?.[0] === pi && fnDropdown?.[1] === si && (
-                                <div className="fn-dropdown" onClick={e => e.stopPropagation()}>
-                                  {fnTypes.map(ft => (
-                                    <button key={ft.key} className="fn-dropdown-btn"
-                                      style={{ background: ft.color + "25", color: ft.color, borderColor: ft.color + "60" }}
-                                      onClick={e => {
-                                        e.stopPropagation();
-                                        updSlot(pi, si, s => ({ ...s, fn: ft.key, role: { ...s.role, fn: ft.key } }));
-                                        setFnDropdown(null);
-                                      }}>
-                                      {fnLabel(ft)}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                              {role.equip.weapon?.id && (
-                                <img className="rc-weapon-icon"
-                                  src={itemUrl(role.equip.weapon.id)} alt=""
-                                  onError={imgRetry(img => { img.style.opacity = "0.15"; })} />
-                              )}
-                              {isSelected ? (
-                                <input className="rc-name-input"
-                                  placeholder={t("noNamePlaceholder")}
-                                  value={role.name}
-                                  onClick={e => e.stopPropagation()}
-                                  onFocus={captureHistory} onBlur={releaseFocus}
-                                  onChange={e => updRoleQuiet(pi, si, r => ({ ...r, name: e.target.value }))} />
-                              ) : (
-                                <span className="rc-name">{role.name || t("noNamePlaceholder")}</span>
-                              )}
-                              {role.equip_loaded && (
-                                <div className="rc-head-strip" style={{ marginLeft: 6, flexShrink: 0 }}>
-                                  <EquipStrip equip={role.equip} weaponIs2H={is2H(role.equip.weapon?.id)} />
-                                </div>
-                              )}
-                              <button className="cs-xbtn rc-card-remove"
-                                onClick={e => { e.stopPropagation(); removeSlot(pi, si); }}
-                                title={t("removeFromCompTitle")}>
-                                <i className="ti ti-x" aria-hidden />
-                              </button>
-                            </div>
-
-                            {isSelected && renderCardDetail(pi, si)}
-                          </div>
-                        );
-                      })}
-
-                    {/* Add role — 1 clique cria role vazia + botão copiar de outra */}
-                    {addCopyMenu === pi && (() => {
-                      const seen = new Set<string>();
-                      const pickableSlots: { fn: string | null; role: DraftRole }[] = [];
-                      for (const p of (draft?.parties ?? [])) {
-                        for (const s of p.slots) {
-                          const key = `${s.role.catalog_id ?? ""}|${s.role.name}`;
-                          if (!seen.has(key) && (s.role.catalog_id != null || s.role.name.trim())) {
-                            seen.add(key);
-                            pickableSlots.push({ fn: s.fn, role: s.role });
-                          }
-                        }
-                      }
                       return (
-                        <div className="flex-picker-menu">
-                          {pickableSlots.map((item, idx) => (
-                            <button key={idx} className="flex-picker-item"
-                              onClick={() => {
-                                if (!draft || draft.parties[pi].slots.length >= MAX_SLOTS) return;
-                                const newSlotIdx = draft.parties[pi].slots.length;
-                                const copied: DraftRole = JSON.parse(JSON.stringify(item.role));
-                                copied.catalog_id = null;
-                                upd(d => ({
-                                  ...d,
-                                  parties: d.parties.map((p, i) =>
-                                    i !== pi ? p : { ...p, slots: [...p.slots, { fn: item.fn, role: copied }] }
-                                  ),
-                                }));
-                                setOpenCard([pi, newSlotIdx]);
-                                setAddCopyMenu(null);
-                              }}>
-                              {item.role.equip.weapon?.id
-                                ? <img src={itemUrl(item.role.equip.weapon.id)} alt=""
-                                    style={{ width: 20, height: 20, flexShrink: 0 }}
-                                    onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
-                                : <span style={{ width: 20, flexShrink: 0 }} />}
-                              <span className="flex-picker-name">{item.role.name || t("noNamePlaceholder")}</span>
-                              {item.fn && (() => { const ft = getFnDef(item.fn, fnTypes); return ft ? (
-                                <span className="rc-fn-badge" style={{ background: ft.color + "25", color: ft.color, flexShrink: 0 }}>
-                                  {fnLabel(ft)}
-                                </span>
-                              ) : null; })()}
-                              {item.role.equip_loaded && <EquipStrip equip={item.role.equip} />}
+                        <div key={si}
+                          className={`role-card${isSelected ? " rc-open" : ""}`}
+                          style={{ "--chip-color": chipColor ?? "var(--border-strong)", cursor: "pointer" } as CSSProperties}
+                          onClick={() => toggleCard(pi, si)}>
+
+                          {/* Card head — fn dot (clicável) + weapon icon + name (editável) + equip strip + remove. */}
+                          <div className="rc-head">
+                            <span className={"rc-fn-dot" + (slot.fn ? "" : " rc-fn-empty")}
+                              style={{ background: chipColor ?? "transparent" }}
+                              title={slot.fn ? (fnDef?.label ?? t("noFnTitle")) : t("noFnTitle")}
+                              onClick={e => {
+                                e.stopPropagation();
+                                setFnDropdown(prev => prev?.[0] === pi && prev?.[1] === si ? null : [pi, si]);
+                              }} />
+                            {/* fn-dropdown — menu de fn-types ancorado ao dot */}
+                            {fnDropdown?.[0] === pi && fnDropdown?.[1] === si && (
+                              <div className="fn-dropdown" onClick={e => e.stopPropagation()}>
+                                {fnTypes.map(ft => (
+                                  <button key={ft.key} className="fn-dropdown-btn"
+                                    style={{ background: ft.color + "25", color: ft.color, borderColor: ft.color + "60" }}
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      updSlot(pi, si, s => ({ ...s, fn: ft.key, role: { ...s.role, fn: ft.key } }));
+                                      setFnDropdown(null);
+                                    }}>
+                                    {fnLabel(ft)}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {role.equip.weapon?.id && (
+                              <img className="rc-weapon-icon"
+                                src={itemUrl(role.equip.weapon.id)} alt=""
+                                onError={imgRetry(img => { img.style.opacity = "0.15"; })} />
+                            )}
+                            {isSelected ? (
+                              <input className="rc-name-input"
+                                placeholder={t("noNamePlaceholder")}
+                                value={role.name}
+                                onClick={e => e.stopPropagation()}
+                                onFocus={captureHistory} onBlur={releaseFocus}
+                                onChange={e => updRoleQuiet(pi, si, r => ({ ...r, name: e.target.value }))} />
+                            ) : (
+                              <span className="rc-name">{role.name || t("noNamePlaceholder")}</span>
+                            )}
+                            {role.equip_loaded && (
+                              <div className="rc-head-strip" style={{ marginLeft: 6, flexShrink: 0 }}>
+                                <EquipStrip equip={role.equip} weaponIs2H={is2H(role.equip.weapon?.id)} />
+                              </div>
+                            )}
+                            <button className="cs-xbtn rc-card-remove"
+                              onClick={e => { e.stopPropagation(); removeSlot(pi, si); }}
+                              title={t("removeFromCompTitle")}>
+                              <i className="ti ti-x" aria-hidden />
                             </button>
-                          ))}
-                          {!pickableSlots.length && <span className="flex-picker-empty">{t("noRoleInComp")}</span>}
+                          </div>
+
+                          {isSelected && renderCardDetail(pi, si)}
                         </div>
                       );
-                    })()}
-                    <div className="party-add-row">
-                      <button className="party-col-add party-col-add-primary"
-                        onClick={() => addSlot(pi)}
-                        disabled={party.slots.length >= MAX_SLOTS}>
-                        <i className="ti ti-plus" aria-hidden />
-                        {party.slots.length >= MAX_SLOTS ? t("fullLabel") : t("addRoleBtn")}
-                      </button>
-                      <button className="party-col-add party-col-add-secondary"
-                        onClick={() => {
-                          const opening = addCopyMenu !== pi;
-                          setAddCopyMenu(opening ? pi : null);
-                          if (opening) {
-                            const roles = (draft?.parties ?? []).flatMap(p => p.slots.map(s => s.role).filter(Boolean));
-                            ensurePickableRolesLoaded(roles);
-                          }
-                        }}
-                        disabled={party.slots.length >= MAX_SLOTS}
-                        title={t("createNewRoleBtn")}>
-                        <i className="ti ti-copy" aria-hidden />
-                      </button>
-                    </div>
+                    })}
+
+                  {/* Add role — 1 clique cria role vazia + botão copiar de outra */}
+                  {addCopyMenu === pi && (() => {
+                    const seen = new Set<string>();
+                    const pickableSlots: { fn: string | null; role: DraftRole }[] = [];
+                    for (const p of (draft?.parties ?? [])) {
+                      for (const s of p.slots) {
+                        const key = `${s.role.catalog_id ?? ""}|${s.role.name}`;
+                        if (!seen.has(key) && (s.role.catalog_id != null || s.role.name.trim())) {
+                          seen.add(key);
+                          pickableSlots.push({ fn: s.fn, role: s.role });
+                        }
+                      }
+                    }
+                    return (
+                      <div className="flex-picker-menu">
+                        {pickableSlots.map((item, idx) => (
+                          <button key={idx} className="flex-picker-item"
+                            onClick={() => {
+                              if (!draft || draft.parties[pi].slots.length >= MAX_SLOTS) return;
+                              const newSlotIdx = draft.parties[pi].slots.length;
+                              const copied: DraftRole = JSON.parse(JSON.stringify(item.role));
+                              copied.catalog_id = null;
+                              upd(d => ({
+                                ...d,
+                                parties: d.parties.map((p, i) =>
+                                  i !== pi ? p : { ...p, slots: [...p.slots, { fn: item.fn, role: copied }] }
+                                ),
+                              }));
+                              setOpenCard([pi, newSlotIdx]);
+                              setAddCopyMenu(null);
+                            }}>
+                            {item.role.equip.weapon?.id
+                              ? <img src={itemUrl(item.role.equip.weapon.id)} alt=""
+                                  style={{ width: 20, height: 20, flexShrink: 0 }}
+                                  onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
+                              : <span style={{ width: 20, flexShrink: 0 }} />}
+                            <span className="flex-picker-name">{item.role.name || t("noNamePlaceholder")}</span>
+                            {item.fn && (() => { const ft = getFnDef(item.fn, fnTypes); return ft ? (
+                              <span className="rc-fn-badge" style={{ background: ft.color + "25", color: ft.color, flexShrink: 0 }}>
+                                {fnLabel(ft)}
+                              </span>
+                            ) : null; })()}
+                            {item.role.equip_loaded && <EquipStrip equip={item.role.equip} />}
+                          </button>
+                        ))}
+                        {!pickableSlots.length && <span className="flex-picker-empty">{t("noRoleInComp")}</span>}
+                      </div>
+                    );
+                  })()}
+                  <div className="party-add-row">
+                    <button className="party-col-add party-col-add-primary"
+                      onClick={() => addSlot(pi)}
+                      disabled={party.slots.length >= MAX_SLOTS}>
+                      <i className="ti ti-plus" aria-hidden />
+                      {party.slots.length >= MAX_SLOTS ? t("fullLabel") : t("addRoleBtn")}
+                    </button>
+                    <button className="party-col-add party-col-add-secondary"
+                      onClick={() => {
+                        const opening = addCopyMenu !== pi;
+                        setAddCopyMenu(opening ? pi : null);
+                        if (opening) {
+                          const roles = (draft?.parties ?? []).flatMap(p => p.slots.map(s => s.role).filter(Boolean));
+                          ensurePickableRolesLoaded(roles);
+                        }
+                      }}
+                      disabled={party.slots.length >= MAX_SLOTS}
+                      title={t("createNewRoleBtn")}>
+                      <i className="ti ti-copy" aria-hidden />
+                    </button>
                   </div>
-                )}
-              </div>
-            );
+                  </div>
+                </div>
+              );
             })}
+            </div>
 
             <button className="party-col-add" onClick={addParty}>
               <i className="ti ti-plus" aria-hidden /> {t("newPartyBtn")}
