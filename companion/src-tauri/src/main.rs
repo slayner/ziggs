@@ -1,5 +1,5 @@
-// Ziggs Companion — binário.
-// Toda a lógica fica em companion_lib (lib.rs); este arquivo só chama run().
+// Ziggs Companion binary.
+// All logic lives in companion_lib (lib.rs); this file only calls run().
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 

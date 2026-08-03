@@ -1,8 +1,5 @@
-// Detecção do processo do Albion Online.
-//
-// Windows: EnumProcesses + GetModuleBaseNameW (psapi).
-// Linux/macOS: varre /proc por nome, fallback pgrep-like (não usado em prod,
-// o companion roda em Windows quase sempre, mas o stub evita erro de compile).
+// Detect the Albion Online process. Windows: single Toolhelp32 snapshot.
+// Linux/macOS: /proc scan as a compile-compatible stub.
 
 use serde::Serialize;
 
@@ -26,8 +23,6 @@ pub fn find_albion_pid() -> Option<u32> {
 
 #[cfg(target_os = "windows")]
 fn find_albion_pid_windows() -> Option<u32> {
-    // ponytail: UM snapshot de todos os processos, itera uma vez.
-    // Antes era O(n²) — EnumProcesses + CreateToolhelp32Snapshot por PID.
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW,

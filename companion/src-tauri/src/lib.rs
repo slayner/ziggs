@@ -1,5 +1,4 @@
-﻿// companion_lib: ponto de entrada da biblioteca companion.
-// O binário main.rs chama companion_lib::run().
+﻿// companion_lib: library entry point. main.rs calls companion_lib::run().
 
 pub mod aodp;
 pub mod api;
@@ -35,8 +34,8 @@ use tauri::{
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
 
-/// Empurra uma linha pro buffer de debug do sniffer (mostrado no terminal da UI).
-/// Cap em 500 linhas (mesmo teto usado nos outros pushers de debug).
+/// Pushes a line to the sniffer debug buffer (shown in the UI terminal).
+/// Cap at 500 lines.
 fn push_debug(debug: &Arc<Mutex<Vec<DebugLine>>>, level: &str, msg: &str) {
     let line = DebugLine {
         ts: photon_parser::now_iso_utc(),
@@ -48,22 +47,15 @@ fn push_debug(debug: &Arc<Mutex<Vec<DebugLine>>>, level: &str, msg: &str) {
     if d.len() > 500 { let ex = d.len() - 500; d.drain(..ex); }
 }
 
-/// É hora segura pra queimar CPU/rede do usuário?
-///
-/// Seguro = jogo FECHADO **ou** jogador fora de zona PvP. O "jogo fechado" sai
-/// de graça do `stats.online` do sniffer (sem pacote do Albion há 5s), então
-/// não custa varredura de processo.
-///
-/// A trava existe porque a única coisa que o usuário NÃO perdoa é engasgo no
-/// meio de um CTA. Fora de PvP, trabalho pesado é invisível; dentro, custa
-/// morte. Qualquer tarefa cara nova deve passar por aqui.
+/// Safe to spend CPU/network? True when game is closed or player is outside PvP zone.
+/// The sniffer's stats.online flag is free (no process scan needed).
 async fn heavy_work_ok(
     sniffer: &Sniffer,
     zone: &Arc<Mutex<transfer::ZoneType>>,
     pvp_pause: &Arc<Mutex<bool>>,
 ) -> bool {
     if !sniffer.stats.lock().await.online {
-        return true; // jogo fechado: pode usar a máquina à vontade
+        return true;
     }
     let paused = *pvp_pause.lock().await;
     !(paused && matches!(*zone.lock().await, transfer::ZoneType::PvP))
@@ -121,11 +113,11 @@ async fn set_config(
             state.sniffer.feed_aodp.store(b, std::sync::atomic::Ordering::Relaxed);
         }
         ("auto_lootlog_submit", serde_json::Value::Bool(b)) => cfg.auto_lootlog_submit = b,
-        // Calibração do damage meter — ver spell_index_offset no config.
+        // Damage meter spell index calibration — see spell_index_offset in config.
         ("spell_index_offset", serde_json::Value::Number(n)) => {
             cfg.spell_index_offset = n.as_i64().unwrap_or(0) as i32;
         }
-        _ => return Err(format!("campo desconhecido: {}", key)),
+        _ => return Err(format!("unknown field: {}", key)),
     }
     if let Err(e) = config::save(&cfg) {
         return Err(format!("falha ao salvar config: {e}"));
@@ -133,9 +125,8 @@ async fn set_config(
     if changed_autostart {
         #[cfg(target_os = "windows")]
         {
-            // Sem Npcap, o companion nunca faz nada útil sozinho no boot — não
-            // registra a tarefa mesmo que o usuário tenha ligado o toggle
-            // (ver `npcap_installed` e a nota grande em `set_autostart`).
+            // Without Npcap the companion does nothing useful on boot — skip
+            // registering the task even if the toggle is on.
             let want = cfg.autostart && sniffer::npcap_installed();
             let _ = set_autostart(want);
         }
@@ -163,7 +154,7 @@ async fn start_scanner(state: tauri::State<'_, AppState>) -> Result<(), String> 
     }
     *running = true;
     state.scanner.prepare_start();
-    // Battle scanning é sempre on (razão de ser do companion).
+    // Battle scanning is always on (primary purpose of the companion).
     let api = api::ApiClient::new(config::API_BASE_URL);
     let scanner = state.scanner.clone_for_spawn();
     let running_flag = Arc::clone(&state.scanner_running);
@@ -189,7 +180,7 @@ async fn test_dns(_server_hostname: String) -> Result<Vec<dns::DnsResult>, Strin
 #[tauri::command]
 async fn apply_dns(profile_name: String) -> Result<(), String> {
     let profile = dns::dns_profiles().into_iter().find(|p| p.name == profile_name)
-        .ok_or_else(|| format!("perfil '{}' não encontrado", profile_name))?;
+        .ok_or_else(|| format!("profile '{}' not found", profile_name))?;
     dns::apply_dns(&profile).map_err(|e| format!("{:#}", e))
 }
 
@@ -242,7 +233,7 @@ fn classify_zone(cluster_type: String) -> String {
     }.to_string()
 }
 
-// ─── Sniffer commands (Fase 2 — packet capture) ──────────────────────────────
+    // ─── Sniffer commands (packet capture) ──────────────────────────────────────
 
 #[tauri::command]
 async fn start_sniffer(state: tauri::State<'_, AppState>) -> Result<(), String> {
@@ -273,15 +264,13 @@ async fn stop_sniffer(state: tauri::State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 async fn get_sniff_stats(state: tauri::State<'_, AppState>) -> Result<SniffStats, String> {
     let mut s = state.sniffer.stats.lock().await.clone();
-    // Somado na LEITURA (poll de 5s da UI), não no hot loop — ver o comentário
-    // do campo em SniffStats. Locks em sequência, nunca aninhados.
+    // Summed at read time (UI poll every 5s), not in the hot loop.
+    // Sequential locks, never nested.
     let damage_map = state.sniffer.damage.lock().await;
     s.damage_total = damage_map.values().map(|a| a.damage).sum::<f64>() as u64;
-    // Badge da aba Damage: dano do PRÓPRIO jogador (s.player_name), não o total
-    // da party. O DamageAcc é indexado por causer_id (entityId), e o nome do
-    // próprio jogador pode ter vários entityIds numa sessão (re-enter no
-    // alcance de visão) — resolve por nome via mapa entities, igual ao
-    // get_damage_meter. Locks em sequência, nunca aninhados.
+    // Badge for Damage tab: own player's damage (s.player_name), not party total.
+    // A player can have multiple entity IDs per session (re-entering vis range) —
+    // resolve by name via the entities map. Sequential locks, never nested.
     if !s.player_name.is_empty() {
         let ents = state.sniffer.entities.lock().await;
         let my_ids: std::collections::HashSet<i64> = ents.iter()
@@ -306,22 +295,21 @@ async fn get_sniffer_debug(state: tauri::State<'_, AppState>) -> Result<Vec<snif
 
 #[tauri::command]
 async fn get_albion_pid() -> Option<u32> {
-    // ponytail: async pra não bloquear o main thread do webview.
-    // A varredura de processos roda numa thread separada.
+    // spawn_blocking to avoid blocking the webview main thread.
+    // Process enumeration runs on a separate thread.
     tokio::task::spawn_blocking(|| albion_detect::find_albion_pid())
         .await
         .unwrap_or(None)
 }
 
-// ─── Lootlog (capturado via packet sniffing) ──────────────────────────────────
+// ─── Lootlog (captured via packet sniffing) ──────────────────────────────────
 
-/// Devolve os eventos de loot capturados durante a sessão atual.
+/// Returns captured loot events for the current session.
 #[tauri::command]
 async fn get_captured_loot(state: tauri::State<'_, AppState>) -> Result<Vec<lootlog::LootRow>, String> {
     let buf = state.sniffer.loot.lock().await;
     Ok(buf.iter().map(|l| {
-        // A UI mostra nome, não índice cru — e escolhe o idioma, então vão os
-        // três. `item_id` continua indo pro caso de alguém conferir.
+        // UI shows name in the user's language; item_id kept for reference.
         let (item_id, en, pt, es) = lootlog::resolve(l.item_index);
         lootlog::LootRow {
             ts: Some(l.ts.clone()),
@@ -337,7 +325,7 @@ async fn get_captured_loot(state: tauri::State<'_, AppState>) -> Result<Vec<loot
     }).collect())
 }
 
-/// Limpa o buffer de loot capturado.
+/// Clears the captured loot buffer.
 #[tauri::command]
 async fn clear_captured_loot(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut buf = state.sniffer.loot.lock().await;
@@ -348,10 +336,9 @@ async fn clear_captured_loot(state: tauri::State<'_, AppState>) -> Result<(), St
     Ok(())
 }
 
-// ─── Nomes de feitiço (damage meter) ─────────────────────────────────────────
-// Tabela índice→nome baixada do backend uma vez e cacheada em disco. Vazia =
-// UI cai no fallback "Habilidade {id}". Nunca bloqueia o meter: se o download
-// falhar, o painel funciona igual, só sem nome.
+// ─── Spell names (damage meter) ────────────────────────────────────────────
+// Index→name table downloaded from backend once and cached to disk.
+// Empty table = UI falls back to "Spell {id}".
 
 static SPELL_TABLE: std::sync::OnceLock<Mutex<Vec<api::SpellName>>> = std::sync::OnceLock::new();
 
@@ -372,8 +359,8 @@ fn item_names_cache_path() -> std::path::PathBuf {
         .join("item_names_map_v1.json")
 }
 
-/// Carrega UniqueName → game_name do cache em disco, ou baixa do backend.
-/// Mesmo padrão do load_spell_names: retry até conseguir (autostart antes da rede).
+/// Loads UniqueName → game_name from disk cache or downloads from backend.
+/// Retries until success (autostart may run before network is up).
 async fn load_item_names_map() {
     if let Ok(bytes) = std::fs::read(item_names_cache_path()) {
         if let Ok(v) = serde_json::from_slice::<std::collections::HashMap<String, String>>(&bytes) {
@@ -394,19 +381,19 @@ async fn load_item_names_map() {
                 return;
             }
             Ok(_) => {
-                tracing::info!("items-map vazio no backend (não seedado)");
+                tracing::info!("items-map empty from backend (not seeded)");
                 return;
             }
             Err(e) => {
-                tracing::warn!("items-map download falhou: {e:#}, retry em 60s");
+                tracing::warn!("items-map download failed: {e:#}, retry in 60s");
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             }
         }
     }
 }
 
-/// Converte UniqueName (ItemTypeId do jogo) → game_name usando o mapa carregado.
-/// Se o mapa não tem a chave, devolve o UniqueName cru (fallback).
+/// Converts UniqueName → game_name using the loaded map. Returns the raw
+/// UniqueName as fallback when the key is missing.
 pub async fn to_game_name(unique_name: &str) -> String {
     let map = item_names_map().lock().await;
     map.get(unique_name).cloned().unwrap_or_else(|| unique_name.to_string())
@@ -416,20 +403,15 @@ fn spell_cache_path() -> std::path::PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| ".".into())
         .join("ziggs-companion")
-        // Bump a cada mudança de CONTEÚDO da tabela: o cache antigo
-        // desserializa sem erro (campos novos são Option), então sem trocar o
-        // nome quem já tem cache nunca veria a melhoria.
-        // v2 = pt/es. v3 = sub-feitiço herda nome e ícone do pai.
-        // v4 = família da arma (`fam`), pra inferir a arma no ranking.
-        // v5 = channelingspell entrou na contagem — TODOS os índices mudaram.
+        // Bump filename when table CONTENT changes: old cache deserializes
+        // without error (new fields are Option), so a rename is needed for
+        // users to pick up improvements.
         .join("spell_names_v5.json")
 }
 
-/// Carrega do cache em disco e, se vazio/velho, baixa do backend em background.
-///
-/// Repete até conseguir: com autostart o companion sobe junto com o Windows,
-/// antes da rede estar de pé, e uma tentativa única falhava calada — o damage
-/// meter ficava a sessão inteira mostrando "Habilidade 2972" em vez do nome.
+/// Loads from disk cache or downloads from backend. Retries until success:
+/// with autostart the companion starts before the network is ready, and a
+/// single attempt would silently fail.
 async fn load_spell_names() {
     if let Ok(bytes) = std::fs::read(spell_cache_path()) {
         if let Ok(v) = serde_json::from_slice::<Vec<api::SpellName>>(&bytes) {
@@ -449,12 +431,12 @@ async fn load_spell_names() {
                 *spell_table().lock().await = v;
                 return;
             }
-            // Backend sem o dump seedado: tentar de novo não resolve.
+            // Backend without seeded dump: retrying won't help.
             Ok(_) => {
-                tracing::info!("tabela de feitiços vazia no backend (não seedada)");
+                tracing::info!("spell table empty from backend (not seeded)");
                 return;
             }
-            Err(e) => tracing::warn!("nomes de feitiço falharam, tentando de novo em 60s: {e:#}"),
+            Err(e) => tracing::warn!("spell names failed, retrying in 60s: {e:#}"),
         }
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
     }
@@ -465,51 +447,49 @@ async fn load_spell_names() {
 #[derive(serde::Serialize)]
 struct SkillRow {
     id: i32,
-    /// Nome resolvido pela tabela do dump. None = fora da tabela ou tabela
-    /// ausente → a UI mostra "Habilidade {id}". Vem sempre acompanhado do `id`
-    /// cru na interface, justamente pra dar pra conferir na calibração.
+    /// Resolved name from the dump table. None = not in table → UI shows "Spell {id}".
     name: Option<String>,
-    /// Traduções. O idioma vive no localStorage do webview, não no config do
-    /// Rust, então mandamos as três e a UI escolhe. None = cai no `name`.
+    /// Translations. Language lives in the webview's localStorage, not Rust config,
+    /// so we send all three and let the UI pick. None falls back to `name`.
     name_pt: Option<String>,
     name_es: Option<String>,
-    /// uniquename do dump (ex. "AIR_RAID") — o que se confere contra o jogo.
+    /// uniquename from the dump (e.g. "AIR_RAID") — for cross-referencing.
     unique_name: Option<String>,
-    /// Chave do ícone em render.albiononline.com/v1/spell/{id}.png. Difere do
-    /// `unique_name` em sub-feitiço interno, que tem arte genérica de passiva
-    /// em vez do ícone da habilidade — aí vem o id do pai.
+    /// Icon key for render.albiononline.com/v1/spell/{id}.png.
+    /// Differs from unique_name for internal sub-spells (generic passive art);
+    /// in that case, carries the parent's id.
     icon: Option<String>,
-    /// Golpes (eventos de dano), não casts — ver SpellAcc.
+    /// Hit events (damage instances), not casts — see SpellAcc.
     hits: u64,
     total: i64,
     avg: i64,
     max_hit: i64,
-    /// Fatia do dano DESTE jogador que veio desta skill.
+    /// Share of THIS player's total damage dealt by this skill.
     pct: f64,
-    /// Família da arma dona desta skill — base pra inferir a arma da linha.
+    /// Weapon family that owns this skill — used to infer the player's weapon.
     fam: Option<String>,
 }
 
 #[derive(serde::Serialize)]
 struct DamageRow {
     name: String,
-    /// Família da arma inferida (bow, dagger, …). None = só auto-attack, ou
-    /// nenhuma skill usada veio de arma reconhecida.
+    /// Inferred weapon family (bow, dagger, …). None = only auto-attack or
+    /// no recognized weapon family among used skills.
     weapon: Option<String>,
     damage: i64,
     dps: i64,
     skills: Vec<SkillRow>,
-    /// Dano por segundo dos últimos TIMELINE_SECS, do mais antigo pro mais
-    /// recente. Índice = segundos atrás (0 = há 3 min, fim = agora), com os
-    /// segundos sem dano preenchidos com 0 — a UI só desenha o array.
+    /// DPS over the last TIMELINE_SECS seconds, oldest first.
+    /// Index = seconds ago (0 = 3 min ago, end = now), with zeros for idle seconds.
+    /// The UI just draws the array without knowing about timestamps.
     timeline: Vec<i64>,
 }
 
-/// Dano por jogador na sessão, resolvido por nome e ordenado por dano desc.
-/// Traz breakdown por skill e a timeline pra expandir a linha (estilo Details).
-/// ponytail: IDs sem nome conhecido (mobs) são descartados — só jogadores.
+/// Per-player damage for the session, resolved by name and sorted by damage desc.
+/// Includes per-skill breakdown and timeline for row expansion.
+/// Unknown IDs (mobs) are discarded — only named players are shown.
 #[tauri::command]
-/// `vs_players` = só o dano cujo ALVO era jogador (descarta mob/estrutura).
+/// `vs_players` = only damage where the TARGET was a player (excludes mobs/structures).
 async fn get_damage_meter(
     state: tauri::State<'_, AppState>,
     vs_players: bool,
@@ -521,19 +501,19 @@ async fn get_damage_meter(
         .unwrap_or(0);
     let offset = state.config.lock().await.spell_index_offset;
 
-    // ── Fase 1: sob os locks do sniffer, SÓ agrega ────────────────────────
+    // ── Phase 1: under sniffer locks, aggregate only ──────────────────────
     //
-    // Junta por NOME: o mesmo jogador tem vários entity ids na sessão (id novo
-    // a cada vez que ele reentra no teu alcance de visão) e `entities` nunca
-    // esquece nenhum. Sem isso ele virava várias linhas com o dano picado — e,
-    // como o React usa o nome como `key`, as chaves colidiam e a lista
-    // duplicava a cada troca de fonte de dados.
+    // Group by NAME: the same player has multiple entity IDs per session (new ID
+    // each time they re-enter vis range), and `entities` never forgets.
+    // Without this merge, the same player appears as multiple rows with split
+    // damage — and since React uses name as key, keys collide and the list
+    // duplicates on every data source switch.
     //
-    // O escopo é apertado de propósito: o loop de pacotes precisa destes
-    // mesmos locks a CADA golpe. Antes a formatação inteira (timeline densa de
-    // 180 posições por jogador, clone de nome, sort de skills, lookup na
-    // tabela de feitiços) acontecia aqui dentro, e a cada 2s a UI travava a
-    // captura — justo em ZvZ, que é quando tem mais gente e mais pacote.
+    // Lock scope is intentionally narrow: the packet loop needs these same
+    // locks on EVERY hit. Previously the entire formatting (dense timeline
+    // of 180 points per player, name clone, skill sort, spell table lookup)
+    // happened under the locks, freezing packet capture every 2s — right
+    // during ZvZ, when there's the most traffic.
     let merged: Vec<(String, crate::photon_parser::DamageAcc)> = {
         let names = state.sniffer.entities.lock().await;
         let dmg = if vs_players {
@@ -549,15 +529,15 @@ async fn get_damage_meter(
             }
         }
         by_name.into_iter().collect()
-    }; // locks do sniffer soltos aqui — captura volta a correr livre
+    }; // sniffer locks released here — packet capture resumes freely
 
-    // ── Fase 2: sem lock do sniffer, formata ──────────────────────────────
+    // ── Phase 2: formatting, no sniffer locks ───────────────────────────
     let spells = spell_table().lock().await;
     let mut rows: Vec<DamageRow> = merged.iter().map(|(name, acc)| {
         {
             let total_dmg = acc.damage.max(1.0);
             let mut skills: Vec<SkillRow> = acc.spells.iter().map(|(sid, sp)| {
-                // Índice negativo = auto attack/desconhecido; nunca indexa.
+                // Negative index = auto-attack/unknown; never indexes the table.
                 let entry = sid.checked_add(offset)
                     .filter(|i| *i >= 0)
                     .and_then(|i| spells.get(i as usize));
@@ -577,15 +557,13 @@ async fn get_damage_meter(
             }}).collect();
             skills.sort_by(|a, b| b.total.cmp(&a.total));
 
-            // Arma do jogador = família da skill que MAIS deu dano. Não dá pra
-            // ler o equipamento (o NewCharacter que lemos só traz id e nome),
-            // então inferimos pelo que ele usou. Como `skills` já está ordenado
-            // por dano, é o primeiro com família conhecida — assim um passivo
-            // compartilhado ou um consumível no meio da lista não decide.
+            // Player's weapon = family of the highest-damage skill.
+            // We can't read equipment (NewCharacter only has id + name), so we
+            // infer from usage. skills is already sorted by damage, so the
+            // first with a known family wins — shared passives won't decide.
             let weapon = skills.iter().find_map(|s| s.fam.clone());
 
-            // Buckets esparsos → array denso alinhado em `now`, pro gráfico
-            // não precisar saber de timestamp nenhum.
+            // Sparse buckets → dense array aligned to `now` for the chart.
             let mut timeline = vec![0i64; window as usize];
             let oldest = now.saturating_sub(window - 1);
             for (sec, d) in &acc.timeline {
@@ -609,13 +587,13 @@ async fn get_damage_meter(
 
 #[tauri::command]
 async fn clear_damage_meter(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    // Os dois juntos: zerar só um deixaria o toggle mostrando sessão velha.
+    // Clear both maps: clearing only one would leave the toggle showing stale data.
     state.sniffer.damage.lock().await.clear();
     state.sniffer.damage_vs_players.lock().await.clear();
     Ok(())
 }
 
-/// Gera CSV no formato lootlogger a partir do loot capturado e salva em arquivo.
+/// Generates lootlogger-format CSV from captured loot and saves to file.
 #[tauri::command]
 async fn save_lootlog_csv(
     state: tauri::State<'_, AppState>,
@@ -624,7 +602,7 @@ async fn save_lootlog_csv(
     let buf = state.sniffer.loot.lock().await;
     let csv = lootlog::build_csv_from_loot(&buf);
     drop(buf);
-    let path = lootlog::save_csv(&csv).map_err(|e| format!("falha ao salvar: {e}"))?;
+    let path = lootlog::save_csv(&csv).map_err(|e| format!("save failed: {e}"))?;
     {
         let mut s = state.lootlog.lock().await;
         s.last_saved_path = Some(path.clone());
@@ -633,36 +611,27 @@ async fn save_lootlog_csv(
     Ok(path)
 }
 
-/// Abre a página de download do Npcap no browser do usuário.
+/// Opens the Npcap download page in the user's browser.
 ///
-/// A instalação é MANUAL de propósito, não por preguiça: o instalador free do
-/// Npcap ABORTA o `/S` ("silent installation is only supported in Npcap OEM")
-/// e a licença free também proíbe redistribuí-lo embutido no nosso installer
-/// — as duas coisas são exatamente o que a licença OEM (npcap.com/oem) vende.
-/// Já existiu um hook NSIS rodando `npcap-installer.exe /S` dos resources;
-/// morreu por esses dois motivos. Se um dia comprarmos OEM, é só ressuscitar
-/// o hook (git log de nsis-hooks.nsh).
-///
-/// O fluxo free é bom o bastante: o usuário instala com as opções padrão
-/// (nem o modo WinPcap precisa — `ensure_npcap_dll_path` resolve o subdir) e
-/// o loop de retry de 15s do `Sniffer::run` pega a instalação sozinho, sem
-/// reiniciar o app.
+/// Installation is intentionally manual: the free Npcap installer ABORTs /S
+/// ("silent installation is only supported in Npcap OEM") and the free license
+/// prohibits redistribution inside our installer. After installing with default
+/// options, the sniffer's 15s retry loop picks it up without restarting the app.
 #[tauri::command]
 async fn open_npcap_download(app: tauri::AppHandle) -> Result<(), String> {
     app.opener().open_url("https://npcap.com/#download", None::<&str>)
-        .map_err(|e| format!("falha ao abrir browser: {e}"))
+        .map_err(|e| format!("failed to open browser: {e}"))
 }
 
-/// Abre qualquer URL no browser padrão. Usado pelos links legais ("Termos",
-/// "Privacidade") na tela Sobre do Config — o companion não renderiza HTML
-/// legal próprio, só aponta pro site.
+/// Opens any URL in the default browser. Used for legal links ("Terms",
+/// "Privacy") in the Config About screen.
 #[tauri::command]
 async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     app.opener().open_url(&url, None::<&str>)
-        .map_err(|e| format!("falha ao abrir browser: {e}"))
+        .map_err(|e| format!("failed to open browser: {e}"))
 }
 
-// ─── Discord login (opcional) + lootlog auto-submit ────────────────────────
+// ─── Discord login (optional) + lootlog auto-submit ──────────────────────────
 
 #[tauri::command]
 async fn companion_login(
@@ -676,7 +645,7 @@ async fn companion_login(
     }).collect();
     let url = api.auth_start_url(&nonce);
     app.opener().open_url(&url, None::<&str>)
-        .map_err(|e| format!("falha ao abrir browser: {e}"))?;
+        .map_err(|e| format!("failed to open browser: {e}"))?;
     Ok(nonce)
 }
 
@@ -693,7 +662,7 @@ async fn companion_poll_auth(
             cfg.discord_user_id = Some(result.user_id.clone());
             cfg.discord_username = Some(result.username.clone());
             if let Err(e) = config::save(&cfg) {
-                return Err(format!("falha ao salvar config: {e}"));
+        return Err(format!("failed to save config: {e}"));
             }
             Ok(result)
         }
@@ -708,7 +677,7 @@ async fn companion_logout(state: tauri::State<'_, AppState>) -> Result<(), Strin
     cfg.discord_user_id = None;
     cfg.discord_username = None;
     cfg.auto_lootlog_submit = false;
-    config::save(&cfg).map_err(|e| format!("falha ao salvar config: {e}"))?;
+    config::save(&cfg).map_err(|e| format!("failed to save config: {e}"))?;
     Ok(())
 }
 
@@ -721,7 +690,7 @@ async fn get_active_events(
     api.active_events().await.map_err(|e| format!("{:#}", e))
 }
 
-/// Envia o loot capturado (CSV) pra um evento.
+/// Submits captured loot (CSV) to an event.
 #[tauri::command]
 async fn submit_captured_loot(
     event_id: i64,
@@ -737,23 +706,18 @@ async fn submit_captured_loot(
         .map_err(|e| format!("{:#}", e))
 }
 
-/// Worker do auto-submit: manda o lootlog sozinho quando um evento em que o
-/// usuário está inscrito entra em REVISÃO.
+/// Auto-submit worker: sends lootlog when a subscribed event enters REVIEW.
 ///
-/// Por que revisão e não o fim da captura: é quando a guilda fecha o CTA e
-/// começa a conferir os logs — mandar antes significaria enviar um log pela
-/// metade, e mandar depois é tarde.
-///
-/// Reenviar o mesmo evento é inofensivo (o backend faz upsert por
-/// guild+event+submitter), então o controle de "já mandei" é só em memória:
-/// reiniciar o app no máximo reenvia uma vez, sobrescrevendo com o mesmo dado.
-/// Mantém perfis quentes no site enquanto o jogo está aberto (`online`). Loop de
-/// 5min. Só NOMEAÇÃO — o backend busca o dado na Albion (não confia no cliente):
-/// - **Fase 2, todo ciclo:** players VISTOS em jogo (`entities`) → `/warm/seen`
-///   (refresh-only no backend; cobre briga sub-limiar/roaming que o tracker pula).
-/// - **Fase 1, a cada ~20min:** o PRÓPRIO personagem → `/warm` (faz bootstrap se
-///   for desconhecido; ajuda gatherer/solo que nunca cai em ZvZ rastreada).
-/// Região vem do servidor AODP detectado (west/east/europe → americas/asia/europe).
+/// REVIEW is the right moment (guild closes CTA and starts checking logs).
+/// Before = incomplete log; after = too late. Re-sending the same event is
+/// harmless (backend upserts by guild+event+submitter), so the "already sent"
+/// check is in-memory only.
+/// Also keeps profiles warm on the site while the game is running (`online`). 5min loop.
+/// Only NAMING — the backend fetches data from Albion (never trusts the client):
+/// - Every cycle: SEEN players (`entities`) → `/warm/seen` (refresh-only; covers
+///   sub-threshold fights the tracker misses).
+/// - Every ~20min: own character → `/warm` (bootstraps unknown gatherers/solos).
+/// Region comes from the detected AODP server (west/east/europe → americas/asia/europe).
 async fn warm_self_worker(
     entities: Arc<Mutex<std::collections::HashMap<i64, String>>>,
     stats: Arc<Mutex<sniffer::SniffStats>>,
@@ -770,19 +734,18 @@ async fn warm_self_worker(
             (s.player_name.clone(), s.online)
         };
         if !online {
-            continue; // jogo fechado: nada a aquecer
+            continue; // game closed: nothing to warm
         }
         let region = match aodp_server.lock().await.as_ref().map(|s| s.region()) {
             Some("east") => "asia",
             Some("europe") => "europe",
             Some("west") => "americas",
-            _ => continue, // região desconhecida: não chuta
+            _ => continue, // unknown region: skip
         };
         let api = api::ApiClient::new(config::API_BASE_URL);
 
-        // Fase 2: players vistos (dedup, sem o próprio, teto de 100 — o backend
-        // corta em 100 de qualquer jeito). entities só cresce na sessão; re-enviar
-        // é inofensivo (backend é refresh-only e idempotente por refresh_requested_at).
+        // Phase 2: seen players (dedup, exclude self, cap 100 — backend truncates anyway).
+        // entities only grows during the session; re-sending is harmless (idempotent).
         let seen: Vec<String> = {
             let e = entities.lock().await;
             let uniq: std::collections::HashSet<String> = e
@@ -794,11 +757,11 @@ async fn warm_self_worker(
         };
         if !seen.is_empty() {
             if let Err(e) = api.warm_seen(&seen, region).await {
-                tracing::debug!("warm/seen falhou: {e:#}");
+                tracing::debug!("warm/seen failed: {e:#}");
             }
         }
 
-        // Fase 1: próprio char a cada ~20min (1º ciclo e depois de 4 em 4).
+        // Phase 1: own character every ~20min (1st cycle, then every 4th).
         if !name.is_empty() && tick % 4 == 1 {
             match api.warm_profile(&name, region).await {
                 Ok(out) => {
@@ -808,17 +771,15 @@ async fn warm_self_worker(
                         last_logged = Some(cur);
                     }
                 }
-                Err(e) => tracing::debug!("warm falhou: {e:#}"),
+                Err(e) => tracing::debug!("warm failed: {e:#}"),
             }
         }
     }
 }
 
-/// Worker de fundo que estima o valor em prata dos loots capturados nesta
-/// sessão — só badge ILUSTRATIVO da aba Lootlog. Agrega o loot buffer por
-/// item_id (pra não mandar duplicados) e chama a rota
-/// /companion/lootlog/silver-estimate do backend. Poll de 30s: o valor
-/// não precisa ser em tempo real, e mantém a cota de HTTP baixa.
+/// Background worker that estimates the silver value of captured loot —
+/// purely illustrative badge for the Lootlog tab. Aggregates by item_id
+/// (dedup) and calls /companion/lootlog/silver-estimate. 30s poll.
 async fn loot_silver_worker(
     loot: Arc<Mutex<Vec<photon_parser::LootEvent>>>,
     stats: Arc<Mutex<sniffer::SniffStats>>,
@@ -826,8 +787,7 @@ async fn loot_silver_worker(
     let api = api::ApiClient::new(config::API_BASE_URL);
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-        // Agrega por item_id (dedup) — o backend precifica por item, não por
-        // linha, então mandar a mesma T4_BAG 50× só bateria o mesmo cache.
+        // Aggregate by item_id (dedup) — backend prices by item, not by line.
         let mut agg: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
         {
             let buf = loot.lock().await;
@@ -838,7 +798,7 @@ async fn loot_silver_worker(
             }
         }
         if agg.is_empty() {
-            // Sem loot — zera o badge em vez de deixar um valor velho.
+            // No loot — reset badge instead of showing stale value.
             let mut s = stats.lock().await;
             s.loot_silver_total = 0;
             continue;
@@ -849,7 +809,7 @@ async fn loot_silver_worker(
                 let mut s = stats.lock().await;
                 s.loot_silver_total = total as u64;
             }
-            Err(e) => tracing::debug!("silver-estimate falhou: {e:#}"),
+            Err(e) => tracing::debug!("silver-estimate failed: {e:#}"),
         }
     }
 }
@@ -870,7 +830,7 @@ async fn auto_lootlog_worker(
         let events = match api.active_events().await {
             Ok(e) => e,
             Err(e) => {
-                tracing::debug!("auto-lootlog: não deu pra listar eventos: {e:#}");
+                tracing::debug!("auto-lootlog: could not list events: {e:#}");
                 continue;
             }
         };
@@ -880,8 +840,8 @@ async fn auto_lootlog_worker(
                 let buf = loot.lock().await;
                 lootlog::build_csv_from_loot(&buf)
             };
-            // Sem loot capturado não há o que mandar — e mandar vazio
-            // sobrescreveria uma submissão manual boa com nada.
+            // No captured loot — skip; sending empty CSV would overwrite a
+            // good manual submission with nothing.
             if csv.lines().count() <= 1 {
                 continue;
             }
@@ -892,7 +852,7 @@ async fn auto_lootlog_worker(
                         "auto-lootlog: evento {} enviado ({} linhas)", ev.event_id, out.row_count
                     );
                 }
-                Err(e) => tracing::warn!("auto-lootlog: evento {} falhou: {e:#}", ev.event_id),
+                Err(e) => tracing::warn!("auto-lootlog: event {} failed: {e:#}", ev.event_id),
             }
         }
     }
@@ -904,14 +864,13 @@ fn single_review_event(events: &[api::ActiveEvent]) -> Option<&api::ActiveEvent>
     review.next().is_none().then_some(event)
 }
 
-// ─── Autostart (Task Scheduler no Windows = admin sem UAC no boot) ────────────
+// ─── Autostart (Task Scheduler on Windows — admin without UAC prompt on boot) ──
 
-/// Autostart via Task Scheduler (Windows) — roda como admin no boot sem prompt
-/// UAC (RunLevel HighestAvailable, sempre — o app exige admin pros trackers).
-/// Inicia como janela normal (sem `--minimized`): os anuncios precisam aparecer
-/// no boot pra cobrir o custo da VPS do túnel. Fechar a janela ainda vai pra
-/// bandeja se `minimize_to_tray` estiver on — só o arranque é sempre visível.
-/// macOS/Linux: manter via tauri_plugin_autostart (LaunchAgent / .desktop).
+/// Autostart via Task Scheduler (Windows) — runs as admin on boot without UAC
+/// prompt (RunLevel HighestAvailable). Starts as a normal window: ads need to
+/// show on boot to cover tunnel VPS cost. Closing the window still goes to
+/// tray if minimize_to_tray is on.
+/// macOS/Linux: uses tauri_plugin_autostart (LaunchAgent / .desktop).
 fn set_autostart(enable: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -969,9 +928,9 @@ fn set_autostart(enable: bool) -> Result<(), String> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        // ponytail: macOS/Linux usam tauri_plugin_autostart (LaunchAgent / .desktop) — sem admin.
+        // macOS/Linux use tauri_plugin_autostart (LaunchAgent / .desktop) — no admin needed.
         let _ = enable;
-        Err("autostart em macOS/Linux deve usar o plugin via set_config".into())
+        Err("autostart on macOS/Linux must use the plugin via set_config".into())
     }
 }
 
@@ -1013,13 +972,13 @@ async fn tunnel_start(state: tauri::State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 async fn tunnel_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
     state.tunnel.stop().await;
-    // Não libera um novo start enquanto a task antiga ainda possui Wintun,
-    // socket e rotas. Isso evita dois túneis concorrentes após stop/start rápido.
+    // Don't allow a new start while the old task still holds Wintun, socket
+    // and routes. Prevents two concurrent tunnels after a fast stop/start.
     for _ in 0..100 {
         if !*state.tunnel_running.lock().await { return Ok(()); }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    return Err("timeout ao encerrar túnel".into());
+    return Err("timeout stopping tunnel".into());
 }
 
 #[tauri::command]
@@ -1029,11 +988,10 @@ async fn tunnel_status(state: tauri::State<'_, AppState>) -> Result<TunnelStatus
 
 #[tauri::command]
 async fn tunnel_is_admin() -> bool {
-    // Delega pro MESMO check que o startup usa. Este comando tinha uma cópia
-    // própria com PROCESS_QUERY_INFORMATION — o bug já corrigido em
-    // is_windows_admin (ver comentário lá). Resultado: aberto como admin, o
-    // startup passava mas a aba Túnel continuava dizendo "precisa de admin".
-    // Duas cópias do mesmo check é como o bug sobreviveu à primeira correção.
+    // Delegates to the SAME check the startup uses. Previously this had its own
+    // copy with PROCESS_QUERY_INFORMATION — a bug already fixed in
+    // is_windows_admin. Two copies of the same check is how the bug survived
+    // the first fix.
     #[cfg(target_os = "windows")]
     {
         is_windows_admin()
@@ -1051,12 +1009,11 @@ fn is_windows_admin() -> bool {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows_sys::Win32::Foundation::CloseHandle;
 
-    // TOKEN_QUERY (0x0008) é o acesso mínimo pro GetTokenInformation; antes
-    // usávamos PROCESS_QUERY_INFORMATION (0x0400), que pode ser negado pelo
-    // token mesmo em processo elevado em algumas configs de segurança —
-    // quando isso acontecia, is_windows_admin() retornava false e o companion
-    // relançava via ShellExecuteW("runas") em loop (cada relaunch voltava
-    // elevado mas a checagem falhava de novo).
+    // TOKEN_QUERY (0x0008) is the minimum access for GetTokenInformation;
+    // we previously used PROCESS_QUERY_INFORMATION (0x0400), which some
+    // security configs deny even for elevated processes. When that happened,
+    // is_windows_admin() returned false and the companion re-launched via
+    // ShellExecuteW("runas") in a loop.
     const TOKEN_QUERY: u32 = 0x0008;
     unsafe {
         let mut token: HANDLE = 0;
@@ -1078,14 +1035,13 @@ fn is_windows_admin() -> bool {
     }
 }
 
-/// Mostra a janela E força a apresentação da superfície do WebView2.
+/// Shows the window AND forces WebView2 surface presentation.
 ///
-/// O bug (encurralado por sonda CDP em 19/07/2026): o renderer TINHA os
-/// pixels — screenshot interno perfeito — mas a janela ficava branca até um
-/// resize forçar a recomposição. É o "white window until resize" do WebView2
-/// com janela `visible: false` + show() tardio. O contorno é o do ecossistema:
-/// nudge de ±1px depois do show. Dois nudges com atraso porque logo-após-show
-/// a superfície pode nem existir ainda; 1px por 60ms é imperceptível.
+/// WebView2 bug: the renderer has the pixels (screenshot via CDP is perfect)
+/// but the window stays white until a resize forces recomposition. Classic
+/// "white until resize" with visible:false + late show(). Workaround: ±1px
+/// nudges after show. Two nudges with delays because the surface may not
+/// exist yet right after show.
 fn present_window(w: &tauri::WebviewWindow) {
     let _ = w.show();
     let _ = w.unminimize();
@@ -1145,16 +1101,15 @@ async fn stop_tunnel_and_wait(tunnel: &Tunnel) {
 
 // ─── Auto-updater ────────────────────────────────────────────────────────────
 
-/// Verifica update no startup. Se há, baixa+instala+relaunch automaticamente.
-/// Sutil: emite eventos `update-status` pro frontend (downloading/installed/erro)
-/// mas nunca pede confirmação. installMode=passive no Windows já mostra uma
-/// barra mínima do installer. Sem botão "ficar na versão antiga".
+/// Checks for update on startup. Downloads, installs, and relaunches automatically.
+/// Emits `update-status` events (downloading/installed/error) but never asks
+/// confirmation. installMode=passive on Windows shows a minimal progress bar.
 #[cfg(desktop)]
 async fn auto_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
     use tauri_plugin_updater::UpdaterExt;
     let update = match app.updater()?.check().await {
         Ok(Some(u)) => u,
-        Ok(None) => return Ok(()), // já na última versão
+        Ok(None) => return Ok(()),
         Err(e) => return Err(e.into()),
     };
     tracing::info!("auto-update: {} -> {}", update.current_version, update.version);
@@ -1164,19 +1119,19 @@ async fn auto_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
             tracing::debug!("auto-update: {chunk} / {total:?} bytes");
         },
         || {
-            tracing::info!("auto-update: download concluído, instalando");
+            tracing::info!("auto-update: download complete, installing");
         },
     ).await?;
     let _ = app.emit("update-status", "installed");
     stop_tunnel_and_wait(&app.state::<AppState>().tunnel).await;
-    // Windows: o installer passive já fecha o app. Outros SOs: relaunch explícito.
+    // Windows: the passive installer already closes the app. Other OS: explicit relaunch.
     app.restart();
 }
 
 pub fn run() {
-    // Em release (windows_subsystem = "windows") não há console — tracing
-    // pra stderr cai no vazio e em alguns setups o Windows aloca um console
-    // pra escrever. Só ativa em debug.
+    // In release (windows_subsystem = "windows") there is no console — tracing
+    // to stderr goes nowhere and some Windows setups allocate a hidden console.
+    // Only active in debug builds.
     #[cfg(debug_assertions)]
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -1185,26 +1140,25 @@ pub fn run() {
         )
         .init();
 
-    // Npcap moderno sem modo WinPcap põe wpcap.dll num subdir que o loader do
-    // Windows não acha sem PATH/SetDllDirectory. Tem que rodar ANTES de qualquer
-    // pcap::Device::list (no setup do Tauri) — depois da primeira chamada falha
-    // a DLL já ficou cacheada como "não encontrada" e não adianta mais.
+    // Modern Npcap (without WinPcap mode) puts wpcap.dll in a subdir that the
+    // Windows loader can't find without PATH/SetDllDirectory. Must run BEFORE
+    // any pcap::Device::list — after the first failed call the DLL is cached
+    // as "not found" and subsequent fixes don't help.
     sniffer::ensure_npcap_dll_path();
 
     let install_id = config::install_id();
     let mut cfg = config::load();
     cfg.install_id = install_id;
 
-    // O companion SEMPRE roda como admin — sniffer (Npcap), túnel (wintun) e
-    // DNS precisam. Sem admin: relança com UAC (runas) e sai. No startup
-    // automático o Task Scheduler abre com HighestAvailable = sem prompt.
+    // The companion ALWAYS runs as admin — sniffer (Npcap), tunnel (wintun) and
+    // DNS all require it. Without admin: re-launches with UAC (runas) and exits.
+    // In autostart, the Task Scheduler opens with HighestAvailable = no prompt.
     //
-    // Rede anti-loop: passamos --ziggs-elev no relaunch. Se o processo foi
-    // relançado por nós e ainda assim não aparece como admin (ex.: usuário
-    // negou o UAC, ou bug raro em is_windows_admin), NÃO relança de novo —
-    // mostra MessageBox fatal e sai. Nunca segue sem admin: o sniffer não
-    // consegue abrir a capture sem Npcap+admin, e o usuário precisa saber
-    // disso pra poder consertar (aceitar UAC, instalar Npcap, etc).
+    // Anti-loop guard: we pass --ziggs-elev on re-launch. If the process was
+    // re-launched by us and still doesn't appear as admin (user denied UAC,
+    // or rare bug in is_windows_admin), do NOT re-launch again — show a fatal
+    // MessageBox and exit. Never continues without admin: the sniffer can't
+    // open captures without Npcap+admin, and the user needs to know.
     #[cfg(target_os = "windows")]
     {
         let already_tried = std::env::args().any(|a| a == "--ziggs-elev");
@@ -1234,8 +1188,8 @@ pub fn run() {
                 use windows_sys::Win32::Foundation::HWND;
                 use windows_sys::Win32::UI::Shell::ShellExecuteW;
                 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-                // Preserva os args (--minimized) no relaunch elevado e marca
-                // que já tentamos elevar (--ziggs-elev lido pelo processo filho).
+                // Preserve args (--minimized) on elevated re-launch and mark
+                // that we already tried elevation (--ziggs-elev read by child).
                 let mut args = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
                 if !args.is_empty() { args.insert_str(0, " "); }
                 args = format!("--ziggs-elev{args}");
@@ -1281,9 +1235,8 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default();
 
-    // Single-instance: se já está rodando, foca a janela existente e fecha esta.
-    // ponytail: tem que ser o primeiro plugin registrado pra interceptar antes
-    // de qualquer outro inicializar. Desktop only (mobile não faz sentido).
+    // Single-instance: if already running, focus existing window and close this one.
+    // Must be the first plugin registered to intercept before any other initializes.
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -1303,10 +1256,8 @@ pub fn run() {
         ))
         .manage(state)
         .setup(move |app| {
-            // Auto-update: init updater plugin (desktop only).
-            // ponytail: check silencioso no startup — se há update, baixa e instala
-            // sem pedir confirmação. Instala passive (barra de progresso pequena),
-            // depois relança. Usuário não escolhe ficar na versão antiga.
+            // Auto-update: silent check on startup — downloads and installs without
+            // confirmation. Passive install (small progress bar), then relaunch.
             #[cfg(desktop)]
             {
                 let _ = app.handle().plugin(tauri_plugin_updater::Builder::new().build());
@@ -1317,28 +1268,26 @@ pub fn run() {
                     }
                 });
             }
-            // Tabela de nomes de feitiço do damage meter: cache em disco, senão
-            // baixa. Em background — o meter funciona sem ela (fallback pro id).
+            // Spell name table for damage meter: disk cache, otherwise download.
+            // In background — the meter works without it (falls back to spell id).
             tauri::async_runtime::spawn(load_spell_names());
             tauri::async_runtime::spawn(load_item_names_map());
             tauri::async_runtime::spawn(lootlog::load_item_names());
 
-            // Auto-submit do lootlog: fica de olho nos eventos do usuário e
-            // envia sozinho quando algum entra em revisão. O worker checa o
-            // toggle a cada volta, então ligar/desligar vale na hora.
+            // Auto-submit lootlog: watches user's events and submits when
+            // one enters review. The worker checks the toggle each cycle.
             {
                 let st = app.state::<AppState>();
                 tauri::async_runtime::spawn(auto_lootlog_worker(
                     Arc::clone(&st.config),
                     Arc::clone(&st.sniffer.loot),
                 ));
-                // Badge ILUSTRATIVO de prata da aba Lootlog — só pra dar uma
-                // noção de quanto de loot passou pela sessão. Não load-bearing.
+                // Illustrative silver badge for the Lootlog tab. Not load-bearing.
                 tauri::async_runtime::spawn(loot_silver_worker(
                     Arc::clone(&st.sniffer.loot),
                     Arc::clone(&st.sniffer.stats),
                 ));
-                // Mantém perfis quentes no site: o próprio char + players vistos.
+                // Keeps profiles warm on the site: own character + seen players.
                 tauri::async_runtime::spawn(warm_self_worker(
                     Arc::clone(&st.sniffer.entities),
                     Arc::clone(&st.sniffer.stats),
@@ -1347,8 +1296,8 @@ pub fn run() {
             }
 
             build_tray(app.handle())?;
-            // Janela fica invisível no tauri.conf; só mostra se NÃO for boot
-            // minimizado (--minimized do Task Scheduler = direto pra bandeja).
+            // Window is hidden in tauri.conf; only show if NOT a minimized boot
+            // (--minimized from Task Scheduler = straight to tray).
             if !start_minimized {
                 if let Some(w) = app.get_webview_window("main") {
                     present_window(&w);
@@ -1357,11 +1306,9 @@ pub fn run() {
             if autostart_on {
                 #[cfg(target_os = "windows")]
                 {
-                    // Sem Npcap o companion não faz nada útil sozinho no
-                    // boot — não registra a tarefa. Reavaliado a cada
-                    // startup: se o usuário instalar o Npcap depois, o
-                    // próximo launch já registra sozinho, sem precisar
-                    // mexer no toggle.
+                    // Without Npcap the companion does nothing useful on boot —
+                    // skip registering. Re-evaluated each startup: if the user
+                    // installs Npcap later, the next launch registers automatically.
                     if sniffer::npcap_installed() {
                         let _ = set_autostart(true);
                     }
@@ -1372,19 +1319,17 @@ pub fn run() {
                     let _ = autostart_mgr.enable();
                 }
             }
-            // Auto-inicia scanner e túnel se os toggles estiverem ligados.
-            // ponytail: roda fora do command handler — replica o mínimo de
-            // start_scanner/tunnel_start inline (mesmo padrão de spawn).
+            // Auto-start scanner and tunnel if their toggles are on.
             let state: tauri::State<AppState> = app.state();
             if let Err(e) = tunnel::scrub_stale_routes_now() {
                 tracing::warn!("tunnel startup cleanup: {e:#}");
             }
             let cfg = state.config.blocking_lock().clone();
-            // Sincroniza pvp_pause do config no scanner.
+            // Sync pvp_pause from config into scanner.
             *state.scanner.pvp_pause.blocking_lock() = cfg.pvp_pause_transfer;
-            // Sincroniza os gates de captura do sniffer com o config persistido.
-            // capture_prices é SEMPRE true (razão de ser do companion); o gate
-            // existe no sniffer só pra emergência (pause manual via código).
+            // Sync capture gates with persisted config.
+            // capture_prices is always true (core feature); the gate exists only
+            // for emergency manual pause.
             {
                 use std::sync::atomic::Ordering;
                 state.sniffer.capture_loot.store(cfg.collect_auto_lootlog, Ordering::Relaxed);
@@ -1392,9 +1337,9 @@ pub fn run() {
                 state.sniffer.capture_prices.store(true, Ordering::Relaxed);
                 state.sniffer.feed_aodp.store(cfg.feed_aodp, Ordering::Relaxed);
             }
-            // Pré-carrega as saídas locais e seus handshakes antes do usuário
-            // abrir o jogo. Se o toggle persistido estiver ligado, conecta logo
-            // depois usando o mesmo resultado; caso contrário só aquece a lista.
+            // Pre-loads local exits and their handshakes before the user opens
+            // the game. If the tunnel toggle is on, connects afterward using
+            // the same result; otherwise just warms the list.
             if !cfg.tunnel_endpoint.is_empty()
                 && !cfg.tunnel_server_pubkey.is_empty()
                 && !cfg.tunnel_client_privkey.is_empty()
@@ -1421,7 +1366,7 @@ pub fn run() {
                     }
                 });
             }
-            // Battle scanning é SEMPRE on (razão de ser do companion).
+            // Battle scanning is ALWAYS on (primary purpose of the companion).
             {
                 let mut running = state.scanner_running.blocking_lock();
                 if !*running {
@@ -1436,7 +1381,7 @@ pub fn run() {
                     });
                 }
             }
-            // Kill scan roda em paralelo — mesmo throttle/zone do battle scan.
+            // Kill scan runs in parallel — shares throttle/zone with battle scan.
             {
                 let mut running = state.kill_scanner_running.blocking_lock();
                 if !*running {
@@ -1450,16 +1395,15 @@ pub fn run() {
                     });
                 }
             }
-            // ── Uploader ÚNICO da fila de transferência ───────────────────
+            // ── Single upload queue ───────────────────────────────────────
             //
-            // Antes cada produtor dava seu próprio `flush_all`, e a volta pra
-            // zona azul despejava a fila inteira numa rajada — pico de rede e
-            // CPU logo depois da luta, que é o pior momento possível.
+            // Previously each producer called flush_all directly, and returning to
+            // blue zone dumped the entire queue in a burst — network/CPU spike
+            // right after a fight, the worst possible moment.
             //
-            // Agora existe UM lugar decidindo ritmo e política: poucos itens
-            // por tick, com respiro entre eles, e só quando `heavy_work_ok`.
-            // Nada some — em zona de risco a fila só engorda e é drenada
-            // devagar depois. Produtor novo deve apenas ENFILEIRAR.
+            // Now one place controls pacing: few items per tick, only when
+            // heavy_work_ok. Nothing is lost — in risky zones the queue just
+            // grows and drains slowly afterward. New producers should only ENQUEUE.
             {
                 const TICK_SECS: u64 = 3;
                 const CHUNK: usize = 20;
@@ -1474,7 +1418,7 @@ pub fn run() {
                         tokio::time::sleep(std::time::Duration::from_secs(TICK_SECS)).await;
                         if q.pending_count().await == 0 { continue; }
                         if !heavy_work_ok(&up_sniffer, &up_zone, &up_pause).await {
-                            continue; // zona de risco: espera, não perde
+                            continue; // risky zone: wait, don't lose data
                         }
                         let (sent, failed) = q.flush_some(&api, CHUNK).await;
                         if sent > 0 || failed > 0 {
@@ -1483,9 +1427,9 @@ pub fn run() {
                     }
                 });
             }
-            // Auto-inicia o sniffer (packet capture) — sempre ligado, sem toggle.
-            // Ele alimenta nome/mapa/party da UI; loot/dano/preço só acumulam
-            // com os gates ligados.
+            // Auto-start sniffer (packet capture) — always on, no toggle.
+            // Feeds name/map/party to the UI; loot/damage/prices only accumulate
+            // when their respective gates are enabled.
             {
                 let mut running = state.sniffer_running.blocking_lock();
                 if !*running {
@@ -1501,9 +1445,9 @@ pub fn run() {
                     });
                 }
             }
-            // Envio periódico de preços: drena o buffer do sniffer a cada 60s,
-            // agrega o menor preço por (item, quality, city) e envia via fila
-            // de transferência (respeita pausa em PvP; persiste se falhar).
+            // Periodic price upload: drains the sniffer buffer every 60s,
+            // aggregates lowest sell_price_min per (item, quality, city) and
+            // enqueues for transfer (respects PvP pause; persists on failure).
             {
                 let prices_buf = Arc::clone(&state.sniffer.prices);
                 let q = Arc::clone(&state.transfer_queue);
@@ -1516,7 +1460,7 @@ pub fn run() {
                             if b.is_empty() { continue; }
                             b.drain(..).collect()
                         };
-                        // Menor sell_price_min por (item_id, quality, city).
+                        // Lowest sell_price_min per (item_id, quality, city).
                         let mut best: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
                         for row in raw {
                             let key = format!(
@@ -1530,22 +1474,21 @@ pub fn run() {
                             if cur.map_or(true, |c| price < c) { best.insert(key, row); }
                         }
                         let n_rows = best.len();
-                        // Chunka em 1900 (backend limita 2000 por request) —
-                        // payload gigante num único POST dá timeout 30s e fica
-                        // preso na fila pra sempre. Pedaços pequenos sobem rápido.
+                        // Chunk at 1900 (backend limits 2000 per request) — large
+                        // payloads in a single POST cause 30s timeouts and get
+                        // stuck in the queue forever.
                         let aggregated: Vec<serde_json::Value> = best.into_values().collect();
                         for chunk in aggregated.chunks(1900) {
                             q.enqueue_prices(chunk.to_vec()).await;
                         }
                         push_debug(&debug, "info",
-                            &format!("prices: enfileiradas {n_rows} rows ({} chunks)", (n_rows + 1899) / 1900));
-                        // Só enfileira. Quem envia é o uploader único, no
-                        // ritmo dele — produtor não decide política de rede.
+                            &format!("prices: enqueued {n_rows} rows ({} chunks)", (n_rows + 1899) / 1900));
+                        // Enqueue only — the single uploader handles pacing.
                     }
                 });
             }
-            // Envio de market history: drena o buffer a cada 60s e envia via
-            // fila de transferência (persistência + pausa em PvP como os preços).
+            // Market history upload: drains buffer every 60s and enqueues for
+            // transfer (same persistence and PvP pause as prices).
             {
                 let hist_buf = Arc::clone(&state.sniffer.market_history);
                 let q = Arc::clone(&state.transfer_queue);
@@ -1559,23 +1502,23 @@ pub fn run() {
                             b.drain(..).collect()
                         };
                         let n_rows = rows.len();
-                        // Backend limita 2000 rows por request — chunka em 1900.
+                        // Backend limits 2000 rows per request — chunk at 1900.
                         for chunk in rows.chunks(1900) {
                             q.enqueue_market_history(chunk.to_vec()).await;
                         }
                         push_debug(&debug, "info",
-                            &format!("market_history: enfileirados {n_rows} buckets"));
-                        // Só enfileira — ver comentário do uploader único.
+                            &format!("market_history: enqueued {n_rows} buckets"));
+                        // Enqueue only — see single uploader comment above.
                     }
                 });
             }
-            // Upload ao AODP: drena os lotes de ordens de mercado e envia (PoW).
-            // Um por vez, com respiro entre eles — o PoW é CPU-bound.
+            // AODP upload: drains market order batches and uploads (with PoW).
+            // One at a time with spacing — PoW is CPU-bound.
             //
-            // É a tarefa mais CARA do companion e a única que gasta CPU de
-            // verdade. Fica atrás do `heavy_work_ok`: em zona PvP com o jogo
-            // aberto, os lotes só esperam na fila (não se perdem) e sobem
-            // quando o jogador volta pra zona azul ou fecha o jogo.
+            // The most expensive task in the companion and the only one that
+            // genuinely spends CPU. Gated behind heavy_work_ok: in PvP with the
+            // game open, batches wait in queue (not lost) and upload when the
+            // player returns to blue zone or closes the game.
             {
                 let aodp_out = Arc::clone(&state.sniffer.aodp_out);
                 let debug = Arc::clone(&state.sniffer.debug);
@@ -1590,11 +1533,10 @@ pub fn run() {
                         .unwrap_or_default();
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                        // Espia a fila antes de decidir: sem lote, nem precisa
-                        // consultar zona.
+                        // Peek at queue before checking zone: no batch = no work.
                         if aodp_out.lock().await.is_empty() { continue; }
                         if !heavy_work_ok(&aodp_sniffer, &aodp_zone, &aodp_pause).await {
-                            continue; // em PvP: o lote espera, não se perde
+                            continue; // in PvP: batch waits, not lost
                         }
                         let batch = { aodp_out.lock().await.pop() };
                         let Some(batch) = batch else { continue };
@@ -1602,7 +1544,7 @@ pub fn run() {
                             let line = sniffer::DebugLine {
                                 ts: photon_parser::now_iso_utc(),
                                 level: "warn".into(),
-                                msg: format!("AODP upload falhou: {e:#}"),
+                                msg: format!("AODP upload failed: {e:#}"),
                             };
                             let mut d = debug.lock().await;
                             d.push(line);
@@ -1611,10 +1553,10 @@ pub fn run() {
                     }
                 });
             }
-            // Túnel NÃO auto-inicia no boot de propósito: o usuário precisa
-            // ligar manualmente toda vez. Forçar o clique expõe mais os anúncios
-            // da aba Rota, que cobrem o custo da VPS. O toggle `tunnel_enabled`
-            // só decide se o botão aparece "ligado" na UI — não liga sozinho.
+            // Tunnel does NOT auto-start on boot on purpose: user must enable
+            // manually each time. Forcing the click drives ad impressions on
+            // the Route tab, covering VPS cost. The tunnel_enabled toggle only
+            // controls whether the button appears "on" in the UI.
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1673,7 +1615,7 @@ pub fn run() {
             submit_captured_loot,
         ])
         .run(tauri::generate_context!())
-        .expect("erro ao iniciar companion");
+        .expect("failed to start companion");
 }
 #[cfg(test)]
 mod policy_tests {
@@ -1683,29 +1625,29 @@ mod policy_tests {
         Arc::new(Mutex::new(z))
     }
 
-    /// A política inteira do "quando pode gastar máquina" mora aqui. Errar em
-    /// qualquer direção é ruim: liberar em PvP faz o jogador morrer, travar
-    /// demais faz o dado nunca subir.
+    /// The full "when is it safe to spend resources" policy lives here.
+    /// Getting it wrong either way is bad: allowing work in PvP causes lag
+    /// deaths; being too strict means data never uploads.
     #[tokio::test]
-    async fn quando_pode_gastar_maquina() {
+    async fn heavy_work_ok_all_cases() {
         let sniffer = Sniffer::new();
         let pausa_on = Arc::new(Mutex::new(true));
         let pausa_off = Arc::new(Mutex::new(false));
 
-        // Jogo fechado (online=false, o default): libera em qualquer zona.
+        // Game closed (online=false, the default): allows work in any zone.
         assert!(heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pausa_on).await,
-                "jogo fechado é a melhor hora pra trabalhar");
+                "game closed is the best time to work");
 
         sniffer.stats.lock().await.online = true;
 
         assert!(!heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pausa_on).await,
-                "jogando em zona de risco: não encosta na CPU dele");
+                "in PvP zone: don't touch the CPU");
         assert!(heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Blue), &pausa_on).await,
-                "zona azul: pode enviar normalmente");
+                "blue zone: safe to upload");
         assert!(heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Unknown), &pausa_on).await,
-                "zona desconhecida não bloqueia — só PvP confirmado bloqueia");
+                "unknown zone does not block — only confirmed PvP blocks");
         assert!(heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pausa_off).await,
-                "usuário desligou a pausa: respeita a escolha dele");
+                "user disabled pause: respect their choice");
     }
 
 
@@ -1721,7 +1663,7 @@ mod policy_tests {
     }
 
     #[test]
-    fn auto_lootlog_exige_um_unico_evento_em_review() {
+    fn auto_lootlog_requires_single_review_event() {
         assert_eq!(single_review_event(&[event(1, "review")]).map(|e| e.event_id), Some(1));
         assert!(single_review_event(&[event(1, "review"), event(2, "review")]).is_none());
         assert!(single_review_event(&[event(1, "in_progress")]).is_none());

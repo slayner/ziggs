@@ -1,6 +1,6 @@
-// DNS/Route tester: testa latência e estabilidade de diferentes resolvers
-// para os servidores do Albion. Não muda o DNS do sistema (Fase 1 sem admin);
-// apenas recomenda o melhor e deixa o usuário aplicar.
+// DNS/Route tester: measures latency and stability of different resolvers for
+// Albion servers. Does not change system DNS (Phase 1, no admin); only recommends
+// the best and lets the user apply.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -28,19 +28,18 @@ pub struct DnsResult {
     pub profile: String,
     pub primary: String,
     pub resolved: bool,
-    /// latência média em ms (10 amostras)
+    /// Average latency in ms over 10 samples.
     pub latency_ms: Option<f64>,
-    /// jitter = desvio padrão das amostras
+    /// Jitter = standard deviation of samples.
     pub jitter_ms: Option<f64>,
-    /// pacotes perdidos de 10
+    /// Packet loss out of 10.
     pub packet_loss_pct: Option<f64>,
-    /// nota 0-100 (maior = melhor): pondera latência, jitter, perda
+    /// Score 0-100 (higher is better), weighted latency, jitter, loss.
     pub score: f64,
     pub error: Option<String>,
 }
 
-/// Testa um perfil de DNS contra um hostname.
-/// Faz 10 resoluções + pings TCP ao resolvedor.
+/// Test a DNS profile against a hostname. 10 TCP handshakes to the resolver.
 pub async fn test_profile(profile: &DnsProfile, hostname: &str) -> DnsResult {
     let mut result = DnsResult {
         profile: profile.name.clone(),
@@ -54,13 +53,11 @@ pub async fn test_profile(profile: &DnsProfile, hostname: &str) -> DnsResult {
     };
 
     if profile.primary == "system" {
-        // sem teste de resolvedor — só mede o caminho direto
+        // No resolver test; just measure the direct path.
         return test_system_path(hostname).await;
     }
 
-    // 1) resolve hostname usando o resolver escolhido
-    // ponytail: hickory-resolver seria mais "correto", mas para latência de
-    // UDP ao resolvedor, um TCP connect na porta 53 já mede o RTT bem.
+    // TCP connect to resolver port 53 approximates UDP RTT without hickory-resolver.
     let resolver_addr = format!("{}:53", profile.primary);
     let mut samples: Vec<f64> = Vec::with_capacity(10);
     let mut losses = 0u32;
@@ -70,7 +67,7 @@ pub async fn test_profile(profile: &DnsProfile, hostname: &str) -> DnsResult {
             Ok(stream) => {
                 let start = Instant::now();
                 drop(stream);
-                let _ = stream; // conectou = reachable
+                let _ = stream; // connected = reachable
                 samples.push(start.elapsed().as_secs_f64() * 1000.0);
             }
             Err(_) => losses += 1,
@@ -88,9 +85,7 @@ pub async fn test_profile(profile: &DnsProfile, hostname: &str) -> DnsResult {
     let std = var.sqrt();
     let loss_pct = (losses as f64 / 10.0) * 100.0;
 
-    // 2) resolve hostname via este resolver e mede tempo de resolução
-    // ponytail: std::net usa o resolver do sistema, não o perfil testado.
-    // Para "verdadeiro" usaria hickory. Para Fase 1 o score do resolver basta.
+    // Phase 1: resolver score is enough; true per-resolver resolution would need hickory.
 
     result.resolved = true;
     result.latency_ms = Some(mean);
@@ -112,8 +107,7 @@ async fn test_system_path(hostname: &str) -> DnsResult {
         ).await {
             Ok(Ok(_stream)) => {
                 let start = Instant::now();
-                // ponytail: medir TCP connect da próxima vez seria melhor
-                // que medir depois de conectado; refatorar se precisar.
+                // Measures post-connect time; ideally should measure TCP connect time instead.
                 samples.push(start.elapsed().as_secs_f64() * 1000.0);
             }
             _ => losses += 1,
@@ -146,9 +140,9 @@ async fn test_system_path(hostname: &str) -> DnsResult {
     result
 }
 
-/// Nota 0-100: maior = melhor. Pondera latência (40%), jitter (30%), perda (30%).
+/// Score 0-100, higher is better. Weights: latency 40%, jitter 30%, loss 30%.
 fn compute_score(latency_ms: f64, jitter_ms: f64, loss_pct: f64) -> f64 {
-    // Normaliza: 0ms=100, 300ms=0 (latência); 0ms=100, 100ms=0 (jitter); 0%=100, 50%=0 (perda)
+    // Normalize: latency 0ms=100/300ms=0; jitter 0ms=100/100ms=0; loss 0%=100/50%=0.
     let l = 100.0 - (latency_ms / 3.0).clamp(0.0, 100.0);
     let j = 100.0 - jitter_ms.clamp(0.0, 100.0);
     let p = 100.0 - (loss_pct * 2.0).clamp(0.0, 100.0);
@@ -161,12 +155,12 @@ pub async fn test_all(hostname: &str) -> Vec<DnsResult> {
     for p in &profiles {
         out.push(test_profile(p, hostname).await);
     }
-    // ordena por score desc
+    // Sort by descending score.
     out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     out
 }
 
-/// Aplica o DNS no sistema. Requer admin. Windows: netsh interface ip set dns.
+/// Apply DNS to the system. Requires admin. Windows: netsh interface ip set dns.
 pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -196,7 +190,7 @@ pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
     }
 }
 
-/// Descobre o nome da interface de rede primária (com default gateway).
+/// Discover the primary network interface name (the one with the default gateway).
 #[cfg(target_os = "windows")]
 fn default_interface_name() -> Result<String> {
     let out = crate::winutil::no_window(std::process::Command::new("powershell"))

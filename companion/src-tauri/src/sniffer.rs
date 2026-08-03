@@ -1,15 +1,15 @@
-// Packet sniffer: captura pacotes UDP do Albion via libpcap/Npcap.
+// Packet sniffer: captures Albion UDP packets via libpcap/Npcap.
 //
-// Abre listeners em TODAS as interfaces com IPv4 (VPN/ExitLag cria interfaces
-// virtuais — se ouvirmos só uma, perdemos o tráfego quando o user liga VPN).
-// Filtro BPF: "udp and (port 5056 or port 5055 or port 4535)" — o jogo usa
-// essas 3 portas.
+// Listens on ALL IPv4 interfaces (VPN/ExitLag creates virtual interfaces —
+// listening on only one means losing traffic when the user enables VPN).
+// BPF filter: "udp and (port 5056 or port 5055 or port 4535)" — the 3 ports
+// the game uses.
 //
-// Cada pacote é passado pro PhotonParser. Eventos de loot (opcode 256) vão
-// pro buffer de loot. Logs de debug vão pro buffer de debug (mostrados no
-// terminal da UI). Detecção online/offline: sem pacotes por 5s = offline.
+// Each packet is passed to the PhotonParser. Loot events (opcode 256) go to
+// the loot buffer. Debug logs go to the debug buffer (shown in the UI
+// terminal). Online/offline detection: no packets for 5s = offline.
 //
-// Npcap é necessário no Windows. Requer admin.
+// Requires Npcap on Windows. Needs admin.
 
 use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
@@ -30,11 +30,9 @@ use crate::photon_parser::{
 };
 use crate::aodp::{self, AodpBatch, AodpServer};
 
-/// Cidades com marketplace real — só reportamos preço quando o jogador está
-/// numa delas (o nome do mapa vira a cidade do report).
-/// Inclui os 3 Rests (Arthur's/Merlyn's/Morgana's) que têm estações de craft
-/// próprias e shareiam o Smuggler's Network. Smuggler's Den em si é mercado
-/// mas não é local de craft.
+/// Cities with real marketplaces — we only report prices when the player is
+/// in one of these. Includes the 3 Rests (Arthur's/Merlyn's/Morgana's) which
+/// have their own crafting stations and share the Smuggler's Network.
 const MARKET_CITIES: [&str; 12] = [
     "Martlock", "Bridgewatch", "Lymhurst", "Fort Sterling",
     "Thetford", "Caerleon", "Brecilien", "Black Market",
@@ -42,21 +40,20 @@ const MARKET_CITIES: [&str; 12] = [
     "Smuggler's Den",
 ];
 
-/// Janela de dedup de pacote. `open_all` escuta TODAS as interfaces de propósito
-/// (VPN/ExitLag/adaptador virtual — se ouvíssemos uma só, perderíamos o tráfego
-/// quando o user liga VPN). O custo: num adaptador BRIDGEADO (Hyper-V/vEthernet)
-/// o MESMO pacote é capturado em 2 interfaces e chega 2× no channel → loot E
-/// dano duplicados. As 2 cópias chegam quase juntas, então uma janela curta
-/// basta. Pacote Photon distinto NUNCA é byte-idêntico (cada um carrega seu
-/// próprio sequence no header), então deduplicar por hash do payload descarta
-/// SÓ a cópia, jamais um evento legítimo (dois loots iguais vêm em pacotes com
-/// sequence diferente = hash diferente). Não filtramos interface — mantemos a
-/// captura ampla e só ignoramos a cópia byte-a-byte.
+/// Packet dedup window. `open_all` listens on ALL interfaces on purpose
+/// (VPN/ExitLag/virtual adapters — listening on only one would lose traffic
+/// when the user enables VPN). The cost: on a BRIDGED adapter (Hyper-V/vEthernet)
+/// the SAME packet is captured on 2 interfaces and arrives 2× on the channel
+/// → duplicated loot/damage. The 2 copies arrive nearly simultaneously, so a
+/// short window suffices. Distinct Photon packets are never byte-identical
+/// (each carries its own sequence number in the header), so dedup by payload
+/// hash only discards the copy, never a legitimate event (two identical loots
+/// come in packets with different sequences = different hashes).
 const PKT_DEDUP_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Registra o hash do pacote e diz se ele já foi visto dentro da `window` (=
-/// cópia byte-idêntica de outra interface). Sempre grava `now` — refresca a
-/// marca, então duplicação N-way (3+ interfaces) também é coberta.
+/// Records the packet hash and returns whether it was seen within `window`.
+/// Always writes `now` — refreshes the timestamp so N-way duplication (3+
+/// interfaces) is also covered.
 fn packet_is_dup(
     recent: &mut HashMap<u64, Instant>,
     h: u64,
@@ -68,18 +65,15 @@ fn packet_is_dup(
     dup
 }
 
-/// Segunda rede de segurança contra loot duplicado, mais grosseira e mais
-/// confiável que o dedup de bytes crus acima. O dedup de pacote (PKT_DEDUP_
-/// WINDOW) parte da premissa de que as duas cópias do MESMO pacote (vindas de
-/// 2 interfaces bridgeadas) são byte-idênticas — mas offset/checksum/padding
-/// podem divergir sutilmente entre adaptadores, e aí o hash não bate e a
-/// linha duplica mesmo assim (foi o caso relatado). Esta checagem ignora
-/// bytes e compara a IDENTIDADE do evento (quem lootou, de quem, item,
-/// quantidade) contra os últimos já no buffer — se um evento igual acabou de
-/// entrar, é a mesma cópia chegando pela outra interface, não um segundo loot
-/// genuíno (não dá pra lootar o mesmo corpo/item duas vezes na mesma janela).
-/// Preguiçoso de propósito: não tenta consertar o dedup de bytes, só garante
-/// que a linha não dobra no terminal/CSV.
+/// Second safety net against duplicate loot. The byte-level dedup
+/// (PKT_DEDUP_WINDOW) assumes copies from bridged adapters are byte-identical,
+/// but offset/checksum/padding can diverge between adapters, making the hash
+/// miss and the line still duplicate. This check compares event identity
+/// (who looted, from whom, item, quantity) against the last entries in the
+/// buffer — if an identical event just arrived, it's the same copy from
+/// another interface, not a genuine second loot (you can't loot the same
+/// body/item twice in the same window). Lazy on purpose: doesn't try to fix the
+/// byte dedup, just ensures the line doesn't double in the terminal/CSV.
 const LOOT_DEDUP_LOOKBACK: usize = 8;
 
 fn is_duplicate_loot(buf: &[LootEvent], ev: &LootEvent) -> bool {
@@ -100,20 +94,20 @@ pub struct SniffStats {
     pub packets_parsed: u64,
     pub operations_extracted: u64,
     pub loot_count: u64,
-    /// Dano total da sessão (soma do mapa `damage`). NÃO é mantido aqui:
-    /// o hot loop não escreve este campo — `get_sniff_stats` (lib.rs) soma
-    /// na leitura e preenche a cópia que vai pra UI (badge da aba Damage).
+    /// Total session damage (sum of the `damage` map). Not maintained here:
+    /// the hot loop does not write this field — `get_sniff_stats` (lib.rs)
+    /// sums on read and fills the copy sent to the UI (Damage tab badge).
     #[serde(default)]
     pub damage_total: u64,
-    /// Dano total causado PELO PRÓPRIO jogador (player_name). Somado na
-    /// leitura por get_sniff_stats — alimenta o badge da aba Damage com o
-    /// número que interessa ao usuário (o dele), não o da party toda.
+    /// Total damage dealt by the local player (player_name). Summed on read
+    /// by get_sniff_stats — feeds the Damage tab badge with the user's own
+    /// number, not the whole party's.
     #[serde(default)]
     pub my_damage: u64,
-    /// Estimativa ILUSTRATIVA do valor em prata dos loots capturados nesta
-    /// sessão. Calculada por um worker de fundo no lib.rs (poll da rota
-    /// /companion/lootlog/silver-estimate), NÃO no hot loop. Só badge da
-    /// aba Lootlog — não é load-bearing em payout/reconcile nenhum.
+    /// Illustrative estimate of silver value of loots captured this session.
+    /// Computed by a background worker in lib.rs (polling
+    /// /companion/lootlog/silver-estimate), NOT in the hot loop. Lootlog tab
+    /// badge only — not load-bearing for payout/reconcile.
     #[serde(default)]
     pub loot_silver_total: u64,
     pub last_map: String,
@@ -150,7 +144,7 @@ impl Default for SniffStats {
     }
 }
 
-/// Linha de debug do sniffer — mostrada no terminal da UI.
+/// Debug line from sniffer — shown in the UI terminal.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DebugLine {
     pub ts: String,
@@ -162,35 +156,34 @@ pub struct Sniffer {
     pub stats: Arc<Mutex<SniffStats>>,
     pub loot: Arc<Mutex<Vec<LootEvent>>>,
     pub debug: Arc<Mutex<Vec<DebugLine>>>,
-    /// Registro entityId → nome (NewCharacter), usado pra resolver o damage meter.
+    /// Entity ID → name mapping (NewCharacter), used to resolve the damage meter.
     pub entities: Arc<Mutex<HashMap<i64, String>>>,
-    /// Dano/cura acumulado por causer_id na sessão.
+    /// Damage/healing accumulated by causer_id this session.
     pub damage: Arc<Mutex<HashMap<i64, DamageAcc>>>,
-    /// Mesmo acúmulo, mas só dos golpes cujo ALVO é jogador conhecido.
-    ///
-    /// Acumulador separado em vez de filtro na leitura porque o alvo não
-    /// sobrevive ao `record`: o `DamageAcc` é indexado por causer e joga o
-    /// target fora. Pra poder filtrar depois teria que guardar breakdown por
-    /// alvo — muito mais memória do que manter dois totais.
+    /// Same accumulation, but only for hits whose TARGET is a known player.
+    /// Separate accumulator instead of read-time filter because the target
+    /// doesn't survive `record`: DamageAcc is indexed by causer and discards
+    /// target_id. Filtering after would require per-target breakdown — much
+    /// more memory than keeping two totals.
     pub damage_vs_players: Arc<Mutex<HashMap<i64, DamageAcc>>>,
-    /// Rows de preço prontos pro POST /companion/prices/submit — drenados
-    /// periodicamente pela task de envio no lib.rs.
+    /// Price rows ready for POST /companion/prices/submit — drained
+    /// periodically by the upload task in lib.rs.
     pub prices: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// Rows de market history prontas pro POST /companion/market-history/submit.
+    /// Market history rows ready for POST /companion/market-history/submit.
     pub market_history: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// Requests de history pendentes (message_id → info), aguardando a response.
+    /// Pending history requests (message_id → info), awaiting response.
     history_pending: Arc<Mutex<HashMap<u64, HistoryReq>>>,
-    /// Lotes de ordens de mercado prontos pro upload ao AODP (verbatim).
+    /// Market order batches ready for AODP upload (verbatim).
     pub aodp_out: Arc<Mutex<Vec<AodpBatch>>>,
-    /// Última região AODP inferida do IP do servidor do Albion (por pacote).
+    /// Last AODP region inferred from the Albion server IP (per packet).
     pub aodp_server: Arc<Mutex<Option<AodpServer>>>,
-    /// Gates de captura — espelham os toggles do config (set_config sincroniza).
-    /// O sniffer sempre roda (nome/mapa/party alimentam a UI), mas só acumula
-    /// loot/dano/preço com o gate ligado.
+    /// Capture gates — mirror the config toggles (set_config syncs them).
+    /// The sniffer always runs (name/map/party feed the UI), but only
+    /// accumulates loot/damage/prices when the gate is on.
     pub capture_loot: Arc<AtomicBool>,
     pub capture_damage: Arc<AtomicBool>,
     pub capture_prices: Arc<AtomicBool>,
-    /// Encaminhar ordens de mercado ao AODP (devolver dado à comunidade).
+    /// Forward market orders to AODP (return data to the community).
     pub feed_aodp: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
 }
@@ -231,8 +224,8 @@ impl Sniffer {
         }
     }
 
-    /// Clona compartilhando TODOS os Arcs (inclusive shutdown — stop() no
-    /// original para a task spawnada, o que o antigo with_stats não fazia).
+    /// Clones sharing ALL Arcs (including shutdown — stop() on the original
+    /// stops the spawned task).
     pub fn clone_shared(&self) -> Self {
         Self {
             stats: Arc::clone(&self.stats),
@@ -267,18 +260,17 @@ impl Sniffer {
         self.generation.load(Ordering::Acquire) == generation
     }
 
-    /// Abre uma thread de captura por interface com IPv4 que ainda não está
-    /// em `opened` (nome da interface), mandando os pacotes pro `tx` dado.
-    /// Devolve quantas interfaces NOVAS foram abertas nesta chamada.
+    /// Opens a capture thread per IPv4 interface not yet in `opened`, sending
+    /// packets to the given `tx`. Returns the count of NEW interfaces opened.
     ///
-    /// Recebe `tx`/`opened` de fora (em vez de criar um channel próprio) pra
-    /// poder ser chamada de novo mais tarde, na mesma sessão, quando uma
-    /// interface aparece DEPOIS do boot — WiFi ainda associando com o AP,
-    /// adaptador de VPN ligado depois, Hyper-V/Docker/VirtualBox trazendo uma
-    /// interface virtual com IPv4 antes da rede real (autostart no Windows
-    /// corre contra o DHCP). Sem isso, se QUALQUER interface abrisse primeiro
-    /// — mesmo uma virtual que nunca vê tráfego do Albion — o sniffer nunca
-    /// mais olhava a lista de novo, e ficava pra sempre "sem pacotes".
+    /// Takes `tx`/`opened` from outside (instead of creating its own channel)
+    /// so it can be called again later in the same session when an interface
+    /// appears AFTER boot — WiFi still associating, VPN adapter enabled later,
+    /// Hyper-V/Docker/VirtualBox bringing up a virtual interface with IPv4
+    /// before the real network (autostart on Windows races DHCP). Without this,
+    /// if ANY interface opened first — even a virtual one that never sees
+    /// Albion traffic — the sniffer would never scan the list again and stay
+    /// "no packets" forever.
     async fn open_all(
         &self,
         devices: &[pcap::Device],
@@ -304,10 +296,10 @@ impl Sniffer {
                     opened.insert(dev.name.clone());
                     let l2 = l2_len_for(cap.get_datalink());
                     self.debug_log("info", &format!(
-                        "Ouvindo interface: {} (L2={}b — {})",
-                        desc, l2, if l2 == 0 { "IP puro / VPN" } else { "ethernet" }
+                        "Listening on interface: {} (L2={}b — {})",
+                        desc, l2, if l2 == 0 { "raw IP / VPN" } else { "ethernet" }
                     )).await;
-                    // Spawna uma thread dedicada pra cada capture (bloqueante).
+                    // Spawns a dedicated thread per capture (blocking).
                     let tx_clone = tx.clone();
                     let liveness = Arc::clone(&self.generation);
                     std::thread::spawn(move || {
@@ -317,7 +309,7 @@ impl Sniffer {
                                 Ok(packet) => {
                                     let _ = tx_clone.send(CaptureMsg::Packet(l2, packet.data.to_vec()));
                                 }
-                                Err(pcap::Error::TimeoutExpired) => { /* sem pacote */ }
+                                Err(pcap::Error::TimeoutExpired) => { /* no packet */ }
                                 Err(e) => {
                                     let _ = tx_clone.send(CaptureMsg::Dead(desc.clone()));
                                     tracing::warn!("pcap erro em {}: {}", desc, e);
@@ -328,27 +320,27 @@ impl Sniffer {
                     });
                 }
                 Err(e) => {
-                    // NÃO marca como `opened` — a falha pode ser transitória
-                    // (driver ainda subindo, interface ainda sem link) e é
-                    // exatamente esse caso que o re-scan existe pra cobrir.
-                    self.debug_log("warn", &format!("Não foi possível abrir {}: {}", desc, e)).await;
+                    // Don't mark as `opened` — the failure may be transient
+                    // (driver still starting, interface not yet up) and
+                    // that's exactly what the re-scan exists to cover.
+                    self.debug_log("warn", &format!("Could not open {}: {}", desc, e)).await;
                 }
             }
         }
         if opened_count > 0 {
             self.debug_log("info", &format!(
-                "{} interface(s) nova(s) ativa(s).", opened_count
+                "{} new interface(s) active.", opened_count
             )).await;
         }
         opened_count
     }
 
-    /// Loop principal: abre listeners em todas as interfaces, captura pacotes.
+    /// Main loop: opens listeners on all interfaces, captures packets.
     ///
-    /// A captura pcap é bloqueante (pcap_next_ex trava a thread). Como estamos
-    /// num runtime tokio, movemos a captura pra threads dedicadas (spawn_blocking)
-    /// que mandam pacotes por um channel std::mpsc. O task async processa os
-    /// pacotes recebidos sem bloquear o executor.
+    /// pcap capture is blocking (pcap_next_ex blocks the thread). Since we're
+    /// in a tokio runtime, capture runs on dedicated threads (spawn) that send
+    /// packets via std::mpsc. The async task processes received packets without
+    /// blocking the executor.
     pub async fn run(&self) {
         let generation = self.prepare_start();
         self.run_generation(generation).await;
@@ -360,23 +352,22 @@ impl Sniffer {
             s.running = true;
             s.error = None;
         }
-        // Zera o arquivo de log a cada sessão pra ficar fácil de ler.
+        // Zero the log file each session for readability.
         if let Some(p) = debug_log_path() {
             if let Some(parent) = p.parent() { let _ = std::fs::create_dir_all(parent); }
-            let _ = std::fs::write(&p, format!("=== sessão {} ===\n", crate::photon_parser::now_iso_utc()));
+            let _ = std::fs::write(&p, format!("=== session {} ===\n", crate::photon_parser::now_iso_utc()));
         }
-        self.debug_log("info", "Sniffer iniciando — procurando interfaces de rede…").await;
+        self.debug_log("info", "Sniffer starting — scanning for network interfaces…").await;
 
-        // O channel vive pela sessão inteira: `open_all` é chamado de novo
-        // periodicamente (ver `last_iface_scan` mais abaixo) pra pegar
-        // interfaces que aparecem DEPOIS do boot, reusando o mesmo `tx`.
+        // The channel lives for the entire session: `open_all` is called
+        // periodically (see `last_iface_scan` below) to pick up interfaces
+        // that appear AFTER boot, reusing the same `tx`.
         let (tx, rx) = mpsc::channel::<CaptureMsg>();
         let mut opened_ifaces: HashSet<String> = HashSet::new();
 
-        // Enumerar/abrir interface pode falhar quando o companion sobe junto com
-        // o Windows (autostart): o serviço do Npcap e os adaptadores de rede
-        // ainda não estão prontos. Antes disso derrubava o sniffer de vez e o
-        // Albion nunca era detectado na sessão inteira — agora tenta de novo.
+        // Enumerating/opening interfaces can fail when the companion starts
+        // alongside Windows (autostart): Npcap service and network adapters
+        // aren't ready yet. Retries instead of killing the sniffer.
         loop {
             if self.generation.load(Ordering::Acquire) != generation {
                 return;
@@ -384,7 +375,7 @@ impl Sniffer {
             let devices = match pcap::Device::list() {
                 Ok(d) => d,
                 Err(e) => {
-                    let msg = format!("pcap Device::list falhou: {}. Npcap instalado?", e);
+                    let msg = format!("pcap Device::list failed: {}. Npcap installed?", e);
                     self.debug_log("err", &msg).await;
                     self.stats.lock().await.error = Some(msg);
                     tokio::time::sleep(std::time::Duration::from_secs(15)).await;
@@ -395,8 +386,8 @@ impl Sniffer {
             if n > 0 {
                 break;
             }
-            let msg = "Nenhuma interface de rede pôde ser aberta. Precisa admin/Npcap?".to_string();
-            self.debug_log("err", &format!("{} Tentando de novo em 15s…", msg)).await;
+            let msg = "No network interface could be opened. Needs admin/Npcap?".to_string();
+            self.debug_log("err", &format!("{} Retrying in 15s…", msg)).await;
             self.stats.lock().await.error = Some(msg);
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
         }
@@ -410,9 +401,9 @@ impl Sniffer {
         let mut logged_loot: u32 = 0;
         let mut local_player_name = String::new();
         let mut seen_codes: HashSet<i16> = HashSet::new();
-        // Estado do self-loot (ver photon_parser.rs) — igual a `entities`, só
-        // cresce durante a sessão; limpo pontualmente no detach/no consumo do
-        // slot lootado, resto é resíduo aceitável (ver doutrina de `entities`).
+        // Self-loot state (see photon_parser.rs) — same as `entities`, only
+        // grows during the session; cleaned up on detach/consumption of the
+        // looted slot, leftover is acceptable residue.
         let mut loot_container_owner: HashMap<i64, String> = HashMap::new();
         let mut loot_container_uuid: HashMap<[u8; 16], i64> = HashMap::new();
         let mut loot_container_slots: HashMap<(i64, i32), i64> = HashMap::new();
@@ -420,42 +411,42 @@ impl Sniffer {
         let mut last_heartbeat = Instant::now();
         let mut last_iface_scan = Instant::now();
         let mut raw_pkts: u64 = 0;
-        // Dedup de pacote (ver PKT_DEDUP_WINDOW): hash do payload Photon → última
-        // vez visto. Poda amortizada a cada 500 pacotes pra não crescer.
+        // Packet dedup (see PKT_DEDUP_WINDOW): Photon payload hash → last seen.
+        // Amortized prune every 500 packets to avoid unbounded growth.
         let mut recent_pkts: HashMap<u64, Instant> = HashMap::new();
         let mut pkt_since_prune: u32 = 0;
 
         loop {
             if self.generation.load(Ordering::Acquire) != generation {
-                self.debug_log("info", "Sniffer parado.").await;
+                    self.debug_log("info", "Sniffer stopped.").await;
                 break;
             }
 
-            // Recebe pacotes do canal (non-blocking — se não tem pacote, continua).
+            // Receive packets from channel (non-blocking — if no packet, continue).
             match rx.recv_timeout(std::time::Duration::from_millis(50)) {
                 Ok(CaptureMsg::Dead(name)) => {
                     opened_ifaces.remove(&name);
-                    self.debug_log("warn", &format!("Captura fechou em {name}; interface será reaberta.")).await;
+                    self.debug_log("warn", &format!("Capture closed on {name}; interface will be reopened.")).await;
                     last_iface_scan = Instant::now() - std::time::Duration::from_secs(60);
                 }
                 Ok(CaptureMsg::Packet(l2_hint, data)) => {
                     raw_pkts += 1;
-                    // Offset do payload Photon: L2 (ethernet/raw) + IP (IHL real) + UDP.
-                    // Hardcodar 42 quebra sob VPN/ExitLag (adaptadores IP-puro = 0 de L2).
+                    // Photon payload offset: L2 (ethernet/raw) + IP (real IHL) + UDP.
+                    // Hardcoding 42 breaks under VPN/ExitLag (raw IP adapters = 0 L2).
                     let off = match photon_offset(&data, l2_hint) {
                         Some(o) => o,
                         None => continue,
                     };
                     last_packet_time = Instant::now();
-                    // Região AODP: infere do IP do servidor do Albion no header IP.
+                    // AODP region: inferred from the Albion server IP in the IP header.
                     if let Some(srv) = albion_server_from_frame(&data, l2_hint) {
                         *self.aodp_server.lock().await = Some(srv);
                     }
                     let photon_data = &data[off..];
 
-                    // Dedup: cópia byte-idêntica de outra interface (adaptador
-                    // bridgeado — ver PKT_DEDUP_WINDOW) → pula, senão loot/dano
-                    // duplica. Pula ANTES do parse (também economiza o parse).
+                    // Dedup: byte-identical copy from another interface (bridged
+                    // adapter — see PKT_DEDUP_WINDOW) → skip, else loot/damage
+                    // duplicates. Skips BEFORE parse (also saves the parse cost).
                     {
                         let mut hasher = DefaultHasher::new();
                         photon_data.hash(&mut hasher);
@@ -480,18 +471,17 @@ impl Sniffer {
                         was_online = true;
                         let mut s = self.stats.lock().await;
                         s.online = true;
-                        self.debug_log("info", "Albion detectado — pacotes recebidos. Capturando loot…").await;
+                        self.debug_log("info", "Albion detected — packets received. Capturing loot…").await;
                     }
 
-                    // Rede de segurança: um pacote malformado nunca pode derrubar a
-                    // captura. Se o parser entrar em pânico, logamos, resetamos o estado
-                    // de fragmentos e seguimos.
+                    // Safety net: a malformed packet must never crash capture.
+                    // If the parser panics, log, reset fragment state, continue.
                     let ops = match std::panic::catch_unwind(
                         std::panic::AssertUnwindSafe(|| parser.parse(photon_data))
                     ) {
                         Ok(ops) => ops,
                         Err(_) => {
-                            self.debug_log("err", "parser entrou em pânico num pacote — pulando e resetando").await;
+                            self.debug_log("err", "parser panicked on a packet — skipping and resetting").await;
                             parser = PhotonParser::new();
                             continue;
                         }
@@ -504,29 +494,28 @@ impl Sniffer {
                     }
 
                     for op in &ops {
-                        // Rastreio de mapa: loga TODA ocorrência dos opcodes de zona
+                        // Zone tracking: log ALL occurrences of zone opcodes
                         // (41=ChangeCluster resp, 17=JoinCluster, 294=ChangeCluster req)
-                        // pra ver o que dispara em CADA troca de mapa.
+                        // to see what fires on EACH map change.
                         if matches!(op.albion_code, 41 | 17 | 294) {
                             self.debug_log("info", &format!(
                                 "ZONE op={} type={} :: {}", op.albion_code, op.message_type, dump_params(op)
                             )).await;
                         }
 
-                        // Descoberta de protocolo: loga 1x cada albion_code visto com seus
-                        // params. Os opcodes 2/41 podem estar errados nesta versão do jogo —
-                        // isto revela qual opcode carrega nome/mapa/guild de verdade, e também
-                        // qualquer opcode de self-loot que o extract_loot não cobre (só
-                        // OtherGrabbedLoot é parsado hoje).
+                        // Protocol discovery: log each new albion_code once with its
+                        // params. Opcodes 2/41 may be wrong in this game version —
+                        // this reveals which opcode carries name/map/guild, and also
+                        // any self-loot opcode that extract_loot doesn't cover.
                         if op.albion_code >= 0 && seen_codes.insert(op.albion_code) && seen_codes.len() <= 200 {
                             self.debug_log("info", &format!(
                                 "op code={} type={} :: {}", op.albion_code, op.message_type, dump_params(op)
                             )).await;
                         }
 
-                        // op 103 = info de guild/aliança do jogador local (param 15/16).
-                        // ponytail: inferido do stream — aparece 1x por sessão com valores
-                        // constantes (o guild/aliança do próprio jogador). Confirmar com o user.
+                        // op 103 = guild/alliance info for local player (param 15/16).
+                        // Inferred from the stream — appears 1x per session with
+                        // constant values (the player's own guild/alliance).
                         if op.albion_code == 103 {
                             let mut s = self.stats.lock().await;
                             if let Some(PhotonValue::String(g)) = op.parameters.get(&15) {
@@ -547,8 +536,8 @@ impl Sniffer {
                             }
                             if !state.guild_name.is_empty() { s.guild_name = state.guild_name.clone(); }
                             if !state.alliance_name.is_empty() { s.alliance_name = state.alliance_name.clone(); }
-                            // Registra o jogador local (id→nome) pro damage meter — ele
-                            // não vem nos eventos NewCharacter, só na resposta de Join.
+                            // Register the local player (id→name) for the damage meter —
+                            // they don't come in NewCharacter events, only in Join response.
                             if let (Some(id), false) = (state.local_object_id, state.player_name.is_empty()) {
                                 self.entities.lock().await.insert(id, state.player_name.clone());
                             }
@@ -557,10 +546,10 @@ impl Sniffer {
                                 s.last_map_name = crate::maps::resolve(&state.map_index);
                             }
                             if name_changed {
-                                self.debug_log("info", &format!("Personagem detectado: {}", s.player_name)).await;
+                                self.debug_log("info", &format!("Character detected: {}", s.player_name)).await;
                             }
                             if map_changed {
-                                self.debug_log("info", &format!("Mudança de mapa: {} ({})", s.last_map_name, s.last_map)).await;
+                                self.debug_log("info", &format!("Map change: {} ({})", s.last_map_name, s.last_map)).await;
                             }
                         }
 
@@ -572,22 +561,20 @@ impl Sniffer {
                         }
 
                         if self.capture_loot.load(Ordering::Relaxed) {
-                            // Dump de diagnóstico de loot — os 20 primeiros
-                            // eventos com ESTRUTURA *quase* loot-like: ao menos
-                            // 2 strings (@1, @2) e 1 int (@4 ou @5), mesmo que
-                            // `extract_loot` os aceite OU descarte. Pega também
-                            // self-loot se vier com params em ordem diferente.
-                            //
-                            // Mesma motivação do [CALIB] do damage meter: sem
-                            // evidência real do pacote, qualquer fix é chute.
+                            // Loot diagnostic dump: first 20 events with loot-like
+                            // structure (2 strings + 1 int), even if extract_loot
+                            // accepts or rejects them. Also catches self-loot if it
+                            // arrives with different param ordering.
+                            // Same motivation as the [CALIB] dump for the damage meter:
+                            // without real packet evidence, any fix is a guess.
                             let l_from = op.parameters.get(&1).and_then(|v| v.as_string()).unwrap_or("").to_string();
                             let l_by = op.parameters.get(&2).and_then(|v| v.as_string()).unwrap_or("").to_string();
                             let i4 = op.parameters.get(&4).and_then(|v| v.as_i64()).is_some();
                             let i5 = op.parameters.get(&5).and_then(|v| v.as_i64()).is_some();
-                            // GVG_SEASON_xx crest events (op 388: SCHEMA_xx/GUILDSYMBOL_xx)
-                            // têm a MESMA estrutura (2 strings + int) e disparam
-                            // dezenas de vezes por minuto — sem excluir, eles sozinhos
-                            // enchem o teto de 20 antes de qualquer loot real aparecer.
+                            // GVG_SEASON_xx crest events (op 388) have the same
+                            // structure (2 strings + int) and fire dozens of times
+                            // per minute — without excluding them they alone fill the
+                            // 20-event cap before any real loot appears.
                             let is_gvg_noise = l_from.starts_with("SCHEMA_") || l_by.starts_with("GUILDSYMBOL_");
                             let looks_like_loot = op.message_type == 4 && !l_from.is_empty() && !l_by.is_empty()
                                 && (i4 || i5) && !is_gvg_noise;
@@ -604,14 +591,13 @@ impl Sniffer {
                             if let Some(loot) = extract_loot(op) {
                                 self.push_loot(loot).await;
                             }
-                            // Self-loot: `extract_loot`/OtherGrabbedLoot só cobre loot
-                            // ALHEIO — o servidor não ecoa o broadcast de volta pra
-                            // quem lootou. Confirmado contra o ao-loot-logger
-                            // (madvac/ao-loot-logger): a única forma de detectar o
-                            // PRÓPRIO loot é acompanhar o request que o cliente manda
-                            // ao mover o item do loot bag pra mochila, cruzado com o
-                            // conteúdo daquele loot bag (visto em eventos anteriores).
-                            // Ver doc grande em extract_new_loot_owner (photon_parser.rs).
+                            // Self-loot: extract_loot/OtherGrabbedLoot only covers OTHER
+                            // players' loot — the server doesn't echo the broadcast back
+                            // to the looter. Confirmed against ao-loot-logger: the only way
+                            // to detect your OWN loot is to track the client's inventory
+                            // move request, cross-referenced with the loot bag contents
+                            // (seen in prior events). See extract_new_loot_owner docs in
+                            // photon_parser.rs.
                             if let Some((id, owner)) = extract_new_loot_owner(op) {
                                 loot_container_owner.insert(id, owner);
                             }
@@ -647,18 +633,15 @@ impl Sniffer {
                             }
                         }
 
-                        // Damage meter: registro id→nome + acúmulo de dano/cura.
-                        // Registro de entidades roda sempre (barato, e o meter
-                        // precisa dos nomes vistos ANTES de ligar o toggle).
+                        // Damage meter: id→name registration + damage/heal accumulation.
+                        // Entity registration always runs (cheap, and the meter needs
+                        // names seen BEFORE the toggle is turned on).
                         if let Some((id, name)) = extract_new_character(op) {
-                            // Dump dos 3 primeiros NewCharacter com TODOS os
-                            // params e o CONTEÚDO dos arrays.
-                            //
-                            // Hoje só lemos id (0) e nome (1). O equipamento do
-                            // jogador vem neste mesmo evento — é o que falta pra
-                            // mostrar o render da arma com tier/encantamento no
-                            // ranking. Procuramos um array de inteiros que
-                            // pareça índices de item (os mesmos do lootlog).
+                            // Dump first 3 NewCharacter with ALL params and
+                            // array contents. Currently only id (0) and name (1)
+                            // are read. Equipment comes in this same event —
+                            // that's what's needed for weapon tier/enchant render
+                            // in the ranking.
                             if logged_char < 3 {
                                 logged_char += 1;
                                 let mut ps: Vec<(u8, String)> = op.parameters
@@ -675,15 +658,10 @@ impl Sniffer {
                         }
                         if self.capture_damage.load(Ordering::Relaxed) {
                             if let Some(h) = extract_health(op) {
-                                // Dump de calibração: os primeiros eventos de
-                                // dano com TODOS os params e seus valores.
-                                //
-                                // Antes logava só as CHAVES, uma vez — o que
-                                // não ajuda quando a suspeita é justamente que
-                                // o param do feitiço mudou de lugar no patch.
-                                // Com os valores dá pra ver qual param varia
-                                // por skill e em que faixa, e comparar com o
-                                // que a tabela diz.
+                                // Calibration dump: first damage events with ALL
+                                // params and their values. Previously only logged
+                                // keys, once — unhelpful when the suspicion is that
+                                // the spell param moved in a patch.
                                 if h.change < 0.0 && logged_health < 15 {
                                     logged_health += 1;
                                     let mut ps: Vec<(u8, String)> = op.parameters
@@ -700,28 +678,25 @@ impl Sniffer {
                                         logged_health, who, -h.change, h.spell_id, params
                                     )).await;
                                 }
-                                // Só dano (change < 0). Cura é descartada de
-                                // propósito — o painel é de dano, só.
+                                // Only damage (change < 0). Healing is discarded on
+                                // purpose — this is the damage panel.
                                 //
-                                // spell 0 fica de fora: é o dano sem feitiço
-                                // atribuído (o que aparece quando alguém dá
-                                // /die), não dano causado por ninguém. Ficava
-                                // creditado ao índice 0 da tabela e aparecia
-                                // como "Trudge". Descartado no ACÚMULO, não só
-                                // na exibição — se entrasse no total, a % das
-                                // outras skills sairia errada.
+                                // spell 0 is excluded: unattributed damage (what shows
+                                // when someone /die's). It was credited to index 0 of the
+                                // table and appeared as "Trudge". Discarded in
+                                // ACCUMULATION, not just display — if it entered the
+                                // total, other skills' percentages would be wrong.
                                 if h.change < 0.0 && h.spell_id != 0 {
                                     let now = std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .map(|d| d.as_secs())
                                         .unwrap_or(0);
-                                    // Alvo conhecido em `entities` = jogador.
-                                    // É o mesmo critério que o meter já usa
-                                    // pra decidir quais LINHAS são jogador
-                                    // (NewCharacter só vem de player); mob não
-                                    // entra no mapa e por isso não conta aqui.
-                                    // Guard solto antes de travar `damage` —
-                                    // mesma ordem do get_damage_meter.
+                                    // Target known in `entities` = player.
+                                    // Same criterion the meter uses to decide which
+                                    // ROWS are players (NewCharacter only comes from
+                                    // players); mobs don't enter the map.
+                                    // Lock `damage_vs_players` after releasing
+                                    // `damage` — same order as get_damage_meter.
                                     let target_is_player =
                                         self.entities.lock().await.contains_key(&h.target_id);
                                     let mut dmg = self.damage.lock().await;
@@ -737,8 +712,8 @@ impl Sniffer {
                             }
                         }
 
-                        // Mercado: respostas do marketplace enquanto o jogador navega.
-                        // Alimenta o NOSSO banco (por cidade) e devolve ao AODP (verbatim).
+                        // Market: marketplace responses while the player browses.
+                        // Feeds OUR database (by city) and forwards to AODP (verbatim).
                         if self.capture_prices.load(Ordering::Relaxed) || self.feed_aodp.load(Ordering::Relaxed) {
                             let cap = extract_market(op);
                             if !cap.raw_orders.is_empty() {
@@ -750,15 +725,15 @@ impl Sniffer {
                                     (city, s.last_map.clone(), s.last_map_name.clone())
                                 };
 
-                                // Nosso banco: só em cidade de market conhecida.
+                                // Our database: only in known market cities.
                                 if self.capture_prices.load(Ordering::Relaxed) {
                                     if let Some(city) = &city {
                                         let ts = crate::photon_parser::now_iso_utc();
                                         let mut buf = self.prices.lock().await;
                                         for o in &cap.offers {
-                                            // Converte UniqueName (ItemTypeId do jogo)
-                                            // → game_name (nome em inglês do jogo) que é
-                                            // o ID canônico do nosso banco de preços.
+                                            // Convert UniqueName (game's ItemTypeId)
+                                            // → game_name (English in-game name), which is
+                                            // the canonical ID in our price database.
                                             let game_name = crate::to_game_name(&o.item_id).await;
                                             buf.push(serde_json::json!({
                                                 "item_id": game_name,
@@ -773,15 +748,15 @@ impl Sniffer {
                                     }
                                 }
 
-                                // AODP: encaminha as ordens cruas. LocationId numérico
-                                // (o cluster atual) preenchido quando a ordem não traz —
-                                // exatamente como o client oficial faz.
+                                // AODP: forward raw orders. Numeric LocationId (current
+                                // cluster) filled when the order doesn't have one — same
+                                // as the official client does.
                                 if self.feed_aodp.load(Ordering::Relaxed) {
                                     let server = self.aodp_server.lock().await.clone();
                                     let numeric_loc = raw_map.trim_start_matches('0');
-                                    // Aceita clusters numéricos (cidades reais,
-                                    // Rests) E BLACKBANK-* (Smuggler's Den) — o
-                                    // AODP client oficial aceita ambos.
+                                    // Accept numeric clusters (real cities, Rests)
+                                    // AND BLACKBANK-* (Smuggler's Den) — the
+                                    // official AODP client accepts both.
                                     let is_valid_loc = !numeric_loc.is_empty() && (
                                         numeric_loc.chars().all(|c| c.is_ascii_digit()) ||
                                         numeric_loc.starts_with("BLACKBANK-")
@@ -806,12 +781,12 @@ impl Sniffer {
                                                 topic: "marketorders.ingest".into(),
                                                 natsmsg,
                                             });
-                                            // Cap: no máximo 50 lotes pendentes.
+                                            // Cap: max 50 pending batches.
                                             let len = buf.len();
                                             if len > 50 { buf.drain(..len - 50); }
                                         } else {
                                             self.debug_log("warn", &format!(
-                                                "AODP: local inválido ({}), pulando envio", map_name
+                                                "AODP: invalid location ({}), skipping send", map_name
                                             )).await;
                                         }
                                     }
@@ -819,15 +794,15 @@ impl Sniffer {
                             }
                         }
 
-                        // Market history: gráfico agregado do próprio jogo. O
-                        // request traz item/qualidade/escala; a response traz os
-                        // buckets — correlacionados pelo message-id. Guardado no
-                        // NOSSO banco (independência do AODP).
+                        // Market history: aggregate chart from the game itself.
+                        // Request carries item/quality/scale; response carries buckets —
+                        // correlated by message-id. Stored in OUR database
+                        // (independent of AODP).
                         if self.capture_prices.load(Ordering::Relaxed) {
                             if let Some((mid, info)) = extract_history_request(op) {
                                 let mut pend = self.history_pending.lock().await;
                                 pend.insert(mid, info);
-                                // Cap: descarta requests órfãos antigos (response nunca veio).
+                                // Cap: discard old orphan requests (response never came).
                                 if pend.len() > 256 {
                                     let drop: Vec<u64> = pend.keys().take(pend.len() - 256).copied().collect();
                                     for k in drop { pend.remove(&k); }
@@ -840,8 +815,8 @@ impl Sniffer {
                                         let s = self.stats.lock().await;
                                         s.last_map.trim_start_matches('0').to_string()
                                     };
-                                    // Região do servidor do Albion (detectada pelo IP dos
-                                    // pacotes) — mercados são separados por servidor.
+                                    // Albion server region (detected from packet IPs) —
+                                    // markets are separated by server.
                                     let region = self.aodp_server.lock().await
                                         .as_ref().map(|s| s.region()).unwrap_or("west");
                                     let mut buf = self.market_history.lock().await;
@@ -863,8 +838,8 @@ impl Sniffer {
                             }
                         }
 
-                        // Gold: preço do mercado de ouro (global, sem localização).
-                        // Só precisa da região do servidor — encaminha ao AODP.
+                        // Gold: gold market price (global, no location).
+                        // Only needs the server region — forwards to AODP.
                         if self.feed_aodp.load(Ordering::Relaxed) {
                             if let Some(g) = extract_gold(op) {
                                 if let Some(server) = self.aodp_server.lock().await.clone() {
@@ -886,19 +861,19 @@ impl Sniffer {
                         }
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => { /* sem pacotes — continua o loop */ }
+                Err(mpsc::RecvTimeoutError::Timeout) => { /* no packets — continue loop */ }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.debug_log("err", "Todas as interfaces de captura fecharam. Reinicie o companion.").await;
+                    self.debug_log("err", "All capture interfaces closed. Restart the companion.").await;
                     let mut s = self.stats.lock().await;
                     s.running = false;
                     break;
                 }
             }
 
-            // Heartbeat diagnóstico: a cada 10s mostra se pacotes/parse estão fluindo.
-            // pkts>0 & ops=0 → parser quebrado; pkts=0 → captura não vê o Albion.
-            // Só pro arquivo de diagnóstico — não aparece no terminal da UI
-            // (polui a tela do usuário sem informar nada acionável).
+            // Diagnostic heartbeat: every 10s shows if packets/parse are flowing.
+            // pkts>0 & ops=0 → parser broken; pkts=0 → capture not seeing Albion.
+            // File only — not shown in the UI terminal (would pollute without
+            // actionable info).
             if last_heartbeat.elapsed().as_secs() >= 10 {
                 last_heartbeat = Instant::now();
                 let s = self.stats.lock().await;
@@ -909,30 +884,27 @@ impl Sniffer {
                 )).await;
             }
 
-            // Detecção offline: 5s sem pacotes.
+            // Offline detection: 5s without packets.
             if was_online && last_packet_time.elapsed().as_secs() >= 5 {
                 was_online = false;
                 let mut s = self.stats.lock().await;
                 s.online = false;
-                self.debug_log("warn", "Sem pacotes do Albion há 5s — jogo fechado ou VPN mudou rota?").await;
+                self.debug_log("warn", "No Albion packets for 5s — game closed or VPN changed route?").await;
             }
 
-            // Re-varredura de interfaces: pega adaptador que subiu DEPOIS do
-            // boot (WiFi ainda associando, VPN ligada mais tarde) — sem isso,
-            // uma interface virtual que abriu primeiro (Hyper-V, Docker,
-            // VirtualBox) travava o sniffer nela pra sempre, mesmo com a placa
-            // de rede real disponível alguns segundos depois.
+            // Re-scan interfaces: picks up adapters that came up AFTER boot
+            // (WiFi still associating, VPN enabled later). Without this, a
+            // virtual interface that opened first (Hyper-V, Docker, VirtualBox)
+            // would trap the sniffer on it forever, even when the real NIC is
+            // available seconds later.
             //
-            // Cadência ADAPTATIVA: 30s enquanto ONLINE (só vigia o raro
-            // adaptador novo), mas 5s enquanto OFFLINE. Ficar offline no meio
-            // da sessão quase sempre é MUDANÇA DE ROTA — o usuário ligou uma
-            // VPN (Cloudflare WARP, etc.) e o tráfego do Albion migrou pra uma
-            // interface WinTun nova que ainda não estamos ouvindo. Rescan
-            // rápido reengancha assim que esse adaptador ganha IPv4, em vez de
-            // deixar o companion cego por até 30s (o WinTun às vezes demora
-            // alguns segundos pra receber o IP, então UM rescan não basta —
-            // tem que insistir). Offline = jogo fechado ou idle, então varrer
-            // mais é de graça (ver doutrina de custo no CLAUDE.md).
+            // Adaptive cadence: 30s while ONLINE (only watching for rare new
+            // adapters), but 5s while OFFLINE. Going offline mid-session is
+            // almost always a ROUTE CHANGE — the user enabled a VPN (Cloudflare
+            // WARP, etc.) and Albion traffic migrated to a new WinTun interface
+            // we're not yet listening on. Fast rescan rehooks as soon as that
+            // adapter gets IPv4. Offline = game closed or idle, so scanning
+            // more is free.
             let rescan_secs = if was_online { 30 } else { 5 };
             if last_iface_scan.elapsed().as_secs() >= rescan_secs {
                 last_iface_scan = Instant::now();
@@ -954,7 +926,7 @@ impl Sniffer {
         };
         self.stats.lock().await.loot_count = len as u64;
         if let Some(e) = save_error {
-            self.debug_log("err", &format!("Falha ao persistir loot da sessão: {e}")).await;
+            self.debug_log("err", &format!("Failed to persist session loot: {e}")).await;
         }
     }
 
@@ -962,9 +934,9 @@ impl Sniffer {
         self.debug_log_inner(level, msg, true).await;
     }
 
-    /// Só pro arquivo de diagnóstico — não aparece no terminal da UI. Pra
-    /// heartbeats periódicos (stats: raw=… pkts=…) que poluem a tela do
-    /// usuário mas ainda valem pra debug em disco.
+    /// File only — not shown in the UI terminal. For periodic heartbeats
+    /// (stats: raw=… pkts=…) that pollute the screen but are still useful
+    /// for on-disk debugging.
     async fn debug_log_file(&self, level: &str, msg: &str) {
         self.debug_log_inner(level, msg, false).await;
     }
@@ -993,9 +965,9 @@ impl Sniffer {
     }
 }
 
-/// Caminho do arquivo de log de diagnóstico.
-/// Valor de parâmetro Photon em uma linha, pro dump de calibração.
-/// Coleção sai só com o tamanho: o que interessa aqui são os escalares.
+/// Diagnostic log file path.
+/// Photon parameter value for calibration dumps.
+/// Collections only show their size; scalars are what matter here.
 fn brief(v: &PhotonValue) -> String {
     match v {
         PhotonValue::Bool(b) => b.to_string(),
@@ -1013,10 +985,9 @@ fn brief(v: &PhotonValue) -> String {
     }
 }
 
-/// Como `brief`, mas ABRE os arrays (até 16 itens).
-///
-/// O equipamento vem como array de índices de item, e `arr[13]` não diz nada —
-/// os números é que revelam quais são as peças.
+/// Like `brief`, but EXPANDS arrays (up to 16 items).
+/// Equipment comes as an item-index array — `arr[13]` says nothing, the
+/// numbers reveal which pieces they are.
 fn deep(v: &PhotonValue) -> String {
     match v {
         PhotonValue::Array(a) => {
@@ -1032,19 +1003,19 @@ fn debug_log_path() -> Option<std::path::PathBuf> {
     dirs::document_dir().map(|d| d.join("ziggs-companion").join("companion-debug.log"))
 }
 
-/// Abre uma capture numa device específica com filtro BPF das 3 portas do Albion.
+/// Opens a capture on a specific device with BPF filter for Albion's 3 ports.
 fn open_device_capture(dev: &pcap::Device) -> Result<pcap::Capture<pcap::Active>, String> {
     let builder = pcap::Capture::from_device(dev.clone())
         .map_err(|e| format!("from_device: {}", e))?;
     let builder = builder.promisc(true).immediate_mode(true).timeout(500);
     let mut opened = builder.open()
-        .map_err(|e| format!("open: {}. Precisa admin/Npcap?", e))?;
+        .map_err(|e| format!("open: {}. Needs admin/Npcap?", e))?;
     opened.filter("udp and (port 5056 or port 5055 or port 4535)", true)
         .map_err(|e| format!("BPF filter: {}", e))?;
     Ok(opened)
 }
 
-/// Repr compacto dos params de uma operação (idx=valor) — pra calibrar índices.
+/// Compact repr of an operation's params (idx=value) — for calibrating indices.
 fn dump_params(op: &crate::photon_parser::ParsedOperation) -> String {
     use crate::photon_parser::PhotonValue;
     let mut keys: Vec<u8> = op.parameters.keys().copied().collect();
@@ -1068,27 +1039,28 @@ fn dump_params(op: &crate::photon_parser::ParsedOperation) -> String {
     }).collect::<Vec<_>>().join(" ")
 }
 
-/// Tamanho do header de camada 2 a partir do datalink da interface.
-/// Ethernet=14; NULL (BSD loopback / algumas VPN)=4; resto (RAW/IP puro)=0.
+/// L2 header size from the interface's datalink type.
+/// Ethernet=14; NULL (BSD loopback / some VPN)=4; rest (raw IP)=0.
 fn l2_len_for(dl: pcap::Linktype) -> usize {
     match dl.0 {
         1 => 14, // DLT_EN10MB
         0 => 4,  // DLT_NULL
-        _ => 0,  // DLT_RAW e afins: pacote IP puro (VPN/ExitLag/TUN)
+        _ => 0,  // DLT_RAW and similar: raw IP packet (VPN/ExitLag/TUN)
     }
 }
 
-/// Offset do payload Photon dentro do frame capturado.
-/// Tenta o L2 sugerido pelo datalink, depois cai pra 0/14/4 e valida a estrutura
-/// IPv4+UDP — assim funciona em ethernet, IP-puro (VPN) e loopback sem hardcodar.
+/// Photon payload offset within the captured frame.
+/// Tries the L2 suggested by the datalink, then falls back to 0/14/4 and
+/// validates the IPv4+UDP structure — works on ethernet, raw IP (VPN) and
+/// loopback without hardcoding.
 fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
     for &l2 in &[l2_hint, 0, 14, 4] {
-        if data.len() < l2 + 28 { continue; } // 20 IP mín + 8 UDP
+        if data.len() < l2 + 28 { continue; } // 20 min IP + 8 UDP
         let vihl = data[l2];
-        if vihl >> 4 != 4 { continue; }        // só IPv4 (Albion é IPv4)
+        if vihl >> 4 != 4 { continue; }        // IPv4 only (Albion is IPv4)
         let ihl = (vihl & 0x0F) as usize * 4;
         if ihl < 20 { continue; }
-        // Confirma protocolo UDP (byte 9 do header IPv4 = 17).
+        // Confirm UDP protocol (byte 9 of IPv4 header = 17).
         if data[l2 + 9] != 17 { continue; }
         let off = l2 + ihl + 8;
         if data.len() >= off { return Some(off); }
@@ -1096,8 +1068,8 @@ fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
     None
 }
 
-/// Infere a região AODP a partir dos IPs (origem/destino) do header IPv4.
-/// Src IP (bytes 12-15) e dst IP (16-19) — um deles é o servidor do Albion.
+/// Infers the AODP region from the IPs (src/dst) in the IPv4 header.
+/// Src IP (bytes 12-15) and dst IP (16-19) — one of them is the Albion server.
 fn albion_server_from_frame(data: &[u8], l2_hint: usize) -> Option<AodpServer> {
     for &l2 in &[l2_hint, 0, 14, 4] {
         if data.len() < l2 + 20 { continue; }
@@ -1109,27 +1081,22 @@ fn albion_server_from_frame(data: &[u8], l2_hint: usize) -> Option<AodpServer> {
         if let Some(s) = aodp::server_for_ip(src).or_else(|| aodp::server_for_ip(dst)) {
             return Some(s);
         }
-        return None; // IP header válido mas nenhum lado é servidor Albion conhecido
+        return None; // Valid IP header but neither side is a known Albion server
     }
     None
 }
 
 // ── Npcap DLL path fix ─────────────────────────────────────────────────────
-// Npcap moderno (sem "WinPcap API-compatible Mode") instala wpcap.dll/Packet.dll
-// em C:\Windows\System32\Npcap\ e depende do PATH do processo pra achar. O crate
-// `pcap` chama LoadLibrary("wpcap.dll") — se o PATH não inclui o subdir, falha
-// com "wpcap.dll not found" mesmo o Npcap estando instalado. Isto roda UMA vez
-// no startup: lê o InstallDir do registry, adiciona ao PATH do processo e chama
-// SetDllDirectoryW pro mesmo dir. Se o Npcap NÃO está instalado de jeito nenhum,
-// não faz nada aqui — instalação é MANUAL de propósito (ver nota grande no
-// CLAUDE.md sobre Npcap): o instalador free ABORTA com `/S` ("silent
-// installation is only supported in Npcap OEM"), e essa função já rodou
-// tentando isso síncrono no thread principal, ANTES da janela abrir — quando
-// o installer travava esperando o usuário clicar um dialog que não tinha
-// janela nenhuma atrás pra explicar o quê, o app parecia simplesmente
-// travado no boot pra quem não tinha Npcap ainda (todo usuário novo). O
-// sniffer detecta a ausência sozinho (`Device::list` falha) e o banner
-// `.ck-npcap` na UI manda pro download manual. No-op em não-Windows.
+// Modern Npcap (without "WinPcap API-compatible Mode") installs wpcap.dll
+// and Packet.dll in C:\Windows\System32\Npcap\ and relies on the process
+// PATH to find them. The `pcap` crate calls LoadLibrary("wpcap.dll") — if
+// PATH doesn't include the subdir, it fails with "wpcap.dll not found" even
+// though Npcap is installed. This runs ONCE at startup: reads InstallDir
+// from the registry, adds it to the process PATH, and calls
+// SetDllDirectoryW for the same dir. If Npcap isn't installed at all, this
+// is a no-op — installation is MANUAL on purpose (the free installer aborts
+// `/S`). The sniffer detects absence on its own (Device::list fails) and the
+// UI banner directs the user to manual download. No-op on non-Windows.
 #[cfg(target_os = "windows")]
 pub fn ensure_npcap_dll_path() {
     use std::os::windows::ffi::OsStrExt;
@@ -1138,8 +1105,8 @@ pub fn ensure_npcap_dll_path() {
         RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ,
     };
 
-    // Npcap grava InstallDir + Version em HKLM\SOFTWARE\WOW6432Node\Npcap
-    // (64-bit) ou HKLM\SOFTWARE\Npcap (32-bit). Tentamos os dois.
+    // Npcap stores InstallDir + Version in HKLM\SOFTWARE\WOW6432Node\Npcap
+    // (64-bit) or HKLM\SOFTWARE\Npcap (32-bit). Try both.
     let mut dir: Option<std::path::PathBuf> = None;
     let mut version: Option<String> = None;
     for subkey in ["SOFTWARE\\WOW6432Node\\Npcap", "SOFTWARE\\Npcap"] {
@@ -1158,7 +1125,7 @@ pub fn ensure_npcap_dll_path() {
             let s = String::from_utf16_lossy(&buf[..nul]);
             if !s.is_empty() { dir = Some(std::path::PathBuf::from(s)); }
         }
-        // Version (opcional — só informativo por enquanto)
+        // Version (optional — informational only for now)
         let mut len = 64u32;
         let mut buf = vec![0u16; (len as usize / 2) + 1];
         let valname: Vec<u16> = "Version\0".encode_utf16().collect();
@@ -1171,21 +1138,21 @@ pub fn ensure_npcap_dll_path() {
         unsafe { RegCloseKey(hkey); }
         if dir.is_some() { break; }
     }
-    let _ = version; // reservado pra futuro (alertar versão antiga, etc.)
+    let _ = version; // reserved for future use (alert on old version, etc.)
 
-    // Sem Npcap de jeito nenhum: nada a fazer aqui, o sniffer vai reportar o
-    // erro e a UI mostra o banner de download manual (ver comentário acima).
+    // No Npcap at all: nothing to do here, the sniffer will report the
+    // error and the UI shows the download banner (see comment above).
     let dir = match dir {
         Some(d) => d,
         None => return,
     };
-    // Já em System32? LoadLibrary acha sozinho, no-op.
+    // Already in System32? LoadLibrary finds it on its own, no-op.
     let sys32 = std::env::var_os("SystemRoot")
         .map(|r| std::path::PathBuf::from(r).join("System32"))
         .unwrap_or_default();
     if dir == sys32 { return; }
 
-    // Adiciona ao PATH do processo (vale pra LoadLibrary search order).
+    // Add to process PATH (affects LoadLibrary search order).
     if let Some(cur) = std::env::var_os("PATH") {
         let mut parts: Vec<std::path::PathBuf> = std::env::split_paths(&cur).collect();
         if !parts.contains(&dir) {
@@ -1195,8 +1162,9 @@ pub fn ensure_npcap_dll_path() {
             }
         }
     }
-    // SetDllDirectoryW: adicional ao PATH pro loader achar wpcap.dll mesmo
-    // sem estar no PATH do sistema. Inofensivo se já está em System32.
+    // SetDllDirectoryW: supplemental to PATH for the loader to find
+    // wpcap.dll even without being in the system PATH. Harmless if already
+    // in System32.
     let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
     unsafe { SetDllDirectoryW(wide.as_ptr()); }
 }
@@ -1204,10 +1172,10 @@ pub fn ensure_npcap_dll_path() {
 #[cfg(not(target_os = "windows"))]
 pub fn ensure_npcap_dll_path() {}
 
-/// Só checa se o Npcap está instalado (a chave do registry existe), sem
-/// mexer em PATH/SetDllDirectory — usado pra decidir se vale registrar
-/// autostart (ver `set_autostart` em lib.rs). Baixo custo: só abre e fecha
-/// a chave, não lê valores.
+/// Checks whether Npcap is installed (registry key exists), without
+/// modifying PATH/SetDllDirectory — used to decide whether to register
+/// autostart (see `set_autostart` in lib.rs). Low cost: only opens and
+/// closes the key, doesn't read values.
 #[cfg(target_os = "windows")]
 pub fn npcap_installed() -> bool {
     use windows_sys::Win32::System::Registry::{
@@ -1232,18 +1200,18 @@ mod tests {
     use super::photon_offset;
     use super::{is_duplicate_loot, LootEvent, LOOT_DEDUP_LOOKBACK};
 
-    // UDP/IPv4 mínimo: [ip header 20][udp 8][payload]. version=4, ihl=5, proto=17.
+    // Minimum UDP/IPv4: [ip header 20][udp 8][payload]. version=4, ihl=5, proto=17.
     fn ipv4_udp(payload: &[u8]) -> Vec<u8> {
         let mut p = vec![0u8; 28];
         p[0] = 0x45;   // version 4, IHL 5
-        p[9] = 17;     // protocolo UDP
+        p[9] = 17;     // protocol UDP
         p.extend_from_slice(payload);
         p
     }
 
     #[test]
     fn ethernet_offset() {
-        // 14 bytes de ethernet na frente
+        // 14 bytes ethernet header
         let mut frame = vec![0u8; 14];
         frame.extend_from_slice(&ipv4_udp(b"PHOTON"));
         assert_eq!(photon_offset(&frame, 14), Some(14 + 28));
@@ -1252,7 +1220,7 @@ mod tests {
 
     #[test]
     fn raw_ip_offset_vpn() {
-        // Sem ethernet (VPN/ExitLag). Hint errado (14) mas o fallback acha em 0.
+        // No ethernet (VPN/ExitLag). Wrong hint (14) but fallback finds at 0.
         let frame = ipv4_udp(b"PHOTON");
         assert_eq!(photon_offset(&frame, 14), Some(28));
         assert_eq!(&frame[28..], b"PHOTON");
@@ -1260,7 +1228,7 @@ mod tests {
 
     #[test]
     fn ip_options_offset() {
-        // IHL=6 (24 bytes de header IP, com 4 de options)
+        // IHL=6 (24 bytes IP header, 4 bytes options)
         let mut p = vec![0u8; 32];
         p[0] = 0x46;   // version 4, IHL 6
         p[9] = 17;
@@ -1276,14 +1244,14 @@ mod tests {
         let mut recent = HashMap::new();
         let win = Duration::from_secs(2);
         let t0 = Instant::now();
-        // 1ª vez: não é dup.
+        // First time: not a dup.
         assert!(!packet_is_dup(&mut recent, 42, t0, win));
-        // Mesma hash logo depois (cópia de outra interface): É dup.
+        // Same hash shortly after (copy from another interface): is dup.
         assert!(packet_is_dup(&mut recent, 42, t0 + Duration::from_millis(5), win));
-        // Hash diferente (dois loots iguais vêm com sequence diferente): não é dup.
+        // Different hash (two identical loots come with different sequences): not dup.
         assert!(!packet_is_dup(&mut recent, 99, t0 + Duration::from_millis(6), win));
-        // Mesma hash fora da janela: não é cópia (pacote legítimo reusa hash só
-        // após reconexão/reset de sequence, muito depois) → não é dup.
+        // Same hash outside window: not a copy (legitimate packet reuses hash
+        // only after reconnect/sequence reset, much later) → not dup.
         assert!(!packet_is_dup(&mut recent, 42, t0 + Duration::from_secs(3), win));
     }
 
@@ -1298,23 +1266,23 @@ mod tests {
     #[test]
     fn loot_dedup_pega_evento_identico_vindo_de_2_interfaces() {
         let mut buf = vec![loot_ev("Zezinho", "Fulano", 2958, 3)];
-        // Mesma identidade (mesma cópia chegando pela outra interface) → dup.
+        // Same identity (same copy arriving from the other interface) → dup.
         assert!(is_duplicate_loot(&buf, &loot_ev("Zezinho", "Fulano", 2958, 3)));
         buf.push(loot_ev("Zezinho", "Fulano", 2958, 3));
 
-        // Item diferente do mesmo corpo, mesmo segundo → não é dup.
+        // Different item from same body, same second → not dup.
         assert!(!is_duplicate_loot(&buf, &loot_ev("Zezinho", "Fulano", 1001, 3)));
-        // Quantidade diferente → não é dup.
+        // Different quantity → not dup.
         assert!(!is_duplicate_loot(&buf, &loot_ev("Zezinho", "Fulano", 2958, 5)));
-        // Looter diferente → não é dup.
+        // Different looter → not dup.
         assert!(!is_duplicate_loot(&buf, &loot_ev("Outro", "Fulano", 2958, 3)));
     }
 
     #[test]
     fn loot_dedup_nao_enxerga_alem_do_lookback() {
-        // Evento fora da janela de lookback (mais de LOOT_DEDUP_LOOKBACK
-        // eventos distintos no meio) não é considerado dup — evita falso
-        // positivo quando o mesmo drop acontece de novo bem mais tarde.
+        // Event beyond the lookback window (more than LOOT_DEDUP_LOOKBACK
+        // distinct events in between) is not considered a dup — avoids false
+        // positive when the same drop happens again much later.
         let mut buf = vec![loot_ev("A", "B", 1, 1)];
         for i in 0..LOOT_DEDUP_LOOKBACK {
             buf.push(loot_ev("X", "Y", 100 + i as i32, 1));

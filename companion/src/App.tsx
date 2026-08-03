@@ -5,10 +5,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useT, useLang, LANG_LABELS, LANG_FULL, type Lang, type LangPref } from "./i18n";
 
-// Espelha o CompanionConfig do Rust (src-tauri/src/config.rs). Nome do
-// personagem, região e URL do backend não estão aqui: são detectados
-// automaticamente / hardcoded no binário. battles e prices são sempre ligados
-// (razão de ser do companion) — sem toggle.
+// Mirrors CompanionConfig from Rust. Character name, region, and backend URL
+// are not here — they are auto-detected/hardcoded in the binary. Battles and
+// prices are always on (core companion features) — no toggle.
 type CompanionConfig = {
   api_base_url: string;
   collect_damage_meter: boolean;
@@ -71,15 +70,13 @@ type SniffStats = {
   packets_parsed: number;
   operations_extracted: number;
   loot_count: number;
-  /// Somado na leitura pelo get_sniff_stats (Rust) — alimenta o badge vivo
-  /// da aba Damage sem precisar de um poll de get_damage_meter no App.
+  /// Aggregated by Rust get_sniff_stats. Feeds the Damage tab badge without
+  /// a separate get_damage_meter poll.
   damage_total: number;
-  /// Dano causado PELO PRÓPRIO jogador (player_name) — badge da aba Damage.
-  /// Somado na leitura no Rust (get_sniff_stats), igual ao damage_total.
+  /// Damage dealt by the current player. Aggregated by Rust, like damage_total.
   my_damage: number;
-  /// Estimativa ILUSTRATIVA do valor em prata dos loots da sessão. Calculada
-  /// por um worker de fundo no Rust (poll da rota /silver-estimate). Só
-  /// badge da aba Lootlog — não é load-bearing em payout/reconcile.
+  /// Illustrative silver estimate for the session's loot. Non-critical for
+  /// payouts/reconcile — used only for the Lootlog badge.
   loot_silver_total: number;
   last_map: string;
   last_map_name: string;
@@ -116,14 +113,9 @@ type SkillRow = {
   hits: number; total: number; avg: number; max_hit: number; pct: number;
 };
 
-/// Palavra de tier por idioma, índice = tier. O nome que vem do dump repete o
-/// tier por extenso ("Elder's Guardian Boots") e no terminal isso é ruído —
-/// o número já diz. EN põe na frente, PT/ES no fim.
-///
-/// Tabela na mão de propósito: dá pra DERIVAR do dump comparando os tiers de
-/// cada item, mas aí "Raw Beef" (cujo nome muda inteiro por tier, não só o
-/// adjetivo) virava "Raw". Vocabulário de tier do Albion não muda; nome de
-/// item novo muda toda semana.
+/// Tier adjective per language, indexed by tier. Albion item names include the
+/// tier word ("Elder's Guardian Boots"), which is redundant in the terminal.
+/// Hand-coded table: deriving it from the dump misses cases like "Raw Beef".
 const TIER_WORDS: Record<Lang, string[]> = {
   en: ["", "Beginner's", "Novice's", "Journeyman's", "Adept's", "Expert's", "Master's", "Grandmaster's", "Elder's"],
   pt: ["", "do Calouro", "do Novato", "do Iniciante", "do Adepto", "do Perito", "do Mestre", "do Grão-mestre", "do Ancião"],
@@ -131,12 +123,11 @@ const TIER_WORDS: Record<Lang, string[]> = {
 };
 
 
-// ── Brilho respirando (fase 2 do PLANO-DESIGN-COMPANION) ─────────────────────
-// Espelho do Panel.tsx do site: wrapper com gate de hover (fade 0.6s) + 2
-// radiais dourados respirando, um por canto, fase dessincronizada por delay
-// negativo aleatório. Delays em useState de propósito: os cards re-renderizam
-// a cada poll de 2s, e sortear no render faria a fase do brilho pular.
-const GLOW_PERIOD_S = 7; // igual à duração de dash-glow-breathe no CSS
+// ── Breathing glow ─────────────────────────────────────────────────────────────
+// Mirror of the site's Panel.tsx: hover gate (0.6s fade) + two golden radial
+// glows per corner, randomized negative animation-delay. Stored in useState so
+// re-renders every 2s poll don't reset the glow phase.
+const GLOW_PERIOD_S = 7; // matches dash-glow-breathe animation duration
 function CardGlow() {
   const [delays] = useState(() => [Math.random() * GLOW_PERIOD_S, Math.random() * GLOW_PERIOD_S]);
   return (
@@ -147,15 +138,9 @@ function CardGlow() {
   );
 }
 
-/// Poll periódico com limpeza — só tira a duplicação dos 3 efeitos iguais.
-///
-/// **Não** para quando a janela é minimizada, de propósito: o companion passa o
-/// jogo inteiro na bandeja e continua trabalhando. Quem decide se é hora de
-/// gastar máquina é a ZONA (ver `heavy_work_ok` no Rust), não o estado da
-/// janela — dois critérios de pausa só tornariam o comportamento imprevisível.
-///
-/// `fn` fica num ref pra sempre chamar a versão mais nova sem recriar o timer
-/// a cada render.
+/// Periodic poll with cleanup. Keeps running when minimized; the Rust
+/// `heavy_work_ok` (zone-based) decides when to work, not window state.
+/// `fn` is stored in a ref so the timer doesn't recreate on every render.
 function usePoll(fn: () => void | Promise<void>, ms: number, deps: unknown[] = []) {
   const latest = useRef(fn);
   latest.current = fn;
@@ -169,46 +154,36 @@ function usePoll(fn: () => void | Promise<void>, ms: number, deps: unknown[] = [
   }, [ms, ...deps]);
 }
 
-/// Nome do item no idioma da UI, sem a palavra de tier. O backend manda os três
-/// porque o idioma vive no localStorage do webview. O tier vai num span próprio.
-///
-/// Só a EXIBIÇÃO encurta — o CSV continua com o nome completo, que é o que o
-/// ao-loot-logger e o site esperam.
+/// Localized item name with the tier word stripped for UI display. Backend
+/// sends all three languages; webview language lives in localStorage. The CSV
+/// keeps the full original name.
 function itemName(r: LootRow, lang: Lang, tier?: number): string {
   const full = lang === "pt" ? r.item_name_pt : lang === "es" ? r.item_name_es : r.item_name;
   const word = tier != null ? TIER_WORDS[lang]?.[tier] : undefined;
   if (!word) return full;
   if (full.startsWith(word + " ")) return full.slice(word.length + 1);
   if (full.endsWith(" " + word)) return full.slice(0, -(word.length + 1));
-  return full;  // item sem adjetivo de tier (recurso, comida) fica inteiro
+  return full;  // resources/food items have no tier adjective
 }
 
-/// "T4_CAPEITEM_SMUGGLER@3" → `{ label: "4.3", ench: 3 }`.
-///
-/// Mesma notação que o site já usa nas peças de build ("8.4 Capuz do Asceta").
-/// O ".0" fica visível de propósito: no terminal as linhas empilham e largura
-/// constante é o que deixa a coluna legível.
+/// "T4_CAPEITEM_SMUGGLER@3" → `{ label: "4.3", tier: 4, ench: 3 }`.
+/// Matches the site's tier notation. Keeps ".0" visible for terminal alignment.
 function itemTierParts(itemId: string): { label: string; tier: number; ench: number } | null {
   const m = /^T(\d)_/.exec(itemId);
-  if (!m) return null;  // IDX_123 (item novo, fora do dump) e afins
+  if (!m) return null;  // IDX_123 for unknown items
   const tier = Number(m[1]);
   const ench = Number(/@(\d)$/.exec(itemId)?.[1] ?? 0);
   return { label: `${tier}.${ench}`, tier, ench };
 }
 
-/// "2026-07-18T23:07:11Z" → "23:07". A data não ajuda num log de sessão, e o
-/// segundo só polui. UTC, igual ao CSV — o horário tem que casar quando alguém
-/// cruza o terminal com o arquivo.
+/// ISO timestamp → "HH:MM". Session log doesn't need date or seconds. UTC,
+/// matches the CSV for cross-referencing.
 function shortTime(ts: string | null): string {
   return ts?.slice(11, 16) || "";
 }
 
-/// Item numa linha do terminal: `8.4 Guardian Boots`.
-///
-/// Duas dimensões, duas pistas visuais, porque as duas importam e competiriam
-/// se usassem o mesmo canal: a COR do texto é o tier, o SUBLINHADO é o
-/// encantamento. Item sem encantamento não ganha sublinhado — assim o .1+ pula
-/// aos olhos em vez de todo mundo ficar riscado.
+/// Render a loot row in the terminal: tier text color + enchant underline.
+/// Enchanted items stand out; unenchanted ones stay plain.
 function LootItem({ row, lang }: { row: LootRow; lang: Lang }) {
   const p = itemTierParts(row.item_id);
   const name = itemName(row, lang, p?.tier);
@@ -223,18 +198,16 @@ function LootItem({ row, lang }: { row: LootRow; lang: Lang }) {
   );
 }
 
-/// Nome do feitiço no idioma da UI. Metade do dump não tem tradução (são
-/// sub-feitiços internos tipo AIR_RAID_BOLTS_DAMAGE), então cai no inglês.
+/// Localized skill name. Many internal sub-spells have no translation, so
+/// they fall back to English.
 function skillName(sk: SkillRow, lang: Lang): string | null {
   if (lang === "pt") return sk.name_pt ?? sk.name;
   if (lang === "es") return sk.name_es ?? sk.name;
   return sk.name;
 }
 
-/// Ataque básico não tem arte própria no jogo, então reaproveitamos ícone de
-/// habilidade — um por tipo de ataque, pra dar pra distinguir de relance.
-/// Os ids vêm do dump; as URLs por nome localizado (`?locale=en`) devolvem
-/// exatamente as mesmas imagens, mas quebrariam se a Albion renomeasse.
+/// Auto-attack has no game art, so reuse skill icons by attack type.
+/// Use stable unique IDs, not localized names, in case the game renames skills.
 const AUTO_ATTACK_ICON = {
   melee: "PASSIVE_KNOCKBACKCHANCE",          // "Forceful Bolts"
   ranged: "SPEEDSHOT2",                      // "Speed Shot"
@@ -246,11 +219,8 @@ const MELEE_FAMS = new Set([
 ]);
 const RANGED_FAMS = new Set(["bow", "crossbow"]);
 
-/// Tipo de ataque básico a partir da família da arma. O resto das famílias é
-/// cajado (fogo/gelo/arcano/maldito/sagrado/natureza/shapeshifter), todas
-/// mágicas — inclusive o de shapeshifter, que ataca à distância na forma base.
-/// Família nova cai em "mágico" pelo fallback: se for corpo a corpo ou à
-/// distância física, acrescente no set certo.
+/// Auto-attack type from weapon family. Staff families are magical; add any
+/// new melee/ranged families to the corresponding set.
 function autoAttackKind(weapon: string | null): keyof typeof AUTO_ATTACK_ICON | null {
   if (!weapon) return null;
   if (MELEE_FAMS.has(weapon)) return "melee";
@@ -258,10 +228,8 @@ function autoAttackKind(weapon: string | null): keyof typeof AUTO_ATTACK_ICON | 
   return "magic";
 }
 
-/// Ícone do feitiço — servido pelo NOSSO backend, não pela CDN da Albion.
-/// `/render/spell/{id}` baixa da Albion na primeira vez, salva em disco e
-/// depois serve local: carrega mais rápido e para de martelar a CDN deles.
-/// Mesmo esquema que `/render/item/` já usa no site.
+/// Skill icon served through our backend proxy/cache. First fetch hits Albion
+/// CDN, then serves from disk. Same as `/render/item/` on the site.
 function SkillIcon({ uniqueName, apiBase, gray }: {
   uniqueName: string | null; apiBase: string; gray?: boolean;
 }) {
@@ -269,14 +237,12 @@ function SkillIcon({ uniqueName, apiBase, gray }: {
   return (
     <img
       className={`dmg-skill-icon${gray ? " gray" : ""}`}
-      // `v=2` fura o cache do webview: o render é servido com max-age de um
-      // ano + immutable, então quem já baixou a moldura branca antes da
-      // correção do proxy nunca mais pediria de novo. Bump se acontecer outra
-      // vez — é só um cache-buster, o backend ignora.
+      // v=2 busts the webview cache. The render response is served with a
+      // one-year max-age + immutable; bump this if a placeholder is ever cached.
       src={`${apiBase}/render/spell/${encodeURIComponent(uniqueName)}?v=2`}
       alt=""
       loading="lazy"
-      // Sem rede (ou feitiço sem arte) some em vez de deixar ícone quebrado.
+      // v=2 busts the webview cache. Hide broken/missing icons instead of showing a placeholder.
       onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
     />
   );
@@ -286,8 +252,7 @@ type DamageRow = {
   damage: number; dps: number; skills: SkillRow[]; timeline: number[];
 };
 
-/// Famílias de arma do Albion (`@shopsubcategory1` do dump). O rótulo é curto
-/// de propósito: fica antes do nome numa linha já apertada.
+/// Albion weapon family labels, kept short for the damage meter row.
 const WEAPON_LABELS: Record<Lang, Record<string, string>> = {
   en: {
     sword: "Sword", axe: "Axe", mace: "Mace", hammer: "Hammer", quarterstaff: "Staff",
@@ -317,32 +282,25 @@ export default function App() {
   const [sniffStats, setSniffStats] = useState<SniffStats | null>(null);
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus | null>(null);
   const [updateStatus, setUpdateStatus] = useState<"downloading" | "installed" | null>(null);
-  // ── Abas VIVAS (jul/2026, PLANO-ABAS-VIVAS.md): Rota/Túnel é o foco e a
-  // default; Damage e Lootlog completos têm abas próprias. Cada aba carrega
-  // seu número ao vivo MESMO SEM FOCO — por isso os dados dos badges vêm todos
-  // de estado do App() (tunnelStatus, sniffStats.damage_total/loot_count),
-  // nunca de componente de aba, que desmonta. Config continua modal no ⚙.
+  // Live tabs: Route/Tunnel is the default; Damage and Lootlog have their own
+  // tabs. Badges read App state because tab components unmount when not focused.
   const [gearOpen, setGearOpen] = useState(false);
-  // Detalhes das conexões locais analisadas pelo failover do túnel.
+  // Local connection details from tunnel failover.
   const [routesOpen, setRoutesOpen] = useState(false);
   const [tab, setTab] = useState<"route" | "damage" | "loot">("route");
   const [pending, setPending] = useState(0);
-  // Filtros do Damage Meter vivem AQUI, não dentro de DamageTab: a aba
-  // desmonta ao perder o foco (mesmo motivo dos badges acima), e um botão
-  // "ligado" que volta desligado ao trocar de aba e voltar é exatamente esse
-  // bug — useState local nunca sobrevive ao unmount.
+  // Damage Meter filters live in App state, not DamageTab, so they survive
+  // tab switching.
   const [dmgPartyOnly, setDmgPartyOnly] = useState(false);
   const [dmgVsPlayers, setDmgVsPlayers] = useState(false);
-  // Tutorial do Npcap: reaparece a cada sessão enquanto o Npcap seguir
-  // ausente (não é "só na primeira vez de verdade" — é "toda vez que o app
-  // abre e ainda falta o Npcap"), mas só uma vez por sessão depois de
-  // dispensado. O banner compacto na sidebar continua como lembrete.
+  // Npcap tutorial shown every session while Npcap is missing. Dismissing it
+  // only hides the modal; the sidebar banner remains.
   const [npcapTutorialDismissed, setNpcapTutorialDismissed] = useState(false);
-  // Histórico do gráfico túnel×direto — vive AQUI (não no TunnelHero) pra
-  // sobreviver à troca de aba. 120 amostras × 5s = 10 min.
+  // Tunnel vs direct latency history lives in App, not TunnelHero, to survive
+  // tab switching. 120 samples × 5s = 10 min.
   const [hist, setHist] = useState<{ d: number | null; tn: number | null }[]>([]);
-  // Relógio de sessão (tick de 1s) + taxa de pacotes derivada do delta entre
-  // polls — o Rust não expõe taxa, só o acumulado.
+  // Session clock (1s tick) + packet rate derived from poll deltas. Rust only
+  // exposes accumulated counts, not rate.
   const sessionStart = useRef(Date.now());
   const lastHeaderClick = useRef(0);
   const [nowTs, setNowTs] = useState(Date.now());
@@ -373,8 +331,8 @@ export default function App() {
     await refreshConfig();
   };
 
-  // Poll: sniffer stats + tunnel status. Scanner/stats de coleta não são
-  // exibidos — operam em background sem notificar o usuário.
+  // Poll sniffer stats + tunnel status. Scanner/collection stats run silently
+  // in the background.
   usePoll(async () => {
     try {
       const st = await invoke<SniffStats>("get_sniff_stats");
@@ -384,12 +342,12 @@ export default function App() {
         setPktRate(Math.max(0, (st.packets_captured - prevPkt.current.n) / ((now - prevPkt.current.t) / 1000)));
       }
       prevPkt.current = { n: st.packets_captured, t: now };
-    } catch { /* sniffer indisponível */ }
+    } catch { /* sniffer unavailable */ }
     try {
       const ts = await invoke<TunnelStatus>("tunnel_status");
       setTunnelStatus(ts);
       setHist(h => [...h.slice(-119), { d: ts.direct_latency_ms, tn: ts.tunnel_latency_ms }]);
-    } catch { /* tunnel indisponível */ }
+    } catch { /* tunnel unavailable */ }
   }, 5000);
 
   usePoll(async () => {
@@ -400,7 +358,7 @@ export default function App() {
     if (sniffStats?.error && sniffStats.running) {
       return { kind: "sniff_error", msg: sniffStats.error };
     }
-    // Online/offline vem do sniffer: pacotes do Albion chegando = online.
+    // Online/offline from sniffer: Albion packets arriving = online.
     if (!sniffStats?.online) return { kind: "closed" };
     return { kind: "ok" };
   })();
@@ -415,8 +373,8 @@ export default function App() {
   const up = Math.max(0, Math.floor((nowTs - sessionStart.current) / 1000));
   const uptime = `${String(Math.floor(up / 3600)).padStart(2, "0")}:${String(Math.floor((up % 3600) / 60)).padStart(2, "0")}:${String(up % 60).padStart(2, "0")}`;
 
-  // Feature da aba ativa desligada → volta pra Route. Impede de ficar preso
-  // numa aba que o usuário não pode inspecionar (SideTab desabilitada).
+  // Switch back to Route if the active feature is disabled (tab would be
+  // disabled).
   if (tab === "damage" && !config.collect_damage_meter) setTab("route");
   if (tab === "loot" && !config.collect_auto_lootlog) setTab("route");
 
@@ -425,16 +383,11 @@ export default function App() {
       <header
         className="ck-bar"
         onMouseDown={(e) => {
-          // Só inicia drag em clique primário (botão esquerdo) e não em
-          // elementos interativos (botões de janela). Tauri 2: a API
-          // programática é mais confiável que data-tauri-drag-region em React
-          // (que renderiza como data-tauri-drag-region="true", não vazio).
+          // Drag only on left-click outside interactive elements. Programmatic
+          // Tauri API is more reliable than data-tauri-drag-region in React.
           if (e.button !== 0 || (e.target as HTMLElement).closest("button") != null) return;
-          // Duplo-clique manual: `startDragging()` faz ReleaseCapture() e
-          // entrega o mouse pro window manager do SO — o browser nunca vê o
-          // mouseup/click completo, então o evento `dblclick` do DOM não
-          // dispara de forma confiável depois disso. Detecta o 2º clique
-          // pelo tempo entre mousedowns em vez de depender do dblclick.
+          // Manual double-click detection: startDragging() releases capture, so
+          // DOM dblclick is unreliable. Detect the second click by mousedown timing.
           const now = Date.now();
           if (now - lastHeaderClick.current < 400) {
             lastHeaderClick.current = 0;
@@ -467,11 +420,9 @@ export default function App() {
         </span>
       </header>
 
-      {/* Shell: sidebar vertical à esquerda + conteúdo à direita. As abas
-          vivem na sidebar, com toggle on/off e detalhe expandido quando a
-          feature está ativa — independente de qual aba está selecionada.
-          O rodapé da sidebar carrega o indicador de jogador/mapa/Albion e
-          o botão de config. */}
+      {/* Sidebar on the left + content on the right. Tabs live in the sidebar
+          with toggles and expanded details when active, regardless of selected
+          tab. Footer shows player/map/Albion status and the config button. */}
       <div className="ck-shell">
         <aside className="ck-side">
           <nav className="ck-side-tabs">
@@ -509,18 +460,14 @@ export default function App() {
             />
           </nav>
 
-          {/* 2 ads verticais abaixo das abas — área monetizada da sidebar.
-              Cobrem o custo da VPS do túnel junto com o ad strip de cada aba.
-              Largura da sidebar já acomoda 300px sem mexer no grid (220px de
-              sidebar + 300px de ad = overflow lateral visível só quando o
-              criativo carrega; o placeholder cabe colado na borda). */}
+          {/* Two vertical ad slots below the tabs. Sidebar width already fits a
+              300px creative with minor overflow only once the creative loads. */}
           <div className="ck-side-ads">
             <AdSlot variant="side" />
             <AdSlot variant="side" />
           </div>
 
-          {/* Banner Npcap ausente — dentro da sidebar, entre as abas e o
-              rodapé. Instalação manual de propósito (ver CLAUDE.md). */}
+          {/* Npcap missing banner inside the sidebar. Manual install only. */}
           {npcapMissing && (
             <div className="ck-npcap ck-side-npcap">
               <span>{t("npcapNeeded")}</span>
@@ -531,8 +478,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Rodapé da sidebar: indicador de jogador/mapa/Albion + config.
-              Sempre visível, independente da aba selecionada. */}
+          {/* Sidebar footer: player/map/Albion status + config. Always visible. */}
           <div className="ck-side-foot">
             <div className="ck-side-status" title={albionStatus.kind === "sniff_error" ? albionStatus.msg : t("albionClosedHint")}>
               <span className={`status-dot ${albionStatus.kind === "ok" ? "on" : "off"}`} />
@@ -608,10 +554,8 @@ export default function App() {
         <InternetPathsModal status={tunnelStatus} onClose={() => setRoutesOpen(false)} />
       )}
 
-      {/* Tutorial do Npcap: aparece toda vez que o app abre e o Npcap ainda
-          não está instalado (não é um flag "primeira vez" persistido — é
-          reavaliado a cada sessão a partir do erro real do sniffer). Some ao
-          dispensar; o banner compacto na sidebar (acima) continua lembrando. */}
+      {/* Npcap tutorial shown every session while Npcap is missing. Dismissal
+          is per-session; the sidebar banner remains. */}
       {npcapMissing && !npcapTutorialDismissed && (
         <div className="ck-modal-backdrop" onClick={() => setNpcapTutorialDismissed(true)}>
           <div className="ck-modal" onClick={e => e.stopPropagation()}>
@@ -650,12 +594,11 @@ export default function App() {
 }
 
 
-// ─── Sidebar vertical ──────────────────────────────────────────────────────
+// ─── Vertical sidebar ───────────────────────────────────────────────────────
 
-/// Aba da sidebar vertical. Quando a feature está `on` (toggle ligado ou, no
-/// caso da Rota, túnel configurado), a aba cresce e mostra `expandedContent`
-/// com detalhes pertinentes — **independente de qual aba está selecionada**.
-/// O badge `value` atualiza ao vivo (dado vem do estado do App, nunca daqui).
+/// Sidebar tab. When a feature is on, the tab expands and shows
+/// `expandedContent` regardless of selected tab. The badge value updates live
+//  from App state, not from this component.
 function SideTab({
   label, value, valueTone, selected, onSelect, onToggle, toggleOn, expandedContent, inspectable = true,
 }: {
@@ -673,10 +616,8 @@ function SideTab({
   return (
     <button
       className={`ck-side-tab${selected ? " selected" : ""}${expanded ? " expanded" : ""}${!inspectable ? " disabled" : ""}`}
-      // Não usa `disabled` no <button>: um button disabled não propaga cliques
-      // pros filhos, e o toggle PRECISA ser clicável mesmo com a feature off
-      // (senão liga mas não desliga). Em vez disso, o onClick do botão ignora
-      // quando não inspectable — só o toggle (div filho) age.
+      // Don't use <button disabled>: disabled buttons don't propagate clicks
+      // to children, but the toggle must remain clickable while off.
       onClick={inspectable ? onSelect : undefined}
     >
       <span className="ck-side-tab-head">
@@ -699,7 +640,7 @@ function SideTab({
 }
 
 
-// ─── Ícones SVG (JSX, não string) ───────────────────────────────────────────
+// ─── SVG icons (JSX) ────────────────────────────────────────────────────────
 
 type IconName = "scan" | "list" | "route" | "globe" | "gear" | "sword";
 
@@ -714,44 +655,31 @@ function Icon({ name }: { name: IconName }) {
   }
 }
 
-// ─── Damage meter (captura de combate via packet sniffing) ───────────────────
+// ─── Damage meter (packet capture) ──────────────────────────────────────────
 
-// Formato compacto: 1234567 → "1.23M", 45600 → "45.6K".
-/// Número curto: `850`, `1.2K`, `830K`, `1.2M`, `12M`.
-///
-/// A casa decimal só aparece enquanto vale alguma coisa. Com mantissa < 10 ela
-/// informa (1.2K é 20% mais que 1K); a partir de 10 vira ruído (12.3K é 2,5%
-/// mais que 12K) e custa 2 caracteres.
-///
-/// Caractere importa porque o copy do ranking vai pro chat da party, que tem
-/// limite. Era `830.0K`/`1.24M` em tudo — só de `.0` eram 2 chars por linha.
+// Compact number format: 1234567 → "1.23M", 45600 → "45.6K".
+/// Short format with one decimal only when mantissa < 10. Keeps copied
+/// ranking compact for party chat.
 function fmtC(n: number): string {
-  const curto = (v: number, sufixo: string) => {
-    // Arredonda ANTES de decidir a casa decimal. Decidir olhando o valor cru
-    // fazia 9.99K sair como "10.0K" — justamente o `.0` que queremos sumir.
-    const umaCasa = Math.round(v * 10) / 10;
-    const txt = umaCasa >= 10 ? String(Math.round(v)) : umaCasa.toFixed(1);
-    // ".0" não informa nada em escala nenhuma: 1.0K é 1K, 1.0M é 1M. Sai
-    // sempre, não só acima de 10K.
-    return `${txt.replace(/\.0$/, "")}${sufixo}`;
+  const short = (v: number, suffix: string) => {
+    const oneDec = Math.round(v * 10) / 10;
+    const txt = oneDec >= 10 ? String(Math.round(v)) : oneDec.toFixed(1);
+    return `${txt.replace(/\.0$/, "")}${suffix}`;
   };
-  // 999_500 já arredondaria pra "1000K": sobe pra M antes de chegar nisso.
-  if (n >= 999_500) return curto(n / 1e6, "M");
-  if (n >= 1e3) return curto(n / 1e3, "K");
+  // Cross the boundary early so 999500 doesn't become "1000K".
+  if (n >= 999_500) return short(n / 1e6, "M");
+  if (n >= 1e3) return short(n / 1e3, "K");
   return String(Math.round(n));
 }
 
-/// Número por extenso com separador de milhar (1.234.567). Usado nos badges
-/// onde o valor EXATO importa mais que a compactação — dano total da sessão
-/// e contagem de loots. `fmtC` esconde ordem de grandeza; aqui o usuário quer
-/// conferir o número cheio contra o site.
+/// Full number with thousands separator for badges where the exact value
+/// matters (session damage, loot count).
 function fmtFull(n: number): string {
   return Math.round(n).toLocaleString("pt-BR");
 }
 
-/// Timeline dos últimos 3 min de um jogador: uma barra por segundo, altura
-/// proporcional ao pico dele. preserveAspectRatio="none" deixa o SVG esticar
-/// na largura da linha sem deformar a altura das barras.
+/// 3-minute damage timeline: one bar per second, height relative to the peak.
+/// preserveAspectRatio="none" lets the SVG stretch horizontally.
 function DamageTimeline({ data }: { data: number[] }) {
   const t = useT();
   const peak = data.reduce((m, v) => Math.max(m, v), 0);
@@ -764,12 +692,9 @@ function DamageTimeline({ data }: { data: number[] }) {
         <span>{t("dmgTimeline")}</span>
         <span className="dmg-tl-peak">{t("dmgPeak")}: {fmtC(peak)}/s</span>
       </div>
-      <svg className="dmg-tl-svg" viewBox={`0 0 ${data.length} 40`} preserveAspectRatio="none">
-        {/* Key = SEGUNDO ABSOLUTO da barra, não a posição. O backend alinha
-            data[last] = agora, então o segundo de i é nowSec-(last-i). Keyar
-            pelo tempo faz a mesma barra sobreviver ao poll e DESLIZAR pra
-            esquerda (transition em x) em vez de reusar o rect da posição i e
-            animar a altura no lugar (o "crescimento" indesejado). */}
+        <svg className="dmg-tl-svg" viewBox={`0 0 ${data.length} 40`} preserveAspectRatio="none">
+        {/* Key by absolute second, not array index. Backend aligns data[last]
+            to now; keying by time makes bars slide left smoothly between polls. */}
         {data.map((v, i) => v > 0 && (
           <rect key={nowSec - (last - i)} x={i} y={40 - (v / peak) * 40} width={0.9} height={(v / peak) * 40} />
         ))}
@@ -798,39 +723,33 @@ function DamageTab({
   const [copied, setCopied] = useState(false);
 
   useEffect(() => { if (!on) setRows([]); }, [on]);
-  // `vsPlayers` NÃO é um filtro de linha como os outros: o backend mantém um
-  // acumulador separado, porque o alvo do golpe não existe mais depois que o
-  // dano é somado por causer. Por isso entra na dependência do poll.
+  // vsPlayers is not a row filter; the backend keeps a separate accumulator
+  // because target info is gone once damage is summed by causer. Hence it is a
+  // poll dependency.
   usePoll(async () => {
     if (!on) return;
     try {
       setRows(await invoke<DamageRow[]>("get_damage_meter", { vsPlayers }));
-    } catch { /* sniffer indisponível */ }
+    } catch { /* sniffer unavailable */ }
   }, 2000, [on, vsPlayers]);
 
-  // Filtro por party: membros do grupo + o próprio jogador.
+  // Party filter: party members + self.
   const partySet = new Set([
     ...(sniffStats?.party_members ?? []),
     ...(sniffStats?.player_name ? [sniffStats.player_name] : []),
   ]);
 
-  // FONTE ÚNICA da lista: a tela e o copy leem daqui, e é isso que garante que
-  // colar reproduza exatamente o que está aparecendo. Se algum dos dois voltar
-  // a ler `rows`, o copy passa a vazar linha filtrada sem ninguém perceber.
-  //
-  // `vsPlayers` não entra aqui de propósito — ele age antes, escolhendo qual
-  // acumulador o backend lê, então `rows` já chega restrito.
+  // Single source of truth for display + copy. vsPlayers already narrowed by
+  // the backend poll, so it is not filtered here.
   const filtered = rows.filter(r => !partyOnly || partySet.has(r.name));
 
   const max = filtered.reduce((m, r) => Math.max(m, r.damage), 0) || 1;
   const totalDmg = filtered.reduce((s, r) => s + r.damage, 0) || 1;
 
-  // Export em texto: jogador, dano e %. Colar no Discord tem que ser legível
-  // no celular — mapa, cura e DPS ficam de fora. Copia `filtered`, ou seja
-  // exatamente as linhas visíveis, com a mesma numeração da tela.
+  // Copy visible ranking as text. Excludes map/heal/DPS for mobile readability.
+  // Percentages are over the filtered total so paste matches the screen.
   const copyMeter = async () => {
-    // Sem '#': no chat do Albion ele é caractere de comando e engolia a linha.
-    // '%' do total FILTRADO — bate com o que está na tela, não com a sessão toda.
+    // No '#': Albion chat treats it as a command. Percentages use filtered total.
     const lines = filtered.map(
       (r, i) => `${i + 1}. ${r.name} — ${fmtC(r.damage)} (${((r.damage / totalDmg) * 100).toFixed(1)}%)`
     );
@@ -848,7 +767,7 @@ function DamageTab({
         <div className="empty-area">{t("dmgOffHint")}</div>
       ) : (
         <>
-          {/* Herói do cockpit: o número que se olha no meio do ZvZ. */}
+          {/* Cockpit hero: the number you glance at mid-fight. */}
           <div className="ck-hero">
             <b className="ck-num">{fmtC(filtered.length ? totalDmg : 0)}</b>
             <span className="ck-hero-sub">
@@ -897,8 +816,8 @@ function DamageTab({
                       <span className="dmg-rank">{i + 1}</span>
                       <span className="dmg-name">
                         {r.name}
-                        {/* classe INFERIDA pelas skills (ver get_damage_meter);
-                            nbsp segura a altura de quem ainda não tem arma */}
+                        {/* Weapon family inferred from skills; nbsp preserves
+                            row height when none is available. */}
                         <small className="dmg-cls">
                           {r.weapon ? WEAPON_LABELS[lang][r.weapon] ?? r.weapon : "\u00A0"}
                         </small>
@@ -929,21 +848,18 @@ function DamageTab({
                           {r.skills.map(sk => (
                             <div key={sk.id} className="dmg-skill-row">
                               <span className="dmg-skill-name">
-                                {/* Barra de fundo = fatia desta skill no dano do jogador. */}
+                                {/* Background bar = this skill's share of row damage. */}
                                 <span className="dmg-skill-bar" style={{ width: `${sk.pct}%` }} />
                                 <span className="dmg-skill-label">
                                   {sk.id >= 0 ? (
                                     <SkillIcon uniqueName={sk.icon ?? sk.unique_name} apiBase={config.api_base_url} />
                                   ) : (
-                                    // Auto attack: o ícone sai do tipo de arma
-                                    // da LINHA, já que a skill não tem entrada
-                                    // no dump. Sem arma inferida, sem ícone.
+                                    // Auto-attack icon comes from the row's
+                                    // inferred weapon family, not the skill.
                                     (() => {
                                       const kind = autoAttackKind(r.weapon);
-                                      // Todos em preto e branco: são ícones de
-                                      // habilidade reaproveitados, e a falta de
-                                      // cor é o que separa ataque básico de
-                                      // skill de verdade na lista.
+                                      // Grayscale recycled skill icons: no color
+                                      // distinguishes auto-attack from real skills.
                                       return kind && (
                                         <SkillIcon uniqueName={AUTO_ATTACK_ICON[kind]} apiBase={config.api_base_url} gray />
                                       );
@@ -952,9 +868,8 @@ function DamageTab({
                                   {sk.id < 0
                                     ? t("dmgAutoAttack")
                                     : skillName(sk, lang) || t("dmgSkillN", { id: sk.id })}
-                                  {/* id cru sempre visível: é com ele que se
-                                      confere se o nome resolvido bate com a
-                                      skill que você realmente usou. */}
+                                  {/* Raw skill id stays visible to verify the
+                                      resolved name against the skill you used. */}
                                   {sk.id >= 0 && (
                                     <span className="dmg-skill-id" title={sk.unique_name ?? ""}>
                                       #{sk.id}
@@ -1008,10 +923,10 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
       ]);
       setLoot(rows);
       setDebug(lines);
-    } catch { /* sniffer não rodando */ }
+     } catch { /* sniffer not running */ }
   }, 2000);
 
-  // Auto-scroll pro fim do terminal quando chega conteúdo novo.
+  // Auto-scroll to terminal bottom on new content.
   const totalLines = loot.length + debug.length;
   useEffect(() => {
     if (autoScroll && terminalRef.current) {
@@ -1034,10 +949,8 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
     setLoot([]);
   };
 
-  // O auto-submit vive no worker do Rust (auto_lootlog_worker), que dispara
-  // quando o evento entra em REVISÃO. Antes existia aqui um efeito que
-  // reenviava a cada loot novo — mandava log pela metade dezenas de vezes por
-  // CTA e sobrescrevia a submissão anterior a cada vez.
+  // Auto-submit runs in the Rust worker when an event enters review. Do NOT
+  // submit from React: each new loot would overwrite the previous partial log.
 
   const onTerminalScroll = () => {
     if (!terminalRef.current) return;
@@ -1046,8 +959,7 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
     setAutoScroll(atBottom);
   };
 
-  // Lootlog desligado (toggle na sidebar): não captura nada. O usuário liga
-  // pela aba vertical da sidebar — aqui só mostramos o estado.
+  // Lootlog disabled via sidebar toggle.
   if (!config.collect_auto_lootlog) {
     return (
       <div className="ck-panel ck-loot"><CardGlow />
@@ -1064,17 +976,12 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
     <>
       <div className="ck-panel ck-loot"><CardGlow />
         <div className="card-head">
-          {/* A explicação longa virou tooltip — ver o comentário do toolbar. */}
+          {/* Long description moved to tooltips. */}
           <h2 title={t("lootlogDesc")}>{t("capturedLoot")}</h2>
         </div>
 
-        {/* Tudo num quadrante só: os três cards antigos gastavam metade da
-            aba com texto que se lê uma vez. O que sobrou de explicação está
-            no `title` de cada controle. */}
         <div className="loot-toolbar">
-          {/* Mesmo padrão dos chips do Damage Meter: um botão-toggle só,
-              sem par (botão de ação + switch separado) fazendo a mesma
-              coisa duas vezes. */}
+          {/* Single toggle button, same pattern as Damage Meter chips. */}
           <button
             className={`dmg-chip${config.auto_lootlog_submit ? " active" : ""}`}
             onClick={() => update("auto_lootlog_submit", !config.auto_lootlog_submit)}
@@ -1109,15 +1016,14 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
               <span className="t-loot-tag">[LOOT]</span>{" "}
               <span className="t-player">{r.looted_by}</span>{" "}
               <span className="t-action">{t("lootedBy")}</span>{" "}
-              {/* 1× é o caso comum e não informa nada — só polui a linha. */}
+              {/* Skip quantity when it is 1 to keep lines short. */}
               {r.quantity > 1 && <span className="t-qty">{r.quantity}× </span>}
               <LootItem row={r} lang={lang} />{" "}
               <span className="t-from">{t("from")}</span>{" "}
               <span className="t-source">{r.looted_from}</span>
             </div>
           ))}
-          {/* Resultado do download também vira linha de log: sem os cards, não
-              há mais onde pendurar um aviso solto. */}
+          {/* Download result also appears as a log line. */}
           {savedPath && (
             <div className="terminal-line">
               <span className="t-ok-tag">[OK]</span>{" "}
@@ -1135,14 +1041,13 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
   );
 }
 
-// ─── Hero: Rota/Túnel (tela principal do cockpit) ────────────────────────────
+// ─── Hero: Route/Tunnel (main cockpit view) ──────────────────────────────────
 
-/// Slot de anúncio — placeholder hachurado, mesma linguagem do site. Fica
-/// pronto pro criativo; nada de rede de ads embutida por enquanto.
+/// Ad placeholder in the site's visual language. No ad network wired yet.
 function AdSlot({ variant = "strip" }: { variant?: "strip" | "side" } = {}) {
   const t = useT();
-  // `side`: ad vertical pra sidebar (abaixo das abas). 300×250 ou 160×600.
-  // `strip`: ad horizontal 728×90 no rodapé das abas.
+  // side: 300×250 or 160×600 vertical under the tabs.
+  // strip: 728×90 horizontal at the bottom of the tab content.
   return (
     <div className={`ck-ad ck-ad-${variant}`}>
       <span className="ck-ad-tag">{t("ckAd")}</span>
@@ -1151,9 +1056,8 @@ function AdSlot({ variant = "strip" }: { variant?: "strip" | "side" } = {}) {
   );
 }
 
-/// Painel "Conexão" da aba Rota — detalhe operacional do túnel (VPS, tráfego,
-/// split, fallback, erro). Os campos de configuração da VPS (endpoint, keys)
-/// são definidos por hardcode no binário, não expostos ao usuário.
+/// Route tab connection panel with tunnel operational details. VPS settings
+/// (endpoint, keys) are hardcoded in the binary, not exposed in the UI.
 function ConnPanel({ config, tunnelStatus }: {
   config: CompanionConfig;
   tunnelStatus: TunnelStatus | null;
@@ -1187,10 +1091,10 @@ function ConnPanel({ config, tunnelStatus }: {
   );
 }
 
-/* DamageRail (mini-damage do rail) morreu com as abas vivas: o badge da aba
-   Damage mostra o total ao vivo, e o meter completo é a própria aba. */
+/* DamageRail removed with live tabs: the Damage badge shows the live total and
+   the full meter is the tab itself. */
 
-// ─── Multi-internet: conexões locais que alimentam a mesma VPS ──────────────
+// ─── Multi-internet: local connections feeding the same VPS ────────────────
 
 function InternetPathsModal({ status, onClose }: { status: TunnelStatus | null; onClose: () => void }) {
   const t = useT();
@@ -1229,17 +1133,14 @@ function InternetPathsModal({ status, onClose }: { status: TunnelStatus | null; 
   );
 }
 
-/// A tela principal: rota/túnel estilo ExitLag. SEM número inventado — tudo
-/// vem do tunnel_status real; o que não medimos (per-leg, jitter) não aparece.
-/// Sem VPS configurada, renderiza o MESMO esqueleto em modo "aguardando",
-/// com o botão levando pro modal de config.
+/// Main Route/Tunnel view. No fabricated numbers — everything comes from the
+/// real tunnel_status. Unmeasured metrics (per-leg, jitter) are not shown.
+/// When VPS is not configured, renders the same skeleton in "waiting" mode.
 function TunnelHero({ config, tunnelStatus, hist, onOpenRoutes }: {
   config: CompanionConfig;
   tunnelStatus: TunnelStatus | null;
-  // Acumulado no App (poll de 5s), não aqui: estado local zerava a cada troca
-  // de aba, e 10 min de histórico é justamente o valor do gráfico.
+  // History is accumulated in App (5s poll) so it survives tab switching.
   hist: { d: number | null; tn: number | null }[];
-  // Abre o modal de multi-rotas. Vive no App() pra sobreviver à troca de aba.
   onOpenRoutes: () => void;
 }) {
   const t = useT();
@@ -1255,13 +1156,13 @@ function TunnelHero({ config, tunnelStatus, hist, onOpenRoutes }: {
   const activeHost = (config.tunnel_endpoint || "").split(":")[0];
 
   const toggle = async () => {
-    if (!configured) return; // config mora no ConnPanel abaixo
+    if (!configured) return; // setup is in ConnPanel below
     if (running) { await invoke("tunnel_stop"); setRunning(false); }
     else { await invoke("tunnel_start"); setRunning(true); }
   };
 
-  // Polylines do gráfico: escala pelo maior valor visto (mín. 60ms pra não
-  // ampliar ruído de rede boa).
+  // Chart polylines scaled to the largest observed value (min 60ms so good
+  // connections don't amplify noise).
   const chartMax = Math.max(60, ...hist.flatMap(h => [h.d ?? 0, h.tn ?? 0]));
   const line = (pick: (h: { d: number | null; tn: number | null }) => number | null) =>
     hist.map((h, i) => {
@@ -1327,11 +1228,10 @@ function TunnelHero({ config, tunnelStatus, hist, onOpenRoutes }: {
           <span><i className="sw d" />{t("ckLatDirect")}</span>
           <span className="ck-chart-right">{t("ckLast10")}</span>
         </div>
-        {/* height 140: com o rail limpo o gráfico é o corpo do hero.
-            preserveAspectRatio="none" estica o viewBox de 90 sem mexer
-            na matemática do line().
-            hasData: sem VPS o hist enche de amostras nulas — só contar
-            length deixava uma caixa vazia no lugar do estado "medindo". */}
+        {/* height 140 makes the chart the hero body. preserveAspectRatio="none"
+            stretches the 90-unit viewBox without changing line() math.
+            hasData: without a VPS the history fills with null samples, so length
+            alone would show an empty box instead of "measuring". */}
         {hist.length < 2 || !hist.some(h => h.d != null || h.tn != null) ? (
           <div className="empty-inline">{t("ckChartEmpty")}</div>
         ) : (
@@ -1342,9 +1242,8 @@ function TunnelHero({ config, tunnelStatus, hist, onOpenRoutes }: {
         )}
       </div>
 
-      {/* Métricas (tráfego/split/fallback/erro) moram no ConnPanel abaixo —
-          o hero é só o que se olha: latência, hops, gráfico. O ad fica no
-          fim da .ck-route-col (um só, igual às outras abas). */}
+      {/* Operational metrics live in ConnPanel below. The hero shows latency,
+          hops, and the chart. */}
     </div>
   );
 }
@@ -1395,10 +1294,9 @@ function ConfigTab({
         <ToggleRow label={t("feedAodp")} on={config.feed_aodp} onChange={(v) => update("feed_aodp", v)} />
       </div>
 
-      {/* Calibração do índice de feitiço saiu da UI de propósito: é ajuste
-          NOSSO (feito num patch do jogo, via config.json), não do usuário —
-          exposto, virava campo misterioso que quebrava todos os nomes de
-          skill com um typo. O campo continua no config e no set_config. */}
+      {/* Spell index calibration removed from UI: it is adjusted per patch
+          via config.json, not exposed to users. The field still exists in
+          config/set_config. */}
 
       <div className="card"><CardGlow />
         <h2>{t("aboutTitle")}</h2>
@@ -1416,13 +1314,10 @@ function ConfigTab({
   );
 }
 
-// ─── Discord (botão no topo da sidebar, ao lado da logo) ─────────────────────
+// ─── Discord button (top of the sidebar, next to the logo) ────────────────
 
-/// Marca oficial do Discord (path do simple-icons, viewBox 24×24).
-///
-/// O anterior era uma reconstrução à mão, com arco malformado (`0 0 0-11-.0`)
-/// e proporções erradas. Logo de marca não se desenha de memória: se precisar
-/// mexer, troque pelo asset oficial inteiro em vez de ajustar coordenada.
+/// Official Discord mark (simple-icons path, 24×24 viewBox). Do not hand-draw
+/// brand logos; replace with the full official asset if edits are needed.
 function DiscordIcon() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">

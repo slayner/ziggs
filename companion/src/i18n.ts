@@ -1,7 +1,6 @@
-// i18n do companion — PT/EN/ES, fallback EN.
-// Auto-detecta o idioma do sistema (navigator.language / Tauri locale) no
-// primeiro uso; se não der match com PT/EN/ES, cai pra EN. Persiste em
-// localStorage (igual ao site).
+// Companion i18n — PT/EN/ES, EN fallback.
+// Auto-detects system language on first use; falls back to EN if not PT/EN/ES.
+// Persisted in localStorage (same as the site).
 
 import { createContext, createElement, useContext, useState } from "react";
 import type { ReactNode } from "react";
@@ -16,22 +15,22 @@ export const LANG_FULL: Record<Lang, string> = { pt: "Português", en: "English"
 const VALID_LANGS: readonly Lang[] = ["pt", "en", "es"];
 const VALID_PREFS: readonly string[] = ["auto", ...VALID_LANGS];
 
-// ── Detecção de idioma do sistema ──────────────────────────────────────────
-// navigator.language já retorna o locale do SO no Tauri (Chromium webview).
-// Formato: "pt-BR", "en-US", "es-ES", etc. Bate só no prefixo.
+// ── System language detection ────────────────────────────────────────────
+// navigator.language returns the OS locale in Tauri (Chromium webview).
+// Format: "pt-BR", "en-US", "es-ES", etc. Matches by prefix only.
 export function detectSystemLang(): Lang {
   const raw = (navigator.language || navigator.languages?.[0] || "en").toLowerCase();
   const prefix = raw.split("-")[0];
   if (prefix === "pt") return "pt";
   if (prefix === "es") return "es";
-  // en e qualquer outro → inglês (fallback universal)
+  // en and anything else → English (universal fallback)
   return "en";
 }
 
 function readPref(): LangPref {
   const v = localStorage.getItem("ziggs-companion-lang");
   if (v && VALID_PREFS.includes(v)) return v as LangPref;
-  // Primeira visita: auto (segue o idioma do sistema).
+  // First visit: auto (follow system language).
   return "auto";
 }
 
@@ -58,7 +57,7 @@ export function LangProvider({ children }: { children: ReactNode }) {
 
 export const useLang = () => useContext(LangCtx);
 
-// t(key) → string. t(key, {n: 5}) substitui {n} no template.
+// t(key) → string. t(key, {n: 5}) replaces {n} in the template.
 export function useT() {
   const { lang } = useLang();
   return (key: TKey, vars?: Record<string, string | number>): string => {
@@ -322,7 +321,7 @@ const S = {
     ckNoLoot: "sem loot ainda",
     ckNoDmg: "sem dano ainda",
 
-    // Sobre (modal de Config)
+    // About (Config modal)
     aboutTitle: "Sobre",
     aboutVersion: "Versão",
     aboutDataCredit: "Preços de mercado e cotação de ouro: Albion Online Data Project (AODP) — projeto comunitário open-source.",
@@ -838,7 +837,7 @@ const S = {
     ckNoLoot: "sin loot todavía",
     ckNoDmg: "sin daño todavía",
 
-    // Sobre (modal de Config)
+    // About (Config modal)
     aboutTitle: "Sobre",
     aboutVersion: "Versión",
     aboutDataCredit: "Precios de mercado y cotización de oro: Albion Online Data Project (AODP) — proyecto comunitario open-source.",

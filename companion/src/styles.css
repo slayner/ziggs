@@ -1,5 +1,5 @@
 :root {
-  /* Paleta alinhada ao site v2 (jul/2026) */
+  /* Site v2 palette. */
   --bg: #0e0f13;
   --surface: #161821;
   --surface-2: #1d2029;
@@ -20,7 +20,7 @@
   --orange: #d29922;
   --orange-soft: #2a2417;
   --shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-  /* Esquadro total — só o toggle/dot ficam redondos */
+  /* Square corners everywhere except the toggle knob / dot. */
   --radius: 0px;
   --radius-sm: 0px;
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -39,7 +39,7 @@ button { font-family: inherit; cursor: pointer; color: inherit; }
 a { color: var(--info); text-decoration: none; }
 input, textarea, select { font-family: inherit; }
 
-/* ── Splash inicial ─────────────────────────────────────────────────────── */
+/* ── Splash ── */
 .splash {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   height: 100vh; gap: 14px;
@@ -76,8 +76,6 @@ input, textarea, select { font-family: inherit; }
 }
 .status-dot.off { background: var(--hint); }
 
-/* (seletor de idioma agora é um <select> na aba Config — sem CSS extra) */
-
 
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(4px); }
@@ -88,12 +86,7 @@ input, textarea, select { font-family: inherit; }
   to { transform: scaleX(1); }
 }
 
-/* ── Cards — linguagem "war room" do site (docs/PLANO-DESIGN-V2.md) ──────
-   Painel opaco em gradiente + CANTOS FIXOS TL/BR que douram no hover.
-   Valores copiados do .dash-panel do site, não inventados — é transferência
-   de identidade, não redesign. O brilho respirando (dash-cglow) fica de fora
-   por enquanto: exige DOM extra (wrapper com overflow:hidden) e o companion
-   monta cards com <div> cru — ver PLANO-DESIGN-COMPANION.md fase 2. */
+/* Cards: gradient opaque panel with fixed TL/BR corners that turn gold on hover. */
 .card {
   position: relative;
   background: linear-gradient(180deg, #14151a, #101116);
@@ -116,10 +109,7 @@ input, textarea, select { font-family: inherit; }
 .card:hover::before, .ck-panel:hover::before,
 .card:hover::after, .ck-panel:hover::after { border-color: var(--gold); }
 
-/* Brilho respirando (fase 2) — copiado do site, gate adaptado pra .card.
-   Gate de hover no WRAPPER e respiração no elemento interno: na mesma
-   opacity a animação sobrescreveria a declaração; em camadas separadas
-   multiplicam, e a fase segue correndo invisível — o hover nunca "pula". */
+/* Breathing glow on hover. Wrapper controls opacity; the inner element runs the animation so they multiply instead of overwriting. */
 .dash-cglowwrap {
   position: absolute;
   inset: 0;
@@ -147,9 +137,7 @@ input, textarea, select { font-family: inherit; }
   .dash-cglow { animation: none; opacity: 0.5; }
 }
 
-/* Header editorial: título uppercase de tracking largo + régua em gradiente
-   (o .dash-panel-title/.dash-panel-rule do site). A régua nasce de ::after
-   pra não exigir markup novo em ~15 call sites. */
+/* Editorial header: uppercase wide-tracking title + gradient rule rendered with ::after to avoid extra markup. */
 .card h2, .ck-panel h2 {
   display: flex; align-items: center; gap: 10px;
   font-size: 11px; font-weight: 700;
@@ -167,8 +155,7 @@ input, textarea, select { font-family: inherit; }
   margin-bottom: 12px;
 }
 .card-head h2 { margin-bottom: 0; flex-shrink: 0; }
-/* Dentro do card-head a régua é do PRÓPRIO head (entre título e ação), via
-   order: h2 → régua → resto. O ::after do h2 sai de cena pra não duplicar. */
+/* Inside .card-head the rule belongs to the head itself (between title and action) using flex order; the h2 ::after is suppressed to avoid duplication. */
 .card-head h2::after { content: none; }
 .card-head::after {
   content: "";
@@ -187,12 +174,7 @@ input, textarea, select { font-family: inherit; }
 .hint.ok { color: var(--green); }
 .hint.warn { color: var(--orange); }
 
-/* ═══ COCKPIT (jul/2026) ═══════════════════════════════════════════════════
-   Redesign aprovado por mockup: o companion é um MONITOR, não um app de
-   configurações. Sidebar vertical à esquerda com abas que crescem quando a
-   feature está ativa (detalhe visível independente da aba selecionada);
-   rodapé da sidebar carrega o indicador de jogador/mapa/Albion + botão de
-   config. Topbar fica só com sessão/pacotes/fila/AODP/Discord. */
+/* Cockpit layout: vertical sidebar tabs, footer for player/map/status + settings, topbar for session/packets/queue/AODP/Discord. */
 .ck-root {
   display: flex; flex-direction: column;
   height: 100vh; overflow: hidden;
@@ -209,8 +191,7 @@ input, textarea, select { font-family: inherit; }
 .ck-off { color: var(--hint); }
 .ck-red { color: var(--red); }
 
-/* barra de comando — só sessão/pacotes/fila/AODP/Discord. LED de Albion,
-   zona e ⚙ saíram pra a sidebar vertical. */
+/* Topbar: session, packets, queue, AODP, Discord. Albion/zone/settings moved to the sidebar. */
 .ck-bar {
   height: 44px; flex-shrink: 0;
   display: flex; align-items: center; gap: 14px;
@@ -218,9 +199,7 @@ input, textarea, select { font-family: inherit; }
   background: linear-gradient(180deg, #14151a, #101116);
   border-bottom: 1px solid var(--border);
   cursor: default;
-  /* É a barra de título — arrastável e com duplo-clique pra maximizar.
-     Sem isso, arrastar/duplo-clicar seleciona o texto dos chips por baixo
-     (comportamento normal de texto, mas esquisito numa barra de título). */
+  /* Title bar: draggable and double-click to maximize. user-select prevents text selection while dragging. */
   user-select: none;
 }
 .ck-bar .logo {
@@ -235,8 +214,7 @@ input, textarea, select { font-family: inherit; }
 .ck-chip .ck-lbl { font-size: 8.5px; }
 .ck-chip b { font-size: 13px; font-weight: 600; }
 
-/* ── Botões de janela (decorations:false — custom title bar) ────────────
-   Estilo Windows 11: ícones 10×10, sem borda, hover sutil, vermelho no close. */
+/* Window buttons (custom title bar). Windows-11 style: 10×10 icons, no border, subtle hover, red close. */
 .ck-winbtns { display: flex; align-items: center; margin-left: auto; }
 .ck-winbtn {
   background: transparent; border: none; color: var(--muted);
@@ -248,7 +226,7 @@ input, textarea, select { font-family: inherit; }
 .ck-winbtn:active { background: var(--surface-3); }
 .ck-winbtn-close:hover { background: #e81123; color: #fff; }
 
-/* ── Shell: sidebar vertical | conteúdo ─────────────────────────────────── */
+/* ── Shell: sidebar | content ── */
 .ck-shell {
   flex: 1; min-height: 0;
   display: grid;
@@ -266,8 +244,7 @@ input, textarea, select { font-family: inherit; }
   padding: 8px 6px;
   gap: 4px;
 }
-/* Ads verticais abaixo das abas — 2 slots, lado a lado quando cabe, empilhados
-   quando não. Altura fixa pra não roubar espaço das abas nem do rodapé. */
+/* Vertical ads below tabs: 2 slots, side-by-side when space permits, otherwise stacked. Fixed height to preserve tabs/footer room. */
 .ck-side-ads {
   flex-shrink: 0;
   display: flex; flex-direction: column; gap: 8px;
@@ -281,7 +258,7 @@ input, textarea, select { font-family: inherit; }
   margin: 0;
 }
 
-/* ── Aba vertical ───────────────────────────────────────────────────────── */
+/* ── Vertical tab ── */
 .ck-side-tab {
   position: relative;
   background: transparent;
@@ -299,16 +276,14 @@ input, textarea, select { font-family: inherit; }
   color: var(--text);
   background: var(--surface-2);
 }
-/* Feature desligada: a aba não é clicável (só o toggle é). Cursor default
-   e sem hover background — o toggle filho continua clicável. */
+/* Disabled tab: not clickable; only the nested toggle is. No hover background keeps the toggle as the interactive target. */
 .ck-side-tab.disabled { cursor: default; }
 .ck-side-tab.disabled:hover { background: transparent; color: var(--hint); }
 .ck-side-tab.disabled .ck-side-tab-toggle { cursor: pointer; }
 .ck-side-tab.expanded { padding-bottom: 10px; }
 .ck-side-tab-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  /* Mesma altura com ou sem toggle: o toggle escala pra ~15px, e sem ele
-     a aba Route ficava mais baixa que as outras. min-height iguala. */
+  /* min-height keeps tab height consistent whether or not the toggle is present. */
   min-height: 18px;
 }
 .ck-side-tab-label {
@@ -332,7 +307,7 @@ input, textarea, select { font-family: inherit; }
   animation: fade-in 0.18s ease-out;
 }
 
-/* ── Banner Npcap dentro da sidebar ─────────────────────────────────────── */
+/* ── Npcap banner in sidebar ── */
 .ck-side-npcap {
   flex-shrink: 0;
   flex-direction: column; align-items: stretch; gap: 6px;
@@ -344,7 +319,7 @@ input, textarea, select { font-family: inherit; }
 }
 .ck-side-npcap .ck-npcap-hint { display: block; }
 
-/* ── Rodapé da sidebar: status + config ─────────────────────────────────── */
+/* ── Sidebar footer: status + config ── */
 .ck-side-foot {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
@@ -378,8 +353,7 @@ input, textarea, select { font-family: inherit; }
 .ck-side-gear:hover { background: var(--surface-3); color: var(--text); border-color: rgba(212, 163, 56, 0.55); }
 .ck-side-gear svg { width: 14px; height: 14px; }
 
-/* Discord na sidebar — mesmo design do botão de settings acima. O .discord-btn
-   base tem padding/border-radius do header antigo; aqui sobrescreve pra casar. */
+/* Discord button in sidebar: override legacy header styles to match the settings button. */
 .ck-side-foot .discord-btn {
   display: flex; align-items: center; gap: 8px;
   max-width: none; width: 100%;
@@ -405,7 +379,7 @@ input, textarea, select { font-family: inherit; }
   flex: 1; min-width: 0; text-align: left;
 }
 
-/* ── Conteúdo principal (à direita da sidebar) ──────────────────────────── */
+/* ── Main content (right of sidebar) ── */
 .ck-main {
   min-height: 0; min-width: 0;
   display: flex; flex-direction: column;
@@ -414,7 +388,7 @@ input, textarea, select { font-family: inherit; }
 .ck-main > .ck-full,
 .ck-main > .ck-route-col { flex: 1; min-height: 0; }
 
-/* Aba de painel único (Damage/Lootlog completos) + ad strip embaixo. */
+/* Full-width tab (Damage/Lootlog) + bottom ad strip. */
 .ck-full {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column;
@@ -424,8 +398,7 @@ input, textarea, select { font-family: inherit; }
 .ck-full .terminal { max-height: none; }
 .ck-full .ck-ad-strip { margin: 10px 14px 12px; }
 
-/* Rota: coluna única — hero+conn num wrapper que scrolla, ad fixo embaixo
-   (mesmo padrão das abas Damage/Lootlog: o ad nunca some no scroll). */
+/* Route: single column with hero+connection in a scrolling wrapper; ad stays fixed below. */
 .ck-route-col {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column;
@@ -450,21 +423,20 @@ input, textarea, select { font-family: inherit; }
   min-height: 0; min-width: 0;
 }
 .ck-dmg { display: flex; flex-direction: column; }
-/* Wrapper da lista — só ele scrolla. Header (card-head + ck-hero + filters)
-   fica estático acima. overflow-y só aparece quando a lista excede, não vazio. */
+/* List wrapper scrolls independently; header stays fixed above. */
 .dmg-list-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .ck-loot .terminal { flex: 1; min-height: 0; }
 .ck-panel .card-head { flex-shrink: 0; }
 .ck-cap { display: inline-flex; order: 2; }
 .ck-cap .toggle { transform: scale(0.82); }
 
-/* herói do damage */
+/* damage hero */
 .ck-hero { display: flex; align-items: baseline; gap: 16px; margin: 2px 0 10px; }
 .ck-hero > b { font-size: 32px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.1; }
 .ck-hero-sub { color: var(--muted); font-size: 11px; }
 .ck-hero-sub b { color: var(--text); }
 
-/* classe da arma sob o nome + valor dentro da barra */
+/* weapon class under name + value inside bar */
 .dmg-cls {
   display: block;
   font-size: 8.5px; font-weight: 700;
@@ -472,7 +444,7 @@ input, textarea, select { font-family: inherit; }
   color: var(--wfam, var(--hint));
   line-height: 1.2;
 }
-/* ── Hero: Rota/Túnel (coluna única, jul/2026) ── */
+/* ── Route/Tunnel hero (single column) ── */
 .ck-tun { display: block; }
 
 .ck-conn-rows { display: flex; flex-direction: column; }
@@ -535,7 +507,7 @@ input, textarea, select { font-family: inherit; }
 .ck-m .ck-lbl { font-size: 8.5px; }
 .ck-m b { font-size: 14px; font-weight: 600; }
 
-/* ads — placeholder hachurado, linguagem do site */
+/* ads — hatched placeholder, site style */
 .ck-ad {
   position: relative;
   border: 1px dashed var(--border-strong);
@@ -550,7 +522,7 @@ input, textarea, select { font-family: inherit; }
 .ck-ad-ph { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
 .ck-ad-strip { height: 54px; margin-top: 14px; }
 
-/* modal do ⚙ (Config + Túnel) */
+/* ⚙ modal (Config + Tunnel) */
 .ck-modal-backdrop {
   position: fixed; inset: 0; z-index: 40;
   background: rgba(8, 9, 12, 0.72);
@@ -571,7 +543,7 @@ input, textarea, select { font-family: inherit; }
 .ck-modal-close:hover { color: var(--text); }
 .ck-modal-body { overflow-y: auto; padding: 14px 16px; }
 
-/* Multi-internet fica sob o botão principal do túnel. */
+/* Multi-internet sits under the main tunnel button. */
 .ck-routes-btn {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface-2); border: 1px solid var(--border-strong);
@@ -588,7 +560,7 @@ input, textarea, select { font-family: inherit; }
   border-radius: 8px; font-size: 9px; font-weight: 800; letter-spacing: 0;
 }
 
-/* ── Modal de conexões locais priorizadas ───────────────────────────────── */
+/* ── Prioritized local connections modal ── */
 .ck-routes-modal { width: min(720px, 94vw); max-height: 88vh; }
 .ck-route-prio {
   font-size: 11px; font-weight: 800; color: var(--gold);
@@ -623,13 +595,8 @@ input, textarea, select { font-family: inherit; }
 }
 .ck-npcap-modal-actions { display: flex; gap: 8px; align-items: center; }
 
-/* ── Botões ────────────────────────────────────────────────────────────── */
-/* Mesmo desenho do .dmg-chip (Damage Meter: Só party / Vs jogadores) —
-   chip neutro que doura quando "ativo"/em destaque, em vez do botão
-   genérico preenchido de antes. Base = neutro; .primary/.danger tomam o
-   lugar do "active" de cada cor. Vira o padrão do app inteiro por pedido
-   do usuário — só NÃO se aplica a controles com convenção própria (botões
-   de janela ck-winbtn, o switch .toggle), que não são "chip com texto". */
+/* ── Buttons ── */
+/* Neutral chip button style. Active/primary states turn gold; .primary/.danger replace the old filled "active" buttons. Window buttons and toggles keep their own conventions. */
 .btn {
   padding: 5px 12px;
   border: 1px solid var(--border-strong);
@@ -650,7 +617,7 @@ input, textarea, select { font-family: inherit; }
 .btn.small { padding: 4px 10px; font-size: 10px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* ── Linhas / forms ─────────────────────────────────────────────────────── */
+/* ── Rows / forms ── */
 .row {
   display: flex; align-items: center; gap: 12px;
   margin-bottom: 10px;
@@ -683,7 +650,7 @@ input, textarea, select { font-family: inherit; }
 .row-hint.orange { color: var(--orange); }
 .row-hint.warn { color: var(--orange); }
 
-/* ── Toggle ────────────────────────────────────────────────────────────── */
+/* ── Toggle ── */
 .toggle {
   position: relative;
   width: 38px; height: 22px;
@@ -707,12 +674,11 @@ input, textarea, select { font-family: inherit; }
   transform: translateX(16px);
   background: #fff;
 }
-/* Squish: segurando o clique o knob estica na direção do movimento (estilo
-   iOS). O translateX compensa a largura extra pra ponta não vazar. */
+/* Squish: while pressed the knob stretches toward its target (iOS style). translateX keeps the knob inside the track. */
 .toggle:active .toggle-knob { width: 20px; }
 .toggle.on:active .toggle-knob { transform: translateX(12px); }
 
-/* ── Segmented control ─────────────────────────────────────────────────── */
+/* ── Segmented control ── */
 .seg {
   display: inline-flex;
   border: 1px solid var(--border-strong);
@@ -728,7 +694,7 @@ input, textarea, select { font-family: inherit; }
 .seg-btn.active { background: var(--gold-soft); color: var(--gold); font-weight: 600; }
 .seg-btn.active.danger { color: var(--red); }
 
-/* ── Pills/badges ───────────────────────────────────────────────────────── */
+/* ── Pills/badges ── */
 .pill {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 3px 9px;
@@ -744,7 +710,7 @@ input, textarea, select { font-family: inherit; }
 .pill.warn { color: var(--orange); border-color: var(--orange); background: var(--orange-soft); }
 .pill.idle { color: var(--muted); }
 
-/* ── Stat grid ──────────────────────────────────────────────────────────── */
+/* ── Stat grid ── */
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -764,7 +730,7 @@ input, textarea, select { font-family: inherit; }
   margin-top: 4px;
 }
 
-/* ── List ───────────────────────────────────────────────────────────────── */
+/* ── List ── */
 .list {
   font-family: monospace; font-size: 12px; color: var(--muted);
   margin-top: 8px;
@@ -778,7 +744,7 @@ input, textarea, select { font-family: inherit; }
 .list-row:last-child { border-bottom: none; }
 .list-row.muted { color: var(--hint); font-style: italic; }
 
-/* ── Lootlog terminal ──────────────────────────────────────────────────── */
+/* ── Lootlog terminal ── */
 .terminal {
   background: #0a0e14;
   border: 1px solid var(--border);
@@ -806,9 +772,7 @@ input, textarea, select { font-family: inherit; }
 .terminal-line .t-qty { color: #d1d5db; font-weight: 600; }
 .terminal-line .t-tier { font-weight: 700; }
 
-/* COR = tier. Ramp seguindo a paleta do jogo nos tiers que aparecem em CTA
-   (T5 vermelho, T6 laranja, T7 turquesa, T8 dourado); os baixos são só uma
-   escala legível — não vale caçar o hex exato de T1 que ninguém loota. */
+/* Text color = item tier. */
 .terminal-line .t-tier-1 { color: #9ca3af; }
 .terminal-line .t-tier-2 { color: #a3b18a; }
 .terminal-line .t-tier-3 { color: #b08968; }
@@ -818,8 +782,7 @@ input, textarea, select { font-family: inherit; }
 .terminal-line .t-tier-7 { color: #2dd4bf; }
 .terminal-line .t-tier-8 { color: #fbbf24; }
 
-/* SUBLINHADO = encantamento, nas cores do jogo (.1 verde .2 azul .3 roxo
-   .4 dourado). Sem encantamento não sublinha — ver LootItem. */
+/* Underline = enchantment level (game colors). */
 .terminal-line .t-ench-u {
   text-decoration: underline;
   text-decoration-thickness: 2px;
@@ -841,7 +804,7 @@ input, textarea, select { font-family: inherit; }
 .terminal-line .t-ok-tag { color: var(--green); font-weight: 700; }
 .terminal-line .t-ok-msg { color: #9ca3af; }
 
-/* ── DNS row ────────────────────────────────────────────────────────────── */
+/* ── DNS row ── */
 .dns-row {
   display: grid;
   grid-template-columns: 1fr 80px 80px 80px 60px 60px;
@@ -857,7 +820,7 @@ input, textarea, select { font-family: inherit; }
 .dns-row.best { background: var(--green-soft); }
 .dns-row .score { font-weight: 600; }
 
-/* ── Warnings ───────────────────────────────────────────────────────────── */
+/* ── Warnings ── */
 .warning-box {
   background: var(--red-soft);
   border: 1px solid var(--red);
@@ -872,7 +835,7 @@ input, textarea, select { font-family: inherit; }
   color: var(--orange);
 }
 
-/* ── Misc ───────────────────────────────────────────────────────────────── */
+/* ── Misc ── */
 .mono { font-family: monospace; }
 code {
   background: var(--surface-2);
@@ -882,13 +845,13 @@ code {
   border-radius: var(--radius-sm);
 }
 
-/* Scrollbars finas escuras */
+/* Thin dark scrollbars */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
-/* ── Update toast (sutil, canto inferior) ────────────────────────────────── */
+/* ── Update toast (subtle, bottom-right) ── */
 .update-toast {
   position: fixed;
   bottom: 16px; right: 16px;
@@ -909,16 +872,16 @@ code {
   animation: pulse-logo 1.5s ease-in-out infinite;
   flex-shrink: 0;
 }
-/* ─── Toggle na sidebar (lootlog/damage on-off) ──────────────────────────── */
+/* ─── Sidebar toggles (lootlog/damage) ── */
 .nav-toggle .toggle { transform: scale(0.82); }
 
-/* ─── Damage meter ─────────────────────────────────────────────────────── */
+/* ─── Damage meter ── */
 .dmg-filters {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 0 4px;
   border-bottom: 1px solid var(--border);
 }
-/* Chip clicável: ativo = dourado, inativo = neutro. Substituiu os toggles. */
+/* Clickable chip: active = gold, inactive = neutral. */
 .dmg-chip {
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
@@ -935,9 +898,8 @@ code {
 .dmg-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
 .dmg-entry { border-bottom: 1px solid var(--border); }
 .dmg-entry:last-child { border-bottom: none; }
-/* colunas: caret · rank · nome · barra · dano · dps · % */
-/* A coluna de 62px é a arma; largura fixa pra os nomes ficarem alinhados
-   mesmo quando um jogador não tem arma inferida. */
+/* columns: caret · rank · name · bar · damage · dps · % */
+/* Fixed weapon column so names stay aligned even without an inferred weapon. */
 .dmg-row { display: grid; grid-template-columns: 14px 22px 150px 1fr 64px 60px 48px; align-items: center; gap: 8px; padding: 6px 0; }
 .dmg-row.clickable { cursor: pointer; }
 .dmg-row.clickable:hover { background: var(--surface-2); }
@@ -946,11 +908,7 @@ code {
 .dmg-rank { color: var(--hint); font-variant-numeric: tabular-nums; text-align: right; }
 .dmg-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Cor por FAMÍLIA de arma. Agrupadas pela linha de dano do jogo —
-   físicas corpo a corpo em quentes, à distância em frios, mágicas na cor do
-   elemento — pra dar pra ler a composição da party de relance.
-
-   A família NÃO aparece escrita no ranking: é só a cor das barras. */
+/* Bar color by weapon family. The family is not shown as text; only the bar color conveys it. */
 .dmg-entry.w-sword        { --wfam: #e5e7eb; }
 .dmg-entry.w-axe          { --wfam: #f87171; }
 .dmg-entry.w-mace         { --wfam: #fbbf24; }
@@ -967,12 +925,10 @@ code {
 .dmg-entry.w-cursestaff   { --wfam: #84cc16; }
 .dmg-entry.w-holystaff    { --wfam: #fde68a; }
 .dmg-entry.w-naturestaff  { --wfam: #34d399; }
-/* Shapeshifter: âmbar-terroso, longe do verde da natureza e do roxo do
-   arcano — as três são cajado e ficariam parecidas demais. */
+/* Shapeshifter staff uses an amber-earth tone to avoid clashing with nature (green) and arcane (purple) staves. */
 .dmg-entry.w-shapeshifterstaff { --wfam: #d8a657; }
 .dmg-bar-wrap { height: 10px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
-/* Sem arma inferida cai no dourado de antes. A transição faz a barra
-   deslizar a cada poll (2s) em vez de teleportar pro novo valor. */
+/* No inferred weapon → gold fallback. Transition smooths the bar on each 2s poll. */
 .dmg-bar {
   display: flex; align-items: center; justify-content: flex-end;
   height: 100%; padding-right: 5px;
@@ -984,7 +940,7 @@ code {
 .dmg-pct { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; text-align: right; }
 .dmg-dps { font-variant-numeric: tabular-nums; color: var(--info); font-size: 12px; text-align: right; }
 
-/* Bracket expandida: timeline + skills do jogador */
+/* Expanded row: timeline + player skills */
 .dmg-detail { padding: 6px 0 10px 44px; animation: fade-in 0.15s ease-out; }
 
 .dmg-tl { margin-bottom: 10px; }
@@ -995,20 +951,15 @@ code {
   margin-bottom: 3px;
 }
 .dmg-tl-peak { color: var(--wfam, var(--gold)); font-variant-numeric: tabular-nums; }
-/* preserveAspectRatio="none" no SVG → a altura aqui manda, a largura estica. */
+/* SVG preserveAspectRatio="none": height controls the chart, width stretches. */
 .dmg-tl-svg {
   width: 100%; height: 44px; display: block;
   background: var(--surface-2); border-radius: 3px;
 }
-/* Barras dos últimos 3 min na cor da arma do jogador — a variável vem
-   herdada da .dmg-entry, mesma fonte da barra principal. */
+/* Last-3-minute bars use the player's weapon color inherited from .dmg-entry. */
 .dmg-tl-svg rect {
   fill: var(--wfam, var(--gold));
-  /* Smooth entre polls: cada barra é keyada pelo segundo absoluto (ver JSX),
-     então ao chegar poll novo ela DESLIZA pra esquerda (x muda ~2 posições
-     por poll de 2s) em vez de crescer no lugar. Linear ≈ intervalo do poll
-     pra o fluxo parecer contínuo. Altura/nascimento snapam de propósito —
-     é a mudança de x que a gente quer suave, não a de valor. */
+  /* Each bar is keyed by absolute second so new polls slide the timeline left instead of growing in place. Height/value snap to keep motion focused on x. */
   transition: x 2s linear;
 }
 .dmg-tl-axis {
@@ -1017,11 +968,7 @@ code {
 }
 .dmg-tl-empty { margin-bottom: 8px; }
 
-/* ── Empty states (fase 3.5) — os DOIS padrões do site, portados ──────────
-   .empty-area  = .market-empty do site (vazio de área inteira, centrado);
-   .empty-inline = .mover-empty do site (vazio dentro de painel).
-   O site NÃO tem empty "editorial" próprio dos dash-panels (Dashboard não
-   tem empty state nenhum) — regra da casa: porta o que existe, não inventa. */
+/* Empty states: full-area centered and inline-in-panel variants. */
 .empty-area { color: var(--hint); text-align: center; padding: 60px 20px; font-size: 14px; }
 .empty-inline { color: var(--hint); font-size: 12px; padding: 12px 4px; }
 
@@ -1031,32 +978,27 @@ code {
   font-size: 12px; color: var(--text);
   font-variant-numeric: tabular-nums;
 }
-/* Nome da skill com a barra de participação atrás do texto. */
+/* Skill name with participation bar behind the text. */
 .dmg-skill-name { position: relative; overflow: hidden; padding: 1px 4px; }
 .dmg-skill-bar {
   position: absolute; inset: 0 auto 0 0;
   transition: width 0.7s cubic-bezier(0.25, 1, 0.4, 1);
-  /* Mesma cor da barra principal, esmaecida via opacity — evita ter que
-     declarar uma variante translúcida de cada família. */
+  /* Same color as the main bar, faded via opacity to avoid a translucent variant per family. */
   background: var(--wfam, var(--gold));
   opacity: 0.18;
   border-radius: 2px;
 }
 .dmg-skill-label { position: relative; display: inline-flex; align-items: center; gap: 4px; }
-/* Ícone do feitiço vindo do CDN do Albion — a arte já tem folga em volta, por
-   isso 22px aqui rende algo do tamanho do texto da linha. */
+/* Spell icon from Albion CDN. The art has built-in padding, so 22px matches the row text size. */
 .dmg-skill-icon { width: 22px; height: 22px; flex-shrink: 0; object-fit: contain; }
-/* Auto attack sempre em preto e branco: distingue ataque básico de skill de
-   verdade, já que os ícones são de habilidade reaproveitados. */
+/* Auto-attack icons are grayscale to distinguish them from reused skill icons. */
 .dmg-skill-icon.gray { filter: grayscale(1); }
-/* Barra de ações do lootlog: enviar / baixar / limpar + auto-submit, tudo em
-   cima do terminal. Substituiu os dois cards de explicação — o texto virou
-   `title` nos controles. */
+/* Lootlog action bar above the terminal. */
 .loot-toolbar {
   display: flex; align-items: center; gap: 8px;
   margin: 8px 0; flex-wrap: wrap;
 }
-/* id cru ao lado do nome — é o que se confere na calibração. */
+/* Raw spell id next to the name for calibration. */
 .dmg-skill-id { color: var(--hint); font-size: 10px; margin-left: 6px; }
 .dmg-skill-total em { color: var(--muted); font-style: normal; font-size: 10px; }
 .dmg-skill-row.header {
@@ -1066,7 +1008,7 @@ code {
 .dmg-skill-row.muted { color: var(--hint); font-style: italic; }
 
 
-/* ── Botão de Discord na barra da logo ───────────────────────────────────── */
+/* ── Discord button in logo bar ── */
 .sidebar-brand .brand-name { margin-right: auto; }
 .discord-btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1089,7 +1031,7 @@ code {
 .discord-btn.connected:hover { background: var(--red-soft); border-color: var(--red); color: var(--red); }
 .discord-btn.waiting, .discord-btn:disabled { opacity: 0.6; cursor: default; }
 
-/* ── Placeholder da aba Rota/Túnel (aguardando VPS) ──────────────────────── */
+/* ── Route/Tunnel placeholder (waiting for VPS) ── */
 .tunnel-soon {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   text-align: center; gap: 12px;

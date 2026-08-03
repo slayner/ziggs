@@ -1,6 +1,6 @@
-// Cliente HTTP que fala com o backend Ziggs. Sem auth (APIs públicas/companion).
-// Tudo é anon: scan/claim e scan/report — o backend confia no dado validando
-// contra a API pública do Albion. Lootlog é local, nunca vai pro backend.
+// HTTP client for the Ziggs backend. No auth (public/companion APIs).
+// All anonymous: scan claim/report — backend validates against Albion public API.
+// Lootlog is local, never sent to backend.
 
 use anyhow::{anyhow, Result};
 use reqwest::Client;
@@ -9,9 +9,8 @@ use serde::{Deserialize, Serialize};
 pub struct ApiClient {
     base_url: String,
     client: Client,
-    /// Token de portador (bearer) Discord — None = não logado.
-    /// Enviado como header Authorization: Bearer <token> nas rotas /companion/auth/*
-    /// e /companion/lootlog/*.
+    /// Bearer token for Discord auth — None = not logged in.
+    /// Sent as Authorization: Bearer <token> on /companion/auth/* and /companion/lootlog/*.
     discord_token: Option<String>,
 }
 
@@ -27,14 +26,14 @@ pub struct ScanClaim {
 pub struct ScanReportIn {
     pub task_id: i64,
     pub region: String,
-    /// IDs que responderam com batalha válida; o backend busca o payload oficial.
+    /// IDs that returned a valid battle; backend fetches the official payload.
     pub found: Vec<i64>,
-    /// IDs sondados que voltaram 404 (não existem).
+    /// Probed IDs that returned 404 (don't exist).
     pub missing: Vec<i64>,
-    /// IDs que falharam (timeout/5xx) — re-tentar depois.
+    /// IDs that failed (timeout/5xx) — retry later.
     pub errors: Vec<i64>,
-    /// Nick configurado — backend credita batalhas novas (found_by) pro
-    /// agradecimento na página pública. None = anônimo.
+    /// Configured nickname — backend credits new battles (found_by) for
+    /// public page attribution. None = anonymous.
     pub character_name: Option<String>,
 }
 
@@ -73,32 +72,32 @@ pub struct DnsTarget {
     pub hostname: String,
 }
 
-/// Uma entrada da tabela de feitiços. `id` = uniquename do dump (ex.
-/// "HEROICSTRIKE"), útil pra conferir na calibração; `name` = nome legível.
+/// Spell table entry. `id` = uniquename from the dump (e.g. "HEROICSTRIKE"),
+/// useful for calibration checks; `name` = human-readable name.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SpellName {
     pub id: String,
     pub name: String,
-    /// Nome traduzido. Ausente quando o dump não localiza o feitiço (metade
-    /// deles são sub-feitiços internos) ou quando é igual ao inglês.
+    /// Localized name. Absent when the dump doesn't localize the spell
+    /// (half are internal sub-spells) or when it equals English.
     #[serde(default)]
     pub pt: Option<String>,
     #[serde(default)]
     pub es: Option<String>,
-    /// uniquename do feitiço-PAI, quando este é um sub-feitiço interno que
-    /// herdou o nome. O CDN tem arte pro sub-feitiço, mas é um ícone genérico
-    /// de passiva — o da habilidade é o do pai. Ausente = usa o próprio id.
+    /// Parent spell's uniquename — inherited when this is an internal sub-spell.
+    /// The CDN has art for the sub-spell but it's a generic passive icon;
+    /// the parent's icon is the correct one. Absent = use own id.
     #[serde(default)]
     pub icon: Option<String>,
-    /// Família da arma dona do feitiço (bow, dagger, sword, …). Ausente em
-    /// feitiço de mob/consumível, que não vem de arma nenhuma.
+    /// Weapon family of the owning spell (bow, dagger, sword, …).
+    /// Absent for mob/consumable spells (not from any weapon).
     #[serde(default)]
     pub fam: Option<String>,
 }
 
-/// Item do jogo por índice. `i` = campo `Index` do ao-bin-dump, o mesmo número
-/// que vem no pacote de loot; `id` = UniqueName com encantamento
-/// (T7_HEAD_PLATE_SET3@1). `pt`/`es` ausentes = igual ao inglês.
+/// Game item by loot index. `i` = ao-bin-dump document index, the same number
+/// that arrives in loot packets; `id` = UniqueName with enchant
+/// (T7_HEAD_PLATE_SET3@1). Missing `pt`/`es` means same as English.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ItemName {
     pub i: i32,
@@ -112,18 +111,15 @@ pub struct ItemName {
 
 #[derive(Debug, Deserialize)]
 pub struct DnsTargetsOut {
-    /// hostnames dos 3 servidores Albion por região.
+    /// Albion server hostnames by region.
     pub servers: Vec<DnsTarget>,
 }
 
-/// Erro claro quando a resposta não é JSON.
+/// Clear error when the response is not JSON.
 ///
-/// O backend serve o SPA num catch-all: rota que não existe devolve
-/// **200 com index.html**, não 404. Sem esta checagem o companion via
-/// `is_success()` e só quebrava no parse, com erro de desserialização
-/// ilegível — foi exatamente assim que um backend desatualizado (sem
-/// `/companion/items` registrado) deixou o lootlog inteiro em `IDX_2958`
-/// sem ninguém entender por quê.
+/// The backend serves the SPA as a catch-all: an unregistered route returns
+/// **200 with index.html**, not 404. Without this check the companion would
+/// only fail at parse time with a confusing deserialization error.
 fn ensure_json(resp: &reqwest::Response, what: &str) -> Result<()> {
     if !resp.status().is_success() {
         return Err(anyhow!("{what} falhou: HTTP {}", resp.status()));
@@ -144,8 +140,8 @@ fn ensure_json(resp: &reqwest::Response, what: &str) -> Result<()> {
 
 impl ApiClient {
     pub fn new(base_url: &str) -> Self {
-        // X-Ziggs-Install em TODA request: identidade estável da instalação.
-        // Como é default header do Client, nenhum call site precisa saber disso.
+        // X-Ziggs-Install is sent on every request as a stable install identity.
+        // As a default header, no call site needs to set it manually.
         let mut headers = reqwest::header::HeaderMap::new();
         if let Ok(v) = reqwest::header::HeaderValue::from_str(&crate::config::install_id()) {
             headers.insert("X-Ziggs-Install", v);
@@ -216,8 +212,8 @@ impl ApiClient {
         Ok(resp.json().await?)
     }
 
-    /// Nomeia um personagem (o próprio do usuário) pra manter o perfil quente no
-    /// site. Só o NOME — o backend busca o dado na Albion (ver /companion/warm).
+    /// Names the user's own character to keep the profile warm on the site.
+    /// Only the NAME is sent — the backend fetches data from Albion (see /companion/warm).
     pub async fn warm_profile(&self, name: &str, region: &str) -> Result<WarmProfileOut> {
         let url = format!("{}/companion/warm", self.base_url);
         let body = serde_json::json!({ "name": name, "region": region });
@@ -228,9 +224,9 @@ impl ApiClient {
         Ok(resp.json().await?)
     }
 
-    /// Fase 2: reporta players vistos em jogo pra mantê-los quentes. O backend é
-    /// refresh-only (só re-aquece quem já conhece e está velho); nome
-    /// desconhecido é ignorado, não faz bootstrap (ver /companion/warm/seen).
+    /// Phase 2: report players seen in-game to keep them warm. The backend is
+    /// refresh-only (only re-warms who we already know and is stale); unknown
+    /// names are ignored, no bootstrap (see /companion/warm/seen).
     pub async fn warm_seen(&self, names: &[String], region: &str) -> Result<()> {
         let url = format!("{}/companion/warm/seen", self.base_url);
         let body = serde_json::json!({ "region": region, "names": names });
@@ -251,8 +247,8 @@ impl ApiClient {
         Ok(out)
     }
 
-    /// Tabela de nomes de feitiço (índice = posição). Baixada uma vez e
-    /// cacheada em disco pelo chamador — muda só quando o Albion patcheia.
+    /// Spell name table indexed by position. Downloaded once and cached on
+    /// disk by the caller; changes only when Albion patches.
     pub async fn spell_names(&self) -> Result<Vec<SpellName>> {
         let url = format!("{}/companion/spells", self.base_url);
         let resp = self.client.get(&url).send().await?;
@@ -260,8 +256,8 @@ impl ApiClient {
         Ok(resp.json().await?)
     }
 
-    /// Catálogo de itens por índice. Mesmo padrão dos feitiços: baixa uma vez,
-    /// o chamador cacheia em disco. ~1,5 MB.
+    /// Item catalog by loot index. Same pattern as spell names: download once,
+    /// cache on disk. ~1.5 MB.
     pub async fn items(&self) -> Result<Vec<ItemName>> {
         let url = format!("{}/companion/items", self.base_url);
         let resp = self.client.get(&url).send().await?;
@@ -269,9 +265,8 @@ impl ApiClient {
         Ok(resp.json().await?)
     }
 
-    /// Mapeamento UniqueName → game_name (nome em inglês do jogo).
-    /// Usado pelo sniffer pra converter ItemTypeId do pacote em game_name
-    /// antes de mandar pro backend. ~500 KB.
+    /// UniqueName → in-game English name mapping. Used by the sniffer to
+    /// translate packet ItemTypeId before uploading. ~500 KB.
     pub async fn items_map(&self) -> Result<std::collections::HashMap<String, String>> {
         let url = format!("{}/companion/items-map", self.base_url);
         let resp = self.client.get(&url).send().await?;
@@ -299,12 +294,12 @@ impl ApiClient {
         Ok(())
     }
 
-    /// Estimativa ILUSTRATIVA do valor em prata dos loots capturados nesta
-    /// sessão. Só alimenta o badge da aba Lootlog — não é usado em
-    /// payout/reconcile. Preço vem do cache DB do backend (1h, mediana 6
-    /// cidades); item novo = 1 HTTP, depois cacheado.
+    /// Rough silver value estimate for loot captured this session. Feeds the
+    /// Lootlog tab badge only — not used for payouts/reconcile. Prices come
+    /// from the backend price cache (1h, median across 6 cities); a new item
+    /// costs one HTTP, then is cached.
     pub async fn loot_silver_estimate(&self, items: &[(String, i64)]) -> Result<i64> {
-        // Backend limita 200 itens por request — chunka em 190 (margem) e soma.
+        // Backend limits 200 items per request — chunk at 190 (margin) and sum.
         let chunk_size = 190;
         let mut total: i64 = 0;
         for chunk in items.chunks(chunk_size) {
@@ -344,8 +339,8 @@ impl ApiClient {
 
     // ── Lootlog auto-submit ────────────────────────────────────────────────
 
-    /// Eventos do usuário logado (todas as guildas) em andamento ou revisão.
-    /// Sem guild_id — o backend deriva das inscrições.
+    /// Logged-in user's active events across all guilds (in progress or review).
+    /// No guild_id is sent; the backend derives it from event signups.
     pub async fn active_events(&self) -> Result<Vec<ActiveEvent>> {
         let (key, val) = self.auth_header().ok_or_else(|| anyhow!("não logado"))?;
         let url = format!("{}/companion/lootlog/active-events", self.base_url);
@@ -356,8 +351,8 @@ impl ApiClient {
         Ok(resp.json().await?)
     }
 
-    /// A guilda não vai no corpo: o backend a deriva da inscrição do usuário
-    /// no evento (e rejeita se não houver inscrição).
+    /// Guild is not sent in the body; the backend derives it from the user's
+    /// event signup and rejects if there is none.
     pub async fn submit_lootlog(
         &self, event_id: i64, csv_text: &str,
     ) -> Result<LootlogIngestOut> {
@@ -394,8 +389,7 @@ pub struct ActiveEvent {
     pub guild_name: Option<String>,
     pub title: Option<String>,
     pub scheduled_at: Option<String>,
-    /// "in_progress" (rolando) ou "review" (fechou, em revisão — gatilho do
-    /// auto-submit).
+    /// "in_progress" or "review" (review triggers auto-submit).
     pub state: String,
 }
 

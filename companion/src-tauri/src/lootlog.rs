@@ -1,7 +1,6 @@
-// Lootlog: o companion captura eventos de loot via packet sniffing (opcode
-// 256 = OtherGrabbedLoot) e os acumula num buffer na sessão. Este módulo
-// converte o buffer em CSV no formato lootlogger (compatível com o backend)
-// e salva em arquivo quando o usuário pede o download.
+// Lootlog: captures OtherGrabbedLoot events via packet sniffing and accumulates
+// them in a session buffer. Converts the buffer to ao-loot-logger CSV and saves
+// to a file on user request.
 
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -17,8 +16,7 @@ fn session_path() -> std::path::PathBuf {
         .join("loot_session.json")
 }
 
-/// A sessão continua após restart até o usuário usar "limpar". Isso preserva
-/// o loot enquanto o CTA demora para entrar em review, sem inventar escopo novo.
+// Session persists across restarts until the user clears it.
 pub fn load_session() -> anyhow::Result<Vec<LootEvent>> {
     match std::fs::read(session_path()) {
         Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
@@ -41,12 +39,12 @@ pub struct LootlogStatus {
     pub last_saved_path: Option<String>,
 }
 
-/// Linha de loot no formato que o backend espera (mesmo schema do lootlogger).
+// Loot row matching the backend's expected ao-loot-logger schema.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LootRow {
     pub ts: Option<String>,
     pub item_id: String,
-    /// Nome em inglês (o que vai pro CSV). pt/es são só pra UI escolher.
+    // English name goes into the CSV; UI picks localized name separately.
     pub item_name: String,
     #[serde(default)]
     pub item_name_pt: String,
@@ -58,10 +56,8 @@ pub struct LootRow {
     pub looted_from: String,
 }
 
-// ─── Tabela de itens (índice do pacote → id + nome) ──────────────────────────
-// O índice vem do campo `Index` do ao-bin-dump — AUTORITATIVO, é o mesmo que o
-// jogo usa no pacote (ao contrário dos feitiços, que dependem de hipótese de
-// ordem). Baixada uma vez do backend e cacheada em disco.
+// Item table: packet index → id + localized names. Index matches the ao-bin-dump
+// packet catalog; downloaded once from the backend and cached locally.
 
 static ITEMS: OnceLock<RwLock<HashMap<i32, crate::api::ItemName>>> = OnceLock::new();
 
@@ -73,9 +69,8 @@ fn item_cache_path() -> std::path::PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| ".".into())
         .join("ziggs-companion")
-        // v2: o índice do catálogo mudou de items.json `Index` p/ items.txt
-        // (índice de pacote real). Cache v1 mapeava o índice errado — o nome do
-        // arquivo é bumpado pra abandonar o cache velho e forçar 1 refetch.
+        // v2: switched to the real packet index. Bumping the filename invalidates
+        // the old cache and forces one refetch.
         .join("item_names_v2.json")
 }
 
@@ -86,9 +81,8 @@ fn store(list: Vec<crate::api::ItemName>) {
     }
 }
 
-/// Item resolvido: `(item_id, nome_en, nome_pt, nome_es)`. Índice desconhecido
-/// (item novo que o dump ainda não tem) devolve o fallback `IDX_{n}` — mesma
-/// convenção do backend, então nada se perde no ingest.
+// Resolve index to (item_id, en, pt, es). Unknown indexes fall back to `IDX_{n}`,
+// matching the backend convention so nothing is dropped on ingest.
 pub fn resolve(index: i32) -> (String, String, String, String) {
     if let Ok(r) = items().read() {
         if let Some(it) = r.get(&index) {
@@ -102,9 +96,8 @@ pub fn resolve(index: i32) -> (String, String, String, String) {
     (fallback.clone(), fallback.clone(), fallback.clone(), fallback)
 }
 
-/// Carrega do cache em disco e, se vazio, baixa do backend — repetindo até
-/// conseguir (mesmo motivo do `load_spell_names`: no autostart a rede não está
-/// pronta, e uma tentativa única deixava o lootlog inteiro em `IDX_2958`).
+// Load from disk cache, or download from the backend on a 60s retry loop. A single
+// failure at boot would leave every entry as `IDX_n`.
 pub async fn load_item_names() {
     if let Ok(bytes) = std::fs::read(item_cache_path()) {
         if let Ok(v) = serde_json::from_slice::<Vec<crate::api::ItemName>>(&bytes) {
@@ -134,22 +127,18 @@ pub async fn load_item_names() {
     }
 }
 
-/// Cabeçalho do CSV no formato ao-loot-logger (compatível com o backend Ziggs,
-/// que casa por NOME de coluna e tolera extras/ordem — ver `parse_loot_rows`).
+// ao-loot-logger CSV header. The backend matches by column name and tolerates
+// extra columns and any order.
 const CSV_HEADER: &str = "timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;\
 item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name";
 
-/// Converte o buffer de LootEvents capturados em CSV no formato lootlogger.
-///
-/// `item_name` sai em INGLÊS de propósito: o CSV é interoperável (vai pro site
-/// da guilda, é comparado com log de outra pessoa que pode estar em outro
-/// idioma). A tradução é coisa de UI, não de arquivo.
+// Convert captured LootEvents into ao-loot-logger CSV. Item names stay in English
+// so the file stays interoperable across clients in different languages.
 pub fn build_csv_from_loot(events: &[LootEvent]) -> String {
     let mut lines = Vec::with_capacity(events.len() + 1);
     lines.push(CSV_HEADER.to_string());
     for e in events {
-        // Guild/alliance não vêm no pacote de loot — ficam vazios e o backend
-        // reconcilia pelo nome do looter.
+        // Guild/alliance are not present in the loot packet; backend reconciles by looter name.
         let (item_id, item_name, _, _) = resolve(e.item_index);
         lines.push(format!(
             "{};{};{};{};{};{};{};{};{};{}",
@@ -159,11 +148,9 @@ pub fn build_csv_from_loot(events: &[LootEvent]) -> String {
     lines.join("\n")
 }
 
-/// Salva o texto CSV na pasta Downloads do usuário.
+// Save CSV text to the user's Downloads folder.
 pub fn save_csv(csv_text: &str) -> std::io::Result<String> {
-    // Downloads é onde o usuário procura um arquivo que ele mandou baixar.
-    // Sem subpasta: um arquivo avulso com nome datado não bagunça nada, e
-    // enterrar em ziggs-companion/ só fazia o usuário caçar.
+    // Use a dated file directly in Downloads for easy discovery.
     let dir = dirs::download_dir()
         .or_else(dirs::document_dir)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -192,8 +179,7 @@ mod tests {
         }
     }
 
-    /// Um teste só: a tabela é global, dois testes mexendo nela em paralelo
-    /// dariam flake.
+    // Single test because the global item table would flake under parallel access.
     #[test]
     fn csv_traz_id_e_nome_e_bate_com_o_parser_do_backend() {
         store(vec![crate::api::ItemName {
@@ -207,15 +193,13 @@ mod tests {
         let csv = build_csv_from_loot(&[ev(2958), ev(999999)]);
         let lines: Vec<&str> = csv.lines().collect();
 
-        // O backend casa por NOME de coluna (parse_loot_rows); estas são as
-        // que ele exige. Renomear qualquer uma quebra o ingest em silêncio.
+        // These columns are required by the backend's column-name parser.
         let cols: Vec<&str> = lines[0].split(';').collect();
         for req in ["timestamp_utc", "looted_by__guild", "looted_by__name",
                     "item_id", "quantity", "looted_from__name"] {
             assert!(cols.contains(&req), "coluna {req} sumiu do header");
         }
-        // Toda linha tem que ter exatamente as colunas do header, senão o
-        // parser desalinha os campos.
+        // Each row must align with the header column count.
         for l in &lines[1..] {
             assert_eq!(l.split(';').count(), cols.len(), "linha desalinhada: {l}");
         }
@@ -225,11 +209,10 @@ mod tests {
         assert_eq!(
             f[cols.iter().position(|c| *c == "item_name").unwrap()],
             "Grandmaster's Guardian Helmet",
-            "CSV vai em inglês, não traduzido"
+            "CSV must stay in English"
         );
 
-        // Índice fora do dump não pode virar linha vazia — o backend precisa
-        // de item_id preenchido pra não descartar a coleta.
+        // Unknown index must still emit an item_id so the backend keeps the row.
         assert!(lines[2].contains("IDX_999999"));
     }
 

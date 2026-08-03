@@ -1,12 +1,5 @@
-// Fila de transferência com persistência em disco.
-//
-// Quando o jogador está em zona PvP, NÃO envia dados ao backend — acumula local.
-// Quando entra em zona azul, faz flush de tudo (mesmo que velho — dados antigos
-// ainda útil pra histórico). Se fechar o programa em PvP, a fila persiste em
-// JSON e volta no próximo startup.
-//
-// Sem memory read (Fase 1): zona é informada pelo usuário via toggle.
-// Fase 2.5 (memory read): substituir toggle por detecção automática do mapa.
+// Disk-persisted transfer queue. Buffers outbound data in PvP zones and flushes
+// in blue zones. Phase 1 uses a manual toggle; phase 2.5 will use map detection.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -111,15 +104,10 @@ impl TransferQueue {
         }
     }
 
-    /// Envia todos os items pendentes. Remove cada um só após sucesso.
-    /// Retorna (sent, failed).
-    /// Envia no MÁXIMO `max` itens e volta, com respiro entre um e outro.
+    /// Drain at most `max` items with a short pause between each.
+    /// Returns (sent, failed). Items are removed only after a successful ACK.
     ///
-    /// A fila é drenada aos poucos, continuamente, em vez de despejada de uma
-    /// vez. Depois de um tempo em zona de risco ela acumula, e um `flush_all`
-    /// na volta pra zona azul viraria uma rajada de dezenas de requests — pico
-    /// de rede e CPU exatamente quando o jogador acabou de sair da luta.
-    /// Trabalho constante e pequeno passa despercebido; rajada, não.
+    /// Gradual draining avoids a network/CPU burst when leaving a PvP zone.
     pub async fn flush_some(&self, api: &ApiClient, max: usize) -> (usize, usize) {
         let _uploader = self.uploader.lock().await;
         let mut sent = 0;
@@ -137,7 +125,7 @@ impl TransferQueue {
                 sent += 1;
                 let mut items = self.items.lock().await;
                 if let Some(pos) = items.iter().position(|queued| queued == item) {
-                    items.remove(pos); // só depois do ACK
+                    items.remove(pos); // only after ACK
                     if let Err(e) = save_queue(&self.path, &items) {
                         tracing::error!("ACK recebido, mas falhou salvar remoção da fila: {e:#}");
                     }
@@ -154,7 +142,7 @@ impl TransferQueue {
                             updated.retries, updated.kind
                         );
                     } else {
-                        items.push(updated); // mover pro fim: próximos items tentam primeiro
+                        items.push(updated); // move to the back so other items get a chance first
                     }
                     if let Err(e) = save_queue(&self.path, &items) {
                         tracing::error!("falha ao salvar fila após mover item falhado: {e:#}");
@@ -165,7 +153,7 @@ impl TransferQueue {
         (sent, failed)
     }
 
-    /// Um item. `true` = aceito pelo backend (pode sair da fila).
+    /// Try sending a single item. Returns true when the backend accepts it.
     async fn send_one(&self, api: &ApiClient, item: &QueuedItem) -> bool {
         match item.kind.as_str() {
             "scan_report" => match serde_json::from_value::<ScanReportIn>(item.payload.clone()) {
@@ -227,9 +215,9 @@ mod tests {
         let item = QueuedItem { kind: "prices".into(), payload: serde_json::json!({}), queued_at: "1".into(), retries: 0 };
         let mut items = vec![item.clone()];
         let pending = items[0].clone();
-        assert_eq!(items, vec![item.clone()]); // enviar/clonar não drena
+        assert_eq!(items, vec![item.clone()]); // cloning must not drain
         let pos = items.iter().position(|queued| queued == &pending).unwrap();
-        items.remove(pos); // operação feita somente após ACK em flush_some
+        items.remove(pos); // mirrors the ACK-only removal in flush_some
         assert!(items.is_empty());
     }
 }

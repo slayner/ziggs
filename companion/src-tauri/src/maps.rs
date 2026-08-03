@@ -1,5 +1,5 @@
-// Resolve o índice de cluster que o Albion envia (ex: "0000") pro nome legível
-// ("Thetford"). Tabela gerada de ao-bin-dumps/cluster/world.json (@id → @displayname).
+// Map raw Albion cluster indices (e.g. "0000") to readable names (e.g. "Thetford").
+// Table generated from ao-bin-dumps/cluster/world.json (@id → @displayname).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -12,9 +12,8 @@ fn table() -> &'static HashMap<String, String> {
     })
 }
 
-/// Nome legível do mapa a partir do índice cru. O jogo às vezes manda sufixo
-/// "@..." (hideouts/instâncias) — cortamos antes de buscar. Sem match, devolve
-/// o índice cru pra não sumir com a info.
+/// Resolve a raw cluster index to a readable map name.
+/// Strip any "@..." suffix (hideouts/instances) before lookup; fall back to the raw index.
 pub fn resolve(raw_index: &str) -> String {
     let key = raw_index.split('@').next().unwrap_or(raw_index);
     table().get(key).cloned().unwrap_or_else(|| raw_index.to_string())
@@ -28,7 +27,7 @@ mod tests {
     fn known_cities() {
         assert_eq!(resolve("0000"), "Thetford");
         assert_eq!(resolve("3004"), "Martlock");
-        assert_eq!(resolve("0000@abc"), "Thetford"); // sufixo cortado
+        assert_eq!(resolve("0000@abc"), "Thetford"); // suffix stripped
     }
 
     #[test]

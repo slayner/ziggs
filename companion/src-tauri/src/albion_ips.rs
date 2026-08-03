@@ -1,14 +1,12 @@
-// Descoberta de IPs dos servidores do Albion — precisa resolver os hostnames
-// periodicamente porque os IPs mudam (rotação de datacenters).
-//
-// Cache simples: resolve na primeira chamada e re-resolve a cada 5 min.
+// Resolve Albion server hostnames to IPs and caches them for 5 minutes.
+// IPs change as datacenters rotate, so periodic re-resolution is required.
 
 use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-// Hostnames dos servidores do Albion (batem com player_tracker.HOSTS)
+// Albion server hostnames (must match player_tracker.HOSTS)
 const ALBION_HOSTNAMES: &[&str] = &[
     "gameinfo.albiononline.com",        // Americas
     "gameinfo-ams.albiononline.com",    // Europe
@@ -33,9 +31,9 @@ async fn cache() -> &'static Mutex<Option<IpCache>> {
     CACHE.get_or_init(|| Mutex::new(None))
 }
 
-const TTL: Duration = Duration::from_secs(300); // 5 min
+const TTL: Duration = Duration::from_secs(300); // 5 minutes
 
-/// Resolve os hostnames do Albion em IPs. Usa cache de 5 min.
+/// Resolve Albion hostnames to IPs, using a 5-minute cache.
 pub async fn albion_server_ips() -> Vec<IpAddr> {
     let c = cache().await;
     {
@@ -46,7 +44,7 @@ pub async fn albion_server_ips() -> Vec<IpAddr> {
             }
         }
     }
-    // re-resolve em thread bloqueante (ToSocketAddrs é síncrono)
+    // Re-resolve on a blocking thread because ToSocketAddrs is synchronous.
     let ips = tokio::task::spawn_blocking(|| {
         let mut ips = Vec::new();
         for host in ALBION_HOSTNAMES {
@@ -68,7 +66,7 @@ pub async fn albion_server_ips() -> Vec<IpAddr> {
     ips
 }
 
-/// Destinos do split tunnel: gameplay Photon /24 e serviços gameinfo /32.
+/// Split-tunnel destinations: Photon /24 game networks and gameinfo /32 hosts.
 pub async fn albion_route_targets() -> Vec<(Ipv4Addr, Ipv4Addr)> {
     let mut routes = ALBION_GAME_NETWORKS.iter()
         .map(|p| (Ipv4Addr::new(p[0], p[1], p[2], 0), Ipv4Addr::new(255, 255, 255, 0)))
@@ -82,7 +80,7 @@ pub async fn albion_route_targets() -> Vec<(Ipv4Addr, Ipv4Addr)> {
     routes
 }
 
-/// Força refresh do cache.
+/// Force a cache refresh.
 pub async fn refresh() {
     let c = cache().await;
     let mut g = c.lock().await;

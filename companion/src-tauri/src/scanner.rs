@@ -1,15 +1,11 @@
-// Battle scanner worker: pega ranges distribuídos pelo backend, sonda a API
-// pública do Albion e reporta resultados. N clients = N IPs = rate limit
-// distribuído — o ponto central do plano.
+// Battle scanner: claims ID ranges from backend, probes Albion public API,
+// reports results. N clients = N source IPs = distributed rate limiting.
 //
-// Zone-aware: se o jogador estiver em zona PvP (e pvp_pause_transfer=true),
-// o report vai pra fila local em vez do backend. Flush quando voltar pra zona azul.
+// Zone-aware: in PvP, reports queue locally; flushed when back in blue zone.
 //
-// Throttle adaptativo: o delay entre sondagens sobe/desce conforme a API do
-// Albion responde. 429 → recua multiplicativo (×2, teto 5s). 200 sustentado →
-// recupera aditivo (-50ms por sondagem, piso 150ms). Mesma filosofia AIMD do
-// albion_gate no backend, mas no client — porque o companion fala direto com
-// a API pública, não passa pelo rate limiter do servidor.
+// AIMD throttle: 429 → backoff ×2 (cap 5s); sustained 200 → recover -50ms
+// per probe (floor 150ms). Same philosophy as backend albion_gate, but on
+// the client since we talk to Albion directly.
 
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -22,8 +18,7 @@ use crate::api::{ApiClient, ScanClaim, ScanReportIn, KillScanClaim, KillScanRepo
 use crate::transfer::TransferQueue;
 use crate::sniffer::DebugLine;
 
-/// Empurra linha pro buffer de debug (terminal da UI), se presente.
-/// Cap em 500 linhas (mesmo teto dos outros pushers).
+/// Push a line to the debug buffer (UI terminal), capped at 500 lines.
 async fn emit_debug(debug: &Option<Arc<Mutex<Vec<DebugLine>>>>, level: &str, msg: String) {
     if let Some(d) = debug {
         let line = DebugLine { ts: crate::photon_parser::now_iso_utc(), level: level.into(), msg };
@@ -33,13 +28,13 @@ async fn emit_debug(debug: &Option<Arc<Mutex<Vec<DebugLine>>>>, level: &str, msg
     }
 }
 
-/// Delay entre sondagens — adaptativo. Começa em 150ms (cortesia mínima).
-/// 429 dobra (teto 5s). 200 sustentado recupera -50ms por sondagem (piso 150ms).
-/// Atômico pra não precisar de lock no hot loop do scan.
+/// Inter-probe delay — adaptive. Starts at 150ms. 429 doubles (cap 5s).
+/// Sustained 200 recovers -50ms per probe (floor 150ms). Atomic to avoid
+/// locking in the scan hot loop.
 const THROTTLE_MIN_MS: u64 = 150;
 const THROTTLE_MAX_MS: u64 = 5_000;
 const THROTTLE_START_MS: u64 = 150;
-const THROTTLE_RECOVER_MS: u64 = 50;  // -50ms por 200 sustentado
+const THROTTLE_RECOVER_MS: u64 = 50;  // -50ms per sustained 200
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScanStats {
@@ -52,8 +47,8 @@ pub struct ScanStats {
     pub last_error: Option<String>,
     pub queued_reports: usize,
     pub zone: String,               // "blue" | "pvp" | "unknown"
-    pub throttle_ms: u64,           // delay adaptativo entre sondagens (transparência)
-    // Kill scan — roda em paralelo ao battle scan, mesmo throttle/zone.
+    pub throttle_ms: u64,           // adaptive inter-probe delay (transparency)
+    // Kill scan — runs in parallel with battle scan, shared throttle/zone.
     pub kill_cycles: u64,
     pub kill_events_found: u64,
     pub kill_events_missing: u64,
@@ -84,21 +79,19 @@ impl Default for ScanStats {
 pub struct Scanner {
     pub stats: Arc<Mutex<ScanStats>>,
     shutdown: Arc<AtomicBool>,
-    /// Zona atual — lida por commands da UI (set_zone). Default: blue (envia direto).
+    /// Current zone — read by UI commands (set_zone). Default: blue (sends directly).
     pub zone: Arc<Mutex<crate::transfer::ZoneType>>,
-    /// Fila de transferência — compartilhada com AppState.
+    /// Transfer queue — shared with AppState.
     pub queue: Option<Arc<TransferQueue>>,
-    /// Se true, pausa transferência em zona PvP. Mutável via set_config.
+    /// If true, pauses transfer in PvP zone. Mutable via set_config.
     pub pvp_pause: Arc<Mutex<bool>>,
-    /// Nick do jogador — vai no report pro backend creditar batalhas novas
-    /// (agradecimento na página pública). Mutável via set_config.
+    /// Player nickname — included in reports for battle attribution on the
+    /// public page. Mutable via set_config.
     pub character_name: Arc<Mutex<Option<String>>>,
-    /// Delay entre sondagens (ms), adaptativo. 429 dobra, 200 sustentado recupera.
-    /// Atômico: lido/escrito no hot loop do cycle sem lock.
+    /// Inter-probe delay (ms), adaptive. 429 doubles, sustained 200 recovers.
+    /// Atomic: read/written in the cycle hot loop without locking.
     pub throttle_ms: Arc<AtomicU64>,
-    /// Buffer de debug (terminal da UI). Opcional — ausente quando o scanner
-    /// roda sem UI (testes). Linhas por ciclo mantêm o usuário ciente do que
-    /// o nó distribuído está fazendo.
+    /// Debug buffer (UI terminal). Absent when scanner runs without UI.
     pub debug: Option<Arc<Mutex<Vec<DebugLine>>>>,
 }
 
@@ -126,8 +119,8 @@ impl Scanner {
         self
     }
 
-    /// Clona os Arcs internos pra criar um scanner que roda numa task separada
-    /// mas compartilha stats/zone/queue/pvp_pause/throttle/debug com o original.
+    /// Clone internal Arcs to spawn in a separate task, sharing state with
+    /// the original scanner.
     pub fn clone_for_spawn(&self) -> Scanner {
         Scanner {
             stats: Arc::clone(&self.stats),
@@ -149,7 +142,7 @@ impl Scanner {
         self.shutdown.store(false, Ordering::Relaxed);
     }
 
-    /// Define a zona atual. Se mudar de PvP→Blue, dispara flush da fila.
+    /// Set current zone. Flushes queue on PvP→Blue transition.
     pub async fn set_zone(&self, zone: crate::transfer::ZoneType, _api: &ApiClient) {
         let was_pvp = matches!(self.zone.lock().await.clone(), crate::transfer::ZoneType::PvP);
         *self.zone.lock().await = zone.clone();
@@ -160,9 +153,9 @@ impl Scanner {
         };
         self.stats.lock().await.zone = zone_str.to_string();
 
-        // Voltou pra zona azul: só atualiza o contador. O envio é do uploader
-        // único, aos poucos — despejar a fila inteira aqui era uma rajada de
-        // rede logo depois da luta, o pior momento possível.
+        // Back in blue zone: just update counter. The single uploader sends
+        // gradually — flushing the whole queue here would spike network right
+        // after a fight, the worst possible time.
         if was_pvp && matches!(zone, crate::transfer::ZoneType::Blue) {
             if let Some(q) = &self.queue {
                 self.stats.lock().await.queued_reports = q.pending_count().await;
@@ -170,8 +163,8 @@ impl Scanner {
         }
     }
 
-    /// Loop principal: claim → scan → report → sleep → repete.
-    /// Para quando `stop()` ou erro persistente de conexão.
+    /// Main loop: claim → scan → report → sleep → repeat.
+    /// Stops on `stop()` or persistent connection error.
     pub async fn run(&self, api: ApiClient, enabled: bool) {
         if !enabled {
             self.stats.lock().await.status = "disabled".into();
@@ -188,9 +181,8 @@ impl Scanner {
                 self.stats.lock().await.status = "idle".into();
                 break;
             }
-            // Em zona PvP com pause ligado: não claima novas tarefas — só
-            // acumula local. Dorme 30s (economia de CPU/rede pro jogador
-            // que está em combate). Retoma claim quando volta pra zona azul.
+            // In PvP with pause on: don't claim new tasks, just accumulate locally.
+            // Sleep 30s (saves CPU/network during combat). Resumes on blue zone.
             let in_pvp = *self.pvp_pause.lock().await && matches!(
                 self.zone.lock().await.clone(),
                 crate::transfer::ZoneType::PvP
@@ -220,8 +212,8 @@ impl Scanner {
         }
     }
 
-    /// Um ciclo: claim um range, sonda cada ID, reporta (ou enfileira se PvP).
-    /// Retorna Ok(true) se processou um range, Ok(false) se não havia trabalho.
+    /// One cycle: claim a range, probe each ID, report (or queue if PvP).
+    /// Returns Ok(true) if a range was processed, Ok(false) if no work.
     async fn cycle(&self, api: &ApiClient) -> Result<bool> {
         let claim: ScanClaim = match api.claim_scan().await {
             Ok(c) => c,
@@ -247,7 +239,7 @@ impl Scanner {
                         Ok(v) if valid_battle_payload(&v) => found.push(id),
                         _ => errors.push(id),
                     }
-                    // 200 sustentado → recupera throttle (-50ms, piso 150ms).
+                    // Sustained 200 → recover throttle (-50ms, floor 150ms).
                     let cur = self.throttle_ms.load(Ordering::Relaxed);
                     if cur > THROTTLE_MIN_MS {
                         self.throttle_ms.store(
@@ -258,7 +250,7 @@ impl Scanner {
                 }
                 Ok(resp) if resp.status().as_u16() == 404 => missing.push(id),
                 Ok(resp) if resp.status().as_u16() == 429 => {
-                    // rate limit: espera Retry-After ou 5s e segue.
+                    // rate limit: wait Retry-After or 5s and continue.
                     let wait = resp
                         .headers()
                         .get("Retry-After")
@@ -267,14 +259,14 @@ impl Scanner {
                         .unwrap_or(5.0);
                     tokio::time::sleep(Duration::from_secs_f64(wait)).await;
                     errors.push(id);
-                    // 429 → recua multiplicativo (×2, teto 5s). Ganância detectada.
+                    // 429 → multiplicative backoff (×2, cap 5s).
                     let cur = self.throttle_ms.load(Ordering::Relaxed);
                     let next = (cur * 2).min(THROTTLE_MAX_MS);
                     self.throttle_ms.store(next, Ordering::Relaxed);
                 }
                 _ => errors.push(id),
             }
-            // throttle adaptativo entre sondagens (cortesia à API pública).
+            // Adaptive throttle between probes (courtesy to public API).
             let ms = self.throttle_ms.load(Ordering::Relaxed);
             tokio::time::sleep(Duration::from_millis(ms)).await;
         }
@@ -288,7 +280,7 @@ impl Scanner {
             character_name: self.character_name.lock().await.clone(),
         };
 
-        // Zone-aware: zona azul → envia direto (+ flush fila). PvP → enfileira.
+        // Zone-aware: blue → send directly (+ flush queue). PvP → enqueue.
         let in_pvp = *self.pvp_pause.lock().await && matches!(
             self.zone.lock().await.clone(),
             crate::transfer::ZoneType::PvP
@@ -301,11 +293,7 @@ impl Scanner {
                 let pending = q.pending_count().await;
                 self.stats.lock().await.queued_reports = pending;
             }
-            // ponytail: sem api.report_scan — dado fica local até zona azul.
-            // Conta como ciclo processado mas sem confirmar pro backend.
-            // O claim vai expirar em 15min e voltar a pending se não reportar,
-            // mas isso é ok — outro companion ou re-claim pega depois.
-            // Upgrade path: estender CLAIM_TTL no backend pra companions em PvP.
+            // Claims expire server-side; another scanner will pick them up.
             let mut s = self.stats.lock().await;
             s.cycles += 1;
             s.last_cycle_at = Some(chrono_now());
@@ -316,8 +304,8 @@ impl Scanner {
             return Ok(true);
         }
 
-        // Zona azul: manda ESTE report direto. A fila acumulada fica com o
-        // uploader único — misturar as duas coisas aqui recriava a rajada.
+        // Blue zone: send this report directly. Queued reports stay with the
+        // single uploader — mixing both here would recreate the burst.
         let out = api.report_scan(&report).await?;
         {
             let mut s = self.stats.lock().await;
@@ -338,7 +326,7 @@ impl Scanner {
 }
 
 fn host_for(region: &str) -> &'static str {
-    // Bater com backend player_tracker.HOSTS
+    // Keep in sync with backend player_tracker.HOSTS.
     match region {
         "americas" => "gameinfo.albiononline.com",
         "europe" => "gameinfo-ams.albiononline.com",
@@ -362,8 +350,8 @@ fn valid_kill_payload(value: &serde_json::Value) -> bool {
 }
 
 // ─── Kill Scanner ────────────────────────────────────────────────────────────
-// Mesmo padrão do battle Scanner, mas sonda /api/gameinfo/events/{id} em vez
-// de /battles/{id}. Roda em paralelo, compartilha throttle e zone-awareness.
+// Same pattern as the battle Scanner, but probes /api/gameinfo/events/{id}
+// instead of /battles/{id}. Runs in parallel, shares throttle and zone-awareness.
 
 pub struct KillScanner {
     pub stats: Arc<Mutex<ScanStats>>,
@@ -386,8 +374,7 @@ impl KillScanner {
         }
     }
 
-    /// Clona os Arcs pra spawnar numa task separada, compartilhando stats com
-    /// o Scanner de batalhas (mesmo throttle, mesma zona).
+    /// Clone Arcs from a battle Scanner to share stats/throttle/zone.
     pub fn from_scanner(scanner: &Scanner) -> Self {
         Self {
             stats: Arc::clone(&scanner.stats),
@@ -403,8 +390,7 @@ impl KillScanner {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    /// Clona os Arcs pra spawnar numa task separada, compartilhando stats com
-    /// o Scanner de batalhas.
+    /// Clone Arcs to spawn in a separate task, sharing stats with the battle Scanner.
     pub fn clone_for_spawn(&self) -> KillScanner {
         KillScanner {
             stats: Arc::clone(&self.stats),
@@ -511,8 +497,8 @@ impl KillScanner {
             errors: errors.clone(),
         };
 
-        // Kill scan é mais leve — não enfileira em PvP, só descarta e re-claim.
-        // O backend revalida tudo de qualquer forma.
+        // Kill scan is lightweight — discards in PvP instead of queuing.
+        // Backend re-validates everything anyway.
         match api.report_kill_scan(&report).await {
             Ok(out) => {
                 let mut s = self.stats.lock().await;
