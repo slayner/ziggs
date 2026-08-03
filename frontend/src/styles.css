@@ -401,17 +401,32 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   field-sizing: content; -webkit-field-sizing: content; overflow: hidden;
 }
 
-/* Gear grid 5 colunas (offhand/helmet/armor/boots/cape). */
+/* Gear grid — auto-fill (expande conforme largura). 2H remove offhand e
+   outros itens preenchem o espaço. */
 .rc-gear-grid {
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 4px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 4px;
 }
 .rc-gear-cell { min-width: 0; }
 @media (max-width: 719px) {
-  .rc-gear-grid { grid-template-columns: repeat(3, 1fr); }
-}
-@media (max-width: 499px) {
   .rc-gear-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Spell preview — ícones das skills selecionadas, no card expandido. */
+.rc-spell-preview { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; padding: 6px 8px; background: var(--surface); border-radius: var(--radius-sm); border: 1px solid var(--border); }
+.rc-spell-preview-icon { width: 28px; height: 28px; object-fit: contain; border-radius: 4px; }
+
+/* Wizard "Adicionar Função" — mini-setup (fn-type → weapon → suggestions). */
+.rc-wizard {
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface-2); padding: 12px; margin-top: 4px;
+}
+.rc-wizard-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.rc-wizard-title { font-size: 12px; font-weight: 700; color: var(--gold-soft); text-transform: uppercase; letter-spacing: .4px; }
+.rc-wizard-step { display: flex; flex-direction: column; gap: 8px; }
+.rc-wizard-hint { font-size: 11px; color: var(--hint); margin: 0 0 4px; text-transform: uppercase; letter-spacing: .4px; }
+.rc-wizard-fn-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.rc-wizard-suggest { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.rc-wizard-suggest .flex-picker-item { font-size: 11px; padding: 4px 8px; }
 
 /* Seções tituladas do formulário de edição — blocos com respiro, títulos
    editoriais (uppercase + régua embaixo). */
@@ -1112,7 +1127,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    ao badge grande. */
 .role-card {
   border: 1px solid var(--border);
-  border-left: 3px solid var(--chip-color, var(--border-strong));
   border-radius: var(--radius-sm); background: var(--surface);
   cursor: pointer; transition: border-color 0.1s, box-shadow 0.1s;
   position: relative;
@@ -1141,21 +1155,31 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .rc-card-remove:hover { opacity: 1; }
 
 .rc-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; position: relative; }
-/* Dot colorido da função no canto superior esquerdo do head — clicável, abre
-   o fn-dropdown. Transparente/meio-opaco quando o slot não tem fn. */
-.rc-fn-dot {
-  width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
-  background: var(--chip-color, transparent); align-self: center;
-  cursor: pointer; transition: transform 0.12s, box-shadow 0.12s;
+/* Emoji da função — substitui o fn-dot. Clicável, abre fn-dropdown.
+   some quando o card está expandido (a cor/emoji fica óbvia no detail). */
+.rc-fn-emoji {
+  font-size: 14px; flex-shrink: 0; cursor: pointer; line-height: 1;
+  width: 18px; text-align: center; align-self: center;
+  transition: transform 0.1s;
 }
-.rc-fn-dot:hover { transform: scale(1.2); box-shadow: 0 0 0 3px rgba(255,255,255,0.08); }
-.rc-fn-dot.rc-fn-empty { opacity: 0.35; background: var(--muted); border: 1px dashed var(--hint); }
+.rc-fn-emoji:hover { transform: scale(1.25); }
+.rc-fn-emoji.rc-fn-empty { opacity: 0.3; }
+.role-card.rc-open .rc-fn-emoji { display: none; }
 /* EquipStrip do head some quando o card está aberto — a do detail basta. */
 .role-card.rc-open .rc-head-strip { display: none; }
+.role-card.rc-open .rc-head-renders { display: none; }
 .rc-name {
-  flex: 1; font-size: 13px; font-weight: 600; min-width: 0;
+  font-size: 13px; font-weight: 600; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.rc-name-btn {
+  display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;
+  background: none; border: none; color: var(--text); cursor: pointer;
+  padding: 0; font-family: inherit; text-align: left;
+}
+.rc-name-btn .rc-name { flex: 1; }
+.rc-name-edit-icon { font-size: 11px; color: var(--hint); opacity: 0; flex-shrink: 0; transition: opacity 0.1s; }
+.rc-name-btn:hover .rc-name-edit-icon { opacity: 0.7; }
 .rc-name-input {
   flex: 1; font-size: 13px; font-weight: 600; min-width: 0;
   background: var(--surface); border: 1px solid var(--border-strong);
@@ -1163,6 +1187,13 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   padding: 2px 6px; font-family: inherit;
 }
 .rc-name-input:focus { outline: none; border-color: var(--info); }
+
+/* Big renders — todos os equipamentos + alts, tamanho maior, na bracket collapsada. */
+.rc-head-renders { flex: 1; min-width: 0; display: flex; align-items: center; overflow: hidden; }
+.rc-big-renders { display: flex; gap: 4px; flex-wrap: wrap; }
+.rc-big-render-slot { display: flex; flex-direction: column; gap: 2px; }
+.rc-big-render { width: 36px; height: 36px; object-fit: contain; border-radius: 4px; background: var(--surface-2); }
+.rc-big-render-alt { width: 22px; height: 22px; opacity: 0.8; }
 
 /* fn-dropdown — menu de fn-types ancorado ao fn-dot. */
 .fn-dropdown {
