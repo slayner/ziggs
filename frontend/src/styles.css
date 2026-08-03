@@ -581,6 +581,41 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .cs-player-drag .cs-player-name { font-weight: 600; }
 .cs-player-drag .cs-xbtn { margin: 0 -4px 0 0; }
 
+/* ── Escalação: popover de candidatos por slot (vazio clicável) ──────────── */
+/* Botão no slot vazio: mostra nº de compatíveis ou hint de drag. Clic abre o menu. */
+.cs-slot-pick { position: relative; display: inline-flex; }
+.cs-slot-pick-btn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px;
+  border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+  background: transparent; color: var(--muted); font-size: 12px; line-height: 1;
+  cursor: pointer; transition: border-color .12s, color .12s, background .12s;
+}
+.cs-slot-pick-btn:hover, .cs-slot-pick-open {
+  border-color: var(--gold); color: var(--gold); border-style: solid; background: var(--gold-soft);
+}
+.cs-slot-pick-count {
+  font-weight: 700; background: var(--gold); color: #1a1306; border-radius: 999px;
+  padding: 0 6px; font-size: 11px; line-height: 16px;
+}
+.cs-slot-pick-overlay { position: fixed; inset: 0; z-index: 40; }
+.cs-slot-pick-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 41;
+  min-width: 200px; max-width: 280px; max-height: 260px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,.4); padding: 4px;
+}
+.cs-slot-pick-empty { padding: 8px 10px; text-align: center; font-size: 12px; }
+.cs-slot-pick-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  width: 100%; padding: 6px 8px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text); cursor: pointer; text-align: left;
+  transition: background .1s;
+}
+.cs-slot-pick-item:hover { background: var(--surface-2); }
+.cs-slot-pick-name { font-size: 13px; font-weight: 600; }
+.cs-slot-pick-fns { display: inline-flex; gap: 3px; flex-wrap: wrap; align-items: center; }
+.cs-slot-pick-more { font-size: 10px; color: var(--gold); padding: 0 2px; }
+
 /* Linha do próprio usuário (sua escalação) — destaque + expansão de build/skills */
 .cs-myrow { box-shadow: inset 3px 0 0 var(--gold); }
 .cs-myrow-detail td { background: var(--gold-soft) !important; padding: 10px 12px; border-top: 1px solid rgba(212,163,56,.25); }

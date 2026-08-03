@@ -202,6 +202,7 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
   const [err, setErr] = useState<string | null>(null);
   const [prices, setPrices] = useState<Record<string, number> | null>(null);
   const [flexPick, setFlexPick] = useState<FlexPick | null>(null);
+  const [popoverSlot, setPopoverSlot] = useState<number | null>(null);
   const [autoFillBusy, setAutoFillBusy] = useState(false);
   const [undoRunId, setUndoRunId] = useState<string | null>(null);
   const [expandedProfiles, setExpandedProfiles] = useState<Set<number>>(new Set());
@@ -408,6 +409,18 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
   const slotByUserId = new Map<number, number>();
   for (const a of data.assignments) { if (a.slot_id != null) slotByUserId.set(a.user_id, a.slot_id); }
 
+  // Candidatos por slot: inscritos NÃO escalados cujas funções batem com alguma
+  // role do slot. Já pré-computado uma vez por render — o popover só filtra por
+  // slot_id. Slot flex (várias roles) lista quem bate com qualquer uma.
+  const candidatesBySlot = new Map<number, typeof data.enlisted>();
+  for (const slot of data.parties.flatMap(p => p.slots)) {
+    const roleNames = new Set(slot.roles.map(r => r.name));
+    const cands = data.enlisted.filter(s =>
+      !assignedUserIds.has(s.user_id) && s.functions.some(f => roleNames.has(f))
+    );
+    if (cands.length) candidatesBySlot.set(slot.id, cands);
+  }
+
   // Um escalado é "flexível" (amarelo) se alguma das suas funções casa com
   // um role de algum slot vazio. Senão é "completo" (verde). Declarado ANTES
   // do enlistedRank (que o chama) — const arrow fica em TDZ até aqui.
@@ -445,12 +458,10 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
       .then(load).catch(e => alert(String((e as Error)?.message ?? e)));
   };
 
-  const onDropSlot = (slotId: number, e: React.DragEvent) => {
-    if (!canManage) return;
-    e.preventDefault();
-    const parsed = parseDragPayload(e.dataTransfer.getData("text/plain"));
-    if (!parsed) return;
-    const { userId } = parsed;
+  // Atribui um signup a um slot. Slot de 1 role: direto. Slot flex (>1 role):
+  // abre o modal de escolha já existente. Reusado pelo drag&drop e pelo popover
+  // de candidatos por slot (clicar = atribuir, sem precisar arrastar).
+  const assignSignupToSlot = (slotId: number, userId: number) => {
     const signup = enlistedMap.get(userId);
     const slot = data.parties.flatMap(p => p.slots).find(s => s.id === slotId);
     if (!slot) return;
@@ -459,6 +470,14 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     } else if (slot.roles.length > 1) {
       setFlexPick({ slotId, userId, userName: signup?.user_name ?? null, roles: slot.roles });
     }
+  };
+
+  const onDropSlot = (slotId: number, e: React.DragEvent) => {
+    if (!canManage) return;
+    e.preventDefault();
+    const parsed = parseDragPayload(e.dataTransfer.getData("text/plain"));
+    if (!parsed) return;
+    assignSignupToSlot(slotId, parsed.userId);
   };
 
   return (
@@ -510,6 +529,10 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
                       mySlotId={mySlotId}
                       t={t}
                       lang={lang}
+                      candidatesBySlot={candidatesBySlot}
+                      popoverSlot={popoverSlot}
+                      setPopoverSlot={setPopoverSlot}
+                      onPickCandidate={(slotId, userId) => { setPopoverSlot(null); assignSignupToSlot(slotId, userId); }}
                     />
                   ))}
                 </tbody>
@@ -709,11 +732,16 @@ interface PartyRowsProps {
   mySlotId: number | null;
   t: (k: never) => string;
   lang: Lang;
+  candidatesBySlot: Map<number, EscalationOut["enlisted"]>;
+  popoverSlot: number | null;
+  setPopoverSlot: (id: number | null) => void;
+  onPickCandidate: (slotId: number, userId: number) => void;
 }
 
 function PartyRows({
   name, slots, assignedBySlot, canManage, pricesReady,
   rolePrice, onDropSlot, onUnassignUser, mySlotId, t, lang,
+  candidatesBySlot, popoverSlot, setPopoverSlot, onPickCandidate,
 }: PartyRowsProps) {
   const rows: React.ReactNode[] = [];
   let n = 0;
@@ -762,7 +790,15 @@ function PartyRows({
               <i className="ti ti-grip-horizontal" style={{ fontSize: 12, opacity: .6 }} />
               <span className="cs-player-name">{a.user_name || String(a.user_id)}</span>
             </span>
-          ) : <span className="cs-empty">{canManage ? t("escDropHint" as never) : NA}</span>}
+          ) : canManage ? (
+            <SlotCandidatePicker
+              candidates={candidatesBySlot.get(slot.id) ?? []}
+              open={popoverSlot === slot.id}
+              onToggle={() => setPopoverSlot(popoverSlot === slot.id ? null : slot.id)}
+              onPick={(uid) => onPickCandidate(slot.id, uid)}
+              dropHint={t("escDropHint" as never)}
+            />
+          ) : <span className="cs-empty">{NA}</span>}
         </td>
         <td className="cs-cell cs-build-cell">
           {showAllFlex
@@ -818,5 +854,68 @@ function PartyRows({
       <tr><td colSpan={7} className="cs-ph"><div className="cs-ph-inner"><span className="cs-pname">{name}</span></div></td></tr>
       {rows}
     </>
+  );
+}
+
+// Popover de candidatos por slot: clicar no slot vazio abre a lista de inscritos
+// compatíveis. Clique num candidato atribui direto (slot de 1 role) ou abre o
+// modal de escolha (slot flex). Fecha ao clicar fora, ESC ou ao escolher.
+// ponytail: overlay simples com stopPropagation — sem portal, sem lib.
+function SlotCandidatePicker({
+  candidates, open, onToggle, onPick, dropHint,
+}: {
+  candidates: EscalationOut["enlisted"];
+  open: boolean;
+  onToggle: () => void;
+  onPick: (userId: number) => void;
+  dropHint: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: KeyboardEvent) => { if (e.key === "Escape") onToggle(); };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [open, onToggle]);
+  const count = candidates.length;
+  return (
+    <div className="cs-slot-pick">
+      <button
+        type="button"
+        className={"cs-slot-pick-btn" + (open ? " cs-slot-pick-open" : "")}
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+        title={count ? `${count} candidato(s)` : dropHint}
+      >
+        {count ? (
+          <><i className="ti ti-user-plus" style={{ fontSize: 12, opacity: .6 }} /><span className="cs-slot-pick-count">{count}</span></>
+        ) : (
+          <span className="cs-empty">{dropHint}</span>
+        )}
+      </button>
+      {open && (
+        <>
+          <div className="cs-slot-pick-overlay" onClick={onToggle} />
+          <div className="cs-slot-pick-menu" onClick={(e) => e.stopPropagation()}>
+            {count === 0
+              ? <div className="hint cs-slot-pick-empty">Nenhum inscrito compatível</div>
+              : candidates.map(s => (
+                <button
+                  key={s.user_id}
+                  type="button"
+                  className="cs-slot-pick-item"
+                  onClick={() => onPick(s.user_id)}
+                >
+                  <span className="cs-slot-pick-name">{s.user_name || String(s.user_id)}</span>
+                  {s.functions.length > 0 && (
+                    <span className="cs-slot-pick-fns">
+                      {s.functions.slice(0, 3).map(f => <span key={f} className="esc-role-chip">{f}</span>)}
+                      {s.functions.length > 3 && <span className="cs-slot-pick-more">+{s.functions.length - 3}</span>}
+                    </span>
+                  )}
+                </button>
+              ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
