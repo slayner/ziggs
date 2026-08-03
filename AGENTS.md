@@ -13,17 +13,17 @@ O trabalho no Ziggs é despachado pelo agente **`team`** (`.opencode/agents/team
 um agente primário que tria a dificuldade e delega pra um worker. Troque pra
 ele com **Tab** no TUI (ou invoque com `@team`).
 
-**3 tiers × 3 providers = 9 workers** (todos em `.opencode/agents/worker-*.md`):
+**3 tiers × 4 providers = 12 workers** (todos em `.opencode/agents/worker-*.md`):
 
-| Tier | Primary (provider 1) | Fallback 1 | Fallback 2 | Quando |
-|------|----------------------|------------|------------|-------|
-| **Hard** | `worker-hard-zai` (zai-coding-plan/glm-5.2) | `worker-hard-ollama` (ollama-cloud/glm-5.2) | `worker-hard-go` (opencode-go/glm-5.2) | substancial/maduro/sensível, design, migrations |
-| **Medium** | `worker-medium-zai` (zai-coding-plan/glm-5-turbo) | `worker-medium-ollama` (ollama-cloud/kimi-k2.7-code) | `worker-medium-go` (opencode-go/kimi-k2.7-code) | claro+delimitado, feature single-file, refactor mecânico |
-| **Easy** | `worker-easy-ollama` (ollama-cloud/deepseek-v4-pro) | `worker-easy-go` (opencode-go/deepseek-v4-pro) | `worker-easy-zai` (zai-coding-plan/glm-4.7) | trivial, grep-and-report, doc edits, lookups |
+| Tier | Primary (provider 1) | Fallback 1 | Fallback 2 | Fallback 3 | Quando |
+|------|----------------------|------------|------------|------------|-------|
+| **Hard** | `worker-hard-zai` (zai-coding-plan/glm-5.2) | `worker-hard-ollama` (ollama-cloud/glm-5.2) | `worker-hard-ollama2` (ollama-cloud-2/glm-5.2) | `worker-hard-go` (opencode-go/glm-5.2) | substancial/maduro/sensível, design, migrations |
+| **Medium** | `worker-medium-zai` (zai-coding-plan/glm-5-turbo) | `worker-medium-ollama` (ollama-cloud/kimi-k2.7-code) | `worker-medium-ollama2` (ollama-cloud-2/kimi-k2.7-code) | `worker-medium-go` (opencode-go/kimi-k2.7-code) | claro+delimitado, feature single-file, refactor mecânico |
+| **Easy** | `worker-easy-ollama` (ollama-cloud/deepseek-v4-pro) | `worker-easy-ollama2` (ollama-cloud-2/deepseek-v4-pro) | `worker-easy-go` (opencode-go/deepseek-v4-pro) | `worker-easy-zai` (zai-coding-plan/glm-4.7) | trivial, grep-and-report, doc edits, lookups |
 
 **Failover (mesmo tier, próximo provider):** se um worker falha por tokens
 esgotados / erro de provider (resposta vazia ou erro de credit/limit/quota),
-o orchestrator re-envia a MESMA task pro próximo worker do mesmo tier. Se os 3
+o orchestrator re-envia a MESMA task pro próximo worker do mesmo tier. Se os 4
 providers falharem, escala pro usuário.
 
 **Escalada (sobe de tier):** se o worker devolve `NEEDS_ESCALATION` (a task é

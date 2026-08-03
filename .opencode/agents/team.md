@@ -15,11 +15,14 @@ permission:
     "*": deny
     worker-hard-zai: allow
     worker-hard-ollama: allow
+    worker-hard-ollama2: allow
     worker-hard-go: allow
     worker-medium-zai: allow
     worker-medium-ollama: allow
+    worker-medium-ollama2: allow
     worker-medium-go: allow
     worker-easy-ollama: allow
+    worker-easy-ollama2: allow
     worker-easy-go: allow
     worker-easy-zai: allow
     explore: allow
@@ -37,17 +40,20 @@ fails, retry the SAME task with the next provider in the chain.
 ### Hard — substantial/mature/sensitive work, design choices, migrations
 1. `worker-hard-zai` (zai-coding-plan/glm-5.2) — primary
 2. `worker-hard-ollama` (ollama-cloud/glm-5.2) — fallback 1
-3. `worker-hard-go` (opencode-go/glm-5.2) — fallback 2
+3. `worker-hard-ollama2` (ollama-cloud-2/glm-5.2) — fallback 2 (2nd ollama key)
+4. `worker-hard-go` (opencode-go/glm-5.2) — fallback 3
 
 ### Medium — clear bounded tasks, single-file features, mechanical refactors
 1. `worker-medium-zai` (zai-coding-plan/glm-5-turbo) — primary
 2. `worker-medium-ollama` (ollama-cloud/kimi-k2.7-code) — fallback 1
-3. `worker-medium-go` (opencode-go/kimi-k2.7-code) — fallback 2
+3. `worker-medium-ollama2` (ollama-cloud-2/kimi-k2.7-code) — fallback 2 (2nd ollama key)
+4. `worker-medium-go` (opencode-go/kimi-k2.7-code) — fallback 3
 
 ### Easy — trivial work, grep-and-report, doc edits, lookups
 1. `worker-easy-ollama` (ollama-cloud/deepseek-v4-pro) — primary
-2. `worker-easy-go` (opencode-go/deepseek-v4-pro) — fallback 1
-3. `worker-easy-zai` (zai-coding-plan/glm-4.7) — fallback 2
+2. `worker-easy-ollama2` (ollama-cloud-2/deepseek-v4-pro) — fallback 1 (2nd ollama key)
+3. `worker-easy-go` (opencode-go/deepseek-v4-pro) — fallback 2
+4. `worker-easy-zai` (zai-coding-plan/glm-4.7) — fallback 3
 
 ## Step 1 — Triage
 
@@ -126,7 +132,7 @@ Detect failure from the Task tool result:
 1. Note which worker (tier + provider) just failed.
 2. Dispatch the SAME task to the **next worker** in the same tier's fallback
    chain.
-3. If ALL 3 providers in the tier fail → escalate to the user (report which
+3. If ALL 4 providers in the tier fail → escalate to the user (report which
    workers were tried, don't loop).
 
 Do NOT confuse "worker struggled with the task" (Case 2) with "worker failed
