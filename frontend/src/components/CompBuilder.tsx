@@ -26,7 +26,7 @@ export default function CompBuilder({ perms, onOpenChange }: {
   const [compList, setCompList] = useState<{ id: number; name: string }[] | null>(null);
   const [offline, setOffline] = useState(false);
   const [weapons, setWeapons] = useState<WeaponOut[]>([]);
-  const [active, setActive] = useState<{ id: number; draft: Draft; startEditing: boolean; importCode: CompCode | null } | null>(null);
+  const [active, setActive] = useState<{ id: number; draft: Draft; importCode: CompCode | null } | null>(null);
 
   useEffect(() => {
     api.listComps()
@@ -44,12 +44,12 @@ export default function CompBuilder({ perms, onOpenChange }: {
   if (!active) {
     return (
       <CompList perms={perms} offline={offline} compList={compList} setCompList={setCompList}
-        onOpen={(id, draft, startEditing, importCode) => setActive({ id, draft, startEditing, importCode: importCode ?? null })} />
+        onOpen={(id, draft, _startEditing, importCode) => setActive({ id, draft, importCode: importCode ?? null })} />
     );
   }
 
   return (
-    <CompEditor initialDraft={active.draft} initialEditing={active.startEditing} initialImportCode={active.importCode}
+    <CompEditor initialDraft={active.draft} initialImportCode={active.importCode}
       perms={perms} offline={offline} weapons={weapons}
       onBack={() => setActive(null)} />
   );

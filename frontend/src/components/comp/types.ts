@@ -28,9 +28,8 @@ export type DraftRole = {
   gear_spells:   Record<string, string | null>;
   potion_qty:    number;
   food_qty:      number;
-  flex_of?:      string;
 };
-export type DraftSlot  = { fn: string | null; roles: DraftRole[] };
+export type DraftSlot  = { fn: string | null; role: DraftRole };
 export type DraftParty = { name: string; slots: DraftSlot[] };
 export type Draft      = { id: number; name: string; parties: DraftParty[] };
 
@@ -51,8 +50,7 @@ export type CompCodeRole = {
   abilities: string | null;
   potion_qty: number;
   food_qty: number;
-  flex_of?: string;
 };
-export type CompCodeSlot = { fn: string | null; roles: CompCodeRole[] };
+export type CompCodeSlot = { fn: string | null; role: CompCodeRole };
 export type CompCodeParty = { name: string; slots: CompCodeSlot[] };
 export type CompCode = { v: 1; parties: CompCodeParty[] };

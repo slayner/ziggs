@@ -383,14 +383,29 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   background: var(--surface); border-bottom: 1px solid var(--border);
   padding: 4px 2px 0; /* EquipStrip já traz seu próprio padding */
 }
-/* Abas de build integradas ao card expandido — logo abaixo do head, com
-   fundo próprio pra separar das seções de edição. */
-.rc-card-buildtabs {
-  background: var(--surface); border-bottom: 1px solid var(--border);
-  padding: 0 10px;
-}
-.rc-card-buildtabs .build-tabs { margin-bottom: 0; }
+/* Abas de build removidas (flex removido — 1 role por slot). */
 .rc-card-detail-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+
+/* Layout 3 colunas no topo do detail (arma+skills / consumíveis / notas). */
+.rc-detail-top-row {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 4px;
+}
+.rc-detail-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+@media (max-width: 719px) {
+  .rc-detail-top-row { grid-template-columns: 1fr; }
+}
+
+/* Gear grid 5 colunas (offhand/helmet/armor/boots/cape). */
+.rc-gear-grid {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 4px;
+}
+.rc-gear-cell { min-width: 0; }
+@media (max-width: 719px) {
+  .rc-gear-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 499px) {
+  .rc-gear-grid { grid-template-columns: repeat(2, 1fr); }
+}
 
 /* Seções tituladas do formulário de edição — blocos com respiro, títulos
    editoriais (uppercase + régua embaixo). */
@@ -778,57 +793,10 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .flex-picker-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flex-picker-empty { font-size: 11px; color: var(--muted); padding: 6px 10px; }
 
-/* ── Build tabs (abas de builds de um slot flex) ─────────── */
-.build-tabs {
-  display: flex; gap: 2px; flex-wrap: wrap; align-items: stretch;
-  border-bottom: 1px solid var(--border); margin-bottom: 6px;
-}
-.build-tab {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 10px 6px; max-width: 200px;
-  background: none; border: none; border-bottom: 2px solid transparent;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  color: var(--muted); font-size: 12px; cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-}
-.build-tab img { width: 20px; height: 20px; object-fit: contain; flex-shrink: 0; }
-.build-tab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
-.build-tab:focus-visible { outline: 1px solid var(--info); outline-offset: -1px; }
-.build-tab.act {
-  color: var(--text); font-weight: 600;
-  background: var(--surface-2);
-  border-bottom-color: var(--chip-color, var(--gold));
-}
-.build-tab-name {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.build-tab-main-star { font-size: 9px; color: var(--gold); flex-shrink: 0; }
-.build-tab-flex-pill {
-  font-size: 9px; padding: 0 5px; border: 1px solid var(--border-strong);
-  border-radius: 999px; color: var(--hint); flex-shrink: 0;
-  text-transform: uppercase; letter-spacing: 0.04em; line-height: 1.5;
-}
-.build-tab.act .build-tab-flex-pill { color: var(--muted); border-color: var(--chip-color, var(--border-strong)); }
-.build-tab-add { padding: 5px 9px 6px; color: var(--hint); }
-.build-tab-add:hover { color: var(--info); }
-.build-tab-add.act { color: var(--info); border-bottom-color: var(--info); }
+/* ── Build tabs removidas (flex removido — 1 role por slot). ── */
 
-/* Badge de builds flex no card colapsado */
-.rc-flex-badge {
-  display: inline-flex; align-items: center; gap: 3px;
-  font-size: 10px; font-weight: 600; padding: 1px 7px;
-  border: 1px solid; border-radius: 999px; flex-shrink: 0;
-  background: rgba(255,255,255,0.03); white-space: nowrap;
-}
-.rc-flex-badge .ti { font-size: 10px; }
-
-/* Pilha de ícones de arma (principal + flex atrás) no card colapsado */
-.rc-weapon-stack { position: relative; display: inline-flex; flex-shrink: 0; }
-.rc-weapon-stack.has-alt { margin-right: 5px; }
-.rc-weapon-stack .rc-weapon-behind {
-  position: absolute; left: 5px; top: -2px;
-  opacity: 0.45; filter: saturate(0.6);
-}
+/* Badge de builds flex removido (flex removido). */
+/* Pilha de ícones de arma (principal + flex atrás) removida. */
 
 /* ── ItemPicker ──────────────────────────────────────────── */
 .item-picker { position: relative; }
@@ -1150,19 +1118,44 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .rc-card-remove:hover { opacity: 1; }
 
-.rc-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; }
-/* Dot colorido da função no canto superior esquerdo do head — complementa a
-   borda esquerda. Transparente quando o slot não tem fn. */
+.rc-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; position: relative; }
+/* Dot colorido da função no canto superior esquerdo do head — clicável, abre
+   o fn-dropdown. Transparente/meio-opaco quando o slot não tem fn. */
 .rc-fn-dot {
-  width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0;
+  width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
   background: var(--chip-color, transparent); align-self: center;
+  cursor: pointer; transition: transform 0.12s, box-shadow 0.12s;
 }
+.rc-fn-dot:hover { transform: scale(1.2); box-shadow: 0 0 0 3px rgba(255,255,255,0.08); }
+.rc-fn-dot.rc-fn-empty { opacity: 0.35; background: var(--muted); border: 1px dashed var(--hint); }
 /* EquipStrip do head some quando o card está aberto — a do detail basta. */
 .role-card.rc-open .rc-head-strip { display: none; }
 .rc-name {
   flex: 1; font-size: 13px; font-weight: 600; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.rc-name-input {
+  flex: 1; font-size: 13px; font-weight: 600; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); color: var(--text);
+  padding: 2px 6px; font-family: inherit;
+}
+.rc-name-input:focus { outline: none; border-color: var(--info); }
+
+/* fn-dropdown — menu de fn-types ancorado ao fn-dot. */
+.fn-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 10px; z-index: 100;
+  display: flex; flex-wrap: wrap; gap: 4px; padding: 6px;
+  background: var(--surface-2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  max-width: 280px;
+}
+.fn-dropdown-btn {
+  border: 1px solid; border-radius: 5px;
+  font-size: 11px; font-weight: 600; cursor: pointer; padding: 4px 10px;
+  flex-shrink: 0; transition: filter 0.12s;
+}
+.fn-dropdown-btn:hover { filter: brightness(1.15); }
 .rc-fn-badge {
   font-size: 10px; padding: 1px 7px; border-radius: 999px;
   font-weight: 500; white-space: nowrap; flex-shrink: 0;
@@ -1230,29 +1223,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .fn-emoji-input:focus { outline: none; }
 
-/* Fn type picker (inline inside new bracket card) — SÓ botões de escolha.
-   O painel de editar/criar/deletar fn-types fica no botão "Funções" da toolbar
-   (.fn-colors-panel); aqui é só atribuir. */
-.fn-type-picker {
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 12px 14px; margin-bottom: 2px;
-}
-.fn-picker-hint {
-  margin: 0 0 4px; font-size: 11px; color: var(--hint);
-  text-transform: uppercase; letter-spacing: .4px;
-}
-.fn-picker-btns {
-  display: flex; flex-wrap: wrap; gap: 8px;
-}
-.fn-picker-btns .fn-type-assign-btn {
-  padding: 7px 16px; font-size: 12px; min-width: 0;
-}
-.fn-type-assign-btn {
-  border-radius: 5px; border: 1px solid transparent;
-  font-size: 12px; font-weight: 600; cursor: pointer; flex-shrink: 0;
-  transition: filter .15s;
-}
-.fn-type-assign-btn:hover { filter: brightness(1.15); }
+/* Fn type picker inline removido — agora é o .fn-dropdown ancorado ao dot. */
 
 /* Function type color panel */
 .fn-colors-panel {

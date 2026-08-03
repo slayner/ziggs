@@ -3,7 +3,7 @@
 import { type ApiComp, type ApiRole, type RegearItem } from "../../api";
 import { RENDER_URL, ITEM_BY_ID, itemRenderUrl, type ItemSlot } from "../../data/albion-items";
 import { useT } from "../../i18n";
-import type { CompCode, Draft, DraftEquip, DraftRole, EquipItem, FnTypeDef } from "./types";
+import type { CompCode, CompCodeParty, CompCodeRole, Draft, DraftEquip, DraftRole, EquipItem, FnTypeDef } from "./types";
 
 export const MAX_SLOTS = 20;
 
@@ -103,7 +103,8 @@ export function compToDraft(c: ApiComp): Draft {
       name: p.name ?? "",
       slots: p.slots.map(s => ({
         fn: s.fn ?? null,
-        roles: s.roles.map(apiRoleToDraft),
+        // flex removed: take first role only (silently drop rest on legacy data)
+        role: s.roles.length ? apiRoleToDraft(s.roles[0]) : emptyRole(),
       })),
     })),
   };
@@ -119,6 +120,16 @@ export function emptyRole(): DraftRole {
     potion_qty: 10,
     food_qty: 1,
   };
+}
+
+// Normaliza um slot de comp-code pro novo formato (role: DraftRole única).
+// Aceita tanto o formato antigo (roles: [...]) quanto o novo (role: {...}).
+export function normalizeCompCodeSlot(
+  s: { fn: string | null; role?: unknown; roles?: unknown }
+): { fn: string | null; role: unknown } {
+  if (s.role && typeof s.role === "object") return { fn: s.fn, role: s.role };
+  if (Array.isArray(s.roles)) return { fn: s.fn, role: s.roles[0] };
+  return { fn: s.fn, role: undefined };
 }
 
 export function roleToPayload(role: DraftRole) {
@@ -166,13 +177,12 @@ export function encodeCompCode(draft: Draft): string {
       name: p.name,
       slots: p.slots.map(s => ({
         fn: s.fn,
-        roles: s.roles.map((r: DraftRole) => ({
-          name: r.name, fn: r.fn, equip: r.equip,
-          q_spell: r.q_spell, w_spell: r.w_spell, passive_spell: r.passive_spell,
-          gear_spells: r.gear_spells, play_style: r.play_style, abilities: r.abilities,
-          potion_qty: r.potion_qty, food_qty: r.food_qty,
-          ...(r.flex_of ? { flex_of: r.flex_of } : {}),
-        })),
+        role: {
+          name: s.role.name, fn: s.role.fn, equip: s.role.equip,
+          q_spell: s.role.q_spell, w_spell: s.role.w_spell, passive_spell: s.role.passive_spell,
+          gear_spells: s.role.gear_spells, play_style: s.role.play_style, abilities: s.role.abilities,
+          potion_qty: s.role.potion_qty, food_qty: s.role.food_qty,
+        },
       })),
     })),
   };
@@ -182,7 +192,16 @@ export function encodeCompCode(draft: Draft): string {
 export function decodeCompCode(code: string): CompCode | null {
   try {
     const obj = JSON.parse(decodeURIComponent(atob(code.trim())));
-    return obj && obj.v === 1 && Array.isArray(obj.parties) ? obj as CompCode : null;
+    if (!obj || obj.v !== 1 || !Array.isArray(obj.parties)) return null;
+    // Normaliza cada slot do formato antigo (roles:[...]) pro novo (role:{...}).
+    const parties: CompCodeParty[] = (obj.parties as { name: string; slots: { fn: string | null; role?: unknown; roles?: unknown }[] }[]).map(p => ({
+      name: p.name,
+      slots: p.slots.map(sRaw => {
+        const { fn, role } = normalizeCompCodeSlot(sRaw);
+        return { fn, role: role as CompCodeRole };
+      }),
+    }));
+    return { v: 1, parties };
   } catch {
     return null;
   }

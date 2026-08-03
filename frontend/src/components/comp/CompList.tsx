@@ -51,7 +51,7 @@ export function CompList({ perms, offline, compList, setCompList, onOpen }: {
       api.getComp(c.id)
         .then(full => {
           const parties = full.parties.length;
-          const roles = full.parties.reduce((n, p) => n + p.slots.reduce((m, s) => m + s.roles.length, 0), 0);
+          const roles = full.parties.reduce((n, p) => n + p.slots.length, 0);
           setStats(prev => ({ ...prev, [c.id]: { parties, roles } }));
         })
         .catch(() => setStats(prev => ({ ...prev, [c.id]: { parties: 0, roles: 0 } })));
