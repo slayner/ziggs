@@ -1,8 +1,10 @@
 # Build artifacts
 src-tauri/target/
 src-tauri/target-diag/
+src-tauri/gen/
 dist/
 node_modules/
+tsconfig.tsbuildinfo
 *.pdb
 
 # Local config (per-user, never committed)

@@ -1045,15 +1045,29 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
 
 // ─── Hero: Route/Tunnel (main cockpit view) ──────────────────────────────────
 
-/// Ad placeholder in the site's visual language. No ad network wired yet.
+/// Ad slot embedded via iframe from ziggs.xyz/ad/:size. AdSense doesn't run
+// directly in a Tauri webview (no public URL for the crawler to verify), so
+// we load the ad page hosted on the site — which already has ads.txt and the
+// AdSense client configured. The companion doesn't handle cookies itself;
+// consent is governed by the site's cookie banner in the iframe context.
 function AdSlot({ variant = "strip" }: { variant?: "strip" | "side" } = {}) {
   const t = useT();
-  // side: 300×250 or 160×600 vertical under the tabs.
+  // side: 300×250 vertical under the tabs.
   // strip: 728×90 horizontal at the bottom of the tab content.
+  const size = variant === "side" ? "300x250" : "728x90";
+  const w = variant === "side" ? 300 : 728;
+  const h = variant === "side" ? 250 : 90;
   return (
-    <div className={`ck-ad ck-ad-${variant}`}>
+    <div className={`ck-ad ck-ad-${variant}`} style={{ width: w, height: h }}>
       <span className="ck-ad-tag">{t("ckAd")}</span>
-      <span className="ck-ad-ph">{variant === "side" ? "300 × 250" : "728 × 90"}</span>
+      <iframe
+        src={`https://ziggs.xyz/ad/${size}`}
+        title="ad"
+        width={w}
+        height={h}
+        style={{ border: 0, display: "block" }}
+        sandbox="allow-scripts allow-same-origin allow-popups"
+      />
     </div>
   );
 }

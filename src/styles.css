@@ -253,7 +253,7 @@ input, textarea, select { font-family: inherit; }
   background: #0e0f13;
 }
 .ck-ad-side {
-  height: 200px;
+  height: 250px;
   width: 100%;
   margin: 0;
 }
@@ -507,20 +507,20 @@ input, textarea, select { font-family: inherit; }
 .ck-m .ck-lbl { font-size: 8.5px; }
 .ck-m b { font-size: 14px; font-weight: 600; }
 
-/* ads — hatched placeholder, site style */
+/* ads — container for iframe loaded from ziggs.xyz/ad/:size */
 .ck-ad {
   position: relative;
-  border: 1px dashed var(--border-strong);
-  background: repeating-linear-gradient(45deg, transparent 0 10px, rgba(148, 163, 184, 0.045) 10px 20px);
+  border: 1px solid var(--border-strong);
   display: flex; align-items: center; justify-content: center;
   color: var(--hint); flex-shrink: 0;
+  overflow: hidden;
 }
 .ck-ad-tag {
   position: absolute; top: 4px; right: 6px;
   font-size: 7.5px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--hint);
+  pointer-events: none; z-index: 1;
 }
-.ck-ad-ph { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
-.ck-ad-strip { height: 54px; margin-top: 14px; }
+.ck-ad-strip { height: 90px; margin-top: 14px; }
 
 /* ⚙ modal (Config + Tunnel) */
 .ck-modal-backdrop {
