@@ -7,6 +7,9 @@ node_modules/
 tsconfig.tsbuildinfo
 *.pdb
 
+# Internal scripts (not published in public repo)
+scripts/
+
 # Local config (per-user, never committed)
 src-tauri/data/
 
