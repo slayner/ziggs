@@ -27,9 +27,10 @@ if ($Version -eq $current) {
   exit 1
 }
 
-# Atualizar tauri.conf.json
-$conf.version = $Version
-$conf | ConvertTo-Json -Depth 10 | Set-Content $tauriConf -Encoding UTF8
+# Atualizar versao no tauri.conf.json (textual, preserva encoding/indentacao, sem BOM)
+$content = Get-Content $tauriConf -Raw -Encoding UTF8
+$content = $content -replace '"version":\s*"[^"]*"', "`"version`": `"$Version`""
+[System.IO.File]::WriteAllText($tauriConf, $content, [System.Text.UTF8Encoding]::new($false))
 Write-Host "Versao atualizada para $Version no tauri.conf.json"
 
 # Build com assinatura
