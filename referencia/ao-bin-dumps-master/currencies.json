@@ -1,0 +1,58 @@
+{
+  "?xml": {
+    "@version": "1.0",
+    "@encoding": "utf-8"
+  },
+  "currencies": {
+    "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+    "@xsi:noNamespaceSchemaLocation": "currencies.xsd",
+    "currency": [
+      {
+        "@uniquename": "GVGTOKEN_GENERIC",
+        "@item": "UNIQUE_GVGTOKEN_GENERIC",
+        "@displayname": "@ITEMS_UNIQUE_GVGTOKEN_GENERIC",
+        "@transactionlogaccountname": "siphoned_energy"
+      },
+      {
+        "@uniquename": "FACTION_FOREST",
+        "@uisprite": "CURRENCY_FACTION_FOREST",
+        "@displayname": "@CURRENCY_FACTION_FOREST"
+      },
+      {
+        "@uniquename": "FACTION_HIGHLAND",
+        "@uisprite": "CURRENCY_FACTION_HIGHLAND",
+        "@displayname": "@CURRENCY_FACTION_HIGHLAND"
+      },
+      {
+        "@uniquename": "FACTION_MOUNTAIN",
+        "@uisprite": "CURRENCY_FACTION_MOUNTAIN",
+        "@displayname": "@CURRENCY_FACTION_MOUNTAIN"
+      },
+      {
+        "@uniquename": "FACTION_STEPPE",
+        "@uisprite": "CURRENCY_FACTION_STEPPE",
+        "@displayname": "@CURRENCY_FACTION_STEPPE"
+      },
+      {
+        "@uniquename": "FACTION_SWAMP",
+        "@uisprite": "CURRENCY_FACTION_SWAMP",
+        "@displayname": "@CURRENCY_FACTION_SWAMP"
+      },
+      {
+        "@uniquename": "FACTION_CAERLEON",
+        "@uisprite": "CURRENCY_FACTION_CAERLEON",
+        "@displayname": "@CURRENCY_FACTION_CAERLEON"
+      },
+      {
+        "@uniquename": "FAVOR",
+        "@uisprite": "CURRENCY_FAVOR",
+        "@displayname": "@CURRENCY_FAVOR"
+      },
+      {
+        "@uniquename": "HIDEOUT_BOOST",
+        "@uisprite": "FACTION_TOKEN_HIGHLANDS",
+        "@displayname": "@CURRENCY_HIDEOUT_BOOST"
+      }
+    ]
+  }
+}

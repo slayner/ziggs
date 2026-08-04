@@ -1,0 +1,12 @@
+{
+  "visualevents": {
+    "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+    "@xsi:noNamespaceSchemaLocation": "visualevents.xsd",
+    "visualevent": {
+      "@uniquename": "HELL_DUNGEON_PLAYER_DEATH_EVENT",
+      "@soundeventonspawn": "Play_helldungeon_player_death",
+      "@prefab": "FX/ClientPrefabs/fx_visualevent_hd_player_die",
+      "@duration": "3"
+    }
+  }
+}

@@ -1,0 +1,148 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Times xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="times.xsd">
+  <!--confluence link: http://confluence.office.albion.zone/display/AO/Times+XML -->
+  <!-- !!! DON'T FORGET TO OVERRIDE FOR ASIA !!! -->
+  <!-- GVG Season dates -->
+  <DateTime uniquename="GVG_SEASON_35_END" defaultdatetime="2027-01-18T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_35_START" defaultdatetime="2026-11-21T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_34_END" defaultdatetime="2026-11-09T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_34_START" defaultdatetime="2026-09-12T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_33_END" defaultdatetime="2026-08-31T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_33_START" defaultdatetime="2026-07-04T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_32_END" defaultdatetime="2026-06-15T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_32_START" defaultdatetime="2026-04-18T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_31_END" defaultdatetime="2026-03-30T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_31_START" defaultdatetime="2026-01-31T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_30_END" defaultdatetime="2026-01-19T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_30_START" defaultdatetime="2025-11-22T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_29_END" defaultdatetime="2025-11-10T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_29_START" defaultdatetime="2025-09-13T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_28_END" defaultdatetime="2025-09-01T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_28_START" defaultdatetime="2025-07-05T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_27_END" defaultdatetime="2025-06-16T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_27_START" defaultdatetime="2025-04-19T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_26_END" defaultdatetime="2025-04-07T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_26_START" defaultdatetime="2025-02-08T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_25_END" defaultdatetime="2025-01-27T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_25_START" defaultdatetime="2024-11-02T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_24_END" defaultdatetime="2024-10-21T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_24_START" defaultdatetime="2024-07-27T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_23_END" defaultdatetime="2024-05-15T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_23_START" defaultdatetime="2024-04-20T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_22_END" defaultdatetime="2024-04-08T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_22_START" defaultdatetime="2024-01-13T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_21_END" defaultdatetime="2023-12-18T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_21_START" defaultdatetime="2023-09-23T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_20_END" defaultdatetime="2023-09-11T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_20_START" defaultdatetime="2023-06-17T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_19_END" defaultdatetime="2023-06-05T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_19_START" defaultdatetime="2023-03-25T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_18_END" defaultdatetime="2023-03-13T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_18_START" defaultdatetime="2023-02-20T00:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_17_END" defaultdatetime="2022-12-05T11:00:00Z" />
+  <DateTime uniquename="GVG_SEASON_17_START" defaultdatetime="2022-09-17T11:00:00Z" />
+  <!-- Special GVG Season dates -->
+  <!--is needed to have no beta crystal league without breaking tokens-->
+  <DateTime uniquename="CRYSTAL_22_EU_END" defaultdatetime="2024-04-23T11:00:00Z" />
+  <DateTime uniquename="CRYSTAL_22_EU_START" defaultdatetime="2024-04-03T11:00:00Z" />
+  <DateTime uniquename="CRYSTAL_18_ASIA_END" defaultdatetime="2023-02-20T00:00:00Z" />
+  <DateTime uniquename="CRYSTAL_18_ASIA_START" defaultdatetime="2023-02-01T00:00:00Z" />
+  <!-- Crystal League Finals -->
+  <!-- Crystal Atrifact Decay -->
+  <DateTime uniquename="CRYSTAL_ARTIFACT_BATCH_4_DECAY" defaultdatetime="2025-02-02T23:00:00Z" />
+  <!-- events -->
+  <!--2022-->
+  <DateTime uniquename="EVENT_ANNIVERSARY_2022_END_HACK" defaultdatetime="2022-07-28T10:00:00Z" />
+  <DateTime uniquename="EVENT_HALLOWEEN_2022_END_HACK" defaultdatetime="2022-11-10T10:00:00Z" />
+  <!--2023-->
+  <DateTime uniquename="EVENT_ANNIVERSARY_2023_END_HACK" defaultdatetime="2023-07-27T10:00:00Z" />
+  <DateTime uniquename="EVENT_HALLOWEEN_2023_END_HACK" defaultdatetime="2023-11-15T23:00:00Z" />
+  <!--2024-->
+  <DateTime uniquename="EVENT_ANNIVERSARY_2024_END_HACK" defaultdatetime="2024-07-30T10:00:00Z" />
+  <DateTime uniquename="EVENT_HALLOWEEN_2024_END_HACK" defaultdatetime="2024-11-13T23:00:00Z" />
+  <!--2025-->
+  <DateTime uniquename="EVENT_EASTER_2025_END_HACK" defaultdatetime="2025-04-28T23:00:00Z" />
+  <DateTime uniquename="EVENT_ANNIVERSARY_2025_END_HACK" defaultdatetime="2025-07-29T10:00:00Z" />
+  <DateTime uniquename="EVENT_HALLOWEEN_2025_END_HACK" defaultdatetime="2025-11-12T23:00:00Z" />
+  <!--2026-->
+  <DateTime uniquename="EVENT_APRIL_1ST_END_HACK" defaultdatetime="2026-04-03T23:00:00Z" />
+  <DateTime uniquename="EVENT_EASTER_2026_END_HACK" defaultdatetime="2026-04-13T23:00:00Z" />
+  <DateTime uniquename="EVENT_ANNIVERSARY_2026_END_HACK" defaultdatetime="2026-08-03T23:00:00Z" />
+  <DateTime uniquename="EVENT_HALLOWEEN_2026_END_HACK" defaultdatetime="2026-11-11T23:00:00Z" />
+  <!--2027-->
+  <!--#########################################-->
+  <!--Dragon Lead-Up Season -->
+  <DateTime uniquename="EVENT_DRAGON_LEAD_UP_PHASE_1_START" defaultdatetime="2026-07-03T23:00:00Z" removeforclient="false" />
+  <!--#########################################-->
+  <DateTime uniquename="EVENT_HIDE_TEST" defaultdatetime="2024-01-01T00:00:00Z" />
+  <!--Asia Beta Event (only used on Asia)-->
+  <DateTime uniquename="ASIA_BETA_START" defaultdatetime="2023-01-02T02:00:00Z" />
+  <DateTime uniquename="ASIA_BETA_END" defaultdatetime="2023-03-13T10:00:00Z" />
+  <!--EU Beta Event (only used on EU)-->
+  <DateTime uniquename="EU_BETA_START" defaultdatetime="2024-03-11T11:00:00Z" />
+  <DateTime uniquename="EU_BETA_END" defaultdatetime="2024-04-23T10:00:00Z" />
+  <!-- REFERRAL -->
+  <!--these dates are used to conceal the actual release-->
+  <DateTime uniquename="REFERRAL_A_TRADEABLE" defaultdatetime="2023-05-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_B_TRADEABLE" defaultdatetime="2023-06-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_C_TRADEABLE" defaultdatetime="2023-07-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_D_TRADEABLE" defaultdatetime="2023-08-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_E_TRADEABLE" defaultdatetime="2023-09-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_F_TRADEABLE" defaultdatetime="2023-10-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_G_TRADEABLE" defaultdatetime="2023-11-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_H_TRADEABLE" defaultdatetime="2023-12-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_I_TRADEABLE" defaultdatetime="2024-01-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_J_TRADEABLE" defaultdatetime="2024-02-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_K_TRADEABLE" defaultdatetime="2024-03-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_L_TRADEABLE" defaultdatetime="2024-04-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_M_TRADEABLE" defaultdatetime="2024-05-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_N_TRADEABLE" defaultdatetime="2024-06-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_O_TRADEABLE" defaultdatetime="2024-07-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_P_TRADEABLE" defaultdatetime="2024-08-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_Q_TRADEABLE" defaultdatetime="2024-09-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_R_TRADEABLE" defaultdatetime="2024-10-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_S_TRADEABLE" defaultdatetime="2024-11-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_T_TRADEABLE" defaultdatetime="2024-12-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_U_TRADEABLE" defaultdatetime="2025-01-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_V_TRADEABLE" defaultdatetime="2025-02-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_W_TRADEABLE" defaultdatetime="2025-03-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_X_TRADEABLE" defaultdatetime="2025-04-15T23:00:00Z" />
+  <DateTime uniquename="REFERRAL_Y_TRADEABLE" defaultdatetime="2025-05-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_Z_TRADEABLE" defaultdatetime="2025-06-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_1_TRADEABLE" defaultdatetime="2025-07-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_2_TRADEABLE" defaultdatetime="2025-08-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_3_TRADEABLE" defaultdatetime="2025-09-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_4_TRADEABLE" defaultdatetime="2025-10-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_5_TRADEABLE" defaultdatetime="2025-11-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_6_TRADEABLE" defaultdatetime="2025-12-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_7_TRADEABLE" defaultdatetime="2026-01-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_8_TRADEABLE" defaultdatetime="2026-02-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_9_TRADEABLE" defaultdatetime="2026-03-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_10_TRADEABLE" defaultdatetime="2026-04-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_11_TRADEABLE" defaultdatetime="2026-05-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_12_TRADEABLE" defaultdatetime="2026-06-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_13_TRADEABLE" defaultdatetime="2026-07-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_14_TRADEABLE" defaultdatetime="2026-08-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_15_TRADEABLE" defaultdatetime="2026-09-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_16_TRADEABLE" defaultdatetime="2026-10-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_17_TRADEABLE" defaultdatetime="2026-11-15T10:00:00Z" />
+  <DateTime uniquename="REFERRAL_18_TRADEABLE" defaultdatetime="2026-12-15T10:00:00Z" />
+  <!-- ########## 1v1 Arena ########## -->
+  <!-- Initial Fiona Launch -->
+  <DateTime uniquename="1V1_ARENA_1_START" defaultdatetime="2026-04-13T23:00:00Z" />
+  <DateTime uniquename="1V1_ARENA_1_END" defaultdatetime="2026-06-27T23:00:00Z" />
+  <!-- Faction Warfare -->
+  <Time uniquename="FW_DUCHY_EVALUATION_TIME_OF_DAY_1" time="02:00:00" />
+  <Time uniquename="FW_DUCHY_EVALUATION_TIME_OF_DAY_2" time="05:00:00" />
+  <Time uniquename="FW_DUCHY_EVALUATION_TIME_OF_DAY_3" time="07:00:00" />
+  <Time uniquename="FW_DUCHY_EVALUATION_TIME_OF_DAY_4" time="09:00:00" />
+  <Time uniquename="FW_DUCHY_EVALUATION_TIME_OF_DAY_5" time="13:00:00" />
+  <Time uniquename="FW_DUCHY_EVALUATION_TIME_OF_DAY_6" time="15:00:00" />
+  <Time uniquename="FW_DUCHY_EVALUATION_TIME_OF_DAY_7" time="17:00:00" />
+  <Time uniquename="FW_DUCHY_EVALUATION_TIME_OF_DAY_8" time="19:00:00" />
+  <Time uniquename="FW_RZE_POSSIBLE_START_TIME_OF_DAY_1" time="21:00:00" />
+  <Time uniquename="FW_RZE_POSSIBLE_START_TIME_OF_DAY_2" time="11:00:00" />
+  <!-- Downtime -->
+  <Time uniquename="DOWNTIME" time="23:00:00" />
+  <Time uniquename="0UTC" time="00:00:00" />
+</Times>

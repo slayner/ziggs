@@ -1,0 +1,47 @@
+{
+  "?xml": {
+    "@version": "1.0",
+    "@encoding": "utf-8"
+  },
+  "patch": {
+    "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+    "@xsi:noNamespaceSchemaLocation": "patch.xsd",
+    "replace": [
+      {
+        "@sel": "seasonstatues/dynamicstatue[@season='GVG_SEASON_23']",
+        "attribute": {
+          "@name": "winnername",
+          "@newvalue": "Sex and Flex"
+        }
+      },
+      {
+        "@sel": "seasonstatues/dynamicstatue[@season='GVG_SEASON_24']",
+        "attribute": {
+          "@name": "winnername",
+          "@newvalue": "POLSKA GUROM"
+        }
+      },
+      {
+        "@sel": "seasonstatues/dynamicstatue[@season='GVG_SEASON_25']",
+        "attribute": {
+          "@name": "winnername",
+          "@newvalue": "Take Care"
+        }
+      },
+      {
+        "@sel": "seasonstatues/dynamicstatue[@season='GVG_SEASON_26']",
+        "attribute": {
+          "@name": "winnername",
+          "@newvalue": "Heralds of Valhalla"
+        }
+      },
+      {
+        "@sel": "seasonstatues/dynamicstatue[@season='GVG_SEASON_27']",
+        "attribute": {
+          "@name": "winnername",
+          "@newvalue": "Statement"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PlaceholderSpots xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="placeholderspots.xsd">
+
+  <Category name="special_season">
+    <Spot> <!-- Energy Surge Statue 1st place -->
+      <Banner     prefab="HIGHLAND_DEAD_MONUMENT_GVG_ENERGY_RUSH_A" season="GVG_SEASON_ENERGY_RUSH" />
+      <Statue     prefab="GVG_ENERGY_RUSH_FIRSTPLACE_CLICKABLE" season="GVG_SEASON_ENERGY_RUSH"/>
+    </Spot>
+    <Spot> <!-- Energy Surge Statue 2nd place -->
+      <Banner     prefab="STEPPE_DEAD_MONUMENT_GVG_ENERGY_RUSH_B" season="GVG_SEASON_ENERGY_RUSH" />
+      <Statue     prefab="GVG_ENERGY_RUSH_SECONDPLACE_CLICKABLE" season="GVG_SEASON_ENERGY_RUSH" placement="2" text="@GVG_SEASON_ENERGY_RUSH_SECOND_PLACE"/>
+    </Spot>
+    <Spot> <!-- Energy Surge Statue 3rd place -->
+      <Banner     prefab="STEPPE_DEAD_MONUMENT_GVG_ENERGY_RUSH_C" season="GVG_SEASON_ENERGY_RUSH" />
+      <Statue     prefab="GVG_ENERGY_RUSH_THIRDPLACE_CLICKABLE" season="GVG_SEASON_ENERGY_RUSH" placement="3" text="@GVG_SEASON_ENERGY_RUSH_THIRD_PLACE"/>
+    </Spot>
+    <Spot>
+      <!-- Avalonian Invasion (Caerleon Statue) -->
+      <Statue     prefab="HIGHLAND_DEAD_CITY_PORTAL_MONUMENT_A" season="GVG_SEASON_AVALONIAN_INVASION"/>
+    </Spot>
+  </Category>
+  
+  <Category name="gvg_season">
+    <!-- Outside - Spot 0 -->
+	  <Spot>
+		  <!-- Season 32 Statue -->
+		  <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_32" />
+		  <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_32" season="GVG_SEASON_32"/>
+		  <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_32" />
+	  </Spot>
+
+	<!-- Inside -->
+    <Spot>
+      <!-- Season 32 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_32" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_32" season="GVG_SEASON_32"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_32" />
+    </Spot>
+    <Spot>
+      <!-- Season 31 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_31" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_31" season="GVG_SEASON_31"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_31" />
+    </Spot>
+    <Spot>
+      <!-- Season 30 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_30" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_30" season="GVG_SEASON_30"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_30" />
+    </Spot>
+    <Spot>
+      <!-- Season 29 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_29" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_29" season="GVG_SEASON_29"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_29" />
+    </Spot>
+    <Spot>
+      <!-- Season 28 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_28" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_28" season="GVG_SEASON_28"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_28" />
+    </Spot>
+    <Spot>
+      <!-- Season 27 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_27" />
+    <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_27" season="GVG_SEASON_27"/>
+    <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_27" />
+    </Spot>
+    <Spot>
+      <!-- Season 26 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_26" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_26" season="GVG_SEASON_26"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_26" />
+    </Spot>
+    <Spot>
+      <!-- Season 25 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_25" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_25" season="GVG_SEASON_25"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_25" />
+    </Spot>
+    <Spot>
+      <!-- Season 24 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_24" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_24" season="GVG_SEASON_24"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_24" />
+    </Spot>
+    <Spot>
+      <!-- Season 23 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_23" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_23" season="GVG_SEASON_23"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_23" />
+    </Spot>
+    <Spot>
+		  <!-- Season 22 Statue -->
+		  <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_22" />
+		  <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_22" season="GVG_SEASON_22"/>
+		  <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_22" />
+	  </Spot>
+	  <Spot>
+		  <!-- Season 21 Statue -->
+		  <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_21" />
+		  <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_21" season="GVG_SEASON_21"/>
+		  <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_21" />
+	  </Spot>
+	  <Spot>
+		  <!-- Season 20 Statue -->
+		  <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_20" />
+		  <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_20" season="GVG_SEASON_20"/>
+		  <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_20" />
+	  </Spot>
+	  <Spot>
+      <!-- Season 19 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_19" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_19" season="GVG_SEASON_19"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_19" />
+    </Spot>     
+    <Spot>
+      <!-- Season 18 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_18" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_18" season="GVG_SEASON_18"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_18" />
+    </Spot>
+    <Spot>
+      <!-- Season 17 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_17" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_17" season="GVG_SEASON_17"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_17" />
+    </Spot>
+    <Spot>
+      <!-- Season 16 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_16" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_16" season="GVG_SEASON_16"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_16" />
+    </Spot>
+    <Spot>
+      <!-- Season 15 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_15" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_15" season="GVG_SEASON_15"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_15" />
+    </Spot>
+    <Spot>
+      <!-- Season 14 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_14" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_14" season="GVG_SEASON_14"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_14" />
+    </Spot>
+    <Spot> 
+	  <!-- Season 13 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_13" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_13" season="GVG_SEASON_13"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_13" />
+    </Spot>
+	<Spot>
+      <!-- Season 12 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_12" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_12" season="GVG_SEASON_12"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_12" />
+    </Spot>
+    <Spot>
+      <!-- Season 11 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_11" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_11" season="GVG_SEASON_11"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_11" />
+    </Spot>
+    <Spot>
+      <!-- Season 10 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_10" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_10" season="GVG_SEASON_10"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_10" />
+    </Spot>
+    <Spot>
+      <!-- Season 9 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_09" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_09" season="GVG_SEASON_09"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_09" />
+    </Spot>
+    <Spot>
+      <!-- Season 8 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_08" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_08" season="GVG_SEASON_08"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_08" />
+    </Spot>
+    <Spot>
+      <!-- Season 7 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_07" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_07" season="GVG_SEASON_07"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_07" />
+    </Spot>
+    <Spot>
+      <!-- Season 6 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_06" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_06" season="GVG_SEASON_06"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_06" />
+    </Spot>
+    <Spot>
+      <!-- Season 5 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_05" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_05" season="GVG_SEASON_05"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_05" />
+    </Spot>
+    <Spot>
+    <!-- Season 4 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_04" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_04" season="GVG_SEASON_04"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_04" />
+    </Spot> 
+    <Spot>
+    <!-- Season 3 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_03" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_03" season="GVG_SEASON_03"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_03" />
+    </Spot>
+    <Spot>
+    <!-- Season 2 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_02" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_02" season="GVG_SEASON_02"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_02" />
+    </Spot>
+    <Spot>
+    <!-- Season 1 Statue -->
+      <Banner     prefab="HALL_OF_FAME_BANNER" season="GVG_SEASON_01" />
+      <Statue     prefab="HALL_OF_FAME_THRONE_A_SEASON_01" season="GVG_SEASON_01"/>
+      <Decoration prefab="HALL_OF_FAME_SEASON_NUMBER_01" />
+    </Spot>
+	  
+	<!-- Placeholder -->
+	<Spot>
+	  <Statue prefab="HALL_OF_FAME_THRONE_A_SEASON_EMPTY" season="GVG_SEASON_BETA"/>
+	</Spot>
+	<Spot>
+	  <Statue prefab="HALL_OF_FAME_THRONE_A_SEASON_EMPTY" season="GVG_SEASON_BETA"/>
+	</Spot>
+	<Spot>
+	  <Statue prefab="HALL_OF_FAME_THRONE_A_SEASON_EMPTY" season="GVG_SEASON_BETA"/>
+	</Spot>
+
+  </Category>
+</PlaceholderSpots>

@@ -1,0 +1,304 @@
+{
+  "?xml": {
+    "@version": "1.0",
+    "@encoding": "utf-8"
+  },
+  "ChatSettings": {
+    "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+    "@xsi:noNamespaceSchemaLocation": "chatsettings.xsd",
+    "ChatUi": {
+      "@maxtabs": "10",
+      "@selectedtab": "0",
+      "@maxtabnamelength": "10",
+      "DefaultTab": [
+        {
+          "@name": "@CHAT_SETTINGS_TAB_NAME_GENERAL",
+          "@showtimestamps": "true",
+          "@showchannelnames": "true",
+          "@maininputchannel": "say",
+          "Channel": [
+            {
+              "@id": "languageproxy"
+            },
+            {
+              "@id": "local"
+            },
+            {
+              "@id": "say"
+            },
+            {
+              "@id": "personal"
+            },
+            {
+              "@id": "killplayer"
+            },
+            {
+              "@id": "system"
+            },
+            {
+              "@id": "party"
+            }
+          ]
+        },
+        {
+          "@name": "@CHAT_SETTINGS_TAB_NAME_HELP",
+          "@showtimestamps": "true",
+          "@showchannelnames": "true",
+          "@maininputchannel": "help",
+          "Channel": [
+            {
+              "@id": "help"
+            },
+            {
+              "@id": "personal"
+            },
+            {
+              "@id": "system"
+            }
+          ]
+        },
+        {
+          "@name": "@CHAT_SETTINGS_TAB_NAME_LOOKING_FOR_GROUP",
+          "@showtimestamps": "true",
+          "@showchannelnames": "true",
+          "@maininputchannel": "lookingforgroup",
+          "Channel": [
+            {
+              "@id": "lookingforgroup"
+            },
+            {
+              "@id": "personal"
+            },
+            {
+              "@id": "system"
+            }
+          ]
+        },
+        {
+          "@name": "@CHAT_SETTINGS_TAB_NAME_COMBAT",
+          "@showtimestamps": "true",
+          "@showchannelnames": "false",
+          "Channel": [
+            {
+              "@id": "takedamage"
+            },
+            {
+              "@id": "givedamage"
+            },
+            {
+              "@id": "killplayer"
+            },
+            {
+              "@id": "healplayer"
+            },
+            {
+              "@id": "spelleffect"
+            },
+            {
+              "@id": "loot"
+            },
+            {
+              "@id": "silver"
+            },
+            {
+              "@id": "reputation"
+            },
+            {
+              "@id": "fame"
+            }
+          ]
+        },
+        {
+          "@name": "@CHAT_SETTINGS_TAB_NAME_RECRUIT",
+          "@showtimestamps": "true",
+          "@showchannelnames": "true",
+          "@maininputchannel": "recruit",
+          "Channel": [
+            {
+              "@id": "recruit"
+            },
+            {
+              "@id": "personal"
+            },
+            {
+              "@id": "system"
+            }
+          ]
+        },
+        {
+          "@name": "@CHAT_SETTINGS_TAB_NAME_SOCIAL",
+          "@showtimestamps": "true",
+          "@showchannelnames": "true",
+          "@maininputchannel": "party",
+          "Channel": [
+            {
+              "@id": "party"
+            },
+            {
+              "@id": "guild"
+            },
+            {
+              "@id": "alliance"
+            },
+            {
+              "@id": "personal"
+            },
+            {
+              "@id": "system"
+            },
+            {
+              "@id": "killplayer"
+            }
+          ]
+        }
+      ],
+      "FactionTab": {
+        "@showtimestamps": "true",
+        "@showchannelnames": "true",
+        "@maininputchannel": "faction",
+        "Channel": [
+          {
+            "@id": "faction"
+          },
+          {
+            "@id": "factionlocal"
+          },
+          {
+            "@id": "personal"
+          },
+          {
+            "@id": "system"
+          }
+        ]
+      }
+    },
+    "Cooldowns": {
+      "@default_message_cooldown_ms": "500",
+      "@say_cooldown_ms": "2000",
+      "@whisper_cooldown_ms": "500",
+      "@say_radius": "30",
+      "@PlayerWhisperListCoolDownInSec": "3600",
+      "@MaxPlayerOnWhisperCoolDownListTutorial": "3",
+      "@MaxPlayerOnWhisperCoolDownList": "10",
+      "@MaxPlayerOnWhisperCoolDownListTrusted": "100",
+      "Channel": [
+        {
+          "@id": "local",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "global",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "english",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "german",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "french",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "polish",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "russian",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "portuguese",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "spanish",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "chinese",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "korean",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "japanese",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "italian",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "traditionalchinese",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "indonesian",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "turkish",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "arabic",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "trade",
+          "@cooldown_ms": "120000"
+        },
+        {
+          "@id": "recruit",
+          "@cooldown_ms": "120000"
+        },
+        {
+          "@id": "lookingforgroup",
+          "@cooldown_ms": "120000"
+        },
+        {
+          "@id": "hardcoreexpedition",
+          "@cooldown_ms": "120000"
+        },
+        {
+          "@id": "help",
+          "@cooldown_ms": "2000"
+        },
+        {
+          "@id": "staff",
+          "@cooldown_ms": "100"
+        },
+        {
+          "@id": "guild",
+          "@cooldown_ms": "500"
+        },
+        {
+          "@id": "alliance",
+          "@cooldown_ms": "500"
+        },
+        {
+          "@id": "party",
+          "@cooldown_ms": "500"
+        },
+        {
+          "@id": "duell",
+          "@cooldown_ms": "500"
+        },
+        {
+          "@id": "faction",
+          "@cooldown_ms": "500"
+        },
+        {
+          "@id": "factionlocal",
+          "@cooldown_ms": "500"
+        }
+      ]
+    }
+  }
+}

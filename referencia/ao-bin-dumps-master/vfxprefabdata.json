@@ -1,0 +1,4431 @@
+{
+  "vfxprefabdata": {
+    "vfx": [
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_character_kata_100",
+        "@ttl": "18",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_ent_support_area",
+        "@ttl": "17",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_character_kata_60",
+        "@ttl": "12.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_corrupted_trail_dagger",
+        "@ttl": "10",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_healing_potion",
+        "@ttl": "9.2",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_fanatic_witch_dragon_fire_cast_flame_aura",
+        "@ttl": "9",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_fanatic_witch_dragon_fire_cast_draw_flames",
+        "@ttl": "9",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_shapeshifter_pull_ally",
+        "@ttl": "8.1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_exploration_lute_spell_60",
+        "@ttl": "7",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_exploration_lute_spell_100",
+        "@ttl": "7",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_VANITY_SPELLBOOK_FIREWORKS",
+        "@ttl": "6.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_slowring",
+        "@ttl": "6",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_spiked_01_die",
+        "@ttl": "6",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_undead_hand",
+        "@ttl": "5.6",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_giant_die_01",
+        "@ttl": "5.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_mauler_01_die",
+        "@ttl": "5.2",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_spiderbeam_nodelay",
+        "@ttl": "5.1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_smite_pillar",
+        "@ttl": "5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_lord_boss_die_01",
+        "@ttl": "4.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_creatures_skull_undead_02",
+        "@ttl": "4.2",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_creatures_skull_demon_02",
+        "@ttl": "4.2",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_wizard_basilisk_01_die",
+        "@ttl": "4",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_cleansing_fire",
+        "@ttl": "4",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_fanatic_witch_dragon_fire_channel_flame_aura_others",
+        "@ttl": "3.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_corrupted_fire_loop",
+        "@ttl": "3.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_watcher_boss_die_01",
+        "@ttl": "3.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_sorcerer_boss_die_01",
+        "@ttl": "3.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_hook_boss_die_01",
+        "@ttl": "3.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_well_of_life_big",
+        "@ttl": "3.3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_tracking_escape_imp",
+        "@ttl": "3.3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_hand_grab",
+        "@ttl": "3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_iceshard",
+        "@ttl": "3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_groundbreaker_avalon_large",
+        "@ttl": "3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_groundbreaker_avalon",
+        "@ttl": "3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_projectile_cast_loop",
+        "@ttl": "3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_corrupted_sorcerer_boss_reload",
+        "@ttl": "3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_spear_execution_group",
+        "@ttl": "3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_debuff_frozen",
+        "@ttl": "3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_corrupted_flame_center",
+        "@ttl": "3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rock_elemental_projectile_norotation",
+        "@ttl": "2.9",
+        "@loop": "true"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellEffectVfx/HealOverTimeEffectVfx",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellCastEffectVfx/SprintCastVfx",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_snowball_bullet",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_handglow",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_arrow_ultimate_glow",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_testcreature_cone_fire_world",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_testcreature_cone_fire_local",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_teleport_marker",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_status_damage_reflect_small",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_white_whirlwind",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_whirlwind_withoutsound",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_whirlwind_big",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_whirlwind",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_toxic_breath",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_spiderbeam",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_slow_mine_projectile",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_shrink_shapeshifter",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_sacred_ground_weapon",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_revitalize",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_reflect_area",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_qstaff_combo",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_punch_buildup_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_punch_buildup_avalon",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_punch_buildup",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_potion_slow_area_projectile",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_petrifying_gaze",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_morgana_spear_empowered",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mightyblow_impact_high",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_meteor_no_smoke",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_melee_whirlwind_big",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_melee_whirlwind",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_marker_target_red",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_killshot_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_killshot_avalon",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_killshot",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_witch_heal_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_fanatic_witch_dragon_fire_cast_sparks_aura",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_juggernado",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_inner_corruption_mob",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_imp_firering",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holytouch_halo",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holytouch_aura",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holyhalo_view_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_whirlwind_scaling",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_ultimate_anticipation",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_projectile_bullet",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_marker_02",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_marker",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_heretic_shadowmask_insanity",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_heretic_dynamite_mine_projectile",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hawk_skyshot_avalon_marker_streaks",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hawk_skyshot_avalon_marker",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hawk_skyshot_avalon_cast",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hammertackle",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_projectile_wave_impact_sound",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fairydragon_casteffect",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_escape_dungeon",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_energy_shield_beam",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_energy_projectile_cast_loop",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_energy_cost_reduction",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_energy_beam_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_energy_beam_inverted_hidden_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_eagle_lightning_cast",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dualaxe_buildup_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dualaxe_buildup",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_fear_area",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_darkmatter",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_area_weapon",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_death_curse",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_sword_run",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_sword_glow",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_staff_starfall_caster",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_speer_buildup",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_scythe_dash_swoosh",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_scythe_dash_smoke",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_mace_swoosh_vertical",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_mace_swoosh_cw",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_mace_swoosh_ccw",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_holystaff_cast",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_dagger_glow_right",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_dagger_glow_left",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_crossbow_muzzleflash_right",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_crossbow_muzzleflash_left",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_crossbow_inworld_impacts",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_crossbow_caster",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_bow_body",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_beetle_dust_start",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_beetle_buzz_channel_lightning",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_claymore_slash",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_circle_white_6m",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_charge_in_fey_armor",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_channel_frenzy_cw",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_channel_frenzy_ccw",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_caerleon_knight_cleave_glow",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_brimstone_meteor_marker",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_brimstone_meteor_bullet",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_bow_speedbuff_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_bear_dash",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_beam_empower",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_staff_cast",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_speed",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_rockgiant_earthquake_loop",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_overTime_energy",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_direboar_tuskglow",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_direboar_sprintshield",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mount_spider_hell_thread",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mount_avalon_basilisk_lightning_tailtip_01",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mount_avalon_basilisk_lightning_head_01_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mount_avalon_basilisk_lightning_head_01",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mount_avalon_basilisk_lightning_01",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mortar_barrel_bullet_playerspell",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_morgana_imp_impact",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_heretic_thief_boss_01_die",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_heretic_mage_boss_01_die",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_heretic_brawler_boss_01_die",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_fw_carleon_guard_mightyswing_swoosh",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_hellhound_01_die",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_dualxbow_01_die",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_crystal_cobra_lightning_right",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_crystal_cobra_lightning_left",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_crystal_cobra_eyes",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_witch_stomp_swirls_arm_right",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_witch_stomp_swirls_arm_left",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_unproven_male_mace",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_spear_throw_mainhand",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_song_horn_final",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_song_horn_allies",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_song_horn_CC",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_song_final",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_song_allies",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_song_CC",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_gathering_spell_multitool_swoosh_60",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_gathering_spell_multitool_swoosh_100",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_character_kata_60_player",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_character_kata_100_player",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_impact_explosion",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_heretic_overseer_swirl",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_heretic_mage_firecone",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_heretic_gibson_beam",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_healingreduction_area",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_harpune_chain_01",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_guardian_crystal_loop",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_fireball_dist",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_expeditions_teleport_no_intro",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dot_undead_fire_sound",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dot_fire_impactsound",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dot_fire",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_demon_spike_trap_impact_01",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_corrupted_sorcerer_boss_phase",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_combat_marker_red",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_shield_blue",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_hd_wrath_impact",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_hd_wrath_collect",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_hd_dominance_impact",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_hd_dominance_collect",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_hd_cruelty_collect",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_undead_puller_chain_01",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_undead_cursedsound",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_undead",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_target_debuff",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_shield",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_morgana",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning_thinner",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning_avalon_wizard_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning_avalon_wizard_scout_channeling_sound",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning_avalon_wizard",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning_avalon_small_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning_avalon_small",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning_avalon",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning_aggressive_sound",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning_02",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_lightning",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_holy_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_holy",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_heal",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_fire",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_crystalspider",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_avalon_shadowbond",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_avalon_damage",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_avalon_archmage",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_arrows_01_silent",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_arrows_01",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_arcane_protective",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_arcane_empower",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_arcane_elemental_begin",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_arcane_elemental",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_arcane",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_whirlwind",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_captain_aura_beam",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_builder_smoke",
+        "@ttl": "2.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_sarcophagus_ghost_end",
+        "@ttl": "2.3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_resurrection",
+        "@ttl": "2.2",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_undead_shockwave_area",
+        "@ttl": "2.05",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_demon_crush_glow",
+        "@ttl": "2",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_undead_hand_impact",
+        "@ttl": "1.8",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_smokebomb_explosion_sound_big",
+        "@ttl": "1.6",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_smokebomb",
+        "@ttl": "1.6",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_cursed_skeleton_explosion",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cast_flare_yellow",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cast_flare_red",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cast_flare_purple",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_witch_smash_staff",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_witch_smash_glow_right",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_witch_smash_glow_left",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_witch_pull_arm",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_fanatic_witch_fire_cast_arm_right",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_fanatic_witch_fire_cast_arm_left",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_earthmother_projectile_bullet_preparation",
+        "@ttl": "1.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_shaman_cast",
+        "@ttl": "1.3",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_fire_her_mage",
+        "@ttl": "1.25",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_fire_flamespinner_silent",
+        "@ttl": "1.25",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_fire_corrupted",
+        "@ttl": "1.25",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_projectile_impact",
+        "@ttl": "1.15",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_explosion_large",
+        "@ttl": "1.1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_projectile_lightning_impact",
+        "@ttl": "1.1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_ice",
+        "@ttl": "1.1",
+        "@loop": "true"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellEffectVfx/SprintEffectVfx",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellEffectVfx/HamstringEffectVfx",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellCastEffectVfx/PbaoeHealCastVfx",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_necromancer_smoke",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_governor_sword_trail",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_energy_projectile",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_well_of_life",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_tracking_dash_shadowmask",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_silence_field",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_shapeshifter_staff_nrg",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rootfield_area",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_protectionaura_mammoth",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_offensiveaura",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_heal_loop_silent",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_heal_loop",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_morgana_raven",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_meteor_marker",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_marker",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_lunging_stab_trail",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_lightning_aoe_impact",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_lava_ground",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_lightning_ring_impact",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_iceblock",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_loop_silent",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_loop",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_charge_up_silent",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_charge_up_ground",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_growing_punch_indication",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_projectile_cast_loop_silent",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_player_loop",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_loop_silent",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_loop",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_ferocity_stack",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_projectile_loop",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_boss_torch_loop",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_projectile_loop",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_meteor_marker",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_meteor",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_shieldbubble_holy_loopsound",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_shieldbubble_holy",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_shield_bubble",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mortar_barrel_bullet",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_lightning_loop_offset",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_lightning_cast_loop",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_lightning_aoe_impact",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_earthdaughter_marker",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_heretic_shadowmask_smoke_ghostsound",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_hell_dungeon_resshrine_spell_player",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_guardian_rockgiant_trap_start",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_guardian_rockgiant_trap_end",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_guardian_rock_trap_end",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dragons_keeper_shaman_summon_cast",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dot_bloody",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_demonic_levitate_buff",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_lasersweep_weapon",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_lasersweep_ground_impact",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_behemoth_barrel_bullet",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_cursed",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_energybubble",
+        "@ttl": "1",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_staff_starfall",
+        "@ttl": "0.7",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_petrify_gaze",
+        "@ttl": "0.5",
+        "@loop": "true"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_eagle_constantbuff_area",
+        "@ttl": "17"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_explosion_area_silent",
+        "@ttl": "17"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_captain_aura_start",
+        "@ttl": "17"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_broken_ground",
+        "@ttl": "15.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/AddonVfxMasters/fx_last_town_teleport",
+        "@ttl": "15"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_snow_falling",
+        "@ttl": "14"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_force_shield",
+        "@ttl": "10.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_start",
+        "@ttl": "10.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rock_elemental_rock_shield",
+        "@ttl": "10"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_VANITY_SPELLBOOK_BIRD",
+        "@ttl": "9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_channel_heal",
+        "@ttl": "8.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dragons_flame_elemental_summon_player_buildup_8s",
+        "@ttl": "8.1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_risingblow",
+        "@ttl": "8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_beetle_slam_buff",
+        "@ttl": "8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_forestspirit_piercingroot",
+        "@ttl": "8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_VANITY_POISON_POT_JUGGLE",
+        "@ttl": "8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_VANITY_POISON_POT_GHOST",
+        "@ttl": "8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_island_hat_60",
+        "@ttl": "7.75"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_island_hat_100",
+        "@ttl": "7.75"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_harvester_zone",
+        "@ttl": "7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_governor_unholy_aoe",
+        "@ttl": "7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_governor_skulls_aoe",
+        "@ttl": "7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_energy_field_01",
+        "@ttl": "7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_exploration_lute_spell_poof",
+        "@ttl": "7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_death",
+        "@ttl": "7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demon_curse_aoe",
+        "@ttl": "6.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_death_curse_02_halo",
+        "@ttl": "6.15"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_fireworks_green",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_urn_end",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_undead_ghoststrike",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mist_walker_out",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mist_walker_in",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frostnowa_teleport_start",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frostnowa_teleport_end",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cooldown_reset_hellgate",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_undead_statue_01_die",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_removal_hellgates",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_knight_01_die",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_brute_01_die",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_hell_rift_arm",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_MOB_DEMON_STATUE_01_spawn",
+        "@ttl": "5.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_fireworks_red",
+        "@ttl": "5.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner_thetford",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner_rally",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner_martlock",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner_lymhurst",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner_fortsterling",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner_caerleon",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner_bridgewatch",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rock_elemental_big_smash_outer",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rock_elemental_big_smash_inner",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_morgana_trap_die",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magic_shock_pillar_avalon",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_explosion",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frostnova_medium",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_bomb_impact",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_thetford_banner",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_martlock_banner",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_bridgewatch_banner",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_Caerleon_banner",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_divine_jump_avalon",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_ice_nova_impact",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_wizard_bomb_impact_silent",
+        "@ttl": "5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_portal_mob_spawn",
+        "@ttl": "4.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beartrap_small_end",
+        "@ttl": "4.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/demount_fx_medium_silent",
+        "@ttl": "4.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/demount_fx_medium",
+        "@ttl": "4.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/demount_fx_big",
+        "@ttl": "4.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/AddonVfxMasters/fx_last_town_teleport_end",
+        "@ttl": "4.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_hell_rift_ground",
+        "@ttl": "4.8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_fireworks_yellow",
+        "@ttl": "4.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_halloween_dancebreak_fireworks",
+        "@ttl": "4.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_fireworks_blue",
+        "@ttl": "4.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_fortsterling_banner",
+        "@ttl": "4.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_Lymhurst_banner",
+        "@ttl": "4.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_demon_sorcererboss_boss_die_01",
+        "@ttl": "4.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner_banner_02",
+        "@ttl": "4.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_lightning_ring",
+        "@ttl": "4.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_elemental_implosion_start",
+        "@ttl": "4.15"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rain_of_arrows_bow",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_pyroblast_staff",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_pyroblast_cast",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demon_brute_infernal_chains_01",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cataclysm_darkness",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_direbear_roar",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mount_tower_chariot_barreldeploy_projectile_impact",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_wounded_king_boss_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_wizard_02_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_wizard_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_statue_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_priest_boss_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_priest_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_pikeman_02_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_pikeman_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_mortar_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_monk_02_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_monk_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_minion_worker_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_minion_scout_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_minion_lamp_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_minion_builder_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_minion_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_mage_boss_02_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_mage_boss_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_mage_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_knight_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_eagle_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_drone_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_construct_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_cleric_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_captain_boss_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_bowman_boss_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_bowman_03_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_bowman_02_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_bowman_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_berserk_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_apprentice_02_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_avalon_apprentice_01_die",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_behemoth_barrel_wiggle",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_behemoth_barrel_impact",
+        "@ttl": "4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_impact_bloody_lifestealsound",
+        "@ttl": "3.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_impact_bloody_damage",
+        "@ttl": "3.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_impact_bloody",
+        "@ttl": "3.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_anniversary_gun_green",
+        "@ttl": "3.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_anniversary_gun_blue",
+        "@ttl": "3.7"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/ShieldDebuffImpactVfx_repeating",
+        "@ttl": "3.6"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/ShieldDebuffImpactVfx",
+        "@ttl": "3.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_tracking_escape_imp_buildup",
+        "@ttl": "3.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_spell_crystal",
+        "@ttl": "3.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_celestial_sphere_cast",
+        "@ttl": "3.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_morgana_imp_fireball_charge",
+        "@ttl": "3.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_corrupted_imp_fireball_impact",
+        "@ttl": "3.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_armor_debuff_impact",
+        "@ttl": "3.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_fanatic_witch_dragon_fire_channel_condense_flames_others",
+        "@ttl": "3.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_eagle_summon_pulse",
+        "@ttl": "3.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dragons_flame_elemental_summon_player_buildup",
+        "@ttl": "3.1"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/BuffImpactEffect",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_pull_area_long",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_iceshard_impact",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_icerock_impact_01",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_projectile_impact_icerock_sound",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_projectile_impact",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_projectile_cast_start",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_projectile_cast_end",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_lance_projectile_impact",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_divekick_impact_keeper",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_divekick_impact_griffin",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_divekick_impact",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_corrupted_fire_start",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_corrupted_fire_end",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_crystalspider_01_die",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_crystalcobra_boss_01_die",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_arcane_crystalbeetle_01_die",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_giant_boss_ancient_projectile_impact",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_earthmother_thunderslam_magic",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_earthmother_thunderslam",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_earthmother_projectile_impact_silent",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_earthmother_projectile_impact",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_earthmother_clobbering_impact",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_divine_jump_nrg_avalon",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_hd_dominance_area",
+        "@ttl": "3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rock_elemental_stone_rip",
+        "@ttl": "2.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rock_elemental_passive",
+        "@ttl": "2.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rock_elemental_autoattack",
+        "@ttl": "2.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_charge_sphere",
+        "@ttl": "2.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_impact_silent",
+        "@ttl": "2.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_impact_big_feathered",
+        "@ttl": "2.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_impact_small",
+        "@ttl": "2.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_druid_boss_seer_icebomb_explosion",
+        "@ttl": "2.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_anniversary_gun_red",
+        "@ttl": "2.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_weapon_cache_levelup_swamp",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_weapon_cache_levelup_steppe",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_weapon_cache_levelup_mountain",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_weapon_cache_levelup_highland",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_weapon_cache_levelup_forest",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_weapon_cache_levelup_caerleon",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_watchtower_guards_levelup",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_vanity_warbanner_banner_01",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_whirlwind_ultimate",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_whirling_staff_trail",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_werewolf_cleave",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_werewolf_autoattack_right",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_werewolf_autoattack_left",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_werewolf_autoattack",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_vanity_portal_spawn",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_vanity_portal_despawn",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_vacuumslash_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_undead_stab_smoke",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_undead_heal_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_tracking_smash_earthdaughter_8m",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_tracking_smash_earthdaughter_18m",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_timefreeze_buildup",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_timefreeze_area",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_threatening_smash",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_teleport_start_mist",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_teleport_end_mist",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_sundershot_flare",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_sundershot_buildup",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_stunrun_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_spinningblades_jump",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_spearthrow_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_spear_lunge_swoosh",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_smuggler_cape_01",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_smokecloud_14m",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_simple_trail_purple",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_sacrifice_heal_caster_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rejuvenatingsprint_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rejuvenatingbreeze",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_raging_storm_bow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_purifying_smoke_fast",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_pull_area",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_polyform_buildup_enemy",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_petrifying_gaze_start",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_petrifying_gaze_area",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_owl_ascend",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_heal_impact_silent",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_heal_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_circleoflife_aoe",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mist_hound_howl",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mightyblow_swoosh",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mightyblow_impact_mid",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mightyblow_impact_low",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_meteor_impact_simple",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_meteor_impact_silent",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_meteor_impact_medsound",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_meteor_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_melee_spin_silence",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_knockbackshot_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_killshot_02",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_witch_rock_spear_ring",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_witch_explosion_7m",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_juggernaut_assault_steps",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_juggernaut_assault_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_issue_order_shout",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_interrupt_hit",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_interrupt",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_internalbleeding_reverse",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_internalbleeding",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_inner_corruption",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_ignite_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_howl_werewolf",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_howl_radial_01",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_howl_rabbit",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holytouch_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_ultimate_explosion",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_impact_small",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_flash",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_heretic_dynamite_mine_projectile_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_heretic_dynamite_mine_explosion",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hellnova_explosion",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hellnova_cast",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hawk_skyshot_avalon_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hawk_skyshot_avalon",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hammer_w_swing_arcs_2h",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hammer_w_swing_arcs",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hammer_w_smash_impacts",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hammer_q",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_halberd_spin_7m",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_grudge_target_damage",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_growing_punch_buildup",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_growing_punch_7m",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_growing_punch_4m",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_growing_punch_11m",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_groundspear",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_griffin_rend",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_griffin_ascend",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_icicle_lances_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_bomb_startup",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_force_field",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_projectile_wave_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fire_buff_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fairydragon_ethereal_disappear",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_ent_autoattack_impact_big",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_enigma_blade_teleport_start",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_enigma_blade_teleport_end",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_energy_explosion",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_energeticsprint_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_eagle_constantbuff_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dryad_swoosh_right",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dryad_swoosh_left",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dragonhawk_dive_smoke",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_disembowel",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demon_howl_radial_01",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_death_curse_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dash_purple_local",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_damage_reduction_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystalspider_awaken",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_sword_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_scythe_reduce_cooldown",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_mace_impact_ground",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_mace_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_holystaff_start",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_holystaff",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_hammer_swoosh",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_froststaff_dash_muzzleflash_buildup",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_flamestaff_explosion",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_flamestaff_cast",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_double_bladed_staff_swoosh",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_crossbow_autoattack_impact_silent",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_crossbow_aoe_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_beetle_buzz_energy_bubble_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crowdControlBuffEffect",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crosshair_target",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crosshair_area",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crescent_slash_max_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crescent_slash_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_create_opening_uppercut",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_create_opening_strike_right",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_create_opening_strike_left",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_concussive_blow_swoosh_03",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_concussive_blow_swoosh_02",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_concussive_blow_swoosh_01",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_combatstaff_slash_end",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cleanse_heal",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cleanse_arcane",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_claymorecharge_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_chaindash_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cd_hazard_suicide",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cataclysm_buildup",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_caerleon_knight_jump_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_caerleon_knight_jump",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_caerleon_knight_cleave",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_caerleon_boss_smokescreen",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_caerleon_boss_howl_radial",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_caerleon_boss_cleave_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_brimstone_meteor_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_brimstone_meteor_area",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_boulder_toss_smack",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_boulder_toss_buildup",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_bloody_reap_scythe_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_beetle_charge",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_bear_dash_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_back_slash_avalon_smoke_finale",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_back_slash_avalon_smoke",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_eagle_summon_death",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_divine_shot_minion",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_divine_shot_construct",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_divine_shot",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_cape_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_aura_maxhp",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_orb_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_impact_rework",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_chain_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_abyss_eyes_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_abyss_eyes_beam",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell _energyshield_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_smartclusterqueue_teleport_out",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_shieldbubble_energyshield_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_shield_bubble_cast",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_pumpkin_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_pumpkin_death",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_raven_scream",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_swampdragon_shed_skin",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_greywolf_roar",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_greywolf_huntermark_pulse",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_greywolf_huntermark_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_greywolf_huntermark",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_direbear_roar_weak",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_direbear_exhale_weak",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mountspell_fw_direbear_exhale",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_morgana_champion_chain_01",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_undead_statue_01_summon",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_morgana_giant_01_die",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_keeper_dragon_obelisk_01_spawn",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_keeper_dragon_obelisk_01_die",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_keeper_dragon_obelisk_01_click",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_keeper_dragon_obelisk_01_charge",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_fw_carleon_guard_mightyswing_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_event_easter_chest_02_end",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_event_easter_chest_01_end",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_crystal_cobra_ground_indicator",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_crystal_cobra_flash",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_chest_christmas_end_03",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_chest_christmas_end_01",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_sword_buff_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_sword_buff_collect_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_sword_buff_collect",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_scale_buff_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_scale_buff_collect_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_scale_buff_collect",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_rose_buff_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_rose_buff_collect_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_rose_buff_collect",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_md_general_buff_collect_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_lightning_aoe_impact_purple_big",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_witch_stomp_ground",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_witch_stomp_flare_finger",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_stump_piercingroot",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_spear_throw_weapon_arm2",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_spear_throw_weapon_arm1",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_spear_dash_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_spear_dash",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_giant_boss_stomp_channel",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_fury",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_journal_pvp_grim_reaper_helmet",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_invader_spawn",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_invader_die",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_impact_blood_splatter",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_impact_blood_fountain",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_hit_02",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_hit_01",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_heretic_ballista_impact_small_fire_sound",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_hellhound_howl",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_healingreduction_debuff_impact_silent",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_healingreduction_debuff_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_happiness_buff_01",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_expeditions_teleport_player_spawn",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dryad_moving_tendrils_spawn",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dragons_flame_elemental_summon_small_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dragons_flame_elemental_summon_impact_player",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dragons_flame_elemental_summon_impact_area",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dragons_flame_elemental_summon_death",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dragons_flame_elemental_areapulse_mob",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dragons_flame_elemental_areapulse",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_demonic_growl_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_crystal_realm_gvg_player_spawn",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_crystal_cobra_spit_area_nostacks",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_crystal_cobra_bite_impact_delayed",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_crystal_cobra_bite_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_corrupted_projectile_wave_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_hd_wrath_collect_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_hd_dominance_collect_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_hd_cruelty_collect_glow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_food_yellow",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_food_white",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_food_violet",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_food_red",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_food_green",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_buff_food_blue",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beam_bastion_charge",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_bastion_trail",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_axe_combo_trail",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_axe_combo_swoosh_reverse",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_axe_combo_swoosh",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_axe_combo_hit",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_wisp_ondeath",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_captain_trial_impact",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_builder_tremor",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_archmage_explosion",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_MOUNT_ADC_HERETIC_MULE_01_Shot",
+        "@ttl": "2.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mortar_barrel_impact_playerspell",
+        "@ttl": "2.42"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mortar_barrel_impact",
+        "@ttl": "2.42"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mark_of_death_debuff",
+        "@ttl": "2.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_flamepillar_undead_01",
+        "@ttl": "2.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_flamepillar_silent",
+        "@ttl": "2.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_flamepillar_01",
+        "@ttl": "2.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cleanse",
+        "@ttl": "2.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_archmage_skybeam_impact",
+        "@ttl": "2.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_archmage_skybeam",
+        "@ttl": "2.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_sarcophagus_statue_end",
+        "@ttl": "2.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_heal_start",
+        "@ttl": "2.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_flamepillar_02",
+        "@ttl": "2.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_sarcophagus_statue_disassemble",
+        "@ttl": "2.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_position_swap",
+        "@ttl": "2.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_heal_ultimate_start",
+        "@ttl": "2.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_heal_ultimate_end",
+        "@ttl": "2.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_fanatic_witch_dragon_fire_channel_condense_flames_first",
+        "@ttl": "2.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_castSpeedBuff_01",
+        "@ttl": "2.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_sorcerer_boss_tornado",
+        "@ttl": "2.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_undead_ghoststrike_impact",
+        "@ttl": "2.16"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_blizzard_fast",
+        "@ttl": "2.16"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_areaofdecay",
+        "@ttl": "2.1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_area_ground",
+        "@ttl": "2.05"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_warstomp",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_sacrifice_heal_second_impact",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_sacrifice_heal_impact",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_witch_heal_instant",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_impact_silent_02",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_impact_desperate_prayer",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_impact",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_area_ultimate",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dagger_charge_start_silent",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_beetle_retaliate_lightning_strike_silent",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_shield_bubble_aoe",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_guardian_crystal_start",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_fortifications_banner_start",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_flamespinner_area",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_demon_crush_impact",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_demon_boss_slam_aoe",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_knockback",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_crush_spirit_hand",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_blood_puddle_splash",
+        "@ttl": "2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/anim_hook_trail",
+        "@ttl": "2"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/fx_impact_poison",
+        "@ttl": "1.9"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/AoEHealImpactEffect",
+        "@ttl": "1.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_beartrap_end",
+        "@ttl": "1.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_silence_area",
+        "@ttl": "1.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_damageBuffEffect_silent",
+        "@ttl": "1.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_damageBuffEffect_repeating",
+        "@ttl": "1.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_damageBuffEffect",
+        "@ttl": "1.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mark_of_death_channel",
+        "@ttl": "1.81"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/EnergyImpactEffect_selfbuffsound",
+        "@ttl": "1.8"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/EnergyImpactEffect_lowvolume",
+        "@ttl": "1.8"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/EnergyImpactEffect",
+        "@ttl": "1.8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frostdrill_impact",
+        "@ttl": "1.75"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cleanse_single",
+        "@ttl": "1.75"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cleanse_area",
+        "@ttl": "1.75"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellCastEffectVfx/FireExplosionCastVfx",
+        "@ttl": "1.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_mount_morgana_sparks",
+        "@ttl": "1.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_portal_hit",
+        "@ttl": "1.66"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_explosion_lowsound",
+        "@ttl": "1.66"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_explosion",
+        "@ttl": "1.66"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_charge_explosion",
+        "@ttl": "1.66"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_trail_smash_120degree",
+        "@ttl": "1.65"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_trail_demonic_120degree",
+        "@ttl": "1.65"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_trail_demon_spiked",
+        "@ttl": "1.65"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_trail_brute_autoattack",
+        "@ttl": "1.65"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_back_slash_avalon",
+        "@ttl": "1.65"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_deadly_swipe",
+        "@ttl": "1.65"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_smokebomb_03",
+        "@ttl": "1.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_shieldbubble_pulsing_explosion",
+        "@ttl": "1.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_aoe",
+        "@ttl": "1.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_heretic_shadowmask_insanity_impact",
+        "@ttl": "1.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_smell_of_blood",
+        "@ttl": "1.55"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_tankbeetle_arrowrain_up",
+        "@ttl": "1.51"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rain_of_arrows",
+        "@ttl": "1.51"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_heavy_impact",
+        "@ttl": "1.51"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_elemental_implosion_end",
+        "@ttl": "1.51"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellCastEffectVfx/ThunderClapVfx",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_cursed_skeleton_die",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_sword_spin",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_shockwave_punch_caster",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_shapeshifter_explosion_area",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_shapeshifter_cone_buildup",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_salamander_invisibility",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_morgana_crossbow_empowered",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magic_projectile_shapeshifter_impact_silent",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magic_mushroom",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_fanatic_witch_dragon_fire_impact",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_start",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_earth_geysir_player",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demount_undead_horse",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_trail_fang",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_projectile_small",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_projectile_impact",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_ram_impact_withsound",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_ram_impact_smallsound",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_ram_impact_no_shake",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_ram_impact",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_guardian_crystal_explosion",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_giant_stomp",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_bloodthirstyblade_impact",
+        "@ttl": "1.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_undead_mine_explosion",
+        "@ttl": "1.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magic_projectile_nature_impact",
+        "@ttl": "1.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_projectile_impact_silent",
+        "@ttl": "1.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_orb_impact_7m",
+        "@ttl": "1.35"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_impact_large_silent",
+        "@ttl": "1.33"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_impact_large_02_silent",
+        "@ttl": "1.33"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_impact_large",
+        "@ttl": "1.33"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_heal_end",
+        "@ttl": "1.33"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_explosion_area",
+        "@ttl": "1.33"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_celestial_sphere_impact_mob",
+        "@ttl": "1.33"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_celestial_sphere_impact",
+        "@ttl": "1.33"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_spawn",
+        "@ttl": "1.33"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_swoosh_vertical_01",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_panther_pounce_scratch",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_panther_pounce",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_panther_claws_big",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_panther_claws",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_majestic_swoosh_avalon_vertical",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_lethal_cleaver_swoosh",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hammer_swoosh_avalon_vertical",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_desperate_prayer_wings",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_turquoise",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_morgana_summon_imp",
+        "@ttl": "1.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_bite",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_heretic_mage_aoe_medimpactsound",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fire_explosion",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fire_aoe_impact",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_crystal_froststaff_dash_muzzleflash",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cooldown_reset",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_impact_poison",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_demon_boss_autoattack_impact",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_pikeman_leap_impact",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_captain_leap_impact",
+        "@ttl": "1.25"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_end",
+        "@ttl": "1.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_projectile_start",
+        "@ttl": "1.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_chest_undead_end",
+        "@ttl": "1.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_chest_morgana_end",
+        "@ttl": "1.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_chest_keeper_end",
+        "@ttl": "1.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_chest_heretic_end",
+        "@ttl": "1.2"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_keeper_thunder_quake",
+        "@ttl": "1.15"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_totem_skillshot_muzzleflash",
+        "@ttl": "1.1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_projectile_impact_silent",
+        "@ttl": "1.1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_projectile_impact",
+        "@ttl": "1.1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_aoe_impact_knockbacksound",
+        "@ttl": "1.1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_aoe_impact",
+        "@ttl": "1.1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_guardian_shockwave",
+        "@ttl": "1.1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_purify_waves",
+        "@ttl": "1.1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_puller_magical_hook",
+        "@ttl": "1.05"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_reduce_cooldown",
+        "@ttl": "1.05"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_white_glow",
+        "@ttl": "1.02"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellCastEffectVfx/WhiteTrail",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_sarcophagus_statue_reassemble",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_arrow_ultimate_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_trail_demonic",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_totem_skillshot_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_vanity_chickengun_muzzleflash_red",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_vanity_chickengun_muzzleflash_green",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_vanity_chickengun_muzzleflash_blue",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_teleport_start",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_teleport_end",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_smite_projectile_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_royal_guard_summon_01",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_round_kick",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rendingspin_indicator",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_rendingspin",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_protectionaura_energy",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_power_punch_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_nature_heal_end",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_melee_spin_white_6m_cw",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_majestic_swoosh_avalon_blade",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magmaball_bullet_end",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magic_shapeshifter_impact_aoe",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magic_projectile_arcane_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magic_arrow_big_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_lance_charge_aura_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_keeper_witch_explosion",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holyexplosion_knockback",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_holy_projectile_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hell_arrow_ultimate_impact_silent",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_groundslam_impact_01",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frostnova_silent",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frostnova",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frostdrill_start",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_energy_projectile_impact_01",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_desperate_prayer",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_projectile_start",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_projectile_end",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_damage_area_buff",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cursed_drop",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_broken_earth",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_bloody_reap",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_blade_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_projectile_medium_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_heal_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_avalon_captain_trial_nova",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_meteor_impact",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_smokescreen_undeadspawnsound",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_smokescreen_silent",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_smokescreen",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_turquoise_glow",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_red",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_orange_glow",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_orange",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_green_glow",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_green",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_blue_glow",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_blue",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_morgana_portal_death",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_heretic_ballista_muzzleflash",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dust_01",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_dash_end_dust",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_pull_player",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_boss_demon_prince_pull_hand_demon",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_avalon_captain_oath",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_anniversary_spell_bloody_reap",
+        "@ttl": "1"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_mage_impact",
+        "@ttl": "0.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_taunt",
+        "@ttl": "0.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_purge",
+        "@ttl": "0.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_lightning_projectile_impact",
+        "@ttl": "0.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fire_aoe_big_impact",
+        "@ttl": "0.9"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_governor_explosion",
+        "@ttl": "0.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_shield_break",
+        "@ttl": "0.85"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_giant_stone_impact",
+        "@ttl": "0.83"
+      },
+      {
+        "@p": "Prefabs/Vfx/MeleeHit/MeleeHit",
+        "@ttl": "0.8100001"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_rockgiant_foot_smoke",
+        "@ttl": "0.81"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_tracking_swoosh_shadowmask",
+        "@ttl": "0.8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_shapeshifter_staff_slam",
+        "@ttl": "0.8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_hammer_swoosh_avalon",
+        "@ttl": "0.8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_potion_white",
+        "@ttl": "0.8"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dragonbreath_breath",
+        "@ttl": "0.75"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_demonic_buff_impact",
+        "@ttl": "0.75"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_pyroblast_impact",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_melee_spin_white_02",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_melee_spin_white",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_majestic_swoosh_avalon",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magic_projectile_cursed_impact_silent",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_magic_projectile_cursed_impact",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_impact_silent",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_impact_autoattacksound",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_fireball_impact",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dash",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_cursed_impact",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_morgana_imp_fireball_impact",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_chest_halloween_end_02",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_mob_chest_halloween_end_01",
+        "@ttl": "0.7"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_slow_mine_projectile_impact",
+        "@ttl": "0.65"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_undead_energy_impact",
+        "@ttl": "0.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_impact_shockwave",
+        "@ttl": "0.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_frost_lance_projectile_cast_end",
+        "@ttl": "0.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_firestaffignite",
+        "@ttl": "0.6"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_undead_mine_projectile_impact",
+        "@ttl": "0.57"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_dagger",
+        "@ttl": "0.55"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_arcane_projectile_end",
+        "@ttl": "0.55"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/EnergyDrainImpactEffect",
+        "@ttl": "0.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_windshield_shockwave",
+        "@ttl": "0.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_portalgun_muzzle_fire_01",
+        "@ttl": "0.5"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_snipeshot_silent",
+        "@ttl": "0.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_snipeshot",
+        "@ttl": "0.4"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_trail_undead_120degree",
+        "@ttl": "0.35"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_trail_morgana_120degree",
+        "@ttl": "0.35"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_trail_avalon_120degree",
+        "@ttl": "0.35"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_caerleon_boss_cleave",
+        "@ttl": "0.35"
+      },
+      {
+        "@p": "Prefabs/SpellEffects/SpellImpactVfx/DamageImpactEffect",
+        "@ttl": "0.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_aoe_impact_arrowhitsound",
+        "@ttl": "0.3"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_knockback_silent",
+        "@ttl": "0.22"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_spell_knockback",
+        "@ttl": "0.22"
+      },
+      {
+        "@p": "FX/ClientPrefabs/fx_trail_simple_white_120degree",
+        "@ttl": "0.15"
+      }
+    ]
+  }
+}

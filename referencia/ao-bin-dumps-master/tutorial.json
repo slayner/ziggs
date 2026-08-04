@@ -1,0 +1,442 @@
+{
+  "?xml": {
+    "@version": "1.0",
+    "@encoding": "utf-8"
+  },
+  "tutorial": {
+    "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+    "@xsi:noNamespaceSchemaLocation": "tutorial.xsd",
+    "@learningpointsifskipped": "100",
+    "clustergroup": {
+      "@startcluster": "1008",
+      "cluster": [
+        {
+          "@id": "1009"
+        },
+        {
+          "@id": "1010"
+        },
+        {
+          "@id": "1011"
+        }
+      ]
+    },
+    "travelplanner": {
+      "@id": "607d582d-0d7c-4a47-b2ef-1ea8a7664f06@1010",
+      "target": [
+        {
+          "@clusterid": "1006",
+          "@title": "@TUTORIAL_TRAVEL_FOREST_TITLE",
+          "@desc": "@TUTORIAL_TRAVEL_FOREST_DESC"
+        },
+        {
+          "@clusterid": "4006",
+          "@title": "@TUTORIAL_TRAVEL_MOUNTAIN_TITLE",
+          "@desc": "@TUTORIAL_TRAVEL_MOUNTAIN_DESC"
+        },
+        {
+          "@clusterid": "0004",
+          "@title": "@TUTORIAL_TRAVEL_SWAMP_TITLE",
+          "@desc": "@TUTORIAL_TRAVEL_SWAMP_DESC"
+        },
+        {
+          "@clusterid": "3002",
+          "@title": "@TUTORIAL_TRAVEL_HIGHLAND_TITLE",
+          "@desc": "@TUTORIAL_TRAVEL_HIGHLAND_DESC"
+        },
+        {
+          "@clusterid": "2002",
+          "@title": "@TUTORIAL_TRAVEL_STEPPE_TITLE",
+          "@desc": "@TUTORIAL_TRAVEL_STEPPE_DESC"
+        }
+      ]
+    },
+    "unlockachievementskippedtutorial": {
+      "achievement": [
+        {
+          "@id": "START",
+          "@masterylevel": "1"
+        },
+        {
+          "@id": "COMBAT_TRAINEE",
+          "@masterylevel": "1"
+        },
+        {
+          "@id": "CRAFT_TRAINEE",
+          "@masterylevel": "1"
+        },
+        {
+          "@id": "FARM_TRAINEE",
+          "@masterylevel": "1"
+        },
+        {
+          "@id": "GATHER_TRAINEE",
+          "@masterylevel": "1"
+        }
+      ]
+    },
+    "startstate": {
+      "@uniquename": "STARTTUTORIAL",
+      "@triggerhint": "FIRSTSTEPS",
+      "@hidedestinyboard": "true",
+      "@showdestinyboardflyout": "false"
+    },
+    "state": [
+      {
+        "@uniquename": "FIRSTSTEPS",
+        "@previousstate": "STARTTUTORIAL",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "USESPELL",
+        "@previousstate": "FIRSTSTEPS",
+        "@triggerhint": "USESPELL",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "USESPELLCLEAR",
+        "@previousstate": "USESPELL",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "FIRSTGATHER",
+        "@previousstate": "USESPELL",
+        "@triggerhint": "FIRSTGATHER",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "FIRSTCRAFT",
+        "@previousstate": "FIRSTGATHER",
+        "@triggerhint": "FIRSTCRAFT",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "FIRSTINVENTORY",
+        "@previousstate": "FIRSTCRAFT",
+        "@triggerhint": "FIRSTINVENTORY",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "FIRSTEQUIP",
+        "@previousstate": "FIRSTINVENTORY",
+        "@triggerhint": "FIRSTEQUIP",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "FIRSTSPELL",
+        "@previousstate": "FIRSTEQUIP",
+        "@triggerhint": "FIRSTSPELL",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "FIRSTSPELLCLEAR",
+        "@previousstate": "FIRSTSPELL",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "EQUIPSHIELD",
+        "@previousstate": "FIRSTSPELLCLEAR",
+        "@triggerhint": "EQUIPSHIELD",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "EQUIPSHIELDCLEAR",
+        "@previousstate": "EQUIPSHIELD",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "COMBAT",
+        "@previousstate": "EQUIPSHIELDCLEAR",
+        "@triggerhint": "COMBAT",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "COMBATCLEAR",
+        "@previousstate": "COMBAT",
+        "@triggerhint": "COMBATCLEAR",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "DESTINYBOARDINTRO",
+        "@previousstate": "MOUNTAINCLEAR",
+        "@triggerhint": "DESTINYBOARDINTRO_01",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "DESTINYBOARDINTROCLEAR",
+        "@previousstate": "DESTINYBOARDINTRO",
+        "@triggerhint": "DESTINYBOARDINTRO_08",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "MARKETPLACEINTRO",
+        "@previousstate": "COMBATCLEAR",
+        "@triggerhint": "MARKETPLACEINTRO_01",
+        "@resetquestonrevisit": "true",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "MARKETPLACEINTROCLEAR",
+        "@previousstate": "MARKETPLACEINTRO",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "BUYMOUNT",
+        "@previousstate": "MARKETPLACEINTROCLEAR",
+        "@triggerhint": "MARKETPLACEINTRO_01",
+        "@resetquestonrevisit": "true",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "COLLECTITEM",
+        "@previousstate": "BUYMOUNT",
+        "@triggerhint": "BUYMOUNT_04",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "EQUIPMULE",
+        "@previousstate": "COLLECTITEM",
+        "@triggerhint": "EQUIPMULE",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "MOUNTMULE",
+        "@previousstate": "EQUIPMULE",
+        "@triggerhint": "MOUNTMULE",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "FINDWOUNDEDCRAFTER",
+        "@previousstate": "MOUNTMULE",
+        "@triggerhint": "SOFTCLEAR",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "CRAFTTOOLSINFO",
+        "@previousstate": "FINDWOUNDEDCRAFTER",
+        "@triggerhint": "CRAFTTOOLSINFO",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "CRAFTTOOLS",
+        "@previousstate": "CRAFTTOOLSINFO",
+        "@triggerhint": "CRAFTTOOLS",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "HIGHLIGHTMAPBUTTON",
+        "@previousstate": "CRAFTTOOLS",
+        "@triggerhint": "MAPINTRO",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "MAPINTRO",
+        "@previousstate": "HIGHLIGHTMAPBUTTON",
+        "@triggerhint": "MAPINTRO_01B",
+        "@resetquestonrevisit": "true",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "MAPINTROCLEAR",
+        "@previousstate": "MAPINTRO",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "FOREST",
+        "@previousstate": "MAPINTROCLEAR",
+        "@triggerhint": "FOREST",
+        "@infobuttonhint": "BUTTONFOREST",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "BIGHINTRECALL",
+        "@previousstate": "FOREST",
+        "@triggerhint": "BIGHINTRECALL",
+        "@infobuttonhint": "BUTTONFOREST",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "FORESTCLEAR",
+        "@previousstate": "BIGHINTRECALL",
+        "@triggerhint": "CLEAR",
+        "@infobuttonhint": "BUTTONFOREST",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "MOUNTAIN",
+        "@previousstate": "FORESTCLEAR",
+        "@triggerhint": "MOUNTAIN",
+        "@infobuttonhint": "BUTTONMOUNTAIN",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "MOUNTAINCLEAR",
+        "@previousstate": "MOUNTAIN",
+        "@triggerhint": "CLEAR",
+        "@infobuttonhint": "BUTTONMOUNTAIN",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "LEARNLP",
+        "@previousstate": "MOUNTAINCLEAR",
+        "@triggerhint": "LEARNLP_01",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "CLEARLEARNLP",
+        "@previousstate": "LEARNLP",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "USELP",
+        "@previousstate": "CLEARLEARNLP",
+        "@triggerhint": "USELP_01",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "CLEARUSELP",
+        "@previousstate": "USELP",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "INFO1",
+        "@previousstate": "DESTINYBOARDINTROCLEAR",
+        "@triggerhint": "INFO1",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "INFO2",
+        "@previousstate": "INFO1",
+        "@triggerhint": "INFO2",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "INFO3",
+        "@previousstate": "INFO2",
+        "@triggerhint": "INFO3",
+        "@infobuttonhint": "BUTTONINFO1",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "WHATYOUWEAR",
+        "@previousstate": "INFO3",
+        "@triggerhint": "SOFTCLEAR",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "GETGEARCLEAR",
+        "@previousstate": "WHATYOUWEAR",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "SILVER",
+        "@previousstate": "GETGEARCLEAR",
+        "@triggerhint": "CLEAR",
+        "@infobuttonhint": "INFO_ARMOR",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "SWORDGLOWOFF",
+        "@triggerhint": "CLEAR",
+        "@previousstate": "FIRSTSPELL"
+      },
+      {
+        "@uniquename": "MOUNTGLOWOFF",
+        "@triggerhint": "CLEAR",
+        "@previousstate": "EQUIPSHIELD"
+      },
+      {
+        "@uniquename": "DELAYEDHARDCLEARPREDB",
+        "@triggerhint": "DELAYEDCLEAR",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "HARDCLEARPREDB",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "true",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "HARDCLEARAFTERDB",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "true"
+      },
+      {
+        "@uniquename": "SHIPFIXED",
+        "@triggerhint": "CLEAR",
+        "@hidedestinyboard": "false",
+        "@showdestinyboardflyout": "false"
+      },
+      {
+        "@uniquename": "SOUNDSHIPARRIVES",
+        "@audiochange": "TUT_FINISH_SHIP_ARRIVES"
+      }
+    ],
+    "endstate": {
+      "@uniquename": "FINISH",
+      "@previousstate": "SOUNDSHIPARRIVES"
+    },
+    "startgear": {
+      "item": [
+        {
+          "@itemid": "T1_ARMOR_LEATHER_SET1"
+        },
+        {
+          "@itemid": "T1_SHOES_LEATHER_SET1"
+        }
+      ]
+    }
+  }
+}

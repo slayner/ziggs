@@ -1,0 +1,52 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<patch xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="patch.xsd">
+
+  <!--GVG Season Dates-->
+  <!--Season 23-->
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_23_START']">
+	  <attribute name="defaultdatetime" newvalue="2024-05-04T11:00:00Z"/>
+  </replace>
+  <!--Season 22-->
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_22_END']">
+    <attribute name="defaultdatetime" newvalue="2024-04-23T11:00:00Z"/>
+  </replace>
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_22_START']">
+    <attribute name="defaultdatetime" newvalue="2024-04-03T11:00:00Z"/>
+  </replace>
+  <!--Season 21-->
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_21_END']">
+    <attribute name="defaultdatetime" newvalue="2023-12-18T11:00:00Z"/>
+  </replace>
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_21_START']">
+    <attribute name="defaultdatetime" newvalue="2023-09-23T11:00:00Z"/>
+  </replace>  
+  <!--Season 20-->
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_20_END']">
+  	<attribute name="defaultdatetime" newvalue="2023-09-11T11:00:00Z"/>
+  </replace>
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_20_START']">
+  	<attribute name="defaultdatetime" newvalue="2023-06-17T11:00:00Z"/>
+  </replace>
+  <!--Season 19-->
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_19_END']">
+  	<attribute name="defaultdatetime" newvalue="2023-06-05T11:00:00Z"/>
+  </replace>
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_19_START']">
+  	<attribute name="defaultdatetime" newvalue="2023-03-25T11:00:00Z"/>
+  </replace>
+  <!--Season 18-->
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_18_END']">
+  	<attribute name="defaultdatetime" newvalue="2023-03-13T11:00:00Z"/>
+  </replace>
+  <replace sel="Times/DateTime[@uniquename='GVG_SEASON_18_START']">
+  	<attribute name="defaultdatetime" newvalue="2023-02-20T11:00:00Z"/>
+  </replace>
+  
+  <replace sel="Times/DateTime[@uniquename='CRYSTAL_LEAGUE_LETHAL_FINAL_END']">
+  	<attribute name="defaultdatetime" newvalue="2023-09-10T10:00:00Z"/>
+  </replace>
+  <replace sel="Times/DateTime[@uniquename='CRYSTAL_LEAGUE_LETHAL_FINAL_START']">
+  	<attribute name="defaultdatetime" newvalue="2023-06-16T10:00:00Z"/>
+  </replace>	
+
+</patch>

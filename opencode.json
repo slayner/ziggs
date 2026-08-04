@@ -1,5 +1,16 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": ["@dietrichgebert/ponytail"],
-  "share": "auto"
+  "share": "auto",
+  "permission": "allow",
+  "mcp": {
+    "ssh": {
+      "type": "local",
+      "command": ["npx", "-y", "mcp-ssh-manager@latest"],
+      "enabled": true,
+      "environment": {
+        "SSH_CONFIG_PATH": "C:\\Users\\Gabriel\\.ssh-manager\\.env"
+      }
+    }
+  }
 }

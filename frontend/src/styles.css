@@ -1161,6 +1161,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    (6px) + dot colorido no canto do head pra deixar a função óbvia sem voltar
    ao badge grande. */
 .role-card {
+  width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm); background: var(--surface);
   cursor: pointer; transition: border-color 0.1s, box-shadow 0.1s;
@@ -1208,9 +1209,10 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .rc-name-btn {
-  display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 4px; min-width: 0;
   background: none; border: none; color: var(--text); cursor: pointer;
   padding: 0; font-family: inherit; text-align: left;
+  max-width: 160px; flex-shrink: 1;
 }
 .rc-name-btn .rc-name { flex: 1; }
 .rc-name-edit-icon { font-size: 11px; color: var(--hint); opacity: 0; flex-shrink: 0; transition: opacity 0.1s; }
@@ -1223,12 +1225,12 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .rc-name-input:focus { outline: none; border-color: var(--info); }
 
-/* Big renders — todos os equipamentos + alts, tamanho maior, na bracket collapsada. */
-.rc-head-renders { flex: 1; min-width: 0; display: flex; align-items: center; overflow: hidden; }
-.rc-big-renders { display: flex; gap: 4px; flex-wrap: wrap; }
-.rc-big-render-slot { display: flex; flex-direction: column; gap: 2px; }
-.rc-big-render { width: 36px; height: 36px; object-fit: contain; border-radius: 4px; background: var(--surface-2); }
-.rc-big-render-alt { width: 22px; height: 22px; opacity: 0.8; }
+/* Big renders — todos os equipamentos + alts, mesmo tamanho, lado a lado. */
+.rc-head-renders { flex: 1; min-width: 0; display: flex; align-items: center; overflow: hidden; gap: 6px; }
+.rc-big-renders { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.rc-big-render-slot { display: flex; flex-direction: row; gap: 3px; align-items: center; }
+.rc-big-render { width: 48px; height: 48px; object-fit: contain; border-radius: 4px; background: var(--surface-2); }
+.rc-big-render-alt { width: 48px; height: 48px; opacity: 1; }
 
 /* fn-dropdown — menu de fn-types ancorado ao fn-dot. */
 .fn-dropdown {
@@ -1373,7 +1375,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    centralizado pelo flex ele parece "subido" perto do texto; empurra alguns
    px pra baixo pra compensar visualmente. */
 .rc-weapon-icon {
-  width: 28px; height: 28px; object-fit: contain; flex-shrink: 0;
+  width: 48px; height: 48px; object-fit: contain; flex-shrink: 0;
+  border-radius: 4px; background: var(--surface-2);
   transform: translateY(2px);
 }
 

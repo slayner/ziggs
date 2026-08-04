@@ -1,0 +1,821 @@
+<?xml version="1.0" encoding="utf-8"?>
+<factionwarfare xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="factionwarfare.xsd">
+  <factions neutralguardprefab="T6_MOB_CITY_CAERLEON_KNIGHT_ELITE">
+    <faction flagging="Highland" city="3004" currency="FACTION_HIGHLAND" displayname="@FACTION_NAME_HIGHLAND" guardprefab="T4_MOB_CITY_HIGHLAND_KNIGHT_ELITE">
+      <logo symbolname="FACTIONSYMBOL_HIGHLANDS" symbol_r="143" symbol_g="122" symbol_b="71" symbol_emissive="68" color="1" symbol_scale="0.6" symbol_offset_y="-0.1"/>
+    </faction>
+    <faction flagging="Steppe" city="2000" currency="FACTION_STEPPE"  displayname="@FACTION_NAME_STEPPE" guardprefab="T4_MOB_CITY_STEPPE_KNIGHT_ELITE">
+      <logo symbolname="FACTIONSYMBOL_STEPPE" symbol_r="255" symbol_g="180" symbol_b="118" symbol_emissive="68" color="4" symbol_scale="0.6" symbol_offset_y="-0.1"/>
+    </faction>
+    <faction flagging="Forest" city="1000" currency="FACTION_FOREST"  displayname="@FACTION_NAME_FOREST" guardprefab="T4_MOB_CITY_FOREST_KNIGHT_ELITE">
+      <logo symbolname="FACTIONSYMBOL_FOREST" symbol_r="105" symbol_g="127" symbol_b="51" symbol_emissive="68" color="3" symbol_scale="0.6" symbol_offset_y="-0.1"/>
+    </faction>
+    <faction flagging="Mountain" city="4000" currency="FACTION_MOUNTAIN"  displayname="@FACTION_NAME_MOUNTAIN" guardprefab="T4_MOB_CITY_MOUNTAIN_KNIGHT_ELITE">
+      <logo symbolname="FACTIONSYMBOL_MOUNTAINS" symbol_r="66" symbol_g="75" symbol_b="79" symbol_emissive="68" color="0" symbol_scale="0.6" symbol_offset_y="-0.1"/>
+    </faction>
+    <faction flagging="Swamp" city="0000" currency="FACTION_SWAMP"  displayname="@FACTION_NAME_SWAMP" guardprefab="T4_MOB_CITY_SWAMP_KNIGHT_ELITE">
+		  <logo symbolname="FACTIONSYMBOL_SWAMP" symbol_r="154" symbol_g="97" symbol_b="143" symbol_emissive="68" color="2" symbol_scale="0.6" symbol_offset_y="-0.1"/>
+    </faction>
+    <faction flagging="Caerleon" city="3003" currency="FACTION_CAERLEON"  displayname="@FACTION_NAME_CAERLEON" guardprefab="T6_MOB_CITY_CAERLEON_KNIGHT_ELITE">
+	    <logo symbolname="FACTIONSYMBOL_CAERLEON" symbol_r="154" symbol_g="0" symbol_b="0" symbol_emissive="68" color="5" symbol_scale="0.6" symbol_offset_y="-0.1"/>
+    </faction>
+  </factions>
+  <global bonuspointmodifier="0.25"
+          killbonuspointmodifier="0.25"
+          killvalue="0.05"
+          nonlethalmaxkillvalue="500"
+          lethalmaxkillvalue="1500"
+          killatrophy="0.2"
+          defensecap="10000" 
+          payoutinterval="900"
+          clustercontributionscaler="0.4"
+          duchycontributionscaler="0.4"
+          supplypointduchycontributionscaler="0.6"
+          carriablecontributionscaler="0.4"
+          duchyvictoryfactionpointreward="4757781"
+          duchyconsolationfactionpointreward="2854669"
+          duchydefendervictoryfactionpointbonus="4948093"
+          duchydefendervictorybonusgroupsize="1000"
+          minitempower="700"
+          contributiontimeout="900"
+          killatrophytimeout="900"
+          campaignstarttime="0UTC"
+          dynamictemplatecampsreactivationtimersmallcampsecmin="420"
+          dynamictemplatecampsreactivationtimersmallcampsecmax="660"
+          dynamictemplatecampsreactivationtimermediumcampsecmin="900"
+          dynamictemplatecampsreactivationtimermediumcampsecmax="1260"
+          dynamictemplatecampsreactivationtimerrzesmallcampsecmin="420"
+          dynamictemplatecampsreactivationtimerrzesmallcampsecmax="660"
+          dynamictemplatecampsreactivationtimerrzemediumcampsecmin="900"
+          dynamictemplatecampsreactivationtimerrzemediumcampsecmax="1260"
+          dynamictemplatecampsphasechangedelaysec="300"
+          caerlonminimumconflicts="2"
+          lethalminimumconflicts="1"
+          nonlethalminimumconflicts="2"
+          factionknockdowndurabilitylossscaling="0.7"
+          factionenlistmentcooldowninmins="1440"/>
+  <factionbalancefactor max="2" scaling="0.8" perioddays="7"/>
+  <activityquotient min="0.75" max="10.0" perioddays="7" interval="900"/>
+  <weeklyreport bonusmodifier="0.8" />
+  <factionpointbonus>
+    <group size="2" bonusfactor="1.04"/>
+    <group size="3" bonusfactor="1.06"/>
+    <group size="4" bonusfactor="1.08"/>
+    <group size="5" bonusfactor="1.10"/>
+    <group size="6" bonusfactor="1.12"/>
+    <group size="7" bonusfactor="1.14"/>
+    <group size="8" bonusfactor="1.16"/>
+    <group size="9" bonusfactor="1.18"/>
+    <group size="10" bonusfactor="1.20"/>
+    <group size="11" bonusfactor="1.22"/>
+    <group size="12" bonusfactor="1.24"/>
+    <group size="13" bonusfactor="1.26"/>
+    <group size="14" bonusfactor="1.28"/>
+    <group size="15" bonusfactor="1.30"/>
+    <group size="16" bonusfactor="1.32"/>
+    <group size="17" bonusfactor="1.34"/>
+    <group size="18" bonusfactor="1.36"/>
+    <group size="19" bonusfactor="1.38"/>
+    <group size="20" bonusfactor="1.40"/>
+  </factionpointbonus>
+
+  <factionpoints>
+    <scalingmultiplier pve="0.007" gathering="0.1" fishing="0.1" />
+  </factionpoints>
+  <clustercontrolpoints points="1000" gainfactor="0.0055"/>
+  <respawning minimumRespawnDistanceInMeters="100"
+              maximumRespawnDistanceInClusters="4"
+              respawnTimeInSeconds="16"
+              respawnTimeFallOffInSeconds="300"
+              respawnTimeIncreaseStepInSeconds="3"
+              respawnPerMinute="3"
+              maximumRespawnTimeInSeconds="45" />
+
+  <portalcost mintravelcosts="2500"
+              emvcostfactor="0.05"
+              toolscostscalingfactor="0.5"
+              ipscalingclusterarchetypereference="YELLOW"
+              citytosafeneighborfactor="0"
+              ivbase="0.98224197"
+              ivcoefficient="102.43388085"
+              ivpower="0.16148053"
+              ivboundconstant="100"
+              ivmin="0"
+              ivmax="121344"
+              globalcostfactor="0.25"/>
+
+  <DefensiveCombatBonus fortressfightnofollowupfightinduchydelaymin="15">
+    <ownedduchydifference value="2" buff="FACTIONWARFAREDEFENSIVEBUFF_LVL1" damagevsplayersmodifier="0.05" defensevsplayersmodifier="0.05"/>
+    <ownedduchydifference value="3" buff="FACTIONWARFAREDEFENSIVEBUFF_LVL2" damagevsplayersmodifier="0.10" defensevsplayersmodifier="0.10"/>
+    <ownedduchydifference value="4" buff="FACTIONWARFAREDEFENSIVEBUFF_LVL3" damagevsplayersmodifier="0.15" defensevsplayersmodifier="0.15"/>
+    <ownedduchydifference value="5" buff="FACTIONWARFAREDEFENSIVEBUFF_LVL4" damagevsplayersmodifier="0.20" defensevsplayersmodifier="0.20"/>
+  </DefensiveCombatBonus>
+
+  <pvebonus type="owningfaction" buff="FACTION_PVE_BONUS_1" famebonus="1.05" silverbonus="1.05" lootbonus="1.05"/>
+  <pvebonus type="inconflict" buff="FACTION_PVE_BONUS_2" famebonus="1.10" silverbonus="1.10" lootbonus="1.10"/>
+  <pvebonus type="owningfactionandinconflict" buff="FACTION_PVE_BONUS_3" famebonus="1.15" silverbonus="1.15" lootbonus="1.15"/>
+
+  <!-- campaign -->
+  <factioncampaign>
+    <dailyrewards>
+      <rewardtrigger id="FACTIONCAMPAIGN_TRIGGER_DAILY_01" pointrequirement="1250">
+        <rewards>
+          <standingreward id="FACTIONCAMPAIGN_REWARD_DAILY_01" amount="1250" boughtpremium="false" premium="false" nonpremium="false"/>
+        </rewards>
+      </rewardtrigger>
+
+      <rewardtrigger id="FACTIONCAMPAIGN_TRIGGER_DAILY_02" pointrequirement="2500">
+        <rewards>
+          <standingreward id="FACTIONCAMPAIGN_REWARD_DAILY_02" amount="2500" boughtpremium="false" premium="false" nonpremium="false"/>
+        </rewards>
+      </rewardtrigger>
+
+      <rewardtrigger id="FACTIONCAMPAIGN_REWARD_DAILY_03" pointrequirement="5000">
+        <rewards>
+          <standingreward id="FACTIONCAMPAIGN_TRIGGER_DAILY_03" amount="5000" boughtpremium="false" premium="false" nonpremium="false"/>
+        </rewards>
+      </rewardtrigger>
+    </dailyrewards>
+    <campaignrewards>
+      <rewardtrigger id="FACTIONCAMPAIGN_TRIGGER_01" unlockday="0" pointrequirement="25000">
+        <rewards>
+          <itemreward id="FACTIONCAMPAIGN_REWARD_01" highlanditem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_HIGHLAND_01" steppeitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_STEPPE_01" forestitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_FOREST_01" mountainitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_MOUNTAIN_01" swampitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_SWAMP_01" caerleonitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_CAERLEON_01" boughtpremium="true" premium="false" nonpremium="false"/>
+        </rewards>
+      </rewardtrigger>
+
+      <rewardtrigger id="FACTIONCAMPAIGN_TRIGGER_02" unlockday="7" pointrequirement="50000">
+        <rewards>
+          <itemreward id="FACTIONCAMPAIGN_REWARD_02" highlanditem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_HIGHLAND_02" steppeitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_STEPPE_02" forestitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_FOREST_02" mountainitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_MOUNTAIN_02" swampitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_SWAMP_02" caerleonitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_CAERLEON_02" boughtpremium="true" premium="false" nonpremium="false"/>
+        </rewards>
+      </rewardtrigger>
+
+      <rewardtrigger id="FACTIONCAMPAIGN_TRIGGER_03" unlockday="14" pointrequirement="75000">
+        <rewards>
+          <itemreward id="FACTIONCAMPAIGN_REWARD_03" highlanditem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_HIGHLAND_03" steppeitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_STEPPE_03" forestitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_FOREST_03" mountainitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_MOUNTAIN_03" swampitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_SWAMP_03" caerleonitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_CAERLEON_03" boughtpremium="true" premium="false" nonpremium="false"/>
+        </rewards>
+      </rewardtrigger>
+
+      <rewardtrigger id="FACTIONCAMPAIGN_TRIGGER_04" unlockday="21" pointrequirement="100000">
+        <rewards>
+          <itemreward id="FACTIONCAMPAIGN_REWARD_04" highlanditem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_HIGHLAND_04" steppeitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_STEPPE_04" forestitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_FOREST_04" mountainitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_MOUNTAIN_04" swampitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_SWAMP_04" caerleonitem="UNIQUE_LOOTCHEST_FACTIONCAMPAIGN_REWARD_CAERLEON_04" boughtpremium="true" premium="false" nonpremium="false"/>
+        </rewards>
+      </rewardtrigger>
+    </campaignrewards>
+  </factioncampaign>
+
+  <!-- ranks -->
+  <factionstanding max="7500000" standingmultiplier="0.36" rankretentionmultiplier="1" rankretentionmax="1000000" protected="1400000">
+    <rank minstanding="0" pointmultiplier="1" standingmultiplier="1" weeklyupkeep="0" usedByNameplate="true">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_01_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_01_STEPPE" maletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_01_FOREST" maletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_01_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_01_SWAMP" maletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_1_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_01_CAERLEON" maletitle="@FACTIONWARFARE_RANK_1_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_1_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="4000" pointmultiplier="1" standingmultiplier="1" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_02_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_02_STEPPE" maletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_02_FOREST" maletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_02_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_02_SWAMP" maletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_2_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_02_CAERLEON" maletitle="@FACTIONWARFARE_RANK_2_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_2_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="9000" pointmultiplier="1" standingmultiplier="1" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_03_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_03_STEPPE" maletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_03_FOREST" maletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_03_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_03_SWAMP" maletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_3_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_03_CAERLEON" maletitle="@FACTIONWARFARE_RANK_3_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_3_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="15000" pointmultiplier="1.05" standingmultiplier="0.9524" weeklyupkeep="0" usedByNameplate="true">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_05_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_05_STEPPE" maletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_05_FOREST" maletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_05_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_05_SWAMP" maletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_4_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_05_CAERLEON" maletitle="@FACTIONWARFARE_RANK_4_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_4_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="22000" pointmultiplier="1.05" standingmultiplier="0.9524" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_06_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_06_STEPPE" maletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_06_FOREST" maletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_06_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_06_SWAMP" maletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_5_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_06_CAERLEON" maletitle="@FACTIONWARFARE_RANK_5_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_5_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="30000" pointmultiplier="1.05" standingmultiplier="0.9524" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_07_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_07_STEPPE" maletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_07_FOREST" maletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_07_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_07_SWAMP" maletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_6_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_07_CAERLEON" maletitle="@FACTIONWARFARE_RANK_6_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_6_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="42000" pointmultiplier="1.10" standingmultiplier="0.9091" weeklyupkeep="0" usedByNameplate="true">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_09_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_09_STEPPE" maletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_09_FOREST" maletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_09_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_09_SWAMP" maletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_7_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_09_CAERLEON" maletitle="@FACTIONWARFARE_RANK_7_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_7_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="60000" pointmultiplier="1.10" standingmultiplier="0.9091" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_10_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_10_STEPPE" maletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_10_FOREST" maletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_10_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_10_SWAMP" maletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_8_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_10_CAERLEON" maletitle="@FACTIONWARFARE_RANK_8_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_8_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="85000" pointmultiplier="1.10" standingmultiplier="0.9091" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_11_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_11_STEPPE" maletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_11_FOREST" maletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_11_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_11_SWAMP" maletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_9_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_11_CAERLEON" maletitle="@FACTIONWARFARE_RANK_9_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_9_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="120000" pointmultiplier="1.15" standingmultiplier="0.8696" weeklyupkeep="0" usedByNameplate="true">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_13_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_13_STEPPE" maletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_13_FOREST" maletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_13_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_13_SWAMP" maletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_10_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_13_CAERLEON" maletitle="@FACTIONWARFARE_RANK_10_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_10_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="180000" pointmultiplier="1.15" standingmultiplier="0.8696" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_14_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_14_STEPPE" maletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_14_FOREST" maletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_14_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_14_SWAMP" maletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_11_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_14_CAERLEON" maletitle="@FACTIONWARFARE_RANK_11_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_11_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="240000" pointmultiplier="1.15" standingmultiplier="0.8696" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_15_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_15_STEPPE" maletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_15_FOREST" maletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_15_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_15_SWAMP" maletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_MALE" femaletitle="@FACTIONWARFARE_RANK_12_NONPRESTIGE_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_15_CAERLEON" maletitle="@FACTIONWARFARE_RANK_12_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_12_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="330000" pointmultiplier="1.20" standingmultiplier="0.8333" weeklyupkeep="0" usedByNameplate="true">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_17_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_13_HIGHLAND_MALE" femaletitle="@FACTIONWARFARE_RANK_13_HIGHLAND_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_17_STEPPE" maletitle="@FACTIONWARFARE_RANK_13_STEPPE_MALE" femaletitle="@FACTIONWARFARE_RANK_13_STEPPE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_17_FOREST" maletitle="@FACTIONWARFARE_RANK_13_FOREST_MALE" femaletitle="@FACTIONWARFARE_RANK_13_FOREST_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_17_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_13_MOUNTAIN_MALE" femaletitle="@FACTIONWARFARE_RANK_13_MOUNTAIN_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_17_SWAMP" maletitle="@FACTIONWARFARE_RANK_13_SWAMP_MALE" femaletitle="@FACTIONWARFARE_RANK_13_SWAMP_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_17_CAERLEON" maletitle="@FACTIONWARFARE_RANK_13_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_13_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="450000" pointmultiplier="1.20" standingmultiplier="0.8333" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_18_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_14_HIGHLAND_MALE" femaletitle="@FACTIONWARFARE_RANK_14_HIGHLAND_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_18_STEPPE" maletitle="@FACTIONWARFARE_RANK_14_STEPPE_MALE" femaletitle="@FACTIONWARFARE_RANK_14_STEPPE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_18_FOREST" maletitle="@FACTIONWARFARE_RANK_14_FOREST_MALE" femaletitle="@FACTIONWARFARE_RANK_14_FOREST_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_18_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_14_MOUNTAIN_MALE" femaletitle="@FACTIONWARFARE_RANK_14_MOUNTAIN_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_18_SWAMP" maletitle="@FACTIONWARFARE_RANK_14_SWAMP_MALE" femaletitle="@FACTIONWARFARE_RANK_14_SWAMP_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_18_CAERLEON" maletitle="@FACTIONWARFARE_RANK_14_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_14_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="650000" pointmultiplier="1.20" standingmultiplier="0.8333" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_19_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_15_HIGHLAND_MALE" femaletitle="@FACTIONWARFARE_RANK_15_HIGHLAND_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_19_STEPPE" maletitle="@FACTIONWARFARE_RANK_15_STEPPE_MALE" femaletitle="@FACTIONWARFARE_RANK_15_STEPPE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_19_FOREST" maletitle="@FACTIONWARFARE_RANK_15_FOREST_MALE" femaletitle="@FACTIONWARFARE_RANK_15_FOREST_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_19_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_15_MOUNTAIN_MALE" femaletitle="@FACTIONWARFARE_RANK_15_MOUNTAIN_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_19_SWAMP" maletitle="@FACTIONWARFARE_RANK_15_SWAMP_MALE" femaletitle="@FACTIONWARFARE_RANK_15_SWAMP_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_19_CAERLEON" maletitle="@FACTIONWARFARE_RANK_15_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_15_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="1000000" pointmultiplier="1.20" standingmultiplier="0.8333" weeklyupkeep="0">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_20_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_16_HIGHLAND_MALE" femaletitle="@FACTIONWARFARE_RANK_16_HIGHLAND_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_20_STEPPE" maletitle="@FACTIONWARFARE_RANK_16_STEPPE_MALE" femaletitle="@FACTIONWARFARE_RANK_16_STEPPE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_20_FOREST" maletitle="@FACTIONWARFARE_RANK_16_FOREST_MALE" femaletitle="@FACTIONWARFARE_RANK_16_FOREST_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_20_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_16_MOUNTAIN_MALE" femaletitle="@FACTIONWARFARE_RANK_16_MOUNTAIN_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_20_SWAMP" maletitle="@FACTIONWARFARE_RANK_16_SWAMP_MALE" femaletitle="@FACTIONWARFARE_RANK_16_SWAMP_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_20_CAERLEON" maletitle="@FACTIONWARFARE_RANK_16_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_16_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="1400000" pointmultiplier="1.25" standingmultiplier="0.8000" weeklyupkeep="0.05" usedByNameplate="true">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_21_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_17_HIGHLAND_MALE" femaletitle="@FACTIONWARFARE_RANK_17_HIGHLAND_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_21_STEPPE" maletitle="@FACTIONWARFARE_RANK_17_STEPPE_MALE" femaletitle="@FACTIONWARFARE_RANK_17_STEPPE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_21_FOREST" maletitle="@FACTIONWARFARE_RANK_17_FOREST_MALE" femaletitle="@FACTIONWARFARE_RANK_17_FOREST_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_21_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_17_MOUNTAIN_MALE" femaletitle="@FACTIONWARFARE_RANK_17_MOUNTAIN_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_21_SWAMP" maletitle="@FACTIONWARFARE_RANK_17_SWAMP_MALE" femaletitle="@FACTIONWARFARE_RANK_17_SWAMP_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_21_CAERLEON" maletitle="@FACTIONWARFARE_RANK_17_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_17_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="2000000" pointmultiplier="1.25" standingmultiplier="0.8000" weeklyupkeep="0.05">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_22_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_18_HIGHLAND_MALE" femaletitle="@FACTIONWARFARE_RANK_18_HIGHLAND_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_22_STEPPE" maletitle="@FACTIONWARFARE_RANK_18_STEPPE_MALE" femaletitle="@FACTIONWARFARE_RANK_18_STEPPE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_22_FOREST" maletitle="@FACTIONWARFARE_RANK_18_FOREST_MALE" femaletitle="@FACTIONWARFARE_RANK_18_FOREST_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_22_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_18_MOUNTAIN_MALE" femaletitle="@FACTIONWARFARE_RANK_18_MOUNTAIN_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_22_SWAMP" maletitle="@FACTIONWARFARE_RANK_18_SWAMP_MALE" femaletitle="@FACTIONWARFARE_RANK_18_SWAMP_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_22_CAERLEON" maletitle="@FACTIONWARFARE_RANK_18_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_18_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="2800000" pointmultiplier="1.25" standingmultiplier="0.8000" weeklyupkeep="0.05">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_23_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_19_HIGHLAND_MALE" femaletitle="@FACTIONWARFARE_RANK_19_HIGHLAND_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_23_STEPPE" maletitle="@FACTIONWARFARE_RANK_19_STEPPE_MALE" femaletitle="@FACTIONWARFARE_RANK_19_STEPPE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_23_FOREST" maletitle="@FACTIONWARFARE_RANK_19_FOREST_MALE" femaletitle="@FACTIONWARFARE_RANK_19_FOREST_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_23_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_19_MOUNTAIN_MALE" femaletitle="@FACTIONWARFARE_RANK_19_MOUNTAIN_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_23_SWAMP" maletitle="@FACTIONWARFARE_RANK_19_SWAMP_MALE" femaletitle="@FACTIONWARFARE_RANK_19_SWAMP_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_23_CAERLEON" maletitle="@FACTIONWARFARE_RANK_19_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_19_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="4000000" pointmultiplier="1.25" standingmultiplier="0.8000" weeklyupkeep="0.05">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_24_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_20_HIGHLAND_MALE" femaletitle="@FACTIONWARFARE_RANK_20_HIGHLAND_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_24_STEPPE" maletitle="@FACTIONWARFARE_RANK_20_STEPPE_MALE" femaletitle="@FACTIONWARFARE_RANK_20_STEPPE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_24_FOREST" maletitle="@FACTIONWARFARE_RANK_20_FOREST_MALE" femaletitle="@FACTIONWARFARE_RANK_20_FOREST_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_24_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_20_MOUNTAIN_MALE" femaletitle="@FACTIONWARFARE_RANK_20_MOUNTAIN_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_24_SWAMP" maletitle="@FACTIONWARFARE_RANK_20_SWAMP_MALE" femaletitle="@FACTIONWARFARE_RANK_20_SWAMP_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_24_CAERLEON" maletitle="@FACTIONWARFARE_RANK_20_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_20_CAERLEON_FEMALE"/>
+    </rank>
+    <rank minstanding="6000000" pointmultiplier="1.30" standingmultiplier="0.7692" weeklyupkeep="0.05" usedByNameplate="true">
+      <byfaction faction="Highland" icon="ICON_FACTION_RANK_25_HIGHLANDS" maletitle="@FACTIONWARFARE_RANK_21_HIGHLAND_MALE" femaletitle="@FACTIONWARFARE_RANK_21_HIGHLAND_FEMALE"/>
+      <byfaction faction="Steppe" icon="ICON_FACTION_RANK_25_STEPPE" maletitle="@FACTIONWARFARE_RANK_21_STEPPE_MALE" femaletitle="@FACTIONWARFARE_RANK_21_STEPPE_FEMALE"/>
+      <byfaction faction="Forest" icon="ICON_FACTION_RANK_25_FOREST" maletitle="@FACTIONWARFARE_RANK_21_FOREST_MALE" femaletitle="@FACTIONWARFARE_RANK_21_FOREST_FEMALE"/>
+      <byfaction faction="Mountain" icon="ICON_FACTION_RANK_25_MOUNTAINS" maletitle="@FACTIONWARFARE_RANK_21_MOUNTAIN_MALE" femaletitle="@FACTIONWARFARE_RANK_21_MOUNTAIN_FEMALE"/>
+      <byfaction faction="Swamp" icon="ICON_FACTION_RANK_25_SWAMP" maletitle="@FACTIONWARFARE_RANK_21_SWAMP_MALE" femaletitle="@FACTIONWARFARE_RANK_21_SWAMP_FEMALE"/>
+      <byfaction faction="Caerleon" icon="ICON_FACTION_RANK_25_CAERLEON" maletitle="@FACTIONWARFARE_RANK_21_CAERLEON_MALE" femaletitle="@FACTIONWARFARE_RANK_21_CAERLEON_FEMALE"/>
+    </rank>
+  </factionstanding>
+
+  <!-- objective type -->
+  <!--All instances of 5 outpost/cluster references are deprecated and mirror 3 outpost references to make sure they behave if data still references them-->
+  <objective uniquename="OUTPOST" percentregen="0.15" percentmax="0.1" groupsize="20" caerleongroupsize="10"/>
+  <objective uniquename="OUTPOST_ELITE" percentregen="0.3" percentmax="0.2" groupsize="20" caerleongroupsize="10"/>
+
+  <objective uniquename="OUTPOST_SAFE_1" percentregen="0.6" percentmax="0.4286" groupsize="20" caerleongroupsize="20"/>
+  <objective uniquename="OUTPOST_SAFE_3" percentregen="0.2" percentmax="0.1429" groupsize="20" caerleongroupsize="20"/>
+  <objective uniquename="OUTPOST_SAFE_5" percentregen="0.2" percentmax="0.1429" groupsize="20" caerleongroupsize="20"/>
+  <objective uniquename="OUTPOST_LETHAL_1" percentregen="0.6" percentmax="0.4286" groupsize="20" caerleongroupsize="10"/>
+  <objective uniquename="OUTPOST_LETHAL_3" percentregen="0.2" percentmax="0.1429" groupsize="20" caerleongroupsize="10"/>
+
+  <!-- cluster type -->
+  <clustertype uniquename="FW_DEFAULT_SAFE" groupsize="20" caerleongroupsize="20" regenrate="0">
+  </clustertype>
+  <clustertype uniquename="FW_DEFAULT_RED" groupsize="20" caerleongroupsize="20" regenrate="0">
+  </clustertype>
+  <clustertype uniquename="FW_DEFAULT_SAFE_1" groupsize="20" caerleongroupsize="20" regenrate="4.1137">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_DEFAULT_SAFE_3" groupsize="20" caerleongroupsize="20" regenrate="12.3412">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="0"/>
+    <level requirement="19398.2" bankingfactor="0"/>
+    <level requirement="31099.9" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_DEFAULT_SAFE_5" groupsize="20" caerleongroupsize="20" regenrate="12.3412">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="0"/>
+    <level requirement="19398.2" bankingfactor="0"/>
+    <level requirement="31099.9" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_LOW_SAFE_1" groupsize="20" caerleongroupsize="20" regenrate="3.8267">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_LOW_SAFE_3" groupsize="20" caerleongroupsize="20" regenrate="11.4802">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="0"/>
+    <level requirement="19398.2" bankingfactor="0"/>
+    <level requirement="31099.9" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_LOW_SAFE_5" groupsize="20" caerleongroupsize="20" regenrate="11.4802">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="0"/>
+    <level requirement="19398.2" bankingfactor="0"/>
+    <level requirement="31099.9" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_HIGH_SAFE_1" groupsize="20" caerleongroupsize="20" regenrate="4.2192">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_HIGH_SAFE_3" groupsize="20" caerleongroupsize="20" regenrate="12.6577">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="0"/>
+    <level requirement="19398.2" bankingfactor="0"/>
+    <level requirement="31099.9" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_HIGH_SAFE_5" groupsize="20" caerleongroupsize="20" regenrate="12.6577">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="0"/>
+    <level requirement="19398.2" bankingfactor="0"/>
+    <level requirement="31099.9" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_LETHAL_1" groupsize="20" caerleongroupsize="10" regenrate="7.6977" redzoneeventminclustervalue="10366.63">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="0"/>
+    <level requirement="19398.2" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_LETHAL_3" groupsize="20" caerleongroupsize="10" regenrate="23.0932" redzoneeventminclustervalue="19398.2">
+    <level requirement="4442.84" bankingfactor="0"/>
+    <level requirement="10366.63" bankingfactor="0"/>
+    <level requirement="19398.2" bankingfactor="0"/>
+    <level requirement="31099.9" bankingfactor="0"/>
+    <level requirement="58194.86" bankingfactor="1.0000"/>
+  </clustertype>
+  <clustertype uniquename="FW_NO_VALUE" groupsize="20" caerleongroupsize="10" regenrate="0">
+  </clustertype>
+  <clustertype uniquename="FW_CITY_MAIN" groupsize="20" caerleongroupsize="10" regenrate="55.70">
+  </clustertype>
+  <clustertype uniquename="FW_CITY_SECONDARY" groupsize="20" caerleongroupsize="10" regenrate="0">
+  </clustertype>
+  <clustertype uniquename="FW_CAERLEON" groupsize="20" caerleongroupsize="10" regenrate="0">
+  </clustertype>
+ 
+  <!-- main cluster type overrides -->
+
+  <!--Thetford-->
+  <clustertypeoverride clusterid="0201" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0203" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0204" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0206" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0207" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0210" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0216" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0217" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0218" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0220" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="4212" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="4217" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="4220" type="FW_HIGH_SAFE_3" />
+	
+  <!--Bridgewatch-->
+  <clustertypeoverride clusterid="2206" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="2207" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="2208" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="2209" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="2210" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="2211" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="2212" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="2217" type="FW_LOW_SAFE_1" />
+  <clustertypeoverride clusterid="2218" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="2219" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="2220" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="3213" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="3216" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="3218" type="FW_LOW_SAFE_3" />
+  <clustertypeoverride clusterid="3219" type="FW_LOW_SAFE_3" />
+	
+  <!--Fort Sterling-->
+  <clustertypeoverride clusterid="1202" type="FW_DEFAULT_SAFE_1" />
+  <clustertypeoverride clusterid="1203" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4201" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4204" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4205" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4206" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4207" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4208" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4209" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4213" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4214" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4218" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4219" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="4249" type="FW_DEFAULT_SAFE_3" />
+	
+  <!--Martlock-->
+  <clustertypeoverride clusterid="0209" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0212" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="0219" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3203" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3204" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3205" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3206" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3207" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3212" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3214" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3217" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3220" type="FW_HIGH_SAFE_3" />
+  <clustertypeoverride clusterid="3249" type="FW_HIGH_SAFE_3" />
+	
+  <!--Lymhurst-->
+  <clustertypeoverride clusterid="1007" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1204" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1206" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1207" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1211" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1214" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1215" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1216" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1217" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1218" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1220" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="1221" type="FW_DEFAULT_SAFE_3" />
+  <clustertypeoverride clusterid="2213" type="FW_DEFAULT_SAFE_1" />
+  <clustertypeoverride clusterid="2222" type="FW_DEFAULT_SAFE_3" />
+	
+  <!--Lethal-->
+  <clustertypeoverride clusterid="0005" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="0208" type="FW_LETHAL_1" />
+  <clustertypeoverride clusterid="0211" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="0221" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="0222" type="FW_LETHAL_1" />
+  <clustertypeoverride clusterid="0223" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="1205" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="1209" type="FW_LETHAL_1" />
+  <clustertypeoverride clusterid="1210" type="FW_LETHAL_1" />
+  <clustertypeoverride clusterid="1213" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="1222" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="1223" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="2009" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="2201" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="2203" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="2204" type="FW_LETHAL_1" />
+  <clustertypeoverride clusterid="2205" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="2221" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="3201" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="3202" type="FW_LETHAL_1" />
+  <clustertypeoverride clusterid="3208" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="3221" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="3222" type="FW_LETHAL_1" />
+  <clustertypeoverride clusterid="3245" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="4211" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="4215" type="FW_LETHAL_1" />
+  <clustertypeoverride clusterid="4216" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="4221" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="4222" type="FW_LETHAL_3" />
+  <clustertypeoverride clusterid="4223" type="FW_LETHAL_1" />
+
+  <!-- t3+t4 cluster type overrides (forced ownership) -->
+
+  <!--Thetford-->
+  <clustertypeoverride clusterid="0202" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="0205" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="0215" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="4210" type="FW_NO_VALUE" />
+
+  <!--Martlock-->
+  <clustertypeoverride clusterid="0213" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="0214" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="3209" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="3210" type="FW_NO_VALUE" />
+	
+  <!--Bridgewatch-->
+  <clustertypeoverride clusterid="2214" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="2215" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="3211" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="3215" type="FW_NO_VALUE" />
+	
+  <!--Lymhurst-->
+  <clustertypeoverride clusterid="1208" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="1212" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="2202" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="2216" type="FW_NO_VALUE" />
+
+  <!--Fort Sterling-->
+  <clustertypeoverride clusterid="1201" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="1246" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="4202" type="FW_NO_VALUE" />
+  <clustertypeoverride clusterid="4203" type="FW_NO_VALUE" />
+
+  <!-- city cluster type overrides -->
+
+  <clustertypeoverride clusterid="0000" type="FW_CITY_MAIN" />
+  <clustertypeoverride clusterid="1000" type="FW_CITY_MAIN" />
+  <clustertypeoverride clusterid="2000" type="FW_CITY_MAIN" />
+  <clustertypeoverride clusterid="3004" type="FW_CITY_MAIN" />
+  <clustertypeoverride clusterid="4000" type="FW_CITY_MAIN" />
+  <clustertypeoverride clusterid="3003" type="FW_CAERLEON" />
+
+  <!-- portal city type overrides -->
+
+  <clustertypeoverride clusterid="0301" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="1301" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="2301" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="3301" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="4301" type="FW_CITY_SECONDARY" />
+
+  <!-- city banks and auctionhouses -->
+  
+  <clustertypeoverride clusterid="0006" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="0007" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="1001" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="1002" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="2003" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="2004" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="3007" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="3008" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="4001" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="4002" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="3006" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="3005" type="FW_CITY_SECONDARY" />
+  <clustertypeoverride clusterid="3013-Auction2" type="FW_CITY_SECONDARY" />  
+  
+  <!-- underway cluster type overrides -->
+
+  <clustertypeoverride clusterid="CenterCity-DNG-01" type="FW_NO_VALUE" />
+
+  <!-- DUCHY supply generations -->
+  
+  <supplygeneration minpointsforbonus="650" bonusmindifferencefactor="1.3" bonusmodifier="0.75" attackerbonusfactor="1.3333">
+    <outpost pointspersecond="0.1853" />
+    <supplyevent name="FACTION_CAMP_SMALL" points="100"/>
+    <supplyevent name="FACTION_CAMP_MEDIUM" points="500"/>
+    <supplyevent name="FACTION_OPEN_WORLD_CHEST_SMALL" points="250"/>
+    <supplyevent name="FACTION_OPEN_WORLD_CHEST_MEDIUM" points="1250"/>
+    <supplyevent name="FACTION_RZE_FORTRESS_CHEST" points="4000"/>
+  </supplygeneration>
+
+  <!-- DUCHY definitions -->
+  
+  <!-- duchy conflict zone evaluation timers -->
+  <conflictzonetimer timeref="FW_DUCHY_EVALUATION_TIME_OF_DAY_1"/>
+  <conflictzonetimer timeref="FW_DUCHY_EVALUATION_TIME_OF_DAY_2"/>
+  <conflictzonetimer timeref="FW_DUCHY_EVALUATION_TIME_OF_DAY_3"/>
+  <conflictzonetimer timeref="FW_DUCHY_EVALUATION_TIME_OF_DAY_4"/>
+  <conflictzonetimer timeref="FW_DUCHY_EVALUATION_TIME_OF_DAY_5"/>
+  <conflictzonetimer timeref="FW_DUCHY_EVALUATION_TIME_OF_DAY_6"/>
+  <conflictzonetimer timeref="FW_DUCHY_EVALUATION_TIME_OF_DAY_7"/>
+  <conflictzonetimer timeref="FW_DUCHY_EVALUATION_TIME_OF_DAY_8"/>
+
+  <!-- duchy home citys -->
+  <duchy uniquename="DUCHY_CITY_THETFORD" defaultfaction="Swamp" ishome="true" islethal="false" worldmapposition="58 -86">
+    <include clusterid="0000"/>
+    <forcedneighbor duchy="DUCHY_RED_01" />
+  </duchy>
+  <duchy uniquename="DUCHY_CITY_LYMHURST" defaultfaction="Forest" ishome="true" islethal="false" worldmapposition="252 -72">
+    <include clusterid="1000"/>
+    <forcedneighbor duchy="DUCHY_RED_04" />
+  </duchy>
+  <duchy uniquename="DUCHY_CITY_BRIDGEWATCH" defaultfaction="Steppe" ishome="true" islethal="false" worldmapposition="213 -191">
+    <include clusterid="2000"/>
+    <forcedneighbor duchy="DUCHY_RED_05" />
+  </duchy>
+  <duchy uniquename="DUCHY_CITY_MARTLOCK" defaultfaction="Highland" ishome="true" islethal="false" worldmapposition="97 -180">
+    <include clusterid="3004"/>
+    <forcedneighbor duchy="DUCHY_RED_02" />
+  </duchy>
+  <duchy uniquename="DUCHY_CITY_FORTSTERLING" defaultfaction="Mountain" ishome="true" islethal="false" worldmapposition="138 -38">
+    <include clusterid="4000"/>
+    <forcedneighbor duchy="DUCHY_RED_03" />
+  </duchy>
+  <duchy uniquename="DUCHY_CITY_CAERLEON" defaultfaction="Caerleon" ishome="true" islethal="true" worldmapposition="164 -124">
+    <include clusterid="3003"/>
+  </duchy>
+
+  <!-- duchies red zone -->
+  <duchy uniquename="DUCHY_RED_01" defaultfaction="Swamp" islethal="true" worldmapposition="126 -77" groupsize="1000">
+    <include clusterid="0211"/>
+    <include clusterid="4221"/>
+    <include clusterid="0221"/>
+    <include clusterid="0222"/>
+    <include clusterid="4222"/>
+    <include clusterid="0223"/>
+    <include clusterid="4215"/>
+    <blockedneighbor duchy="DUCHY_RED_04" />
+    <blockedneighbor duchy="DUCHY_RED_05" />
+    <initialconflict fromduchy="DUCHY_RED_03"/>
+  </duchy>
+  <duchy uniquename="DUCHY_RED_02" defaultfaction="Highland" islethal="true" worldmapposition="120 -124" groupsize="1000">
+    <include clusterid="0005"/>
+    <include clusterid="0208"/>
+    <include clusterid="3201"/>
+    <include clusterid="3208"/>
+    <include clusterid="3202"/>
+    <include clusterid="3245"/>
+    <blockedneighbor duchy="DUCHY_RED_03" />
+    <blockedneighbor duchy="DUCHY_RED_04" />
+    <initialconflict fromduchy="DUCHY_RED_01"/>
+  </duchy>
+  <duchy uniquename="DUCHY_RED_03" defaultfaction="Mountain" islethal="true" worldmapposition="165 -80" groupsize="1000">
+    <include clusterid="1222"/>
+    <include clusterid="4211"/>
+    <include clusterid="1205"/>
+    <include clusterid="4223"/>
+    <include clusterid="1223"/>
+    <include clusterid="4216"/>
+    <blockedneighbor duchy="DUCHY_RED_02" />
+    <blockedneighbor duchy="DUCHY_RED_05" />
+    <initialconflict fromduchy="DUCHY_RED_04"/>
+  </duchy>
+  <duchy uniquename="DUCHY_RED_04" defaultfaction="Forest" islethal="true" worldmapposition="197 -127" groupsize="1000">
+    <include clusterid="1209"/>
+    <include clusterid="1213"/>
+    <include clusterid="2221"/>
+    <include clusterid="2009"/>
+    <include clusterid="1210"/>
+    <include clusterid="2201"/>
+    <blockedneighbor duchy="DUCHY_RED_01" />
+    <blockedneighbor duchy="DUCHY_RED_02" />
+    <initialconflict fromduchy="DUCHY_CITY_CAERLEON"/>
+    <initialconflict fromduchy="DUCHY_RED_05"/>
+  </duchy>
+  <duchy uniquename="DUCHY_RED_05" defaultfaction="Steppe" islethal="true" worldmapposition="163 -159" groupsize="1000">
+    <include clusterid="2203"/>
+    <include clusterid="2204"/>
+    <include clusterid="3221"/>
+    <include clusterid="2205"/>
+    <include clusterid="3222"/>
+    <blockedneighbor duchy="DUCHY_RED_01" />
+    <blockedneighbor duchy="DUCHY_RED_03" />
+    <initialconflict fromduchy="DUCHY_RED_02"/>
+  </duchy>
+  
+  <!-- duchies yellow zone -->
+  <duchy uniquename="DUCHY_YELLOW_01" defaultfaction="Swamp" islethal="false" worldmapposition="79 -47" groupsize="1000">
+    <include clusterid="4217"/>
+    <include clusterid="0217"/>
+    <include clusterid="4220"/>
+    <include clusterid="4205"/>
+    <include clusterid="4212"/>
+    <include clusterid="4219"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_02" defaultfaction="Swamp" islethal="false" worldmapposition="77 -72" groupsize="1000">
+    <include clusterid="0204"/>
+    <include clusterid="0201"/>
+    <include clusterid="0203"/>
+    <include clusterid="0207"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_03" defaultfaction="Swamp" islethal="false" worldmapposition="51 -111" groupsize="1000">
+    <include clusterid="0206"/>
+    <include clusterid="0216"/>
+    <include clusterid="0220"/>
+    <include clusterid="0218"/>
+    <initialconflict fromduchy="DUCHY_YELLOW_04"/>
+  </duchy>
+
+  <duchy uniquename="DUCHY_YELLOW_04" defaultfaction="Highland" islethal="false" worldmapposition="54 -141" groupsize="1000">
+    <include clusterid="0209"/>
+    <include clusterid="0210"/>
+    <include clusterid="0219"/>
+    <include clusterid="0212"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_05" defaultfaction="Highland" islethal="false" worldmapposition="90 -154" groupsize="1000">
+    <include clusterid="3203"/>
+    <include clusterid="3206"/>
+    <include clusterid="3204"/>
+    <include clusterid="3205"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_06" defaultfaction="Highland" islethal="false" worldmapposition="123 -187" groupsize="1000">
+    <include clusterid="3207"/>
+    <include clusterid="3220"/>
+    <include clusterid="3214"/>
+    <include clusterid="3212"/>
+    <initialconflict fromduchy="DUCHY_YELLOW_07"/>
+  </duchy>
+
+  <duchy uniquename="DUCHY_YELLOW_07" defaultfaction="Steppe" islethal="false" worldmapposition="152 -212" groupsize="1000">
+    <include clusterid="3217"/>
+    <include clusterid="3219"/>
+    <include clusterid="3249"/>
+    <include clusterid="3218"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_08" defaultfaction="Steppe" islethal="false" worldmapposition="185 -198" groupsize="1000">
+    <include clusterid="2219"/>
+    <include clusterid="2220"/>
+    <include clusterid="2211"/>
+    <include clusterid="3216"/>
+    <include clusterid="3213"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_09" defaultfaction="Steppe" islethal="false" worldmapposition="233 -183" groupsize="1000">
+    <include clusterid="2209"/>
+    <include clusterid="2208"/>
+    <include clusterid="2210"/>
+    <include clusterid="2212"/>
+    <include clusterid="2207"/>
+    <initialconflict fromduchy="DUCHY_YELLOW_12"/>
+  </duchy>
+
+  <duchy uniquename="DUCHY_YELLOW_10" defaultfaction="Forest" islethal="false" worldmapposition="230 -52" groupsize="1000">
+    <include clusterid="1216"/>
+    <include clusterid="1220"/>
+    <include clusterid="1207"/>
+    <include clusterid="1211"/>
+    <include clusterid="1214"/>
+    <include clusterid="1204"/>
+	<initialconflict fromduchy="DUCHY_YELLOW_15"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_11" defaultfaction="Forest" islethal="false" worldmapposition="245 -110" groupsize="1000">
+    <include clusterid="1215"/>
+    <include clusterid="1218"/>
+    <include clusterid="1206"/>
+    <include clusterid="2222"/>
+    <include clusterid="1221"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_12" defaultfaction="Forest" islethal="false" worldmapposition="268 -146" groupsize="1000">
+    <include clusterid="1217"/>
+    <include clusterid="2213"/>
+    <include clusterid="2218"/>
+    <include clusterid="2206"/>
+    <include clusterid="2217"/>
+  </duchy>
+
+  <duchy uniquename="DUCHY_YELLOW_13" defaultfaction="Mountain" islethal="false" worldmapposition="107 -30" groupsize="1000">
+    <include clusterid="4249"/>
+    <include clusterid="4207"/>
+    <include clusterid="4201"/>
+    <include clusterid="4214"/>
+    <initialconflict fromduchy="DUCHY_YELLOW_01"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_14" defaultfaction="Mountain" islethal="false" worldmapposition="156 -37" groupsize="1000">
+    <include clusterid="4208"/>
+    <include clusterid="4204"/>
+    <include clusterid="4213"/>
+    <include clusterid="4206"/>
+  </duchy>
+  <duchy uniquename="DUCHY_YELLOW_15" defaultfaction="Mountain" islethal="false" worldmapposition="196 -33" groupsize="1000">
+    <include clusterid="1202"/>
+    <include clusterid="1203"/>
+    <include clusterid="1007"/>
+    <include clusterid="4209"/>
+    <include clusterid="4218"/>
+  </duchy>
+
+</factionwarfare>

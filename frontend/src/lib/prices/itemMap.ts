@@ -8,7 +8,7 @@ import _raw from "./item_names.json";
 const _uniqueToGame: Map<string, string> = new Map(Object.entries(_raw as Record<string, string>));
 // Reverso: 235 game_names mapeiam pra >1 UniqueName (ex: "Rare Hemp" ←
 // T4_FIBER_LEVEL2 e T4_FIBER_LEVEL2@2). Prefere a versão COM @enchant —
-// é o que a AODB usa. Sem isto, encantados viravam flat na ida pra AODB.
+// é o que a AODP usa. Sem isto, encantados viravam flat na ida pra AODP.
 const _gameToUnique: Map<string, string> = new Map();
 for (const [uid, gname] of Object.entries(_raw as Record<string, string>)) {
   const existing = _gameToUnique.get(gname);
