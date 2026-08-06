@@ -2,19 +2,18 @@
 ; Hook NSIS do instalador do Ziggs Companion.
 ; Verifica se o Npcap esta instalado ANTES de copiar os arquivos.
 ; Se nao estiver, mostra um guia detalhado no idioma do usuario.
-; O guia re-aparece em loop ate o Npcap ser detectado.
 ;
 ; Idiomas: PT (2070), EN (1033), ES (1034). Fallback = EN.
-; Botoes Sim/Nao/OK sao traduzidos pelo proprio Windows.
+; Botoes Sim/Nao/OK/Cancelar sao traduzidos pelo proprio Windows.
 ;
-; MessageBox MB_YESNO:
-;   IDYES = botao Sim  | IDNO = botao Nao
-; Abort = fecha o instalador inteiro
-; Cancel = volta pra pagina anterior do instalador (nao aborta)
+; Comportamento:
+;   Sim      = abre site do Npcap, depois tela de espera
+;   Nao      = aborta o instalador (usuario roda de novo depois de instalar Npcap)
+;   OK       = re-verifica se Npcap foi instalado
+;   Cancelar = aborta o instalador
 
 !macro NSIS_HOOK_PREINSTALL
-  ; Label de inicio do loop — volta aqui depois que o usuario instala o Npcap
-  check_npcap:
+  npc_check:
 
   ; Verifica se o Npcap esta instalado (chave de registry)
   ClearErrors
@@ -24,16 +23,11 @@
   IfErrors 0 npcap_found
 
   ; Npcap nao encontrado — seleciona mensagem por idioma
-  StrCmp $LANGUAGE 2070 msg_pt    ; Portugues
-  StrCmp $LANGUAGE 1034 msg_es    ; Espanhol
-  Goto msg_en                     ; Default: Ingles
+  StrCmp $LANGUAGE 2070 npc_pt
+  StrCmp $LANGUAGE 1034 npc_es
+  Goto npc_en
 
-  ; === TUTORIAL (MessageBox Sim/Nao) ===
-  ; Sim  = abre site do Npcap, depois mostra tela de espera
-  ; Nao  = volta pro tutorial (re-avalia sem abrir browser — util se
-  ;        o usuario ja baixou o installer mas ainda nao rodou)
-
-  msg_pt:
+  npc_pt:
     MessageBox MB_YESNO|MB_ICONEXCLAMATION \
       "O Ziggs Companion precisa do Npcap para funcionar.$\r$\n$\r$\n\
       O Npcap e um driver de captura de rede (gratuito e seguro).$\r$\n\
@@ -49,11 +43,12 @@
       6. Clique em Install e aguarde terminar$\r$\n\
       7. Apos terminar, clique em OK na proxima mensagem$\r$\n$\r$\n\
       Clique em SIM para abrir o site e baixar o Npcap.$\r$\n\
-      Clique em NAO se ja baixou e quer apenas re-verificar." \
-      IDYES open_npcap
-    Goto check_npcap
+      Clique em NAO para cancelar a instalacao." \
+      IDYES npc_pt_open
+    ; Nao — aborta limpo
+    Abort
 
-  msg_en:
+  npc_en:
     MessageBox MB_YESNO|MB_ICONEXCLAMATION \
       "Ziggs Companion requires Npcap to function.$\r$\n$\r$\n\
       Npcap is a free, safe network capture driver.$\r$\n\
@@ -69,11 +64,11 @@
       6. Click Install and wait for it to finish$\r$\n\
       7. After it finishes, click OK on the next message$\r$\n$\r$\n\
       Click YES to open the website and download Npcap.$\r$\n\
-      Click NO if you already downloaded it and just want to re-check." \
-      IDYES open_npcap
-    Goto check_npcap
+      Click NO to cancel the installation." \
+      IDYES npc_en_open
+    Abort
 
-  msg_es:
+  npc_es:
     MessageBox MB_YESNO|MB_ICONEXCLAMATION \
       "Ziggs Companion necesita Npcap para funcionar.$\r$\n$\r$\n\
       Npcap es un controlador de captura de red (gratis y seguro).$\r$\n\
@@ -89,49 +84,45 @@
       6. Haga clic en Install y espere a que termine$\r$\n\
       7. Despues de terminar, haga clic en OK en el siguiente mensaje$\r$\n$\r$\n\
       Haga clic en SI para abrir el sitio y descargar Npcap.$\r$\n\
-      Haga clic en NO si ya lo descargo y solo quiere re-verificar." \
-      IDYES open_npcap
-    Goto check_npcap
+      Haga clic en NO para cancelar la instalacion." \
+      IDYES npc_es_open
+    Abort
 
   ; === TELA DE ESPERA (depois de abrir o site) ===
-  ; OK     = instalou o Npcap, volta pro loop e checa
-  ; Cancel = desiste — aborta o instalador
+  ; OK      = instalou o Npcap, re-verifica (volta pro label npc_check)
+  ; Cancelar = aborta o instalador
 
-  open_npcap:
+  npc_pt_open:
     ExecShell "open" "https://npcap.com/#download"
-
-    StrCmp $LANGUAGE 2070 wait_pt
-    StrCmp $LANGUAGE 1034 wait_es
-    Goto wait_en
-
-  wait_pt:
     MessageBox MB_OKCANCEL|MB_ICONINFORMATION \
       "O site do Npcap foi aberto no seu navegador.$\r$\n$\r$\n\
       Baixe e instale o Npcap seguindo o tutorial.$\r$\n$\r$\n\
       Clique em OK quando terminar a instalacao$\r$\n\
       para continuar a instalacao do Ziggs Companion.$\r$\n$\r$\n\
       Clique em Cancelar para sair." \
-      IDOK check_npcap
+      IDOK npc_check
     Abort
 
-  wait_en:
+  npc_en_open:
+    ExecShell "open" "https://npcap.com/#download"
     MessageBox MB_OKCANCEL|MB_ICONINFORMATION \
       "The Npcap website has been opened in your browser.$\r$\n$\r$\n\
       Download and install Npcap following the tutorial.$\r$\n$\r$\n\
       Click OK when installation is finished$\r$\n\
       to continue the Ziggs Companion installation.$\r$\n$\r$\n\
       Click Cancel to quit." \
-      IDOK check_npcap
+      IDOK npc_check
     Abort
 
-  wait_es:
+  npc_es_open:
+    ExecShell "open" "https://npcap.com/#download"
     MessageBox MB_OKCANCEL|MB_ICONINFORMATION \
       "El sitio de Npcap se ha abierto en su navegador.$\r$\n$\r$\n\
       Descargue e instale Npcap siguiendo el tutorial.$\r$\n$\r$\n\
       Haga clic en OK cuando termine la instalacion$\r$\n\
       para continuar la instalacion de Ziggs Companion.$\r$\n$\r$\n\
       Haga clic en Cancelar para salir." \
-      IDOK check_npcap
+      IDOK npc_check
     Abort
 
   npcap_found:
