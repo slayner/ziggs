@@ -16,88 +16,72 @@ from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from app.models.battles import Battle, BattleGuild, BattleParticipant, BattleSide
+from app.models.battles import Battle, BattleGroup, BattleGroupMember, BattleGuild, BattleParticipant, BattleSide
 from app.services import battle_groups
 
 _CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "battle_preview_cache"
 
-# Cores de heat (mesmas do BattleTracker.tsx)
-HEAT_MAX = (0x66, 0x71, 0x60)   # #667160 — mais kills
-HEAT_MIN = (0x52, 0x52, 0x5C)   # #52525C — menos kills
+# Cores de heat — dourado do site (--gold: #d4a338) pra mais kills
+HEAT_MAX = (0xD4, 0xA3, 0x38)   # dourado — mais kills
+HEAT_MIN = (0x70, 0x7A, 0x80)   # cinza-azulado claro — menos kills
 BG_COLOR = (0x0E, 0x0F, 0x13)   # fundo escuro do site
-TEXT_COLOR = (0xE4, 0xE4, 0xE7) # texto claro
-# Cor "discreta" = heat mínimo (a guilda que menos se destacou) — usada pra
-# player count, servidor e horario, pra não competir com o nome da guilda.
-DIM_COLOR = HEAT_MIN
+TEXT_COLOR = (0xF5, 0xF5, 0xF7) # texto claro (mais branco)
+# Cor "discreta" = cinza claro (não mais heat mínimo — era apagado demais)
+DIM_COLOR = (0xA8, 0xA8, 0xB2) # cinza claro, legível no escuro sem expandir
+SEP_COLOR = (0x3A, 0x3A, 0x42) # separador mais visível
 
-# Dimensões — largura fixa, altura dinâmica conforme nº de factions
-IMG_W = 600
-PADDING = 16
+# Escala: multiplica todas as dimensões e fontes. 3 = 3x maior (1800px largura).
+S = 2
+
+# Dimensões — largura de banner/tira, altura compacta (cresce só com o conteúdo)
+IMG_W = int(600 * S)
+PADDING = int(18 * S)
 MAX_FACTIONS = 4
-# Altura fixa do topo (header + destaque + horário) até a linha separadora
-_TOP_H = 118
-_ROW_H = 20  # altura de cada linha da lista detalhada (fonte maior)
-_LIST_HEADER_H = 24
 
-# Fonte Segoe UI (mesma do site)
-_FONT_REGULAR = None
-_FONT_BOLD = None
-_FONT_SEMIBOLD = None
-_FONT_SMALL = None       # footer + player count
-_FONT_SMALL_BOLD = None  # mesmo size do _FONT_SMALL, só bold
-_FONT_LIST = None        # lista detalhada — maior que _FONT_SMALL
-_FONT_LIST_BOLD = None   # lista detalhada bold
-_FONT_HEADER = None      # players · kills no topo
-_FONT_PERIOD = None      # período multi-batalha — Consolas (monospace) pra setra → destacar
+# Fontes (carregadas em _load_fonts)
+_FONT_HEADER = None      # título "vs" — Cascadia Code (com stroke pra simular bold)
+_FONT_LIST = None         # nomes das guildas — Cascadia Code regular
+_FONT_NUMBERS = None      # números (kills/deaths/players) — Consolas Bold
+_FONT_PERIOD = None      # info (ID/data/região) — Consolas Bold
+_FONT_COL_HEADER = None  # headers das colunas — Segoe UI Bold (sans-serif diferente)
 
 
 def _load_fonts() -> None:
-    global _FONT_REGULAR, _FONT_BOLD, _FONT_SEMIBOLD, _FONT_SMALL, _FONT_SMALL_BOLD, _FONT_LIST, _FONT_LIST_BOLD, _FONT_HEADER, _FONT_PERIOD
-    if _FONT_REGULAR is not None:
+    global _FONT_HEADER, _FONT_LIST, _FONT_NUMBERS, _FONT_PERIOD, _FONT_COL_HEADER
+    if _FONT_HEADER is not None:
         return
     paths = [
-        (r"C:\Windows\Fonts\segoeui.ttf", "regular"),
-        (r"C:\Windows\Fonts\segoeuib.ttf", "bold"),
-        (r"C:\Windows\Fonts\seguisb.ttf", "semibold"),
-        (r"C:\Windows\Fonts\consola.ttf", "mono"),
+        (r"C:\Windows\Fonts\CascadiaCode.ttf", "cascadia"),
+        (r"C:\Windows\Fonts\consolab.ttf", "consolasbold"),
+        (r"C:\Windows\Fonts\segoeuib.ttf", "segoebold"),
+        ("/home/ziggs/ziggs/backend/data/cascadia_code.ttf", "cascadia"),
+        ("/home/ziggs/ziggs/backend/data/consolab.ttf", "consolasbold"),
+        ("/home/ziggs/ziggs/backend/data/segoeuib.ttf", "segoebold"),
     ]
     for path, kind in paths:
         if not Path(path).exists():
             continue
         try:
-            if kind == "regular":
-                _FONT_REGULAR = ImageFont.truetype(path, 15)
-                _FONT_SMALL = ImageFont.truetype(path, 11)
-                _FONT_LIST = ImageFont.truetype(path, 13)
-                _FONT_HEADER = ImageFont.truetype(path, 14)
-            elif kind == "bold":
-                _FONT_BOLD = ImageFont.truetype(path, 14)
-                _FONT_SMALL_BOLD = ImageFont.truetype(path, 11)
-                _FONT_LIST_BOLD = ImageFont.truetype(path, 13)
-            elif kind == "semibold":
-                _FONT_SEMIBOLD = ImageFont.truetype(path, 15)
-            elif kind == "mono":
-                _FONT_PERIOD = ImageFont.truetype(path, 10)
+            if kind == "cascadia":
+                _FONT_LIST = ImageFont.truetype(path, int(16 * S))
+                _FONT_HEADER = ImageFont.truetype(path, int(28 * S))
+            elif kind == "consolasbold":
+                _FONT_NUMBERS = ImageFont.truetype(path, int(16 * S))
+                _FONT_PERIOD = ImageFont.truetype(path, int(13 * S))
+            elif kind == "segoebold":
+                _FONT_COL_HEADER = ImageFont.truetype(path, int(13 * S))
         except Exception:
             pass
-    if _FONT_REGULAR is None:
-        _FONT_REGULAR = ImageFont.load_default()
-    if _FONT_BOLD is None:
-        _FONT_BOLD = _FONT_REGULAR
-    if _FONT_SEMIBOLD is None:
-        _FONT_SEMIBOLD = _FONT_REGULAR
-    if _FONT_SMALL is None:
-        _FONT_SMALL = _FONT_REGULAR
-    if _FONT_SMALL_BOLD is None:
-        _FONT_SMALL_BOLD = _FONT_BOLD
-    if _FONT_LIST is None:
-        _FONT_LIST = _FONT_REGULAR
-    if _FONT_LIST_BOLD is None:
-        _FONT_LIST_BOLD = _FONT_BOLD
     if _FONT_HEADER is None:
-        _FONT_HEADER = _FONT_BOLD
+        _FONT_HEADER = ImageFont.load_default()
+    if _FONT_LIST is None:
+        _FONT_LIST = ImageFont.load_default()
+    if _FONT_NUMBERS is None:
+        _FONT_NUMBERS = _FONT_LIST
     if _FONT_PERIOD is None:
-        _FONT_PERIOD = _FONT_SMALL
+        _FONT_PERIOD = _FONT_LIST
+    if _FONT_COL_HEADER is None:
+        _FONT_COL_HEADER = _FONT_LIST
 
 
 def _heat_color(kills: int, max_kills: int, min_kills: int) -> tuple[int, int, int]:
@@ -169,9 +153,16 @@ def _truncate(text: str, max_len: int) -> str:
     return text[:max_len - 1] + "…" if len(text) > max_len else text
 
 
+def _truncate_to_w(draw, text: str, max_w: int, font) -> str:
+    if _text_w(draw, text, font) <= max_w:
+        return text
+    while len(text) > 1 and _text_w(draw, text + "…", font) > max_w:
+        text = text[:-1]
+    return text + "…" if text else text
+
+
 def render_battle_preview(db: Session, public_id: str) -> Path | None:
-    """Gera (ou serve do cache) a imagem PNG de resumo da batalha.
-    Retorna o caminho do arquivo, ou None se a batalha não existir."""
+    """Gera (ou serve do cache) a imagem PNG de resumo da batalha."""
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = _CACHE_DIR / f"{public_id}.png"
     if cache_path.exists():
@@ -179,7 +170,16 @@ def render_battle_preview(db: Session, public_id: str) -> Path | None:
 
     _load_fonts()
 
-    battle_ids = battle_groups.get_group_battle_ids(db, public_id)
+    # battle_groups.get_group_battle_ids é async — aqui rodamos sync (a rota
+    # _render_preview já abre SyncSession em to_thread).
+    group = db.scalar(select(BattleGroup).where(BattleGroup.public_id == public_id))
+    if group is None:
+        return None
+    battle_ids = [m.battle_id for m in db.scalars(
+        select(BattleGroupMember)
+        .where(BattleGroupMember.group_id == group.id)
+        .order_by(BattleGroupMember.position)
+    ).all()]
     if not battle_ids:
         return None
 
@@ -217,43 +217,39 @@ def render_battle_preview(db: Session, public_id: str) -> Path | None:
     if not all_factions:
         return None
 
-    # Filtra factions de baixo impacto — mesma lógica do BattlePage.tsx
-    # splitByImpact: engagement (kills+deaths) < 3% do total = rato/gank que
-    # não fez diferença, escondido da imagem pra não inflar a altura.
+    # Filtra factions de baixo impacto (mesma lógica do BattlePage.tsx)
     all_rows = sorted(all_factions.values(), key=lambda r: r["kills"], reverse=True)
     total_engagement = sum(f["kills"] + f.get("deaths", 0) for f in all_rows)
     if total_engagement > 0:
         factions = [f for f in all_rows if (f["kills"] + f.get("deaths", 0)) / total_engagement >= 0.03]
     else:
         factions = all_rows
-    # Máximo 4 — sem "Others", o excesso só não aparece (kills/players totais
-    # no header já contabilizam todo mundo).
     factions = factions[:MAX_FACTIONS]
 
     kills_list = [f["kills"] for f in factions]
     max_kills = max(kills_list) if kills_list else 1
     min_kills = min(kills_list) if kills_list else 0
 
-    # Altura dinâmica: topo fixo + cabeçalho da lista + 1 linha por faction
+    # ── Layout: banner/tira — título "vs" + info + lista de guildas ──
+    # Altura começa pequena e cresce com o número de guildas.
+    header_h = int(44 * S)
+    info_h = int(20 * S)
+    sep_h = int(12 * S)
+    col_h = int(20 * S)
+    col_gap = int(12 * S)  # gap extra entre header das colunas e a lista
+    row_h = int(24 * S)
     n = len(factions)
-    img_h = _TOP_H + _LIST_HEADER_H + n * _ROW_H + PADDING
+    img_h = PADDING + info_h + header_h + sep_h + col_h + col_gap + n * row_h + PADDING
     img = Image.new("RGB", (IMG_W, img_h), BG_COLOR)
     draw = ImageDraw.Draw(img)
     cx = IMG_W // 2
 
-    # Cabeçalho centralizado: players · kills (fonte menor)
-    header = f"{total_players} players  ·  {total_kills} kills"
-    _draw_centered(draw, header, cx, PADDING, TEXT_COLOR, _FONT_HEADER)
-
-    # Servidor no canto superior direito (siglas: AM/EU/AS) — Consolas
+    # ── Linha de info no TOPO: servidor (dir) · ID (esq) · data (centro) ──
     region_map = {"americas": "AM", "europe": "EU", "asia": "AS"}
     battle = db.get(Battle, battle_ids[0])
-    if battle:
-        region_tag = region_map.get(battle.region, battle.region.upper())
-        rw = _text_w(draw, region_tag, _FONT_PERIOD)
-        draw.text((IMG_W - PADDING - rw, PADDING + 2), region_tag, fill=DIM_COLOR, font=_FONT_PERIOD)
+    info_y = PADDING
 
-    # ID do Albion no canto superior esquerdo (ou "MULTI" se multi-batalha) — Consolas
+    # ID à esquerda
     if is_multi:
         id_label = "MULTI"
     elif battle:
@@ -261,94 +257,111 @@ def render_battle_preview(db: Session, public_id: str) -> Path | None:
     else:
         id_label = ""
     if id_label:
-        draw.text((PADDING, PADDING + 2), id_label, fill=DIM_COLOR, font=_FONT_PERIOD)
+        draw.text((PADDING, info_y), id_label, fill=DIM_COLOR, font=_FONT_PERIOD)
 
-    # Factions em destaque — agrupadas no centro, espaço fixo pra até 4
-    faction_spacing = min(120, (IMG_W - 2 * PADDING) // max(n, 2))
-    total_w = (n - 1) * faction_spacing
-    start_x = cx - total_w // 2
-    y = PADDING + 32
+    # Servidor à direita
+    if battle:
+        region_tag = region_map.get(battle.region, battle.region.upper())
+        rw = _text_w(draw, region_tag, _FONT_PERIOD)
+        draw.text((IMG_W - PADDING - rw, info_y), region_tag, fill=DIM_COLOR, font=_FONT_PERIOD)
 
-    for i, f in enumerate(factions):
-        x = start_x + i * faction_spacing
-        color = _heat_color(f["kills"], max_kills, min_kills)
-
-        if f["alliance_name"]:
-            tag = f"[{_truncate(f['alliance_name'], 10)}]"
-        else:
-            tag = _truncate(f["guild_name"], 12)
-        _draw_centered(draw, tag, x, y, color, _FONT_SEMIBOLD)
-        _draw_centered(draw, str(f["player_count"]), x, y + 22, DIM_COLOR, _FONT_SMALL)
-
-    # Horário UTC — separado do destaque. Multi-batalha mostra período
-    # (início → fim); batalha única mostra só a data.
-    footer_y = y + 50
-    battle = db.get(Battle, battle_ids[0])
+    # Data no centro
     if first_start:
         fs = first_start if first_start.tzinfo else first_start.replace(tzinfo=timezone.utc)
         if is_multi and last_end:
             le = last_end if last_end.tzinfo else last_end.replace(tzinfo=timezone.utc)
             if fs.strftime("%d/%m/%Y") == le.strftime("%d/%m/%Y"):
-                footer = f"{fs.strftime('%d/%m/%Y %H:%M')} → {le.strftime('%H:%M')} UTC"
+                footer = f"{fs.strftime('%d/%m %H:%M')} → {le.strftime('%H:%M')} UTC"
             else:
-                footer = f"{fs.strftime('%d/%m/%Y %H:%M')} → {le.strftime('%d/%m/%Y %H:%M')} UTC"
+                footer = f"{fs.strftime('%d/%m %H:%M')} → {le.strftime('%d/%m %H:%M')} UTC"
         else:
             footer = fs.strftime("%d/%m/%Y %H:%M UTC")
-        # Consolas em toda linha de período/data/ID/servidor
-        _draw_centered(draw, footer, cx, footer_y, DIM_COLOR, _FONT_PERIOD)
+        _draw_centered(draw, footer, cx, info_y, DIM_COLOR, _FONT_PERIOD)
+    y = info_y + info_h
 
-    # ── Lista detalhada ──
-    sep_y = footer_y + 18
-    draw.line([(PADDING, sep_y), (IMG_W - PADDING, sep_y)], fill=(0x26, 0x26, 0x2B), width=1)
+    # ── Cabeçalho: factions vs factions com heatmap ──
+    # Cada tag pega a cor de heat da sua guilda — quem matou mais brilha mais.
+    # Sem truncagem por char: mede a largura real e encurta só se não couber.
+    def _faction_tag(f):
+        if f["alliance_name"]:
+            return f"[{f['alliance_name']}]"
+        return f["guild_name"]
 
-    # Colunas right-aligned: PLAYERS | KILLS | DEATHS
+    # Calcula espaço total disponível e distribui entre as tags
+    raw_tags = [(_faction_tag(f), _heat_color(f["kills"], max_kills, min_kills)) for f in factions[:4]]
+    # stroke_width simula bold no Cascadia Code (fonte variável sem peso bold
+    # selecionável pelo PIL). Espessura proporcional à escala.
+    stroke = max(1, int(S))
+    vs_text = "  vs  "
+    vs_w = _text_w(draw, vs_text, _FONT_HEADER)
+    avail_w = IMG_W - 2 * PADDING - vs_w * (len(raw_tags) - 1)
+    # Mede cada tag; se a soma passar do disponível, encurta as maiores primeiro
+    tag_widths = [_text_w(draw, t, _FONT_HEADER) for t, _ in raw_tags]
+    total_tags_w = sum(tag_widths)
+    if total_tags_w > avail_w:
+        # Trunca proporcionalmente — cada tag tem no máximo sua fração do espaço
+        per_tag = avail_w // len(raw_tags)
+        truncated = []
+        for (tag, color), w in zip(raw_tags, tag_widths):
+            if w <= per_tag:
+                truncated.append((tag, color))
+            else:
+                truncated.append((_truncate_to_w(draw, tag, per_tag, _FONT_HEADER), color))
+        raw_tags = truncated
+    total_w = sum(_text_w(draw, t, _FONT_HEADER) for t, _ in raw_tags) + vs_w * (len(raw_tags) - 1)
+    x = cx - total_w // 2
+    for i, (tag, color) in enumerate(raw_tags):
+        if i > 0:
+            draw.text((x, y), vs_text, fill=DIM_COLOR, font=_FONT_HEADER, stroke_width=stroke, stroke_fill=DIM_COLOR)
+            x += vs_w
+        draw.text((x, y), tag, fill=color, font=_FONT_HEADER, stroke_width=stroke, stroke_fill=color)
+        x += _text_w(draw, tag, _FONT_HEADER)
+    y += header_h
+
+    # ── Separador ──
+    sep_y = y + int(2 * S)
+    draw.line([(PADDING, sep_y), (IMG_W - PADDING, sep_y)], fill=SEP_COLOR, width=max(1, int(1 * S)))
+    y = sep_y + sep_h
+
+    # ── Colunas: PLAYERS | KILLS | DEATHS (right-aligned) ──
     col_deaths_x = IMG_W - PADDING
-    col_kills_x = col_deaths_x - 60
-    col_players_x = col_kills_x - 55
-    # Largura máxima disponível pro nome da guilda (esquerda até col_players)
-    name_max_w = col_players_x - PADDING - 10
+    col_kills_x = col_deaths_x - int(70 * S)
+    col_players_x = col_kills_x - int(70 * S)
+    name_max_w = col_players_x - PADDING - int(10 * S)
 
-    list_y = sep_y + 8
-    _draw_text(draw, "GUILD / ALLIANCE", (PADDING, list_y), DIM_COLOR, _FONT_LIST)
+    _draw_text(draw, "GUILD / ALLIANCE", (PADDING, y), DIM_COLOR, _FONT_COL_HEADER)
     for label, x in [("PLAYERS", col_players_x), ("KILLS", col_kills_x), ("DEATHS", col_deaths_x)]:
-        lw = _text_w(draw, label, _FONT_LIST)
-        draw.text((x - lw, list_y), label, fill=DIM_COLOR, font=_FONT_LIST)
+        lw = _text_w(draw, label, _FONT_COL_HEADER)
+        draw.text((x - lw, y), label, fill=DIM_COLOR, font=_FONT_COL_HEADER)
+    y += col_h + col_gap
 
-    # Cores de kills/deaths — opacas (não saturadas)
-    KILLS_C = (0x3A, 0x8A, 0x2E)    # verde muted
-    DEATHS_C = (0x9A, 0x3A, 0x3A)   # vermelho muted
+    KILLS_C = (0x4C, 0xE0, 0x4C)
+    DEATHS_C = (0xF0, 0x4C, 0x4C)
 
     def _draw_right(text: str, x: int, y: int, color: tuple, font) -> None:
         w = _text_w(draw, text, font)
         draw.text((x - w, y), text, fill=color, font=font)
 
-    def _truncate_to_w(text: str, max_w: int, font) -> str:
-        """Trunca o texto pra caber em max_w pixels, medindo largura real."""
-        if _text_w(draw, text, font) <= max_w:
-            return text
-        while len(text) > 1 and _text_w(draw, text + "…", font) > max_w:
-            text = text[:-1]
-        return text + "…" if text else text
-
-    list_y += 20
+    # ── Linhas das factions com heatmap no nome ──
     for f in factions:
         raw_name = f"[{f['alliance_name']}]" if f["alliance_name"] else f["guild_name"]
-        name = _truncate_to_w(raw_name, name_max_w, _FONT_LIST)
+        name = _truncate_to_w(draw, raw_name, name_max_w, _FONT_LIST)
         kills = f["kills"]
         deaths = f.get("deaths", 0)
         players = f["player_count"]
 
-        # Sem bold na lista — só a cor distingue o maior número
-        _draw_text(draw, name, (PADDING, list_y), TEXT_COLOR, _FONT_LIST)
-        _draw_right(str(players), col_players_x, list_y, DIM_COLOR, _FONT_LIST)
+        name_color = _heat_color(kills, max_kills, min_kills)
+        _draw_text(draw, name, (PADDING, y), name_color, _FONT_LIST)
+        _draw_right(str(players), col_players_x, y, DIM_COLOR, _FONT_NUMBERS)
 
         k_color = KILLS_C if kills > deaths else DIM_COLOR
-        _draw_right(str(kills), col_kills_x, list_y, k_color, _FONT_LIST)
+        _draw_right(str(kills), col_kills_x, y, k_color, _FONT_NUMBERS)
 
         d_color = DEATHS_C if deaths > kills else DIM_COLOR
-        _draw_right(str(deaths), col_deaths_x, list_y, d_color, _FONT_LIST)
+        _draw_right(str(deaths), col_deaths_x, y, d_color, _FONT_NUMBERS)
 
-        list_y += _ROW_H
+        y += row_h
 
+    # Render em 2x e mantém — o Discord respeita imagens maiores e não amassa.
     img.save(cache_path, "PNG")
     return cache_path

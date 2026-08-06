@@ -7,14 +7,14 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.api.routes.battles import (
     _factions_summary, _factions_summary_bulk, _wbase, _weapon_function_map,
     SUPPORT_ELIGIBLE_FIGHT_POINTS, TANK_ELIGIBLE_FIGHT_POINTS,
 )
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import Battle, BattleParticipant
 from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, PlayerSnapshot, PlayerWeaponStat, SearchEntry
 from app.services import battle_groups, prices, user_profile
@@ -29,6 +29,20 @@ router = APIRouter(prefix="/players", tags=["players"])
 def _aware(dt: datetime) -> datetime:
     # SQLite não preserva tz-awareness na leitura mesmo com DateTime(timezone=True).
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+# ponytail: user_profile.py ainda sync (próxima migração). AsyncSession não
+# cruza pra thread, então sessão sync própria por chamada — aberta/fechada
+# dentro do to_thread. Remover quando user_profile migrar.
+async def _run_sync(fn, *args):
+    """Roda fn(sync_db, *args) numa thread com sessão sync temporária."""
+    def _run():
+        db = SyncSessionLocal()
+        try:
+            return fn(db, *args)
+        finally:
+            db.close()
+    return await asyncio.to_thread(_run)
 
 
 # View cache-first: serve do DB instantâneo, nunca força loading na primeira
@@ -50,12 +64,12 @@ PROFILE_STALE_AFTER = timedelta(days=15)
 COLD_LOAD_TIMEOUT = timedelta(minutes=15)
 
 
-def _queue_refresh_if_stale(db: Session, player: AlbionPlayer) -> None:
+async def _queue_refresh_if_stale(db: AsyncSession, player: AlbionPlayer) -> None:
     if player.refresh_requested_at is not None:
         return  # já enfileirado
     if datetime.now(timezone.utc) - _aware(player.last_seen_at) > PROFILE_STALE_AFTER:
         player.refresh_requested_at = datetime.now(timezone.utc)
-        db.commit()
+        await db.commit()
 
 
 async def _get_with_retry(
@@ -94,8 +108,8 @@ async def _fetch_player_raw(client: httpx.AsyncClient, host: str, albion_id: str
     return data if isinstance(data, dict) and data.get("Id") else None
 
 
-def _battle_history(
-    db: Session, albion_player_id: str, region: str,
+async def _battle_history(
+    db: AsyncSession, albion_player_id: str, region: str,
     factions_cache: dict[int, list[dict]] | None = None,
 ) -> list[dict]:
     """Batalhas que entraram em deep-processing (>= DEEP_PROCESS_MIN_PLAYERS
@@ -107,25 +121,26 @@ def _battle_history(
     _battle_links_bulk — a mesma batalha aparece nas duas (histórico + kills),
     e sem cache cada uma rodava 3 queries (BattleSide + BattleGuild + count).
     """
-    rows = db.execute(
+    rows = (await db.execute(
         select(Battle, BattleParticipant)
         .join(BattleParticipant, BattleParticipant.battle_id == Battle.id)
         .where(BattleParticipant.albion_player_id == albion_player_id, Battle.region == region)
         .order_by(Battle.start_time.desc())
-    ).all()
+    )).all()
     # Em lote — um commit só pra lista inteira, não um por batalha (pode ser
     # centenas pra jogador ativo desde que DEEP_PROCESS_MIN_PLAYERS virou 0).
-    groups = battle_groups.get_or_create_groups_bulk(db, [battle.id for battle, _ in rows])
+    groups = await battle_groups.get_or_create_groups_bulk(db, [battle.id for battle, _ in rows])
+    public_ids = {bid: g.public_id for bid, g in groups.items()}
     fc = factions_cache if factions_cache is not None else {}
     # Batch: 3 queries fixas pra todas as batalhas, em vez de 3 por batalha.
     missing_bids = [b.id for b, _ in rows if b.id not in fc]
     if missing_bids:
-        fc.update(_factions_summary_bulk(db, missing_bids))
+        fc.update(await _factions_summary_bulk(db, missing_bids))
     out = []
     for battle, bp in rows:
-        group = groups[battle.id]
+        public_id = public_ids[battle.id]
         out.append({
-            "public_id": group.public_id,
+            "public_id": public_id,
             "region": battle.region,
             "start_time": _aware(battle.start_time).isoformat(),
             "cluster": battle.cluster,
@@ -142,8 +157,8 @@ def _battle_history(
     return out
 
 
-def _battle_links_bulk(
-    db: Session, region: str, albion_battle_ids: list[str | None],
+async def _battle_links_bulk(
+    db: AsyncSession, region: str, albion_battle_ids: list[str | None],
     factions_cache: dict[int, list[dict]] | None = None,
 ) -> dict[str, tuple[str | None, list[dict]]]:
     """Versão em lote de resolução de link público + heatmap de facções
@@ -159,16 +174,17 @@ def _battle_links_bulk(
     ids = sorted({i for i in albion_battle_ids if i})
     if not ids:
         return {}
-    battles = db.scalars(select(Battle).where(Battle.region == region, Battle.albion_id.in_(ids))).all()
-    groups = battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
+    battles = (await db.scalars(select(Battle).where(Battle.region == region, Battle.albion_id.in_(ids)))).all()
+    groups = await battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
+    public_ids = {bid: g.public_id for bid, g in groups.items()}
     fc = factions_cache if factions_cache is not None else {}
     # Batch: 3 queries fixas pra todas as batalhas, em vez de 3 por batalha.
     missing_bids = [b.id for b in battles if b.id not in fc]
     if missing_bids:
-        fc.update(_factions_summary_bulk(db, missing_bids))
+        fc.update(await _factions_summary_bulk(db, missing_bids))
     out: dict[str, tuple[str | None, list[dict]]] = {}
     for b in battles:
-        out[b.albion_id] = (groups[b.id].public_id, fc.get(b.id, []))
+        out[b.albion_id] = (public_ids[b.id], fc.get(b.id, []))
     return out
 
 
@@ -187,17 +203,17 @@ def _counts_for_activity(ev: PlayerKillEvent) -> bool:
     return ev.fame > 0
 
 
-def _kill_ledger_rows(db: Session, player_id: int, region: str, role: str) -> list[PlayerKillEvent]:
+async def _kill_ledger_rows(db: AsyncSession, player_id: int, region: str, role: str) -> list[PlayerKillEvent]:
     """Sem limite: a paginação do perfil (10/página) já aguenta a lista inteira."""
     own_col = PlayerKillEvent.killer_player_id if role == "kills" else PlayerKillEvent.victim_player_id
-    return list(db.scalars(
+    return list((await db.scalars(
         select(PlayerKillEvent)
         .where(own_col == player_id, PlayerKillEvent.region == region)
         .order_by(PlayerKillEvent.timestamp.desc())
-    ).all())
+    )).all())
 
 
-def _kill_highlights(db: Session, player: AlbionPlayer) -> dict:
+async def _kill_highlights(db: AsyncSession, player: AlbionPlayer) -> dict:
     """Kill mais valiosa e morte mais valiosa do jogador — por silver_dropped
     e por fame. 4 queries O(1) (top 1 com ORDER BY + LIMIT 1), só pra destacar
     no perfil. silver_dropped IS NOT NULL filtra kills ainda não precificadas
@@ -206,7 +222,7 @@ def _kill_highlights(db: Session, player: AlbionPlayer) -> dict:
     own_kill = PlayerKillEvent.killer_player_id
     own_death = PlayerKillEvent.victim_player_id
 
-    def _top(col, order_col, desc: bool) -> PlayerKillEvent | None:
+    async def _top(col, order_col, desc: bool) -> PlayerKillEvent | None:
         q = select(PlayerKillEvent).where(
             col == player.id, PlayerKillEvent.region == region,
             PlayerKillEvent.fame > 0,
@@ -214,14 +230,14 @@ def _kill_highlights(db: Session, player: AlbionPlayer) -> dict:
         if order_col == PlayerKillEvent.silver_dropped:
             q = q.where(PlayerKillEvent.silver_dropped.is_not(None))
         q = q.order_by(order_col.desc() if desc else order_col.asc())
-        return db.scalars(q.limit(1)).first()
+        return (await db.scalars(q.limit(1))).first()
 
-    def _serialize(ev: PlayerKillEvent | None, role: str) -> dict | None:
+    async def _serialize(ev: PlayerKillEvent | None, role: str) -> dict | None:
         if ev is None:
             return None
         # Oponente: se role=kills, a vítima; se role=deaths, o matador.
         opp_id = ev.victim_player_id if role == "kills" else ev.killer_player_id
-        opp = db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == opp_id)) if opp_id else None
+        opp = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == opp_id)) if opp_id else None
         return {
             "event_id": ev.albion_event_id,
             "timestamp": _aware(ev.timestamp).isoformat() if ev.timestamp else None,
@@ -240,10 +256,10 @@ def _kill_highlights(db: Session, player: AlbionPlayer) -> dict:
         }
 
     return {
-        "kill_by_silver": _serialize(_top(own_kill, PlayerKillEvent.silver_dropped, True), "kills"),
-        "kill_by_fame": _serialize(_top(own_kill, PlayerKillEvent.fame, True), "kills"),
-        "death_by_silver": _serialize(_top(own_death, PlayerKillEvent.silver_dropped, True), "deaths"),
-        "death_by_fame": _serialize(_top(own_death, PlayerKillEvent.fame, True), "deaths"),
+        "kill_by_silver": await _serialize(await _top(own_kill, PlayerKillEvent.silver_dropped, True), "kills"),
+        "kill_by_fame": await _serialize(await _top(own_kill, PlayerKillEvent.fame, True), "kills"),
+        "death_by_silver": await _serialize(await _top(own_death, PlayerKillEvent.silver_dropped, True), "deaths"),
+        "death_by_fame": await _serialize(await _top(own_death, PlayerKillEvent.fame, True), "deaths"),
     }
 
 
@@ -253,16 +269,16 @@ def _kill_highlights(db: Session, player: AlbionPlayer) -> dict:
 _BUILD_SLOTS = ("MainHand", "OffHand", "Head", "Armor", "Shoes")
 
 
-def _weapon_points(db: Session, player: AlbionPlayer, by_weapon: dict[str, list[PlayerKillEvent]]) -> dict[str, int]:
+async def _weapon_points(db: AsyncSession, player: AlbionPlayer, by_weapon: dict[str, list[PlayerKillEvent]]) -> dict[str, int]:
     """Pontos por arma — kills (by_weapon, ledger ao vivo) + bônus de função
     lido de PlayerWeaponStat (contadores brutos pré-calculados, ver
     app.services.weapon_stats; mesma fórmula usada no Highscores all-time)."""
-    weapon_fn = _weapon_function_map(db)
+    weapon_fn = await _weapon_function_map(db)
     points: dict[str, int] = {wb: len(evs) for wb, evs in by_weapon.items()}
 
-    stats = db.scalars(
+    stats = (await db.scalars(
         select(PlayerWeaponStat).where(PlayerWeaponStat.albion_player_id == player.albion_id)
-    ).all()
+    )).all()
     for s in stats:
         role = weapon_fn.get(s.weapon_base, "dps")
         if role == "dps":
@@ -279,19 +295,19 @@ def _weapon_points(db: Session, player: AlbionPlayer, by_weapon: dict[str, list[
     return points
 
 
-def _top_weapons(db: Session, player: AlbionPlayer) -> list[dict]:
+async def _top_weapons(db: AsyncSession, player: AlbionPlayer) -> list[dict]:
     """Top 5 armas em destaque do perfil, ordenadas pelo peso/pontos (ver
     _weapon_points — não kills puras) e, pra cada uma, as top 5 builds usadas
     nos abates com ela — build identificada só pela BASE do item (ignora
     tier/encantamento e capa, pedido explícito). Pontos não vêm só de kills,
     então uma arma pode aparecer aqui mesmo com poucos (ou zero) abates."""
-    kill_rows = db.scalars(
+    kill_rows = (await db.scalars(
         select(PlayerKillEvent).where(
             PlayerKillEvent.killer_player_id == player.id,
             PlayerKillEvent.region == player.region,
             PlayerKillEvent.fame > 0,
         )
-    ).all()
+    )).all()
 
     by_weapon: dict[str, list[PlayerKillEvent]] = {}
     for ev in kill_rows:
@@ -299,7 +315,7 @@ def _top_weapons(db: Session, player: AlbionPlayer) -> list[dict]:
         if weapon_base:
             by_weapon.setdefault(weapon_base, []).append(ev)
 
-    points = _weapon_points(db, player, by_weapon)
+    points = await _weapon_points(db, player, by_weapon)
     top_weapons = [(wb, p) for wb, p in points.items() if p > 0]
     top_weapons.sort(key=lambda kv: kv[1], reverse=True)
 
@@ -326,8 +342,8 @@ def _top_weapons(db: Session, player: AlbionPlayer) -> list[dict]:
     return out
 
 
-def _serialize_kill(
-    db: Session, ev: PlayerKillEvent, role: str, weapon_fn_map: dict[str, str],
+async def _serialize_kill(
+    db: AsyncSession, ev: PlayerKillEvent, role: str, weapon_fn_map: dict[str, str],
     battle_links: dict[str, tuple[str | None, list[dict]]],
     other_players: dict[int, AlbionPlayer] | None = None,
 ) -> dict:
@@ -346,7 +362,7 @@ def _serialize_kill(
     elif other_players is not None:
         other = other_players.get(other_id)
     else:
-        other = db.get(AlbionPlayer, other_id)
+        other = await db.get(AlbionPlayer, other_id)
     own_weapon = (own_equipment or {}).get("MainHand") or {}
     battle_public_id, battle_factions = battle_links.get(ev.albion_battle_id, (None, []))
     return {
@@ -370,7 +386,7 @@ def _serialize_kill(
     }
 
 
-async def _silver_dropped(db: Session, death_rows: list[PlayerKillEvent]) -> int:
+async def _silver_dropped(db: AsyncSession, death_rows: list[PlayerKillEvent]) -> int:
     """Prata aproximada perdida nas mortes registradas — preço dos itens
     equipados + carregados no momento da morte, reaproveitando o cache
     permanente de preço de loot (mesmo usado na página de batalha)."""
@@ -408,7 +424,7 @@ _GATHER_RANK_KINDS = {
 _TOP_N = 500
 
 
-def _gather_rank_of(db: Session, player: AlbionPlayer, kind: str) -> int:
+async def _gather_rank_of(db: AsyncSession, player: AlbionPlayer, kind: str) -> int:
     """Posição (1-indexed) do jogador no ranking do kind, top500 só.
     0 = fora do top500 (não mostra no perfil)."""
     col = getattr(AlbionPlayer, _GATHER_RANK_KINDS[kind])
@@ -416,7 +432,7 @@ def _gather_rank_of(db: Session, player: AlbionPlayer, kind: str) -> int:
     if own <= 0:
         return 0
     # Conta quantos têm valor MAIOR na mesma região — rank = maior+1.
-    higher = db.scalar(
+    higher = await db.scalar(
         select(func.count()).select_from(AlbionPlayer)
         .where(AlbionPlayer.region == player.region, col > own)
     ) or 0
@@ -424,22 +440,22 @@ def _gather_rank_of(db: Session, player: AlbionPlayer, kind: str) -> int:
     return rank if rank <= _TOP_N else 0
 
 
-def _gather_ranks(db: Session, player: AlbionPlayer) -> dict[str, int]:
+async def _gather_ranks(db: AsyncSession, player: AlbionPlayer) -> dict[str, int]:
     """{kind: rank} pra todos os kinds de coleta — top500 só (0 = fora).
     Uma query por kind (são 8), barato. Usado no _ziggs do perfil."""
     out: dict[str, int] = {}
     for kind in _GATHER_RANK_KINDS:
-        r = _gather_rank_of(db, player, kind)
+        r = await _gather_rank_of(db, player, kind)
         if r > 0:
             out[kind] = r
     return out
 
 
-def _guild_history(db: Session, player: AlbionPlayer) -> list[dict]:
+async def _guild_history(db: AsyncSession, player: AlbionPlayer) -> list[dict]:
     """Estadias por guilda derivadas das batalhas do jogador.
     Usa Battle.start_time — timestamps de kill events têm bugs de fuso na API
     do Albion que corrompem a linha do tempo."""
-    rows = db.execute(
+    rows = (await db.execute(
         select(Battle, BattleParticipant)
         .join(BattleParticipant, BattleParticipant.battle_id == Battle.id)
         .where(
@@ -448,7 +464,7 @@ def _guild_history(db: Session, player: AlbionPlayer) -> list[dict]:
             BattleParticipant.guild_id.isnot(None),
         )
         .order_by(Battle.start_time.asc())
-    ).all()
+    )).all()
 
     if not rows:
         return []
@@ -495,16 +511,16 @@ def _guild_history(db: Session, player: AlbionPlayer) -> list[dict]:
     # Enriquece cada entrada com is_deleted de guild/alliance
     guild_ids = [e["guild_id"] for e in out if e.get("guild_id")]
     alliance_ids = [e["alliance_id"] for e in out if e.get("alliance_id")]
-    deleted_guilds = set(db.scalars(
+    deleted_guilds = set((await db.scalars(
         select(DeletedProfile.albion_id).where(
             DeletedProfile.entity_type == "guild", DeletedProfile.albion_id.in_(guild_ids)
         )
-    ).all()) if guild_ids else set()
-    deleted_alliances = set(db.scalars(
+    )).all()) if guild_ids else set()
+    deleted_alliances = set((await db.scalars(
         select(DeletedProfile.albion_id).where(
             DeletedProfile.entity_type == "alliance", DeletedProfile.albion_id.in_(alliance_ids)
         )
-    ).all()) if alliance_ids else set()
+    )).all()) if alliance_ids else set()
     for e in out:
         e["guild_is_deleted"] = e.get("guild_id") in deleted_guilds
         e["alliance_is_deleted"] = e.get("alliance_id") in deleted_alliances
@@ -527,23 +543,23 @@ def _guild_history(db: Session, player: AlbionPlayer) -> list[dict]:
     return out
 
 
-async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -> dict:
-    guild_history = _guild_history(db, player)
+async def _build_profile_payload(db: AsyncSession, player: AlbionPlayer, raw: dict) -> dict:
+    guild_history = await _guild_history(db, player)
 
     # Cresce em ordem cronológica — 90 pontos cobrem ~3 meses de histórico
     # com a resolução diária do gatilho de snapshot (ver upsert_player).
-    fame_series = db.scalars(
+    fame_series = (await db.scalars(
         select(PlayerSnapshot).where(PlayerSnapshot.player_id == player.id)
         .order_by(PlayerSnapshot.snapshotted_at.asc()).limit(90)
-    ).all()
+    )).all()
     fame_history = [
         {"t": _aware(s.snapshotted_at).isoformat(), "kill_fame": s.kill_fame, "death_fame": s.death_fame}
         for s in fame_series
     ]
 
-    death_rows = _kill_ledger_rows(db, player.id, player.region, "deaths")
-    kill_rows = _kill_ledger_rows(db, player.id, player.region, "kills")
-    weapon_fn_map = _weapon_function_map(db)
+    death_rows = await _kill_ledger_rows(db, player.id, player.region, "deaths")
+    kill_rows = await _kill_ledger_rows(db, player.id, player.region, "kills")
+    weapon_fn_map = await _weapon_function_map(db)
 
     # Mortes/kills que não contam como atividade (fama zerada) também não
     # entram na prata dropada — pedido explícito.
@@ -565,12 +581,12 @@ async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -
     other_players: dict[int, AlbionPlayer] = {}
     if other_ids:
         other_players = {
-            p.id: p for p in db.scalars(select(AlbionPlayer).where(AlbionPlayer.id.in_(other_ids))).all()
+            p.id: p for p in (await db.scalars(select(AlbionPlayer).where(AlbionPlayer.id.in_(other_ids)))).all()
         }
 
     # Em lote — um commit só pra lista inteira de kills+mortes, não um por
     # evento (sem paginação aqui, pode ser centenas pra jogador ativo).
-    battle_links = _battle_links_bulk(
+    battle_links = await _battle_links_bulk(
         db, player.region,
         [ev.albion_battle_id for ev in kill_rows_for_activity + death_rows_for_activity],
         factions_cache=factions_cache,
@@ -578,13 +594,13 @@ async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -
 
     # Pré-calcula silver_dropped antes do dict — precisa de HTTP (get_battle_prices).
     # Commit libera read tx antes do await.
-    db.commit()
+    await db.commit()
     silver_dropped_val = await _silver_dropped(db, death_rows_for_activity)
 
     return {
         **raw,
         "_is_deleted": player.is_deleted,
-        "custom_profile": user_profile.get_public_customization(db, player.albion_id),
+        "custom_profile": await _run_sync(user_profile.get_public_customization, player.albion_id),
         "_ziggs": {
             "region": player.region,
             "first_seen_at": _aware(player.first_seen_at).isoformat(),
@@ -596,18 +612,18 @@ async def _build_profile_payload(db: Session, player: AlbionPlayer, raw: dict) -
             "refresh_requested_at": _aware(player.refresh_requested_at).isoformat() if player.refresh_requested_at else None,
             "guild_history": guild_history,
             "fame_history": fame_history,
-            "battle_history": _battle_history(db, player.albion_id, player.region, factions_cache=factions_cache),
-            "top_weapons": _top_weapons(db, player),
-            "kills": [_serialize_kill(db, ev, "kills", weapon_fn_map, battle_links, other_players) for ev in kill_rows_for_activity],
-            "deaths": [_serialize_kill(db, ev, "deaths", weapon_fn_map, battle_links, other_players) for ev in death_rows_for_activity],
+            "battle_history": await _battle_history(db, player.albion_id, player.region, factions_cache=factions_cache),
+            "top_weapons": await _top_weapons(db, player),
+            "kills": [await _serialize_kill(db, ev, "kills", weapon_fn_map, battle_links, other_players) for ev in kill_rows_for_activity],
+            "deaths": [await _serialize_kill(db, ev, "deaths", weapon_fn_map, battle_links, other_players) for ev in death_rows_for_activity],
             "silver_dropped": silver_dropped_val,
             # Kill/morte mais valiosa do jogador (por silver e por fame) —
             # highlights pro perfil, não precisa abrir o ledger inteiro.
-            "kill_highlights": _kill_highlights(db, player),
+            "kill_highlights": await _kill_highlights(db, player),
             # Rank do jogador em cada kind de coleta — top500 só (0/vazio
             # = fora). Exibido no perfil como "MADEIRA (#481)" clicável, leva
             # pro highscores na posição dele. Ver _gather_ranks.
-            "gather_ranks": _gather_ranks(db, player),
+            "gather_ranks": await _gather_ranks(db, player),
         },
     }
 
@@ -623,7 +639,7 @@ def _player_to_search_result(p: AlbionPlayer) -> dict:
 
 
 @router.get("/search")
-async def search_players(q: str = Query(min_length=2), region: str = "americas", db: Session = Depends(deps.db_session)):
+async def search_players(q: str = Query(min_length=2), region: str = "americas", db: AsyncSession = Depends(deps.async_db_session)):
     """Busca jogadores pelo nick no Albion Online (numa região por vez —
     nomes não são únicos entre Americas/Europe/Asia, são servidores separados).
 
@@ -638,15 +654,15 @@ async def search_players(q: str = Query(min_length=2), region: str = "americas",
     # espaço — mesmo padrão de _search_entities em routes/profiles.py.
     nq = norm_name(q)
     lo, hi = prefix_range(nq)
-    local_ids: list[str] = list(db.scalars(
+    local_ids: list[str] = list((await db.scalars(
         select(SearchEntry.entity_id)
         .where(SearchEntry.entity_type == "player", SearchEntry.region == region,
                SearchEntry.norm_name >= lo, SearchEntry.norm_name < hi)
         .order_by(SearchEntry.weight.desc())
         .limit(20)
-    ).all())
+    )).all())
     if len(local_ids) < 20:
-        local_ids += list(db.scalars(
+        local_ids += list((await db.scalars(
             select(SearchEntry.entity_id)
             .where(
                 SearchEntry.entity_type == "player", SearchEntry.region == region,
@@ -654,11 +670,11 @@ async def search_players(q: str = Query(min_length=2), region: str = "americas",
             )
             .order_by(SearchEntry.weight.desc())
             .limit(20 - len(local_ids))
-        ).all())
+        )).all())
 
     local: list[AlbionPlayer] = []
     if local_ids:
-        by_id = {p.albion_id: p for p in db.scalars(select(AlbionPlayer).where(AlbionPlayer.albion_id.in_(local_ids))).all()}
+        by_id = {p.albion_id: p for p in (await db.scalars(select(AlbionPlayer).where(AlbionPlayer.albion_id.in_(local_ids)))).all()}
         local = [by_id[pid] for pid in local_ids if pid in by_id]
     if local:
         qlow = q.lower()
@@ -666,7 +682,7 @@ async def search_players(q: str = Query(min_length=2), region: str = "americas",
         return {"players": [_player_to_search_result(p) for p in local]}
 
     # Libera read tx antes do HTTP (busca na API do Albion).
-    db.commit()
+    await db.commit()
     async with make_client() as c:
         async with albion_scope(PROFILE):
             try:
@@ -680,7 +696,7 @@ async def search_players(q: str = Query(min_length=2), region: str = "americas",
     for p in players:
         if p.get("Id"):
             try:
-                upsert_player(db, p, region)
+                await upsert_player(db, p, region)
             except Exception:
                 pass
 
@@ -812,13 +828,10 @@ async def _cold_load_player(region: str, name: str, host: str) -> None:
                 # Não depende só do feed global ter visto a luta desse jogador
                 # específico — busca direto nos endpoints de kills/deaths dele.
                 _load_progress[progress_key] = (token, "kills")
-                db = SessionLocal()
-                try:
+                async with AsyncSessionLocal() as db:
                     await sync_player_kills(c, db, host, region, raw["Id"])
                     _load_progress[progress_key] = (token, "build")
-                    upsert_player(db, raw, region)
-                finally:
-                    db.close()
+                    await upsert_player(db, raw, region)
 
     try:
         await asyncio.wait_for(_work(), timeout=COLD_LOAD_TIMEOUT.total_seconds())
@@ -836,7 +849,7 @@ async def _cold_load_player(region: str, name: str, host: str) -> None:
 
 
 @router.get("/by-name/{region}/{name}")
-async def get_player_by_name(region: str, name: str, db: Session = Depends(deps.db_session)):
+async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Resolve `/am/Slayner` etc: busca o nome exato na região indicada,
     depois carrega o perfil completo já sabendo o host certo.
 
@@ -854,13 +867,13 @@ async def get_player_by_name(region: str, name: str, db: Session = Depends(deps.
     if host is None:
         raise HTTPException(400, "Região inválida")
 
-    cached = db.scalar(
+    cached = await db.scalar(
         select(AlbionPlayer).where(AlbionPlayer.region == region, func.lower(AlbionPlayer.name) == name.lower())
     )
     if cached is not None:
-        _queue_refresh_if_stale(db, cached)
+        await _queue_refresh_if_stale(db, cached)
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
-        db.commit()
+        await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
 
     # Cold load: dispara task em background (ou junta-se a uma em andamento).
@@ -905,18 +918,18 @@ async def get_player_by_name(region: str, name: str, db: Session = Depends(deps.
 
 
 @router.get("/{albion_id}")
-async def get_player(albion_id: str, region: str | None = None, db: Session = Depends(deps.db_session)):
+async def get_player(albion_id: str, region: str | None = None, db: AsyncSession = Depends(deps.async_db_session)):
     """Retorna perfil completo e salva snapshot no banco. Sem `region`
     informado, tenta os 3 hosts em sequência — um ID só responde 200 numa
     região (mesmo padrão de battle_tracker.resolve_by_albion_id).
 
     Cache-first: mesma lógica de get_player_by_name — só busca ao vivo se
     nunca vimos esse ID antes."""
-    cached = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
+    cached = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
     if cached is not None:
-        _queue_refresh_if_stale(db, cached)
+        await _queue_refresh_if_stale(db, cached)
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
-        db.commit()
+        await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
 
     async with make_client() as c:
@@ -935,14 +948,14 @@ async def get_player(albion_id: str, region: str | None = None, db: Session = De
 
             if raw is None:
                 # Marca como excluído se já estava no nosso banco
-                existing = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
+                existing = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
                 if existing and not existing.is_deleted:
                     existing.is_deleted = True
-                    db.commit()
+                    await db.commit()
                 raise HTTPException(404, "Jogador não encontrado")
             await sync_player_kills(c, db, resolved_host, resolved_region, raw["Id"])
 
-    player = upsert_player(db, raw, resolved_region)
+    player = await upsert_player(db, raw, resolved_region)
     return await _build_profile_payload(db, player, raw)
 
 
@@ -959,7 +972,7 @@ def get_refresh_progress(albion_id: str):
 
 
 @router.post("/{albion_id}/refresh")
-async def request_player_refresh(albion_id: str, db: Session = Depends(deps.db_session)):
+async def request_player_refresh(albion_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Enfileira uma atualização (botão ⟳ do perfil) — não busca nada agora,
     só marca o pedido; o profile_warmer processa em alta prioridade (PROFILE,
     reserved pool) e limpa o campo quando termina. O refresh_event acorda o
@@ -971,7 +984,7 @@ async def request_player_refresh(albion_id: str, db: Session = Depends(deps.db_s
     API da Albion. Enquanto há um refresh em andamento (refresh_requested_at
     != None), não enfileira de novo: retorna o estado atual, então TODOS que
     estão olhando o perfil vêem "atualizando" ao mesmo tempo."""
-    player = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
+    player = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
     if player is None:
         raise HTTPException(404, "Jogador não encontrado")
 
@@ -998,7 +1011,7 @@ async def request_player_refresh(albion_id: str, db: Session = Depends(deps.db_s
             }
 
     player.refresh_requested_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     # Marca o stage inicial — o usuário vê "na fila" imediatamente, antes do
     # profile_warmer pegar o pedido (pode levar alguns segundos até o ciclo).
     from app.services.profile_warmer import _refresh_progress
@@ -1042,12 +1055,12 @@ async def get_player_deaths(albion_id: str, offset: int = 0, limit: int = 10):
 
 
 @router.get("/{albion_id}/versus")
-def versus_history(
+async def versus_history(
     albion_id: str,
     target: str = Query(..., description="Nome do jogador ou guilda oponente"),
     region: str = Query("americas"),
     kind: str = Query("both", description="kills | deaths | both"),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Histórico de confrontos do jogador do perfil contra um alvo — que pode
     ser um jogador (por nome) ou uma guilda (por nome). O site usa na aba
@@ -1058,7 +1071,7 @@ def versus_history(
     (PlayerKillEvent.killer_guild_name / victim_guild_name — snapshot do
     evento, não tabela de guildas). `kind` filtra só kills, só deaths, ou
     ambos."""
-    player = db.scalar(select(AlbionPlayer).where(
+    player = await db.scalar(select(AlbionPlayer).where(
         AlbionPlayer.albion_id == albion_id, AlbionPlayer.region == region,
     ))
     if player is None:
@@ -1066,7 +1079,7 @@ def versus_history(
 
     target_norm = target.strip()
     # Tenta resolver como jogador primeiro.
-    opp = db.scalar(select(AlbionPlayer).where(
+    opp = await db.scalar(select(AlbionPlayer).where(
         AlbionPlayer.name.ilike(target_norm), AlbionPlayer.region == region,
     ))
 
@@ -1095,17 +1108,17 @@ def versus_history(
     out: dict = {"target_name": target_name, "target_type": target_type, "kills": [], "deaths": []}
 
     if kind in ("kills", "both"):
-        kill_events = list(db.scalars(
+        kill_events = list((await db.scalars(
             select(PlayerKillEvent).where(*kills_filters).order_by(PlayerKillEvent.timestamp.desc())
-        ).all())
+        )).all())
         out["kills"] = _summarize_versus(kill_events)
         out["kills_count"] = len(kill_events)
         out["kills_silver"] = sum(ev.silver_dropped or 0 for ev in kill_events)
 
     if kind in ("deaths", "both"):
-        death_events = list(db.scalars(
+        death_events = list((await db.scalars(
             select(PlayerKillEvent).where(*deaths_filters).order_by(PlayerKillEvent.timestamp.desc())
-        ).all())
+        )).all())
         out["deaths"] = _summarize_versus(death_events)
         out["deaths_count"] = len(death_events)
         out["deaths_silver"] = sum(ev.silver_dropped or 0 for ev in death_events)

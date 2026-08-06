@@ -74,7 +74,7 @@ function DocsApp() {
     <div className="docs-shell">
       <header className="docs-header">
         <a className="docs-brand" href={docsPath(selectedLang)} onClick={e => { e.preventDefault(); go(""); }}>
-          <span className="docs-brand-mark"><i className="ti ti-shield-half" /></span>
+          <img className="docs-brand-mark" src="/logo.png" alt="Ziggs" />
           <span>Ziggs <small>DOCS</small></span>
         </a>
         <nav className="docs-header-actions" aria-label="Documentation actions">

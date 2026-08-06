@@ -26,9 +26,9 @@ from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy import select, func
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.players import PlayerKillEvent, KillIdProbe
 from app.services.albion_gate import OTHER, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client, _record_kill_event, _upsert_event_players
@@ -74,7 +74,7 @@ def _region_kill_candidates(
     return out
 
 
-def generate_kill_candidates(db: Session, active_companions: int = 0) -> list[tuple[str, int]]:
+async def generate_kill_candidates(db: AsyncSession, active_companions: int = 0) -> list[tuple[str, int]]:
     """[(region, albion_event_id_int), ...] — buracos por região.
 
     `active_companions`: se >0, reduz o teto — companions ativos sondam os
@@ -87,7 +87,7 @@ def generate_kill_candidates(db: Session, active_companions: int = 0) -> list[tu
                  active_companions, limit)
 
     probed: set[int] = set()
-    for x in db.scalars(select(KillIdProbe.albion_event_id)):
+    for x in (await db.scalars(select(KillIdProbe.albion_event_id))):
         try:
             probed.add(int(x))
         except (TypeError, ValueError):
@@ -96,10 +96,10 @@ def generate_kill_candidates(db: Session, active_companions: int = 0) -> list[tu
     per_region_limit = max(1, limit // len(HOSTS))
     out: list[tuple[str, int]] = []
     for region in HOSTS:
-        raw = db.scalars(
+        raw = (await db.scalars(
             select(PlayerKillEvent.albion_event_id)
             .where(PlayerKillEvent.region == region)
-        ).all()
+        )).all()
         ids: set[int] = set()
         for a in raw:
             try:
@@ -151,7 +151,7 @@ async def _probe_kill_event(
 
 async def _probe_and_ingest(
     client: httpx.AsyncClient,
-    db: Session,
+    db: AsyncSession,
     db_lock: asyncio.Lock,
     region: str,
     event_id: int,
@@ -166,13 +166,13 @@ async def _probe_and_ingest(
         if status == "found" and raw is not None:
             try:
                 await _upsert_event_players(db, raw, region)
-                _record_kill_event(db, raw, region, commit=False)
+                await _record_kill_event(db, raw, region, commit=False)
             except Exception as e:
                 log.debug("kill_sweeper: erro ao ingerir event %s (%s): %s", eid, region, e)
-                db.rollback()
+                await db.rollback()
                 status = "missing"
 
-        existing = db.get(KillIdProbe, eid)
+        existing = await db.get(KillIdProbe, eid)
         if existing is None:
             db.add(KillIdProbe(
                 albion_event_id=eid, status=status,
@@ -183,19 +183,11 @@ async def _probe_and_ingest(
             existing.status = status
             existing.region = region
             existing.probed_at = datetime.now(timezone.utc)
-        db.commit()
+        await db.commit()
     return status == "found"
 
 
-def _generate_candidates_sync(active_companions: int = 0) -> list[tuple[str, int]]:
-    db = SessionLocal()
-    try:
-        return generate_kill_candidates(db, active_companions)
-    finally:
-        db.close()
-
-
-async def sweep_cycle(client: httpx.AsyncClient, db: Session) -> dict:
+async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
     # Companion-aware: companions ativos sondam os mesmos buracos de graça.
     active = 0
     try:
@@ -203,7 +195,7 @@ async def sweep_cycle(client: httpx.AsyncClient, db: Session) -> dict:
         active = len(_kill_claims)
     except Exception:
         pass
-    candidates = await asyncio.to_thread(_generate_candidates_sync, active)
+    candidates = await generate_kill_candidates(db, active)
     if not candidates:
         log.info("kill_sweeper: sem candidatos novos")
         return {"candidates": 0, "found": 0}
@@ -226,13 +218,11 @@ async def sweep_cycle(client: httpx.AsyncClient, db: Session) -> dict:
 async def run_forever() -> None:
     log.info("kill_sweeper: iniciando (interval=%ds)", CYCLE_INTERVAL)
     while True:
-        db = SessionLocal()
-        try:
-            async with make_client() as client:
-                async with albion_scope(OTHER):
-                    await sweep_cycle(client, db)
-        except Exception as e:
-            log.error("kill_sweeper: erro no ciclo: %s", e)
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                async with make_client() as client:
+                    async with albion_scope(OTHER):
+                        await sweep_cycle(client, db)
+            except Exception as e:
+                log.error("kill_sweeper: erro no ciclo: %s", e)
         await asyncio.sleep(CYCLE_INTERVAL)

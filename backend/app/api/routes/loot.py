@@ -13,6 +13,11 @@ from app.models.tenancy import Guild
 from app.services import loot as svc
 from app.services import loot_reconcile
 
+# ponytail: todas as rotas chamam services síncronos (svc.upload_loot/reconcile/
+# upload_chest/get_price, loot_reconcile.unified_reconcile/toggle_verification)
+# que recebem Session sync — não dá pra passar AsyncSession. Migra quando os
+# services migrarem.
+
 router = APIRouter(tags=["loot"])
 
 

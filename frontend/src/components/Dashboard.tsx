@@ -805,7 +805,7 @@ export default function Dashboard({ onOpenBattles, onOpenHighscores }: {
         <CompanionStrip />
       </div>
       <div className="mt-4 flex justify-center">
-        <AdBanner variant="leaderboard" mobileVariant="mobileBanner" />
+        <AdBanner slot="dashboard" variant="leaderboard" mobileVariant="mobileBanner" />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ServerHighlightsCard onSeeAll={onOpenHighscores} />

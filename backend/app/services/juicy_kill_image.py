@@ -31,19 +31,18 @@ _RENDER_CACHE = _BACKEND / "data" / "render_cache" / "items"
 _OUTPUT = _BACKEND / "data" / "juicy_kill_images"
 _LOCKS: dict[int, asyncio.Lock] = {}
 
-# ── Cores (mesmas do battle_preview.py + tons opacos de killer/victim) ────────
+# ── Cores (alinhadas com battle_preview.py) ──────────────────────────────────
 BG_COLOR = (0x0E, 0x0F, 0x13)
-TEXT_COLOR = (0xE4, 0xE4, 0xE7)
-DIM_COLOR = (0x52, 0x52, 0x5C)
-BORDER = (0x1E, 0x1E, 0x24)
+TEXT_COLOR = (0xF5, 0xF5, 0xF7)
+DIM_COLOR = (0xA8, 0xA8, 0xB2)
+BORDER = (0x3A, 0x3A, 0x42)   # SEP_COLOR do battle_preview
 GOLD = (0xD4, 0xA3, 0x38)
 KILLER_C = (0x5B, 0x8C, 0xE4)
 VICTIM_C = (0xE4, 0x5B, 0x6B)
 ALLIANCE_C = (0x8B, 0x8B, 0x9E)
 
-# ── Escala: todas as dimensões em px são multiplicadas por S ───────────────────
-# Imagem maior = ícones e texto renderizados em alta resolução (não upscale).
-S = 1.5
+# ── Escala: mesma do battle_preview (S=2) ─────────────────────────────────────
+S = 2
 
 # Fontes
 _FONT_REGULAR = None
@@ -63,21 +62,28 @@ def _load_fonts() -> None:
     global _FONT_STATS, _FONT_STATS_LABEL, _FONT_CENTER, _FONT_ITEM_PRICE, _FONT_QTY
     if _FONT_REGULAR is not None:
         return
-    seg = r"C:\Windows\Fonts\segoeui.ttf"
-    segb = r"C:\Windows\Fonts\segoeuib.ttf"
-    cons = r"C:\Windows\Fonts\consola.ttf"
+    # Mesmas fontes do battle_preview.py: Cascadia Code, Consolas Bold, Segoe UI Bold
+    casc = r"C:\Windows\Fonts\CascadiaCode.ttf"
+    casc_vps = "/home/ziggs/ziggs/backend/data/cascadia_code.ttf"
     consb = r"C:\Windows\Fonts\consolab.ttf"
+    consb_vps = "/home/ziggs/ziggs/backend/data/consolab.ttf"
+    seg = r"C:\Windows\Fonts\segoeuib.ttf"
+    seg_vps = "/home/ziggs/ziggs/backend/data/segoeuib.ttf"
+    if not Path(casc).exists():
+        casc = casc_vps
+        consb = consb_vps
+        seg = seg_vps
     try:
-        _FONT_REGULAR = ImageFont.truetype(seg, int(14 * S))
-        _FONT_SMALL = ImageFont.truetype(seg, int(11 * S))
-        _FONT_GUILD = ImageFont.truetype(seg, int(12 * S))
-        _FONT_ITEM_PRICE = ImageFont.truetype(seg, int(10 * S))
+        _FONT_REGULAR = ImageFont.truetype(casc, int(14 * S))
+        _FONT_SMALL = ImageFont.truetype(casc, int(11 * S))
+        _FONT_SMALL_BOLD = ImageFont.truetype(casc, int(11 * S))
+        _FONT_GUILD = ImageFont.truetype(casc, int(12 * S))
+        _FONT_ITEM_PRICE = ImageFont.truetype(casc, int(10 * S))
         _FONT_STATS_LABEL = ImageFont.truetype(seg, int(11 * S))
-        _FONT_TITLE = ImageFont.truetype(segb, int(18 * S))
-        _FONT_SMALL_BOLD = ImageFont.truetype(segb, int(11 * S))
-        _FONT_QTY = ImageFont.truetype(segb, int(9 * S))
+        _FONT_TITLE = ImageFont.truetype(casc, int(18 * S))
+        _FONT_QTY = ImageFont.truetype(consb, int(9 * S))
         _FONT_STATS = ImageFont.truetype(consb, int(18 * S))
-        _FONT_CENTER = ImageFont.truetype(cons, int(12 * S))
+        _FONT_CENTER = ImageFont.truetype(consb, int(12 * S))
     except Exception:
         pass
     if _FONT_REGULAR is None:
@@ -160,8 +166,9 @@ SLOT_GAP = int(4 * S)
 GRID_COLS = 3
 GRID_W = GRID_COLS * (ICON_SIZE + SLOT_GAP)
 
-# Tamanho do render baixado do CDN (maior = ícone mais nítido em tela maior)
-CDN_ICON_SIZE = 256
+# Tamanho do render baixado do CDN — 128 é o maior size que o CDN serve
+#可靠 pra TODOS os itens (256 retorna 500 em vários). Upscale via LANCZOS.
+CDN_ICON_SIZE = 128
 
 
 async def _fetch_item_icon(item_id: str, quality: int = 0) -> Image.Image | None:
@@ -175,12 +182,15 @@ async def _fetch_item_icon(item_id: str, quality: int = 0) -> Image.Image | None
         if quality:
             params["quality"] = quality
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
                 resp = await client.get(url, params=params)
-            if resp.status_code == 200 and len(resp.content) > 300:
-                content = resp.content
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                cache_path.write_bytes(content)
+                if resp.status_code != 200 or len(resp.content) <= 300:
+                    # Retry sem size (CDN default) — alguns itens rejeitam size=128
+                    resp = await client.get(url, params={"quality": quality} if quality else None)
+                if resp.status_code == 200 and len(resp.content) > 300:
+                    content = resp.content
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_bytes(content)
         except httpx.HTTPError:
             pass
     if content is None:

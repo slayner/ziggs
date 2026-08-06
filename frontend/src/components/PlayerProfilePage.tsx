@@ -48,29 +48,6 @@ interface ZiggsKill {
 
 type Activity = ZiggsKill & { kind: "kill" | "death" };
 
-// Resultado do /players/{id}/versus — histórico de confrontos contra jogador
-// ou guilda. target_type diz se resolveu como "player" ou "guild".
-interface VersusResult {
-  target_name: string;
-  target_type: "player" | "guild" | "unknown";
-  kills: VersusEvent[];
-  deaths: VersusEvent[];
-  kills_count?: number;
-  deaths_count?: number;
-  kills_silver?: number;
-  deaths_silver?: number;
-}
-interface VersusEvent {
-  event_id: string;
-  timestamp: string;
-  fame: number;
-  silver_dropped: number;
-  is_solo: boolean;
-  participant_count: number;
-  albion_battle_id: string | null;
-  victim_guild_name: string | null;
-  killer_guild_name: string | null;
-}
 
 interface ZiggsBattle {
   public_id: string;
@@ -755,11 +732,9 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
   const [activityPage, setActivityPage] = useState(1);
   const [battlesPage, setBattlesPage] = useState(1);
   const [historyPage, setHistoryPage] = useState(1);
-  // Barra de pesquisa "X matou Y?" na aba Atividade.
-  const [versusQuery, setVersusQuery] = useState("");
-  const [versusKind, setVersusKind] = useState<"both" | "kills" | "deaths">("both");
-  const [versusResult, setVersusResult] = useState<VersusResult | null>(null);
-  const [versusLoading, setVersusLoading] = useState(false);
+  const [tabFilters, setTabFilters] = useState({ activity: "", battles: "", history: "" });
+  const [showKills, setShowKills] = useState(true);
+  const [showDeaths, setShowDeaths] = useState(true);
 
   // live update: glow no que mudou
   const prevStatsRef = useRef<{ killFame: number; deathFame: number; silver: number } | null>(null);
@@ -981,20 +956,6 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
     return (refreshStage && map[refreshStage]) || t("refreshingLabel");
   }
 
-  // Barra de pesquisa "X matou Y?" — o backend resolve se `target` é jogador
-  // ou guilda (ilike no nome do oponente, depois no snapshot de guilda do
-  // evento). `kind` filtra só kills, só deaths, ou ambos.
-  async function searchVersus(target: string, kind: "both" | "kills" | "deaths") {
-    if (!profile || !target.trim()) return;
-    setVersusLoading(true);
-    setVersusResult(null);
-    try {
-      const res = await fetch(`${API}/players/${encodeURIComponent(profile.Id)}/versus?region=${region}&kind=${kind}&target=${encodeURIComponent(target.trim())}`);
-      if (res.ok) setVersusResult(await res.json());
-    } catch { /* silencioso — barra de pesquisa, não bloqueia */ }
-    finally { setVersusLoading(false); }
-  }
-
   // Se o perfil chegou com refresh_requested_at != null (outro usuário pediu),
   // entra no polling automaticamente — todo mundo vê "atualizando" desde o
   // início, mesmo sem ter clicado.
@@ -1086,17 +1047,38 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
     setActivityPage(Math.floor(index / PROFILE_PAGE_SIZE) + 1);
   }, [activityId, activity]);
 
-  const activityTotalPages = Math.max(1, Math.ceil(activity.length / PROFILE_PAGE_SIZE));
+  const normalizeFilter = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase();
+  const includesFilter = (labels: (string | null | undefined)[], filter: string) => {
+    const needle = normalizeFilter(filter.trim());
+    return !needle || labels.some(label => label && normalizeFilter(label).includes(needle));
+  };
+  const filteredActivity = activity.filter(ev =>
+    (ev.kind === "kill" ? showKills : showDeaths) && includesFilter(
+      [profile?.Name, profile?.GuildName, ev.other_name, ev.other_guild_name, ev.other_alliance_name, ev.role],
+      tabFilters.activity,
+    )
+  );
+  const filteredBattles = (z?.battle_history ?? []).filter(b => includesFilter(
+    b.factions.length
+      ? [REGION_LABELS[lang][b.region] ?? b.region, ...b.factions.map(battleFactionTag)]
+      : [REGION_LABELS[lang][b.region] ?? b.region, b.cluster ?? t("unknownZone")],
+    tabFilters.battles,
+  ));
+  const filteredHistory = (z?.guild_history ?? []).filter(h => includesFilter(
+    [h.guild_name, h.alliance_tag], tabFilters.history,
+  ));
+
+  const activityTotalPages = Math.max(1, Math.ceil(filteredActivity.length / PROFILE_PAGE_SIZE));
   const activityPageClamped = Math.min(activityPage, activityTotalPages);
-  const activityItems = activity.slice((activityPageClamped - 1) * PROFILE_PAGE_SIZE, activityPageClamped * PROFILE_PAGE_SIZE);
+  const activityItems = filteredActivity.slice((activityPageClamped - 1) * PROFILE_PAGE_SIZE, activityPageClamped * PROFILE_PAGE_SIZE);
 
-  const battlesTotalPages = Math.max(1, Math.ceil((z?.battle_history.length ?? 0) / PROFILE_PAGE_SIZE));
+  const battlesTotalPages = Math.max(1, Math.ceil(filteredBattles.length / PROFILE_PAGE_SIZE));
   const battlesPageClamped = Math.min(battlesPage, battlesTotalPages);
-  const battlesItems = (z?.battle_history ?? []).slice((battlesPageClamped - 1) * PROFILE_PAGE_SIZE, battlesPageClamped * PROFILE_PAGE_SIZE);
+  const battlesItems = filteredBattles.slice((battlesPageClamped - 1) * PROFILE_PAGE_SIZE, battlesPageClamped * PROFILE_PAGE_SIZE);
 
-  const historyTotalPages = Math.max(1, Math.ceil((z?.guild_history.length ?? 0) / PROFILE_PAGE_SIZE));
+  const historyTotalPages = Math.max(1, Math.ceil(filteredHistory.length / PROFILE_PAGE_SIZE));
   const historyPageClamped = Math.min(historyPage, historyTotalPages);
-  const historyItems = (z?.guild_history ?? []).slice((historyPageClamped - 1) * PROFILE_PAGE_SIZE, historyPageClamped * PROFILE_PAGE_SIZE);
+  const historyItems = filteredHistory.slice((historyPageClamped - 1) * PROFILE_PAGE_SIZE, historyPageClamped * PROFILE_PAGE_SIZE);
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6" data-profile-theme={profile?.custom_profile?.theme}>
@@ -1260,7 +1242,7 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
           </Panel>
 
           {/* Abas */}
-          <div className="flex gap-1 border-b border-zinc-800 pb-0">
+          <div className="flex items-end gap-1 border-b border-zinc-800 pb-0">
             {(["activity", "battles", "history"] as const).map(tab => (
               <button
                 key={tab}
@@ -1273,78 +1255,41 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
                   tab === "battles" ? `${t("battles")} (${z.battle_history.length})` : t("tabGuildHistory")}
               </button>
             ))}
+            <div className="ml-auto mb-1 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 px-2.5 py-1.5">
+              <input
+                type="search"
+                value={tabFilters[activeTab]}
+                onChange={e => {
+                  setTabFilters(filters => ({ ...filters, [activeTab]: e.target.value }));
+                  if (activeTab === "activity") setActivityPage(1);
+                  if (activeTab === "battles") setBattlesPage(1);
+                  if (activeTab === "history") setHistoryPage(1);
+                }}
+                placeholder={t("filterPlaceholder")}
+                className="w-44 bg-transparent text-xs text-zinc-100 outline-none placeholder:text-zinc-600"
+              />
+              {activeTab === "activity" && <>
+                <span className="h-3.5 w-px shrink-0 bg-zinc-800" />
+                <button
+                  onClick={() => { setShowKills(v => !v); setActivityPage(1); }}
+                  className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${showKills ? "bg-green-500/20 text-green-400 border border-green-500/40" : "bg-zinc-800/50 text-zinc-500 border border-zinc-700"}`}
+                >
+                  {t("versusKills")}
+                </button>
+                <button
+                  onClick={() => { setShowDeaths(v => !v); setActivityPage(1); }}
+                  className={`rounded-md px-2 py-0.5 text-[10px] font-medium transition-colors ${showDeaths ? "bg-red-500/20 text-red-400 border border-red-500/40" : "bg-zinc-800/50 text-zinc-500 border border-zinc-700"}`}
+                >
+                  {t("versusDeaths")}
+                </button>
+              </>}
+            </div>
           </div>
 
           <div className="space-y-2">
             {activeTab === "activity" && (
               <>
-                {/* Barra de pesquisa "X matou Y?" + filtro kills/deaths */}
-                <div className="flex gap-2 pb-2">
-                  <input
-                    type="text"
-                    value={versusQuery}
-                    onChange={e => setVersusQuery(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") searchVersus(versusQuery, versusKind); }}
-                    placeholder={t("versusPlaceholder")}
-                    className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-amber-500 focus:outline-none"
-                  />
-                  <select
-                    value={versusKind}
-                    onChange={e => setVersusKind(e.target.value as "both" | "kills" | "deaths")}
-                    className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-300 focus:border-amber-500 focus:outline-none"
-                  >
-                    <option value="both">{t("versusFilterBoth")}</option>
-                    <option value="kills">{t("versusFilterKills")}</option>
-                    <option value="deaths">{t("versusFilterDeaths")}</option>
-                  </select>
-                  <button
-                    onClick={() => searchVersus(versusQuery, versusKind)}
-                    disabled={versusLoading || !versusQuery.trim()}
-                    className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-500 disabled:opacity-40"
-                  >
-                    {versusLoading ? "…" : t("versusBtn")}
-                  </button>
-                </div>
-                {versusResult && (
-                  <div className="rounded-lg border border-zinc-700 bg-zinc-900/80 px-4 py-3 text-sm">
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="font-medium text-zinc-200">
-                        {versusResult.target_type === "guild" ? (
-                          <span className="text-amber-400">[{versusResult.target_name}]</span>
-                        ) : versusResult.target_name}
-                        {" — "}
-                        <span className="text-blue-400">{versusResult.kills_count ?? 0}</span> {t("versusKills")} · <span className="text-red-400">{versusResult.deaths_count ?? 0}</span> {t("versusDeaths")}
-                      </span>
-                      <button onClick={() => { setVersusResult(null); setVersusQuery(""); }} className="text-xs text-zinc-500 hover:text-zinc-300">✕</button>
-                    </div>
-                    {((versusResult.kills_silver ?? 0) > 0 || (versusResult.deaths_silver ?? 0) > 0) && (
-                      <div className="mb-2 text-xs text-zinc-500">
-                        {silver(versusResult.kills_silver ?? 0)} {t("versusSilverGained")} · {silver(versusResult.deaths_silver ?? 0)} {t("versusSilverLost")}
-                      </div>
-                    )}
-                    {versusResult.kills.length === 0 && versusResult.deaths.length === 0 && (
-                      <p className="text-xs text-zinc-600">{t("versusNoHistory")}</p>
-                    )}
-                    {([
-                      ...versusResult.kills.map(e => ({ ...e, kind: "kill" as const })),
-                      ...versusResult.deaths.map(e => ({ ...e, kind: "death" as const })),
-                    ] as (VersusEvent & { kind: "kill" | "death" })[])
-                      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                      .slice(0, 10)
-                      .map((e, i) => (
-                        <div key={i} className="flex items-center gap-2 border-t border-zinc-800 py-1.5 text-xs">
-                          <span className={`font-medium ${e.kind === "kill" ? "text-blue-400" : "text-red-400"}`}>
-                            {e.kind === "kill" ? "↑" : "↓"}
-                          </span>
-                          <span className="tabular-nums text-zinc-500">{dateUTC(e.timestamp)}</span>
-                          <span className="flex-1 text-zinc-400">{silver(e.fame)}</span>
-                          {e.silver_dropped >= JUICY_SILVER_THRESHOLD && <span className="text-amber-400 font-bold">JUICY</span>}
-                          {e.silver_dropped > 0 && <span className="text-zinc-600">{silver(e.silver_dropped)}</span>}
-                        </div>
-                      ))}
-                  </div>
-                )}
-                {activity.length === 0
+                {filteredActivity.length === 0
                   ? <p className="py-8 text-center text-sm text-zinc-600">{t("noActivityYet")}</p>
                   : <>
                     {activityItems.map(ev => (
@@ -1362,7 +1307,7 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
               </>
             )}
             {activeTab === "battles" && (
-              z.battle_history.length === 0
+              filteredBattles.length === 0
                 ? <p className="py-8 text-center text-sm text-zinc-600">{t("noProfileBattlesYet")}</p>
                 : <>
                   {battlesItems.map(b => (
@@ -1376,7 +1321,7 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
                 </>
             )}
             {activeTab === "history" && (
-              z.guild_history.length === 0
+              filteredHistory.length === 0
                 ? <p className="py-8 text-center text-sm text-zinc-600">{t("noGuildHistoryYet")}</p>
                 : <>
                   {historyItems.map((h, i) => <GuildHistoryRow key={i} h={h} />)}

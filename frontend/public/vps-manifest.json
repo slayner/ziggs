@@ -1,0 +1,28 @@
+{
+  "vps": [
+    {
+      "id": "nj1",
+      "label": "New Jersey",
+      "country": "USA",
+      "endpoint": "207.148.20.142:51820",
+      "server_pubkey": "6jgdUljkkmhSs3ua8fIQgktaq5FCBkeVDIYSCGSEFx0=",
+      "ping_url": "http://207.148.20.142:8080/vps-ping.json"
+    },
+    {
+      "id": "tor1",
+      "label": "Toronto",
+      "country": "Canada",
+      "endpoint": "149.248.60.6:51820",
+      "server_pubkey": "UJ+m+kLwnV7pHjkRiASQntN788pVnPCWJ+osHlAkp0Q=",
+      "ping_url": "http://149.248.60.6:8080/vps-ping.json"
+    },
+    {
+      "id": "ams1",
+      "label": "Amsterdam",
+      "country": "Netherlands",
+      "endpoint": "95.179.145.72:51820",
+      "server_pubkey": "T5ejpIQN/P23+TUtkXG7gCv3WKDdiy+tIxvGOA54ujs=",
+      "ping_url": "http://95.179.145.72:8080/vps-ping.json"
+    }
+  ]
+}

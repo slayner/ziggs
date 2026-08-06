@@ -38,9 +38,10 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import Battle, BattleIdProbe
 from app.services.albion_gate import OTHER, albion_scope, slot
 from app.services.battle_tracker import REPROCESS_REASON_SWEEPER, upsert_battle_light
@@ -179,7 +180,7 @@ async def _probe_detail(client: httpx.AsyncClient, host: str, albion_id: str) ->
 
 
 async def _probe_and_capture(
-    client: httpx.AsyncClient, db: Session, db_lock: asyncio.Lock,
+    client: httpx.AsyncClient, db: AsyncSession, db_lock: asyncio.Lock,
     region: str, albion_id: int,
 ) -> bool:
     """Sonda o candidato no host da SUA região (o número só faz sentido na
@@ -196,13 +197,13 @@ async def _probe_and_capture(
             try:
                 battle: Battle | None = None
                 if status == "found" and raw is not None:
-                    battle = upsert_battle_light(db, raw, region)
+                    battle = await upsert_battle_light(db, raw, region)
                     if battle is not None:
                         battle.reprocess_reason = REPROCESS_REASON_SWEEPER
                     else:
                         status = "missing"
 
-                existing = db.get(BattleIdProbe, aid)
+                existing = await db.get(BattleIdProbe, aid)
                 if existing is None:
                     db.add(BattleIdProbe(
                         albion_id=aid, status=status,
@@ -214,35 +215,35 @@ async def _probe_and_capture(
                     existing.region = region
                     existing.battle_id = battle.id if battle else None
                     existing.probed_at = datetime.now(timezone.utc)
-                db.commit()
+                await db.commit()
                 return battle is not None
             except OperationalError as e:
-                db.rollback()
+                await db.rollback()
                 if "database is locked" not in str(e).lower() or attempt == DB_LOCK_RETRIES - 1:
                     raise
                 await asyncio.sleep(2 ** attempt)
             except Exception:
-                db.rollback()
+                await db.rollback()
                 raise
         raise AssertionError("unreachable")
 
 
 def _generate_candidates_sync(active_companions: int = 0) -> list[tuple[str, int]]:
-    db = SessionLocal()
+    db = SyncSessionLocal()
     try:
         return generate_candidates(db, active_companions)
     finally:
         db.close()
 
 
-async def sweep_cycle(client: httpx.AsyncClient, db: Session) -> dict:
+async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
     # Companion-aware: companions ativos sondam os mesmos buracos de graça.
     # Reduzir o teto aqui libera rate limit pro backfill/warmer sem perder
     # cobertura (o companion cobre o que o sweeper pula).
     active = 0
     try:
         from app.services.companion_scan import count_active_companions
-        active = count_active_companions(db)
+        active = await count_active_companions(db)
     except Exception:
         pass
     candidates = await asyncio.to_thread(_generate_candidates_sync, active)
@@ -274,15 +275,13 @@ async def sweep_cycle(client: httpx.AsyncClient, db: Session) -> dict:
 async def run_forever() -> None:
     log.info("battle_sweeper: iniciando (below_min=%d, interval=%ds)", BELOW_MIN_WINDOW, CYCLE_INTERVAL)
     while True:
-        db = SessionLocal()
-        try:
-            async with make_client() as client:
-                async with albion_scope(OTHER):
-                    await sweep_cycle(client, db)
-        except Exception as e:
-            log.error("battle_sweeper: erro no ciclo: %s", e)
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                async with make_client() as client:
+                    async with albion_scope(OTHER):
+                        await sweep_cycle(client, db)
+            except Exception as e:
+                log.error("battle_sweeper: erro no ciclo: %s", e)
         await asyncio.sleep(CYCLE_INTERVAL)
 
 

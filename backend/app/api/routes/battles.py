@@ -1,15 +1,17 @@
 """Rotas públicas de battle tracker — sem escopar por guilda."""
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.db import SyncSessionLocal
 from app.models.battles import Battle, BattleGuild, BattleKillEvent, BattleParticipant, BattleSide
 from app.models.catalog import Weapon
 from app.models.dashboard_cache import DashboardCache
@@ -55,13 +57,13 @@ _weapon_fn_cache: dict[str, str] | None = None
 _weapon_fn_expires_at: float = 0.0
 
 
-def _weapon_function_map(db: Session) -> dict[str, str]:
+async def _weapon_function_map(db: AsyncSession) -> dict[str, str]:
     global _weapon_fn_cache, _weapon_fn_expires_at
     now = time.monotonic()
     if _weapon_fn_cache is not None and now < _weapon_fn_expires_at:
         return _weapon_fn_cache
     out: dict[str, str] = {}
-    for item_id, fn in db.execute(select(Weapon.item_id, Weapon.invisible_function)).all():
+    for item_id, fn in (await db.execute(select(Weapon.item_id, Weapon.invisible_function))).all():
         if fn:
             out[_wbase(item_id)] = fn
     _weapon_fn_cache = out
@@ -118,30 +120,30 @@ def _aware(dt: datetime) -> datetime:
 _BIG_GUILD_PLAYER_CAP = 5  # com mais de 4 guildas na luta, esconde guildas "zerg" maiores que isso
 
 
-def _factions_summary(db: Session, battle_id: int) -> list[dict]:
+async def _factions_summary(db: AsyncSession, battle_id: int) -> list[dict]:
     """Resumo combinado das guildas/alianças que lutaram (exclui o bucket de
     ratos), ordenado por kills desc — usado pra etiqueta centralizada da
     listagem (substitui o antigo "X vs Y" de contagem de jogadores)."""
-    real_side_ids = db.scalars(
+    real_side_ids = (await db.scalars(
         select(BattleSide.id).where(BattleSide.battle_id == battle_id, BattleSide.is_rats == False)
-    ).all()
+    )).all()
     if not real_side_ids:
         return []
 
-    guilds = db.scalars(
+    guilds = (await db.scalars(
         select(BattleGuild).where(
             BattleGuild.battle_id == battle_id, BattleGuild.side_id.in_(real_side_ids)
         )
-    ).all()
+    )).all()
     if not guilds:
         return []
 
     player_counts = dict(
-        db.execute(
+        (await db.execute(
             select(BattleParticipant.guild_id, func.count(BattleParticipant.id))
             .where(BattleParticipant.battle_id == battle_id, BattleParticipant.guild_id.isnot(None))
             .group_by(BattleParticipant.guild_id)
-        ).all()
+        )).all()
     )
 
     return _aggregate_factions(guilds, player_counts)
@@ -192,7 +194,7 @@ def _aggregate_factions(
     return rows
 
 
-def _factions_summary_bulk(db: Session, battle_ids: list[int]) -> dict[int, list[dict]]:
+async def _factions_summary_bulk(db: AsyncSession, battle_ids: list[int]) -> dict[int, list[dict]]:
     """Versão em lote de _factions_summary: 3 queries totais pra N batalhas,
     em vez de 3 por batalha. Pra 10 batalhas na página: 30 queries → 3.
 
@@ -203,11 +205,11 @@ def _factions_summary_bulk(db: Session, battle_ids: list[int]) -> dict[int, list
     if not ids:
         return {}
     # 1 query: sides reais (não-ratos) por batalha.
-    real_sides = db.execute(
+    real_sides = (await db.execute(
         select(BattleSide.id, BattleSide.battle_id).where(
             BattleSide.battle_id.in_(ids), BattleSide.is_rats == False
         )
-    ).all()
+    )).all()
     sides_by_battle: dict[int, list[int]] = {}
     for side_id, bid in real_sides:
         sides_by_battle.setdefault(bid, []).append(side_id)
@@ -220,16 +222,16 @@ def _factions_summary_bulk(db: Session, battle_ids: list[int]) -> dict[int, list
     # toda busca global e listagem de batalha, não só aqui). battle_id já é
     # indexado e a lista de ids já está em mãos; o resultado é idêntico.
     real_side_ids = {sid for sides in sides_by_battle.values() for sid in sides}
-    guilds = db.scalars(
+    guilds = (await db.scalars(
         select(BattleGuild).where(BattleGuild.battle_id.in_(ids))
-    ).all()
+    )).all()
     guilds_by_battle: dict[int, list[BattleGuild]] = {}
     for g in guilds:
         if g.side_id in real_side_ids:
             guilds_by_battle.setdefault(g.battle_id, []).append(g)
 
     # 3 query: contagem de jogadores por guilda, agrupada por (battle, guild).
-    player_counts_rows = db.execute(
+    player_counts_rows = (await db.execute(
         select(
             BattleParticipant.battle_id, BattleParticipant.guild_id,
             func.count(BattleParticipant.id),
@@ -238,7 +240,7 @@ def _factions_summary_bulk(db: Session, battle_ids: list[int]) -> dict[int, list
             BattleParticipant.battle_id.in_(ids), BattleParticipant.guild_id.isnot(None)
         )
         .group_by(BattleParticipant.battle_id, BattleParticipant.guild_id)
-    ).all()
+    )).all()
     # Chave (battle_id, guild_id) → count.
     pc_by_battle: dict[int, dict[str, int]] = {}
     for bid, gid, cnt in player_counts_rows:
@@ -255,7 +257,7 @@ def _factions_summary_bulk(db: Session, battle_ids: list[int]) -> dict[int, list
 
 
 @router.get("/active-players")
-def active_players(db: Session = Depends(deps.db_session)):
+async def active_players(db: AsyncSession = Depends(deps.async_db_session)):
     """Jogadores distintos (kill ou morte) nos últimos 7 dias, por região +
     global, comparado com os 7 dias anteriores. A janela anterior é
     recalculada do ledger (PlayerKillEvent), mas o HISTÓRICO ponto-a-ponto
@@ -267,7 +269,7 @@ def active_players(db: Session = Depends(deps.db_session)):
     até o 1º snapshot existir."""
     from app.services.player_count_snapshot import CARDS_KEY
 
-    cached = db.get(DashboardCache, CARDS_KEY)
+    cached = await db.get(DashboardCache, CARDS_KEY)
     if cached is not None:
         return cached.payload
 
@@ -275,18 +277,26 @@ def active_players(db: Session = Depends(deps.db_session)):
     week_start = now - timedelta(days=7)
     prev_start = now - timedelta(days=14)
 
-    def stat(region: str | None) -> dict:
-        current = active_player_count(db, region, week_start, now)
-        previous = active_player_count(db, region, prev_start, week_start)
+    def _stat(sync_db, region: str | None) -> dict:
+        current = active_player_count(sync_db, region, week_start, now)
+        previous = active_player_count(sync_db, region, prev_start, week_start)
         delta_pct = round((current - previous) / previous * 100) if previous else None
         return {"current": current, "previous": previous, "delta_pct": delta_pct}
 
-    return {
-        "americas": stat("americas"),
-        "europe": stat("europe"),
-        "asia": stat("asia"),
-        "global": stat(None),
-    }
+    # ponytail: active_player_count (player_activity.py) ainda é sync — migra
+    # quando player_activity migrar. Uma sync session pros 4 counts (region×4).
+    def _compute():
+        sdb = SyncSessionLocal()
+        try:
+            return {
+                "americas": _stat(sdb, "americas"),
+                "europe": _stat(sdb, "europe"),
+                "asia": _stat(sdb, "asia"),
+                "global": _stat(sdb, None),
+            }
+        finally:
+            sdb.close()
+    return await asyncio.to_thread(_compute)
 
 
 _ACTIVE_HISTORY_RANGE_DAYS = {"1m": 31, "6m": 183, "1y": 366}
@@ -294,12 +304,12 @@ _ACTIVE_HISTORY_REGIONS = ("global", "americas", "europe", "asia")
 
 
 @router.get("/active-players/history")
-def active_players_history(range: str = "6m", db: Session = Depends(deps.db_session)):
+async def active_players_history(range: str = "6m", db: AsyncSession = Depends(deps.async_db_session)):
     """Série histórica pro gráfico do dashboard — pontos coletados a cada
     15min por services/player_count_snapshot.py. `collected_since` ignora o
     filtro de range: é a data do PRIMEIRO snapshot já gravado, pra avisar o
-    usuário desde quando a coleta existe mesmo que ele esteja olhando "1 mês"."""
-    since_row = db.execute(select(func.min(PlayerCountSnapshot.recorded_at))).scalar_one_or_none()
+    usuário desde quando a coleta existe mesmo que ele esteje olhando "1 mês"."""
+    since_row = (await db.execute(select(func.min(PlayerCountSnapshot.recorded_at)))).scalar_one_or_none()
 
     q = select(PlayerCountSnapshot.region, PlayerCountSnapshot.count, PlayerCountSnapshot.recorded_at)
     days = _ACTIVE_HISTORY_RANGE_DAYS.get(range)
@@ -309,7 +319,7 @@ def active_players_history(range: str = "6m", db: Session = Depends(deps.db_sess
     q = q.order_by(PlayerCountSnapshot.recorded_at)
 
     series: dict[str, list[dict]] = {r: [] for r in _ACTIVE_HISTORY_REGIONS}
-    for region, count, recorded_at in db.execute(q).all():
+    for region, count, recorded_at in (await db.execute(q)).all():
         if region in series:
             series[region].append({"t": int(_aware(recorded_at).timestamp() * 1000), "count": count})
 
@@ -348,7 +358,7 @@ def _bucket_avg(rows: list[tuple[datetime, int]], max_points: int) -> list[dict]
 
 
 @router.get("/gold/history")
-def gold_price_history(range: str = "6m", db: Session = Depends(deps.db_session)):
+async def gold_price_history(range: str = "6m", db: AsyncSession = Depends(deps.async_db_session)):
     """Série histórica da cotação prata↔ouro por região — nosso próprio
     backfill (services/gold_price.py), não mais fetch direto do browser pra
     AODP. Cache em memória por range: o range 'all' varre ~210k linhas, não
@@ -358,7 +368,7 @@ def gold_price_history(range: str = "6m", db: Session = Depends(deps.db_session)
     if cached and (now_mono - cached[0]) < _GOLD_CACHE_TTL:
         return cached[1]
 
-    since_row = db.execute(select(func.min(GoldPriceSnapshot.recorded_at))).scalar_one_or_none()
+    since_row = (await db.execute(select(func.min(GoldPriceSnapshot.recorded_at)))).scalar_one_or_none()
 
     q = select(GoldPriceSnapshot.region, GoldPriceSnapshot.recorded_at, GoldPriceSnapshot.price)
     days = _GOLD_RANGE_DAYS.get(range)
@@ -368,7 +378,7 @@ def gold_price_history(range: str = "6m", db: Session = Depends(deps.db_session)
     q = q.order_by(GoldPriceSnapshot.region, GoldPriceSnapshot.recorded_at)
 
     by_region: dict[str, list[tuple[datetime, int]]] = {r: [] for r in _GOLD_REGIONS}
-    for region, recorded_at, price in db.execute(q).all():
+    for region, recorded_at, price in (await db.execute(q)).all():
         if region in by_region:
             by_region[region].append((recorded_at, price))
 
@@ -411,7 +421,7 @@ def lethal_with_healing_filter() -> list:
     ]
 
 
-def latest_guild_names(db: Session, guild_ids: list[str]) -> dict[str, tuple[str, str | None]]:
+async def latest_guild_names(db: AsyncSession, guild_ids: list[str]) -> dict[str, tuple[str, str | None]]:
     """Nome/aliança mais recentes de cada guilda (podem variar entre batalhas)
     — busca separada da agregação principal porque incluir essas colunas no
     GROUP BY quebra no Postgres sem agregação. Reaproveitado pelo ranking
@@ -419,7 +429,7 @@ def latest_guild_names(db: Session, guild_ids: list[str]) -> dict[str, tuple[str
     if not guild_ids:
         return {}
     out: dict[str, tuple[str, str | None]] = {}
-    for gid, gname, aname in db.execute(
+    for gid, gname, aname in await db.execute(
         select(BattleGuild.albion_guild_id, BattleGuild.guild_name, BattleGuild.alliance_name)
         .join(Battle, Battle.id == BattleGuild.battle_id)
         .where(BattleGuild.albion_guild_id.in_(guild_ids))
@@ -449,7 +459,7 @@ def eligible_guild_battles_subquery():
 
 
 @router.get("/highlights")
-def battle_highlights(regions: str | None = None, db: Session = Depends(deps.db_session)):
+async def battle_highlights(regions: str | None = None, db: AsyncSession = Depends(deps.async_db_session)):
     """Ranking semanal (reseta domingo 00:00 UTC) de fama PvP por guilda. Só
     conta fama de batalha elegível: a guilda teve mais de 15 jogadores NESSA
     luta (limiar é por guilda, não pela batalha toda), a luta é letal (ver
@@ -462,9 +472,9 @@ def battle_highlights(regions: str | None = None, db: Session = Depends(deps.db_
     se o cache ainda não esquentou (bem no boot)."""
     from app.services.dashboard_cache import REGIONS
     region_list = [r.strip() for r in regions.split(",") if r.strip()] if regions else list(REGIONS)
-    cached = {row.key: row.payload for row in db.execute(
+    cached = {row.key: row.payload for row in (await db.execute(
         select(DashboardCache).where(DashboardCache.key.in_([f"highlights:{r}" for r in region_list]))
-    ).scalars()}
+    )).scalars()}
     if len(cached) == len(region_list):
         merged: dict[str, dict] = {}
         week_start_iso = None
@@ -487,7 +497,7 @@ def battle_highlights(regions: str | None = None, db: Session = Depends(deps.db_
 
     eligible_guild_battles = eligible_guild_battles_subquery()
 
-    fame_rows = db.execute(
+    fame_rows = (await db.execute(
         select(
             BattleGuild.albion_guild_id,
             func.sum(BattleGuild.kill_fame).label("fame"),
@@ -503,7 +513,7 @@ def battle_highlights(regions: str | None = None, db: Session = Depends(deps.db_
         .group_by(BattleGuild.albion_guild_id)
         .order_by(func.sum(BattleGuild.kill_fame).desc())
         .limit(10)
-    ).all()
+    )).all()
     if not fame_rows:
         return {"week_start": week_start.isoformat(), "guilds": []}
 
@@ -511,7 +521,7 @@ def battle_highlights(regions: str | None = None, db: Session = Depends(deps.db_
     fame_by_id = {r.albion_guild_id: int(r.fame or 0) for r in fame_rows}
     avg_players_by_id = {r.albion_guild_id: round(r.avg_players or 0) for r in fame_rows}
 
-    latest_by_id = latest_guild_names(db, guild_ids)
+    latest_by_id = await latest_guild_names(db, guild_ids)
 
     return {
         "week_start": week_start.isoformat(),
@@ -529,7 +539,7 @@ def battle_highlights(regions: str | None = None, db: Session = Depends(deps.db_
 
 
 @router.get("")
-def list_battles(
+async def list_battles(
     limit: int = 25,
     offset: int = 0,
     search: str | None = None,
@@ -538,7 +548,7 @@ def list_battles(
     min_players: int = 5,
     min_kills: int = 5,
     regions: str | None = None,  # CSV de Battle.region (americas/europe/asia) — servidor(es) escolhido(s) nas configurações
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Lista de batalhas — só consulta a nossa base, nunca a API do Albion.
     Os 3 filtros (data, jogadores mínimos, kills mínimas) sempre se combinam
@@ -553,7 +563,7 @@ def list_battles(
         and min_players == DEFAULT_MIN_PLAYERS and min_kills == DEFAULT_MIN_KILLS
     )
     if cacheable:
-        cached_row = db.get(DashboardCache, "recent_battles")
+        cached_row = await db.get(DashboardCache, "recent_battles")
         if cached_row is not None:
             payload = cached_row.payload
             # ponytail: defesa contra payload chegar como JSON-texto cru
@@ -622,16 +632,16 @@ def list_battles(
             or_(norm_sql(BattleGuild.guild_name).like(term), norm_sql(BattleGuild.alliance_name).like(term))
         )
         player_battle_ids = select(BattleParticipant.battle_id).where(norm_sql(BattleParticipant.name).like(term))
-        matching_battle_ids = set(db.scalars(guild_battle_ids).all()) | set(db.scalars(player_battle_ids).all())
+        matching_battle_ids = set((await db.scalars(guild_battle_ids)).all()) | set((await db.scalars(player_battle_ids)).all())
         q = q.where(or_(Battle.id.in_(matching_battle_ids), Battle.cluster.ilike(f"%{search}%")))
 
-    total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
-    battles = db.scalars(q.order_by(Battle.start_time.desc()).limit(limit).offset(offset)).all()
+    total = await db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    battles = (await db.scalars(q.order_by(Battle.start_time.desc()).limit(limit).offset(offset))).all()
 
     # Toda batalha que aparece no feed ganha um link público (se ainda não tiver)
     # — em lote, um commit só pra página inteira, não um por batalha (ver
     # get_or_create_groups_bulk).
-    groups = battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
+    groups = await battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
 
     out = []
     for b in battles:
@@ -646,24 +656,24 @@ def list_battles(
             "cluster": b.cluster,
             "players_total": b.players_total,
             "is_zvz": b.is_zvz,
-            "factions": _factions_summary(db, b.id),
+            "factions": await _factions_summary(db, b.id),
         })
 
     return {"battles": out, "total": total}
 
 
-def _combined_detail(db: Session, battle_ids: list[int], public_id: str) -> dict:
+async def _combined_detail(db: AsyncSession, battle_ids: list[int], public_id: str) -> dict:
     """Visão de detalhe — recalcula lados ao vivo a partir dos eventos das
     batalhas (1 ou várias combinadas), pra ficar correto mesmo quando o
     grupo junta mais de uma KB."""
-    battles = db.scalars(select(Battle).where(Battle.id.in_(battle_ids))).all()
+    battles = (await db.scalars(select(Battle).where(Battle.id.in_(battle_ids)))).all()
     if not battles:
         raise HTTPException(404, "Batalha não encontrada")
     battles.sort(key=lambda b: _aware(b.start_time))
 
-    participants = db.scalars(
+    participants = (await db.scalars(
         select(BattleParticipant).where(BattleParticipant.battle_id.in_(battle_ids))
-    ).all()
+    )).all()
 
     merged: dict[str, dict] = {}
     pid_to_player: dict[int, str] = {}
@@ -695,7 +705,7 @@ def _combined_detail(db: Session, battle_ids: list[int], public_id: str) -> dict
             if build not in m["equipment"]:
                 m["equipment"].append(build)
 
-    events = db.scalars(select(BattleKillEvent).where(BattleKillEvent.battle_id.in_(battle_ids))).all()
+    events = (await db.scalars(select(BattleKillEvent).where(BattleKillEvent.battle_id.in_(battle_ids)))).all()
     kills_between: dict[tuple[str, str], int] = {}
     for ev in events:
         k = pid_to_player.get(ev.killer_participant_id) if ev.killer_participant_id else None
@@ -710,7 +720,7 @@ def _combined_detail(db: Session, battle_ids: list[int], public_id: str) -> dict
 
     factions, player_faction = battle_sides.build_factions(merged)
     analysis = battle_sides.analyze(factions, kills_between)
-    weapon_fn = _weapon_function_map(db)
+    weapon_fn = await _weapon_function_map(db)
 
     def p_payload(row: dict, side_label: str) -> dict:
         return {
@@ -846,15 +856,15 @@ def _combined_detail(db: Session, battle_ids: list[int], public_id: str) -> dict
 
 
 @router.get("/by-code/{public_id}")
-def get_battle_by_code(public_id: str, db: Session = Depends(deps.db_session)):
-    battle_ids = battle_groups.get_group_battle_ids(db, public_id)
+async def get_battle_by_code(public_id: str, db: AsyncSession = Depends(deps.async_db_session)):
+    battle_ids = await battle_groups.get_group_battle_ids(db, public_id)
     if not battle_ids:
         raise HTTPException(404, "Link não encontrado")
-    return _combined_detail(db, battle_ids, public_id)
+    return await _combined_detail(db, battle_ids, public_id)
 
 
 @router.get("/prices")
-async def get_battle_item_prices(item_ids: str, db: Session = Depends(deps.db_session)):
+async def get_battle_item_prices(item_ids: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Preço aproximado de itens pra calcular valor de loot em batalhas —
     cacheado pra sempre no banco (ver services.prices.get_battle_prices),
     não bate na API externa de novo depois da primeira consulta de cada item."""
@@ -863,7 +873,7 @@ async def get_battle_item_prices(item_ids: str, db: Session = Depends(deps.db_se
 
 
 @router.post("/resolve")
-async def resolve_battles(albion_ids: list[str] = Body(..., embed=True), db: Session = Depends(deps.db_session)):
+async def resolve_battles(albion_ids: list[str] = Body(..., embed=True), db: AsyncSession = Depends(deps.async_db_session)):
     """Recebe 1+ IDs crus do Albion (de qualquer região), acha/cria a batalha
     correspondente (na nossa base ou direto na API do Albion) e devolve o
     detalhe já combinado num único link público."""
@@ -889,8 +899,8 @@ async def resolve_battles(albion_ids: list[str] = Body(..., embed=True), db: Ses
             "Nenhuma das batalhas informadas foi encontrada — os IDs podem estar errados, ou são antigas demais para a API do Albion.",
         )
 
-    group = battle_groups.get_or_create_group(db, [b.id for b in resolved])
-    detail = _combined_detail(db, [b.id for b in resolved], group.public_id)
+    group = await battle_groups.get_or_create_group(db, [b.id for b in resolved])
+    detail = await _combined_detail(db, [b.id for b in resolved], group.public_id)
     # IDs que o usuário colou junto mas não resolveram (não existem mais na API
     # do Albion, geralmente por serem antigos demais) — o frontend ignora e
     # mostra esses como aviso ao lado da batalha combinada que SIM carregou.
@@ -899,7 +909,7 @@ async def resolve_battles(albion_ids: list[str] = Body(..., embed=True), db: Ses
 
 
 @router.post("/merge")
-def merge_battles(public_ids: list[str] = Body(..., embed=True), db: Session = Depends(deps.db_session)):
+async def merge_battles(public_ids: list[str] = Body(..., embed=True), db: AsyncSession = Depends(deps.async_db_session)):
     """Combina 2+ batalhas já conhecidas (pelos public_id mostrados na listagem)
     num único link — usado pelo modo "Multi" da listagem, onde o usuário
     seleciona várias brackets à mão. Sem chamada à API do Albion (diferente
@@ -910,25 +920,37 @@ def merge_battles(public_ids: list[str] = Body(..., embed=True), db: Session = D
 
     battle_ids: list[int] = []
     for public_id in ids:
-        members = battle_groups.get_group_battle_ids(db, public_id)
+        members = await battle_groups.get_group_battle_ids(db, public_id)
         if not members:
             raise HTTPException(404, f"Batalha não encontrada: {public_id}")
         battle_ids.extend(members)
     battle_ids = list(dict.fromkeys(battle_ids))
 
-    group = battle_groups.get_or_create_group(db, battle_ids)
-    return _combined_detail(db, battle_ids, group.public_id)
+    group = await battle_groups.get_or_create_group(db, battle_ids)
+    return await _combined_detail(db, battle_ids, group.public_id)
+
+
+# ponytail: render_battle_preview (battle_preview.py) ainda é sync e toma Session
+# — migra quando battle_preview migrar. Sessão sync só pra essa chamada, em thread.
+async def _render_preview(public_id: str):
+    def _run():
+        sdb = SyncSessionLocal()
+        try:
+            return render_battle_preview(sdb, public_id)
+        finally:
+            sdb.close()
+    return await asyncio.to_thread(_run)
 
 
 @router.get("/preview/{public_id}.png")
-def battle_preview_png(public_id: str, db: Session = Depends(deps.db_session)):
+async def battle_preview_png(public_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Imagem PNG de resumo da batalha pra embeds do Discord. Cacheada em disco
     (data/battle_preview_cache/) — batalhas são imutáveis, nunca regenera."""
     from fastapi.responses import FileResponse
 
     if not public_id or len(public_id) > 20:
         raise HTTPException(400, "código inválido")
-    path = render_battle_preview(db, public_id)
+    path = await _render_preview(public_id)
     if path is None:
         raise HTTPException(404, "batalha não encontrada")
     return FileResponse(path, media_type="image/png",
@@ -936,7 +958,7 @@ def battle_preview_png(public_id: str, db: Session = Depends(deps.db_session)):
 
 
 @router.get("/embed/{public_id}")
-def battle_embed_html(public_id: str, db: Session = Depends(deps.db_session)):
+async def battle_embed_html(public_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     """HTML mínimo com OG tags pra gerar embed no Discord quando alguém cola o
     link da batalha. O Discord crawler lê as meta tags (og:image aponta pro
     /battles/preview/{public_id}.png) e mostra o card com a imagem de resumo.
@@ -951,13 +973,13 @@ def battle_embed_html(public_id: str, db: Session = Depends(deps.db_session)):
 
     if not public_id or len(public_id) > 20:
         raise HTTPException(400, "código inválido")
-    battle_ids = battle_groups.get_group_battle_ids(db, public_id)
+    battle_ids = await battle_groups.get_group_battle_ids(db, public_id)
     if not battle_ids:
         raise HTTPException(404, "batalha não encontrada")
 
     s = get_settings()
     # Garante que o PNG existe (render sob demanda na 1ª vez)
-    path = render_battle_preview(db, public_id)
+    path = await _render_preview(public_id)
 
     # Altura real do PNG (dinâmica conforme nº de factions)
     img_h = 250
@@ -967,7 +989,7 @@ def battle_embed_html(public_id: str, db: Session = Depends(deps.db_session)):
             img_h = img.height
 
     # Título: dados básicos da batalha pra mostrar no card do Discord
-    b = db.get(Battle, battle_ids[0])
+    b = await db.get(Battle, battle_ids[0])
     title = f"{b.players_total} players · {b.kill_count} kills" if b else "Battle"
     if b and b.cluster:
         title += f" · {b.cluster}"

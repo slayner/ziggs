@@ -8,11 +8,11 @@ from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.api.routes.battles import _as_builds, _classify_role, _factions_summary, _factions_summary_bulk, _weapon_function_map, _wbase
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.battles import Battle, BattleGuild, BattleParticipant, BattleSide
 from app.models.dashboard_cache import DashboardCache
 from app.models.guild_profiles import AllianceProfile, GuildProfile
@@ -29,14 +29,14 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _deleted_set(db: Session, entity_type: str, ids: list[str]) -> set[str]:
+async def _deleted_set(db: AsyncSession, entity_type: str, ids: list[str]) -> set[str]:
     """Retorna conjunto de albion_ids marcados como excluídos."""
     if not ids:
         return set()
-    return set(db.scalars(
+    return set((await db.scalars(
         select(DeletedProfile.albion_id)
         .where(DeletedProfile.entity_type == entity_type, DeletedProfile.albion_id.in_(ids))
-    ).all())
+    )).all())
 
 
 def _cutoffs() -> tuple[datetime, datetime]:
@@ -65,65 +65,65 @@ def _split_windows(rows: list[tuple], cutoff_7d: datetime, cutoff_30d: datetime)
 _LETHAL_BIG = (Battle.players_total > 20, Battle.is_lethal == True)
 
 
-def _fame_windows(db: Session, c7: datetime, c30: datetime, *, guild_id=None, alliance_id=None) -> dict:
+async def _fame_windows(db: AsyncSession, c7: datetime, c30: datetime, *, guild_id=None, alliance_id=None) -> dict:
     """Kill fame somado por janela — só batalhas letais com mais de 20 jogadores."""
     if guild_id:
-        rows = db.execute(
+        rows = (await db.execute(
             select(Battle.start_time, BattleGuild.kill_fame)
             .join(BattleGuild, BattleGuild.battle_id == Battle.id)
             .where(BattleGuild.albion_guild_id == guild_id, *_LETHAL_BIG)
-        ).all()
+        )).all()
     else:
-        rows = db.execute(
+        rows = (await db.execute(
             select(Battle.start_time, func.sum(BattleGuild.kill_fame))
             .join(BattleGuild, BattleGuild.battle_id == Battle.id)
             .where(BattleGuild.alliance_id == alliance_id, *_LETHAL_BIG)
             .group_by(Battle.id, Battle.start_time)
-        ).all()
+        )).all()
     return _split_windows(rows, c7, c30)
 
 
-def _silver_windows(db: Session, c7: datetime, c30: datetime, *, guild_id=None, alliance_id=None) -> dict:
+async def _silver_windows(db: AsyncSession, c7: datetime, c30: datetime, *, guild_id=None, alliance_id=None) -> dict:
     """Fama dropada (earned by enemies killing this guild/alliance members)."""
     if guild_id:
         victim_filter = PlayerKillEvent.victim_guild_id == guild_id
     else:
-        guild_ids = db.scalars(
+        guild_ids = (await db.scalars(
             select(BattleGuild.albion_guild_id)
             .where(BattleGuild.alliance_id == alliance_id)
             .distinct()
-        ).all()
+        )).all()
         if not guild_ids:
             return {"7d": 0, "30d": 0, "all": 0}
         victim_filter = PlayerKillEvent.victim_guild_id.in_(guild_ids)
 
-    rows = db.execute(
+    rows = (await db.execute(
         select(PlayerKillEvent.timestamp, PlayerKillEvent.fame)
         .where(victim_filter, PlayerKillEvent.fame > 0)
-    ).all()
+    )).all()
     return _split_windows(rows, c7, c30)
 
 
-def _battle_windows(db: Session, c7: datetime, c30: datetime, *, guild_id=None, alliance_id=None) -> dict:
+async def _battle_windows(db: AsyncSession, c7: datetime, c30: datetime, *, guild_id=None, alliance_id=None) -> dict:
     """Contagem de batalhas distintas por janela — só letais com mais de 20 jogadores."""
     if guild_id:
-        rows = db.execute(
+        rows = (await db.execute(
             select(Battle.start_time)
             .join(BattleGuild, BattleGuild.battle_id == Battle.id)
             .where(BattleGuild.albion_guild_id == guild_id, *_LETHAL_BIG)
-        ).all()
+        )).all()
         return _split_windows([(ts, 1) for (ts,) in rows], c7, c30)
     else:
-        rows = db.execute(
+        rows = (await db.execute(
             select(Battle.start_time)
             .join(BattleGuild, BattleGuild.battle_id == Battle.id)
             .where(BattleGuild.alliance_id == alliance_id, *_LETHAL_BIG)
             .group_by(Battle.id, Battle.start_time)
-        ).all()
+        )).all()
         return _split_windows([(ts, 1) for (ts,) in rows], c7, c30)
 
 
-def _totals(db: Session, *, guild_id=None, alliance_id=None) -> tuple[int, int]:
+async def _totals(db: AsyncSession, *, guild_id=None, alliance_id=None) -> tuple[int, int]:
     """Kills e mortes totais — só batalhas letais com mais de 20 jogadores."""
     q = (
         select(func.sum(BattleGuild.kills), func.sum(BattleGuild.deaths))
@@ -134,11 +134,11 @@ def _totals(db: Session, *, guild_id=None, alliance_id=None) -> tuple[int, int]:
         q = q.where(BattleGuild.albion_guild_id == guild_id)
     else:
         q = q.where(BattleGuild.alliance_id == alliance_id)
-    row = db.execute(q).one()
+    row = (await db.execute(q)).one()
     return int(row[0] or 0), int(row[1] or 0)
 
 
-def _members(db: Session, guild_id: str, min_players: int = 0, min_kills: int = 0) -> list[dict]:
+async def _members(db: AsyncSession, guild_id: str, min_players: int = 0, min_kills: int = 0) -> list[dict]:
     """Jogadores cujo último evento registrado ainda os mostra nesta guilda.
     min_players/min_kills filtram QUAIS batalhas entram no cálculo de stats.
 
@@ -152,11 +152,11 @@ def _members(db: Session, guild_id: str, min_players: int = 0, min_kills: int = 
     global (a subquery não filtra guild_id, só o conjunto de players)."""
     # Candidates: players que aparecem NESSA guilda em qualquer batalha.
     # Índice em guild_id torna isso O(log n) em vez de full scan.
-    candidates = list(db.scalars(
+    candidates = list((await db.scalars(
         select(BattleParticipant.albion_player_id)
         .where(BattleParticipant.guild_id == guild_id)
         .distinct()
-    ).all())
+    )).all())
     if not candidates:
         return []
 
@@ -172,7 +172,7 @@ def _members(db: Session, guild_id: str, min_players: int = 0, min_kills: int = 
     )
     # IDs dos que ainda estão nesta guilda: a última batalha global do
     # jogador é uma onde ele estava nesta guilda (senão saiu).
-    current_ids = set(db.scalars(
+    current_ids = set((await db.scalars(
         select(BattleParticipant.albion_player_id)
         .join(Battle, Battle.id == BattleParticipant.battle_id)
         .join(
@@ -182,17 +182,17 @@ def _members(db: Session, guild_id: str, min_players: int = 0, min_kills: int = 
         )
         .where(BattleParticipant.guild_id == guild_id)
         .distinct()
-    ).all())
+    )).all())
 
     # Remove jogadores que o tracker já sabe que estão em outra guilda ou sem guilda.
     # guild_id IS NULL significa que saiu da guilda; != trata só valores não-nulos em SQL.
-    known_elsewhere = set(db.scalars(
+    known_elsewhere = set((await db.scalars(
         select(AlbionPlayer.albion_id)
         .where(
             AlbionPlayer.albion_id.in_(current_ids),
             (AlbionPlayer.guild_id != guild_id) | AlbionPlayer.guild_id.is_(None),
         )
-    ).all())
+    )).all())
     current_ids -= known_elsewhere
 
     if not current_ids:
@@ -208,7 +208,7 @@ def _members(db: Session, guild_id: str, min_players: int = 0, min_kills: int = 
     if min_kills > 0:
         stat_filters.append(Battle.kill_count >= min_kills)
 
-    rows = db.execute(
+    rows = (await db.execute(
         select(
             BattleParticipant.albion_player_id,
             BattleParticipant.name,
@@ -225,15 +225,15 @@ def _members(db: Session, guild_id: str, min_players: int = 0, min_kills: int = 
         .where(*stat_filters)
         .group_by(BattleParticipant.albion_player_id, BattleParticipant.name)
         .order_by(func.count(BattleParticipant.id).desc())
-    ).all()
+    )).all()
 
     # Contagem de roles — mesmo filtro de batalha
-    weapon_fn = _weapon_function_map(db)
-    equip_rows = db.execute(
+    weapon_fn = await _weapon_function_map(db)
+    equip_rows = (await db.execute(
         select(BattleParticipant.albion_player_id, BattleParticipant.equipment)
         .join(Battle, Battle.id == BattleParticipant.battle_id)
         .where(*stat_filters, BattleParticipant.equipment.isnot(None))
-    ).all()
+    )).all()
     role_map: dict[str, dict[str, int]] = {}
     for pid, equip in equip_rows:
         role = _classify_role(_as_builds(equip), weapon_fn)
@@ -258,7 +258,7 @@ def _members(db: Session, guild_id: str, min_players: int = 0, min_kills: int = 
     ]
 
 
-def _guilds_in_alliance(db: Session, alliance_id: str, min_players: int = 0, min_kills: int = 0) -> list[dict]:
+async def _guilds_in_alliance(db: AsyncSession, alliance_id: str, min_players: int = 0, min_kills: int = 0) -> list[dict]:
     """Guildas cuja ÚLTIMA aparição em batalha ainda mostra elas nesta aliança —
     mesmo critério usado pro roster de uma guilda (ver _members): só a
     aparição mais recente conta pro roster, senão uma guilda que já saiu da
@@ -268,11 +268,11 @@ def _guilds_in_alliance(db: Session, alliance_id: str, min_players: int = 0, min
     em alliance_id) antes de agrupar — senão a subquery agrupa todas as
     guildas do banco (~milhares) só pra descartar quase todas no JOIN."""
     # Candidates: guildas que apareceram NESSA aliança em qualquer batalha.
-    candidates = list(db.scalars(
+    candidates = list((await db.scalars(
         select(BattleGuild.albion_guild_id)
         .where(BattleGuild.alliance_id == alliance_id)
         .distinct()
-    ).all())
+    )).all())
     if not candidates:
         return []
 
@@ -283,7 +283,7 @@ def _guilds_in_alliance(db: Session, alliance_id: str, min_players: int = 0, min
         .group_by(BattleGuild.albion_guild_id)
         .subquery()
     )
-    current_ids = set(db.scalars(
+    current_ids = set((await db.scalars(
         select(BattleGuild.albion_guild_id)
         .join(Battle, Battle.id == BattleGuild.battle_id)
         .join(
@@ -293,7 +293,7 @@ def _guilds_in_alliance(db: Session, alliance_id: str, min_players: int = 0, min
         )
         .where(BattleGuild.alliance_id == alliance_id)
         .distinct()
-    ).all())
+    )).all())
     if not current_ids:
         return []
 
@@ -303,7 +303,7 @@ def _guilds_in_alliance(db: Session, alliance_id: str, min_players: int = 0, min
     if min_kills > 0:
         filters.append(Battle.kill_count >= min_kills)
 
-    rows = db.execute(
+    rows = (await db.execute(
         select(
             BattleGuild.albion_guild_id,
             BattleGuild.guild_name,
@@ -317,7 +317,7 @@ def _guilds_in_alliance(db: Session, alliance_id: str, min_players: int = 0, min
         .where(*filters)
         .group_by(BattleGuild.albion_guild_id, BattleGuild.guild_name)
         .order_by(func.count(func.distinct(BattleGuild.battle_id)).desc())
-    ).all()
+    )).all()
     return [
         {
             "albion_id": r.albion_guild_id,
@@ -333,14 +333,14 @@ def _guilds_in_alliance(db: Session, alliance_id: str, min_players: int = 0, min
 
 
 
-def _guild_alliance_history(db: Session, guild_id: str) -> list[dict]:
+async def _guild_alliance_history(db: AsyncSession, guild_id: str) -> list[dict]:
     """Cronologia de entradas/saídas de alianças desta guilda, mais recente primeiro."""
-    rows = db.execute(
+    rows = (await db.execute(
         select(Battle.start_time, BattleGuild.alliance_id, BattleGuild.alliance_name)
         .join(BattleGuild, BattleGuild.battle_id == Battle.id)
         .where(BattleGuild.albion_guild_id == guild_id)
         .order_by(Battle.start_time)
-    ).mappings().all()
+    )).mappings().all()
 
     events: list[dict] = []
     prev_id: str | None = "__init__"  # type: ignore[assignment]
@@ -367,7 +367,7 @@ def _guild_alliance_history(db: Session, guild_id: str) -> list[dict]:
     return list(reversed(events))
 
 
-def _alliance_roster_log(db: Session, alliance_id: str) -> list[dict]:
+async def _alliance_roster_log(db: AsyncSession, alliance_id: str) -> list[dict]:
     """Log de mudanças na composição de guildas da aliança, mais recente primeiro.
 
     Uma guilda "entrou" quando aparece com nossa tag após ter sido vista com outra
@@ -375,17 +375,17 @@ def _alliance_roster_log(db: Session, alliance_id: str) -> list[dict]:
     Ausência numa luta não conta — ela pode simplesmente não ter participado.
     """
     # Todas as guildas que já apareceram sob esta aliança
-    guild_ids = list(db.scalars(
+    guild_ids = list((await db.scalars(
         select(BattleGuild.albion_guild_id)
         .where(BattleGuild.alliance_id == alliance_id)
         .distinct()
-    ).all())
+    )).all())
 
     if not guild_ids:
         return []
 
     # Todas as aparições dessas guildas em qualquer batalha, com a tag que usaram
-    rows = db.execute(
+    rows = (await db.execute(
         select(
             Battle.id.label("battle_id"),
             Battle.start_time,
@@ -396,7 +396,7 @@ def _alliance_roster_log(db: Session, alliance_id: str) -> list[dict]:
         .join(Battle, Battle.id == BattleGuild.battle_id)
         .where(BattleGuild.albion_guild_id.in_(guild_ids))
         .order_by(Battle.start_time, Battle.id)
-    ).mappings().all()
+    )).mappings().all()
 
     # Agrupa por batalha mantendo ordem
     battle_order: list[tuple[int, datetime]] = []
@@ -420,7 +420,7 @@ def _alliance_roster_log(db: Session, alliance_id: str) -> list[dict]:
 
     # Guildas excluídas do jogo
     all_guild_ids = list(guild_battle_counts.keys())
-    deleted_guilds_in_alliance = _deleted_set(db, "guild", all_guild_ids)
+    deleted_guilds_in_alliance = await _deleted_set(db, "guild", all_guild_ids)
 
     def _gdict(gid: str, name: str) -> dict:
         return {"guild_id": gid, "name": name, "battles": guild_battle_counts.get(gid, 0),
@@ -467,13 +467,13 @@ def _alliance_roster_log(db: Session, alliance_id: str) -> list[dict]:
     return list(reversed(events))
 
 
-def _win_result(db: Session, battle: Battle, side_id: int | None) -> str | None:
+async def _win_result(db: AsyncSession, battle: Battle, side_id: int | None) -> str | None:
     if not battle.is_zvz or not side_id:
         return None
-    my_side = db.scalar(select(BattleSide).where(BattleSide.id == side_id))
+    my_side = await db.scalar(select(BattleSide).where(BattleSide.id == side_id))
     if not my_side or my_side.is_rats:
         return None
-    enemy_max = db.scalar(
+    enemy_max = await db.scalar(
         select(func.max(BattleSide.score)).where(
             BattleSide.battle_id == battle.id,
             BattleSide.id != side_id,
@@ -489,7 +489,7 @@ def _win_result(db: Session, battle: Battle, side_id: int | None) -> str | None:
     return "draw"
 
 
-def _win_results_bulk(db: Session, battles: list[tuple[Battle, int | None]]) -> dict[int, str | None]:
+async def _win_results_bulk(db: AsyncSession, battles: list[tuple[Battle, int | None]]) -> dict[int, str | None]:
     """Versão em lote de _win_result: resolve vitória/derrota de várias batalhas
     ZvZ em 1 query (todos os BattleSide dos battles de uma vez), em vez de 2
     queries por batalha (1 BattleSide por side_id + 1 max(score) por battle).
@@ -522,9 +522,9 @@ def _win_results_bulk(db: Session, battles: list[tuple[Battle, int | None]]) -> 
 
     # 1 query: todos os BattleSide dos battles em questão. Pode trazer vários
     # sides por batalha (ZvZ com 5 lados), mas é 1 round-trip só.
-    all_sides = db.scalars(
+    all_sides = (await db.scalars(
         select(BattleSide).where(BattleSide.battle_id.in_(battle_ids))
-    ).all()
+    )).all()
     by_battle: dict[int, dict[int, BattleSide]] = {}
     for s in all_sides:
         by_battle.setdefault(s.battle_id, {})[s.id] = s
@@ -588,7 +588,7 @@ _BIG_BIDS_TTL = 300.0
 _big_bids_cache: dict[int, tuple[float, set[int]]] = {}
 
 
-def _big_battle_ids(db: Session, min_players: int) -> set[int]:
+async def _big_battle_ids(db: AsyncSession, min_players: int) -> set[int]:
     """Conjunto de battle_id com >= min_players de alguma guilda. Cacheado
     por 5min — ver comentário em _big_bids_cache."""
     import time as _time
@@ -596,46 +596,46 @@ def _big_battle_ids(db: Session, min_players: int) -> set[int]:
     entry = _big_bids_cache.get(min_players)
     if entry is not None and now < entry[0]:
         return entry[1]
-    bids = set(db.scalars(
+    bids = set((await db.scalars(
         select(BattleParticipant.battle_id)
         .where(BattleParticipant.guild_id.isnot(None))
         .group_by(BattleParticipant.battle_id, BattleParticipant.guild_id)
         .having(func.count(BattleParticipant.id) >= min_players)
-    ).all())
+    )).all())
     _big_bids_cache[min_players] = (now + _BIG_BIDS_TTL, bids)
     return bids
 
 
-def _battles_guild(
-    db: Session, guild_id: str, page: int = 0, min_players: int = 25, min_kills: int = 5,
+async def _battles_guild(
+    db: AsyncSession, guild_id: str, page: int = 0, min_players: int = 25, min_kills: int = 5,
     factions_cache: dict[int, list[dict]] | None = None,
 ) -> tuple[list[dict], int]:
     where, big_sub = _battle_filters(min_players, min_kills)
     guild_where = [BattleGuild.albion_guild_id == guild_id, *where]
     # big_sub vira set em memória cacheado por 5min (ver _big_battle_ids) —
     # evita re-executar a subquery de 2.5M rows 2x (count + page) por chamada.
-    big_extra = [Battle.id.in_(_big_battle_ids(db, min_players))] if big_sub is not None else []
+    big_extra = [Battle.id.in_(await _big_battle_ids(db, min_players))] if big_sub is not None else []
 
-    total = db.scalar(
+    total = (await db.scalar(
         select(func.count(func.distinct(BattleGuild.battle_id)))
         .join(Battle, Battle.id == BattleGuild.battle_id)
         .where(*guild_where, *big_extra)
-    ) or 0
+    )) or 0
 
-    rows = db.execute(
+    rows = (await db.execute(
         select(Battle, BattleGuild)
         .join(BattleGuild, BattleGuild.battle_id == Battle.id)
         .where(*guild_where, *big_extra)
         .order_by(Battle.start_time.desc())
         .limit(PAGE_SIZE).offset(page * PAGE_SIZE)
-    ).all()
-    groups = battle_groups.get_or_create_groups_bulk(db, [battle.id for battle, _ in rows])
+    )).all()
+    groups = await battle_groups.get_or_create_groups_bulk(db, [battle.id for battle, _ in rows])
     # Batch: 1 query pra todos os _win_result + 1 batch pra todos os
     # _factions_summary (3 queries fixas, em vez de 3 por batalha) — antes
     # 5 queries por batalha (2 de _win_result + 3 de _factions_summary),
     # agora 1 + 3 = 4 totais pra a página inteira.
-    win_results = _win_results_bulk(db, [(battle, bg.side_id) for battle, bg in rows])
-    factions_by_bid = _factions_summary_bulk(db, [battle.id for battle, _ in rows])
+    win_results = await _win_results_bulk(db, [(battle, bg.side_id) for battle, bg in rows])
+    factions_by_bid = await _factions_summary_bulk(db, [battle.id for battle, _ in rows])
     fc = factions_cache if factions_cache is not None else {}
     out = []
     for battle, bg in rows:
@@ -659,34 +659,34 @@ def _battles_guild(
     return out, total
 
 
-def _battles_alliance(
-    db: Session, alliance_id: str, page: int = 0, min_players: int = 25, min_kills: int = 5,
+async def _battles_alliance(
+    db: AsyncSession, alliance_id: str, page: int = 0, min_players: int = 25, min_kills: int = 5,
     factions_cache: dict[int, list[dict]] | None = None,
 ) -> tuple[list[dict], int]:
     where, big_sub = _battle_filters(min_players, min_kills)
     alliance_where = [BattleGuild.alliance_id == alliance_id, *where]
-    big_extra = [Battle.id.in_(_big_battle_ids(db, min_players))] if big_sub is not None else []
+    big_extra = [Battle.id.in_(await _big_battle_ids(db, min_players))] if big_sub is not None else []
 
-    total = db.scalar(
+    total = (await db.scalar(
         select(func.count(func.distinct(BattleGuild.battle_id)))
         .join(Battle, Battle.id == BattleGuild.battle_id)
         .where(*alliance_where, *big_extra)
-    ) or 0
+    )) or 0
 
-    battle_ids = db.scalars(
+    battle_ids = (await db.scalars(
         select(BattleGuild.battle_id)
         .join(Battle, Battle.id == BattleGuild.battle_id)
         .where(*alliance_where, *big_extra)
         .distinct()
         .order_by(Battle.start_time.desc())
         .limit(PAGE_SIZE).offset(page * PAGE_SIZE)
-    ).all()
+    )).all()
     if not battle_ids:
         return [], total
 
     agg = {
         row["battle_id"]: row
-        for row in db.execute(
+        for row in (await db.execute(
             select(
                 BattleGuild.battle_id,
                 func.sum(BattleGuild.kills).label("kills"),
@@ -696,22 +696,22 @@ def _battles_alliance(
             )
             .where(BattleGuild.battle_id.in_(battle_ids), BattleGuild.alliance_id == alliance_id)
             .group_by(BattleGuild.battle_id)
-        ).mappings().all()
+        )).mappings().all()
     }
 
     battles = {
-        b.id: b for b in db.scalars(
+        b.id: b for b in (await db.scalars(
             select(Battle).where(Battle.id.in_(battle_ids))
-        ).all()
+        )).all()
     }
 
-    groups = battle_groups.get_or_create_groups_bulk(db, list(battles.keys()))
+    groups = await battle_groups.get_or_create_groups_bulk(db, list(battles.keys()))
     # Mesmo batch de _battles_guild — 1 query pra todos os _win_result,
     # 1 batch pra todos os _factions_summary.
-    win_results = _win_results_bulk(
+    win_results = await _win_results_bulk(
         db, [(battles.get(bid), agg.get(bid, {}).get("side_id") if agg.get(bid) else None) for bid in battle_ids if battles.get(bid)]
     )
-    factions_by_bid = _factions_summary_bulk(db, list(battles.keys()))
+    factions_by_bid = await _factions_summary_bulk(db, list(battles.keys()))
     fc = factions_cache if factions_cache is not None else {}
     out = []
     for bid in battle_ids:
@@ -745,7 +745,7 @@ def _battles_alliance(
 # Busca global
 # ---------------------------------------------------------------------------
 
-def _search_entities(db: Session, entity_type: str, q: str, nq: str, limit: int = 6, region: str | None = None) -> list[SearchEntry]:
+async def _search_entities(db: AsyncSession, entity_type: str, q: str, nq: str, limit: int = 6, region: str | None = None) -> list[SearchEntry]:
     """3 passes sargáveis sobre SearchEntry, cada um só roda se o anterior não
     encheu `limit`: prefixo (usa ix_search_entries_type_norm) -> substring ->
     fuzzy (edit-distance ≤1, só p/ queries de entidade ≥4 chars — mesma regra
@@ -757,16 +757,16 @@ def _search_entities(db: Session, entity_type: str, q: str, nq: str, limit: int 
     "slayner americas" pra restringir. None = todas as regiões."""
     lo, hi = prefix_range(nq)
     region_filter = [SearchEntry.region == region] if region else []
-    found = list(db.scalars(
+    found = list((await db.scalars(
         select(SearchEntry)
         .where(SearchEntry.entity_type == entity_type, SearchEntry.norm_name >= lo, SearchEntry.norm_name < hi, *region_filter)
         .order_by(SearchEntry.weight.desc())
         .limit(limit)
-    ).all())
+    )).all())
     seen = {e.entity_id for e in found}
 
     if len(found) < limit:
-        more = db.scalars(
+        more = (await db.scalars(
             select(SearchEntry)
             .where(
                 SearchEntry.entity_type == entity_type,
@@ -776,7 +776,7 @@ def _search_entities(db: Session, entity_type: str, q: str, nq: str, limit: int 
             )
             .order_by(SearchEntry.weight.desc())
             .limit(limit - len(found))
-        ).all()
+        )).all()
         found.extend(more)
         seen.update(e.entity_id for e in more)
 
@@ -787,7 +787,7 @@ def _search_entities(db: Session, entity_type: str, q: str, nq: str, limit: int 
     # região, não faz sentido buscar跨-região).
     if len(found) < limit and len(nq) >= 4 and not region:
         ln = len(nq)
-        candidates = db.scalars(
+        candidates = (await db.scalars(
             select(SearchEntry)
             .where(
                 SearchEntry.entity_type == entity_type,
@@ -796,7 +796,7 @@ def _search_entities(db: Session, entity_type: str, q: str, nq: str, limit: int 
             )
             .order_by(SearchEntry.weight.desc())
             .limit(300)
-        ).all()
+        )).all()
         for e in candidates:
             if len(found) == limit:
                 break
@@ -807,12 +807,12 @@ def _search_entities(db: Session, entity_type: str, q: str, nq: str, limit: int 
     return found
 
 
-def _search(db: Session, q: str, region: str | None = None) -> dict:
+async def _search(db: AsyncSession, q: str, region: str | None = None) -> dict:
     nq = norm_name(q)
 
-    player_entries = _search_entities(db, "player", q, nq, region=region)
-    guild_entries = _search_entities(db, "guild", q, nq, region=region)
-    alliance_entries = _search_entities(db, "alliance", q, nq, region=region)
+    player_entries = await _search_entities(db, "player", q, nq, region=region)
+    guild_entries = await _search_entities(db, "guild", q, nq, region=region)
+    alliance_entries = await _search_entities(db, "alliance", q, nq, region=region)
 
     players = [
         {
@@ -842,35 +842,35 @@ def _search(db: Session, q: str, region: str | None = None) -> dict:
 
     p_bids: set[int] = set()
     if p_ids:
-        p_bids = set(db.scalars(
+        p_bids = set((await db.scalars(
             select(Battle.id)
             .join(BattleParticipant, BattleParticipant.battle_id == Battle.id)
             .where(BattleParticipant.albion_player_id.in_(p_ids))
             .order_by(Battle.start_time.desc()).limit(30)
-        ).all())
+        )).all())
     g_bids: set[int] = set()
     if g_ids or a_ids:
-        g_bids = set(db.scalars(
+        g_bids = set((await db.scalars(
             select(Battle.id)
             .join(BattleGuild, BattleGuild.battle_id == Battle.id)
             .where(sa.or_(BattleGuild.albion_guild_id.in_(g_ids), BattleGuild.alliance_id.in_(a_ids)))
             .order_by(Battle.start_time.desc()).limit(30)
-        ).all())
+        )).all())
     all_bids = list(p_bids | g_bids)
 
     battles = []
     if all_bids:
-        top_battles = db.scalars(
+        top_battles = (await db.scalars(
             select(Battle).where(Battle.id.in_(all_bids)).order_by(Battle.start_time.desc()).limit(6)
-        ).all()
+        )).all()
         # Só lê (nunca cria) — busca roda a cada tecla digitada, não vale a
         # pena escrever (e disputar lock com o resto do tráfego de fundo) só
         # pra sugestão de autocomplete. Batalha sem link público ainda fica
         # de fora da sugestão (ganha um assim que alguém abrir ela de fato).
-        groups = battle_groups.get_existing_groups_bulk(db, [b.id for b in top_battles])
+        groups = await battle_groups.get_existing_groups_bulk(db, [b.id for b in top_battles])
         # Batch: 3 queries pra todos os _factions_summary de uma vez, em vez
         # de 3 por batalha (6 batalhas = 18 queries → 3).
-        factions_by_bid = _factions_summary_bulk(db, [b.id for b in top_battles])
+        factions_by_bid = await _factions_summary_bulk(db, [b.id for b in top_battles])
         for b in top_battles:
             group = groups.get(b.id)
             if group is None:
@@ -893,7 +893,7 @@ def _search(db: Session, q: str, region: str | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/search")
-def global_search(q: str = "", region: str | None = None, db: Session = Depends(deps.db_session)):
+async def global_search(q: str = "", region: str | None = None, db: AsyncSession = Depends(deps.async_db_session)):
     q = q.strip()
     if len(q) < 2:
         return {"players": [], "guilds": [], "alliances": [], "battles": []}
@@ -902,11 +902,11 @@ def global_search(q: str = "", region: str | None = None, db: Session = Depends(
     # não filtra (devolve tudo, como se não tivesse região).
     valid_regions = {"americas", "europe", "asia"}
     r = region if region in valid_regions else None
-    return _search(db, q, region=r)
+    return await _search(db, q, region=r)
 
 
 @router.get("/search/external")
-async def global_search_external(q: str, region: str | None = None, db: Session = Depends(deps.db_session)):
+async def global_search_external(q: str, region: str | None = None, db: AsyncSession = Depends(deps.async_db_session)):
     """Busca direto na API do Albion e persiste tudo que encontrar — players
     (upsert_player), guilds e alliances (upsert_entry em SearchEntry).
     Prioridade PROFILE (fura a fila de fundo: warmers, backfill).
@@ -961,7 +961,7 @@ async def global_search_external(q: str, region: str | None = None, db: Session 
             if not p.get("Id"):
                 continue
             try:
-                upsert_player(db, p, region)
+                await upsert_player(db, p, region)
             except Exception:
                 pass
             players_out.append({
@@ -970,7 +970,7 @@ async def global_search_external(q: str, region: str | None = None, db: Session 
                 "guild_name": p.get("GuildName"), "alliance_name": p.get("AllianceName"),
                 "battles": 0,
             })
-            search_index.safe_upsert_entry(
+            await search_index.safe_upsert_entry_async(
                 db, entity_type="player", entity_id=p["Id"], display_name=p.get("Name") or "",
                 region=region, guild_name=p.get("GuildName"), alliance_name=p.get("AllianceName"),
             )
@@ -982,7 +982,7 @@ async def global_search_external(q: str, region: str | None = None, db: Session 
                 "alliance_name": g.get("AllianceName"), "battles": 0,
                 "region": region,
             })
-            search_index.safe_upsert_entry(
+            await search_index.safe_upsert_entry_async(
                 db, entity_type="guild", entity_id=g["Id"], display_name=g.get("Name") or "",
                 region=region, alliance_name=g.get("AllianceName"),
             )
@@ -994,14 +994,14 @@ async def global_search_external(q: str, region: str | None = None, db: Session 
                 "guild_count": 0, "battles": 0,
                 "region": region,
             })
-            search_index.safe_upsert_entry(
+            await search_index.safe_upsert_entry_async(
                 db, entity_type="alliance", entity_id=a["Id"], display_name=a.get("Name") or "",
                 region=region,
             )
     try:
-        db.commit()
+        await db.commit()
     except Exception:
-        db.rollback()
+        await db.rollback()
 
     return {"players": players_out, "guilds": guilds_out, "alliances": alliances_out}
 
@@ -1094,26 +1094,24 @@ COLD_LOAD_TIMEOUT = timedelta(minutes=15)
 _cold_cache: dict[str, tuple[datetime, dict]] = {}
 
 
-def _cold_cache_put(key: str, payload: dict) -> None:
+async def _cold_cache_put(key: str, payload: dict) -> None:
     """Grava o payload no dict em memória E no DashboardCache (DB)."""
     now = datetime.now(timezone.utc)
     _cold_cache[key] = (now, payload)
-    db = SessionLocal()
-    try:
-        row = db.get(DashboardCache, key)
-        if row is None:
-            db.add(DashboardCache(key=key, payload=payload))
-        else:
-            row.payload = payload
-        db.commit()
-    except Exception:
-        db.rollback()
-        log.exception("cold_cache: falha ao persistir %s", key)
-    finally:
-        db.close()
+    async with AsyncSessionLocal() as db:
+        try:
+            row = await db.get(DashboardCache, key)
+            if row is None:
+                db.add(DashboardCache(key=key, payload=payload))
+            else:
+                row.payload = payload
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            log.exception("cold_cache: falha ao persistir %s", key)
 
 
-def _cold_cache_get(key: str, db: Session | None = None) -> dict | None:
+async def _cold_cache_get(key: str, db: AsyncSession | None = None) -> dict | None:
     """Retorna o payload cacheado se válido. Se `db` for passado, checa também
     se o `last_seen_at` do GuildProfile/AllianceProfile é mais recente que o
     cache — se sim, o warmer rodou um refresh desde que o cache foi escrito e
@@ -1128,7 +1126,7 @@ def _cold_cache_get(key: str, db: Session | None = None) -> dict | None:
     if entry is None:
         if db is None:
             return None
-        row = db.get(DashboardCache, key)
+        row = await db.get(DashboardCache, key)
         if row is None:
             return None
         cached_at = _aware(row.updated_at)
@@ -1143,19 +1141,19 @@ def _cold_cache_get(key: str, db: Session | None = None) -> dict | None:
         return None
     # Se tem DB, checa se o warmer rodou um refresh depois do cache.
     if db is not None and key.startswith("guild:"):
-        gp = db.scalar(select(GuildProfile).where(GuildProfile.albion_id == key.split(":", 1)[1]))
+        gp = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == key.split(":", 1)[1]))
         if gp is not None and _aware(gp.last_seen_at) > cached_at:
             _cold_cache.pop(key, None)
             return None
     elif db is not None and key.startswith("alliance:"):
-        ap = db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == key.split(":", 1)[1]))
+        ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == key.split(":", 1)[1]))
         if ap is not None and _aware(ap.last_seen_at) > cached_at:
             _cold_cache.pop(key, None)
             return None
     return payload
 
 
-def _overlay_refresh_state(cached: dict, db: Session, model, albion_id: str) -> dict:
+async def _overlay_refresh_state(cached: dict, db: AsyncSession, model, albion_id: str) -> dict:
     """Sobrepõe o `refresh_requested_at` VIVO do DB no payload cacheado.
 
     Clicar em ⟳ (POST /refresh) grava `refresh_requested_at` mas NÃO mexe em
@@ -1165,23 +1163,22 @@ def _overlay_refresh_state(cached: dict, db: Session, model, albion_id: str) -> 
     mostrar a idade antiga — o botão parece não fazer nada (era o bug de
     'guilda com age 20h: clico e volta pra 20h'). Lê a linha (barato, indexado)
     e devolve cópia RASA com o flag corrente — não muta o dict do cache."""
-    row = db.scalar(select(model).where(model.albion_id == albion_id))
+    row = await db.scalar(select(model).where(model.albion_id == albion_id))
     if row is None:
         return cached
     return {**cached, "refresh_requested_at":
             _aware(row.refresh_requested_at).isoformat() if row.refresh_requested_at else None}
 
 
-def _build_guild_payload_sync(db: Session, albion_id: str) -> dict:
-    """Monta o payload completo do perfil de guilda a partir do DB. Síncrono,
-    chamado pela task de cold load (em to_thread) e pela rota quando já está
-    no cache. Não atrelado a request HTTP — pode rodar em background."""
-    bg = db.scalars(
+async def _build_guild_payload(db: AsyncSession, albion_id: str) -> dict:
+    """Monta o payload completo do perfil de guilda a partir do DB. Assíncrono,
+    chamado pela task de cold load e pela rota quando já está no cache."""
+    bg = (await db.scalars(
         select(BattleGuild)
         .where(BattleGuild.albion_guild_id == albion_id)
         .order_by(BattleGuild.id.desc())
         .limit(1)
-    ).first()
+    )).first()
     if not bg:
         raise HTTPException(404, "Guild não encontrada")
 
@@ -1190,30 +1187,30 @@ def _build_guild_payload_sync(db: Session, albion_id: str) -> dict:
     _load_progress[key] = (token, "stats")
     try:
         c7, c30 = _cutoffs()
-        kills_total, deaths_total = _totals(db, guild_id=albion_id)
-        last_synced_at = db.scalar(
+        kills_total, deaths_total = await _totals(db, guild_id=albion_id)
+        last_synced_at = await db.scalar(
             select(func.max(Battle.fetched_at))
             .join(BattleGuild, BattleGuild.battle_id == Battle.id)
             .where(BattleGuild.albion_guild_id == albion_id)
         )
-        gp = db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
+        gp = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
         _load_progress[key] = (token, "silver")
-        kill_fame = _fame_windows(db, c7, c30, guild_id=albion_id)
-        silver_dropped = _silver_windows(db, c7, c30, guild_id=albion_id)
-        battle_windows = _battle_windows(db, c7, c30, guild_id=albion_id)
+        kill_fame = await _fame_windows(db, c7, c30, guild_id=albion_id)
+        silver_dropped = await _silver_windows(db, c7, c30, guild_id=albion_id)
+        battle_windows = await _battle_windows(db, c7, c30, guild_id=albion_id)
         _load_progress[key] = (token, "members")
         # 25/5 = mesmo default que a aba Membros do frontend pede na primeira
         # renderização (ver GuildProfilePage.tsx). Alinhado de propósito: o
         # payload embutido serve o caso comum sem round-trip extra — o
         # frontend só refaz a busca se o usuário mudar o filtro.
-        members = _members(db, albion_id, min_players=25, min_kills=5)
+        members = await _members(db, albion_id, min_players=25, min_kills=5)
         _load_progress[key] = (token, "history")
-        battles_count = db.scalar(
+        battles_count = (await db.scalar(
             select(func.count(func.distinct(BattleGuild.battle_id)))
             .join(Battle, Battle.id == BattleGuild.battle_id)
             .where(BattleGuild.albion_guild_id == albion_id, *_LETHAL_BIG)
-        ) or 0
-        alliance_history = _guild_alliance_history(db, albion_id)
+        )) or 0
+        alliance_history = await _guild_alliance_history(db, albion_id)
         # Primeira página da aba Batalhas, mesmos defaults do frontend
         # (page=0, min_players=25, min_kills=5) — mesmo motivo do `members`
         # acima: a aba abre instantânea em vez de refazer uma busca que já
@@ -1224,7 +1221,7 @@ def _build_guild_payload_sync(db: Session, albion_id: str) -> dict:
         # mas o cache é barato e deixa pronto pro caso de reusar a mesma
         # batalha em outra seção do payload no futuro.
         factions_cache: dict[int, list[dict]] = {}
-        page0_battles, page0_total = _battles_guild(db, albion_id, 0, min_players=25, min_kills=5, factions_cache=factions_cache)
+        page0_battles, page0_total = await _battles_guild(db, albion_id, 0, min_players=25, min_kills=5, factions_cache=factions_cache)
     finally:
         _pop_progress_if_owner(key, token)
 
@@ -1252,15 +1249,6 @@ def _build_guild_payload_sync(db: Session, albion_id: str) -> dict:
     }
 
 
-def _build_payload_with_session(builder, albion_id: str) -> dict:
-    """Executa um builder síncrono com uma sessão pertencente à mesma thread."""
-    db = SessionLocal()
-    try:
-        return builder(db, albion_id)
-    finally:
-        db.close()
-
-
 async def _cold_load_guild(albion_id: str) -> None:
     """Faz a agregação pesada do perfil de guilda em background — sobrevive ao
     client desconectar. Atualiza _load_progress em cada etapa; cacheia o
@@ -1270,26 +1258,19 @@ async def _cold_load_guild(albion_id: str) -> None:
     (DB travado, query lenta demais), o stage vira error:timeout e a task fica
     rastreada até a thread sair, impedindo outro worker para a mesma chave."""
     key = f"guild:{albion_id}"
-    worker = asyncio.create_task(asyncio.to_thread(
-        _build_payload_with_session, _build_guild_payload_sync, albion_id,
-    ))
-    try:
-        payload = await asyncio.wait_for(
-            asyncio.shield(worker),
-            timeout=COLD_LOAD_TIMEOUT.total_seconds(),
-        )
-        await asyncio.to_thread(_cold_cache_put, key, payload)
-    except asyncio.TimeoutError:
-        _load_progress[key] = (object(), "error:timeout")
-        _cold_timeout_at[key] = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
         try:
-            await worker
+            payload = await asyncio.wait_for(
+                asyncio.shield(_build_guild_payload(db, albion_id)),
+                timeout=COLD_LOAD_TIMEOUT.total_seconds(),
+            )
+            await _cold_cache_put(key, payload)
+        except asyncio.TimeoutError:
+            _load_progress[key] = (object(), "error:timeout")
+            _cold_timeout_at[key] = datetime.now(timezone.utc)
         except Exception:
-            pass
-    except Exception:
-        pass  # erro já tratado dentro de _build_guild_payload_sync (HTTPException)
-    finally:
-        _cold_load_tasks.pop(key, None)
+            pass  # erro já tratado dentro de _build_guild_payload (HTTPException)
+    _cold_load_tasks.pop(key, None)
 
 
 # ── refresh de guilda/aliança (botão ⟳ do perfil) ──────────────────────────
@@ -1301,15 +1282,15 @@ async def _cold_load_guild(albion_id: str) -> None:
 REFRESH_COOLDOWN = timedelta(minutes=10)
 
 
-def _resolve_region_for_guild(db: Session, albion_id: str) -> str | None:
+async def _resolve_region_for_guild(db: AsyncSession, albion_id: str) -> str | None:
     """Descobre a região de uma guilda: primeiro olha no GuildProfile (se já
     foi aquecida antes), depois cai pro BattleGuild mais recente (a região da
     última batalha onde a guilda apareceu). None se não sabe — o warmer não
     consegue buscar sem saber o host."""
-    gp = db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
+    gp = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
     if gp is not None:
         return gp.region
-    return db.scalar(
+    return await db.scalar(
         select(Battle.region)
         .join(BattleGuild, BattleGuild.battle_id == Battle.id)
         .where(BattleGuild.albion_guild_id == albion_id)
@@ -1318,11 +1299,11 @@ def _resolve_region_for_guild(db: Session, albion_id: str) -> str | None:
     )
 
 
-def _resolve_region_for_alliance(db: Session, albion_id: str) -> str | None:
-    ap = db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
+async def _resolve_region_for_alliance(db: AsyncSession, albion_id: str) -> str | None:
+    ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
     if ap is not None:
         return ap.region
-    return db.scalar(
+    return await db.scalar(
         select(Battle.region)
         .join(BattleGuild, BattleGuild.battle_id == Battle.id)
         .where(BattleGuild.alliance_id == albion_id)
@@ -1341,28 +1322,28 @@ def get_entity_refresh_progress(entity_type: str, albion_id: str):
 
 
 @router.post("/guilds/{albion_id}/refresh")
-async def refresh_guild(albion_id: str, db: Session = Depends(deps.db_session)):
+async def refresh_guild(albion_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Enfileira refresh da guilda no profile_warmer. Cooldown de 5min,
     estado compartilhado entre todos os visitantes."""
     from app.services.profile_warmer import _refresh_progress, request_refresh
 
     # Confirma que a guilda existe (em BattleGuild ou GuildProfile)
-    region = _resolve_region_for_guild(db, albion_id)
+    region = await _resolve_region_for_guild(db, albion_id)
     if region is None:
         raise HTTPException(404, "Guild não encontrada")
 
-    gp = db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
+    gp = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
     if gp is not None and gp.refresh_requested_at is not None:
         return {"queued": True, "refreshing": True, "cooldown_seconds": 0}
 
     # Sinal de "quando foi atualizado por último" pro cooldown: gp.last_seen_at
     # se a guilda já foi aquecida, senão o fetch de batalha mais recente — o
-    # MESMO fallback que _build_guild_payload_sync usa pro "age" mostrado na
+    # MESMO fallback que _build_guild_payload usa pro "age" mostrado na
     # tela (ver ali). Sem isso, uma guilda nunca aquecida pelo warmer (só
     # vista via battle tracker) mostrava age "agora" na tela mas o cooldown
     # pulava direto por achar gp is None — dava pra pedir refresh de novo na
     # hora, contradizendo o que a própria tela dizia.
-    last_signal = gp.last_seen_at if gp is not None else db.scalar(
+    last_signal = gp.last_seen_at if gp is not None else await db.scalar(
         select(func.max(Battle.fetched_at))
         .join(BattleGuild, BattleGuild.battle_id == Battle.id)
         .where(BattleGuild.albion_guild_id == albion_id)
@@ -1379,28 +1360,28 @@ async def refresh_guild(albion_id: str, db: Session = Depends(deps.db_session)):
     else:
         gp.region = region
     gp.refresh_requested_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     _refresh_progress[f"g:{albion_id}"] = "queued"
     request_refresh()
     return {"queued": True, "refreshing": True, "cooldown_seconds": 0}
 
 
 @router.post("/alliances/{albion_id}/refresh")
-async def refresh_alliance(albion_id: str, db: Session = Depends(deps.db_session)):
+async def refresh_alliance(albion_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Enfileira refresh da aliança no profile_warmer. Mesmo padrão de
     /guilds/{id}/refresh."""
     from app.services.profile_warmer import _refresh_progress, request_refresh
 
-    region = _resolve_region_for_alliance(db, albion_id)
+    region = await _resolve_region_for_alliance(db, albion_id)
     if region is None:
         raise HTTPException(404, "Aliança não encontrada")
 
-    ap = db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
+    ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
     if ap is not None and ap.refresh_requested_at is not None:
         return {"queued": True, "refreshing": True, "cooldown_seconds": 0}
 
     # Mesmo fallback do lado guilda — ver comentário em refresh_guild.
-    last_signal = ap.last_seen_at if ap is not None else db.scalar(
+    last_signal = ap.last_seen_at if ap is not None else await db.scalar(
         select(func.max(Battle.fetched_at))
         .join(BattleGuild, BattleGuild.battle_id == Battle.id)
         .where(BattleGuild.alliance_id == albion_id)
@@ -1417,14 +1398,14 @@ async def refresh_alliance(albion_id: str, db: Session = Depends(deps.db_session
     else:
         ap.region = region
     ap.refresh_requested_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     _refresh_progress[f"a:{albion_id}"] = "queued"
     request_refresh()
     return {"queued": True, "refreshing": True, "cooldown_seconds": 0}
 
 
 @router.get("/guilds/{albion_id}")
-async def guild_profile(albion_id: str, db: Session = Depends(deps.db_session)):
+async def guild_profile(albion_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Perfil de guilda. Cache-first: se a agregação já foi feita (e está no
     _cold_cache, válida por 5min), serve instantâneo. Senão, dispara task em
     background (asyncio.create_task — sobrevive ao client desconectar) e
@@ -1436,17 +1417,17 @@ async def guild_profile(albion_id: str, db: Session = Depends(deps.db_session)):
     Agora a task continua, e o _load_progress mostra o stage atual pra
     qualquer request — a barra continua de onde estava."""
     key = f"guild:{albion_id}"
-    cached = _cold_cache_get(key, db)
+    cached = await _cold_cache_get(key, db)
     if cached is not None:
-        return _overlay_refresh_state(cached, db, GuildProfile, albion_id)
+        return await _overlay_refresh_state(cached, db, GuildProfile, albion_id)
 
     # Valida que a guilda existe antes de disparar a task (senão a task roda
     # à toa e o front fica preso na barra).
-    bg_exists = db.scalars(
+    bg_exists = (await db.scalars(
         select(BattleGuild.albion_guild_id)
         .where(BattleGuild.albion_guild_id == albion_id)
         .limit(1)
-    ).first()
+    )).first()
     if not bg_exists:
         raise HTTPException(404, "Guild não encontrada")
 
@@ -1464,15 +1445,15 @@ async def guild_profile(albion_id: str, db: Session = Depends(deps.db_session)):
     return {"_cold_load": True, "albion_id": albion_id}
 
 
-def _build_alliance_payload_sync(db: Session, albion_id: str) -> dict:
-    """Monta o payload completo do perfil de aliança a partir do DB. Síncrono,
-    chamado pela task de cold load (em to_thread) e servido do cache pela rota."""
-    bg = db.scalars(
+async def _build_alliance_payload(db: AsyncSession, albion_id: str) -> dict:
+    """Monta o payload completo do perfil de aliança a partir do DB. Assíncrono,
+    chamado pela task de cold load e servido do cache pela rota."""
+    bg = (await db.scalars(
         select(BattleGuild)
         .where(BattleGuild.alliance_id == albion_id)
         .order_by(BattleGuild.id.desc())
         .limit(1)
-    ).first()
+    )).first()
     if not bg:
         raise HTTPException(404, "Aliança não encontrada")
 
@@ -1481,30 +1462,30 @@ def _build_alliance_payload_sync(db: Session, albion_id: str) -> dict:
     _load_progress[key] = (token, "stats")
     try:
         c7, c30 = _cutoffs()
-        kills_total, deaths_total = _totals(db, alliance_id=albion_id)
-        last_synced_at = db.scalar(
+        kills_total, deaths_total = await _totals(db, alliance_id=albion_id)
+        last_synced_at = await db.scalar(
             select(func.max(Battle.fetched_at))
             .join(BattleGuild, BattleGuild.battle_id == Battle.id)
             .where(BattleGuild.alliance_id == albion_id)
         )
-        ap = db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
+        ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
         _load_progress[key] = (token, "silver")
-        kill_fame = _fame_windows(db, c7, c30, alliance_id=albion_id)
-        silver_dropped = _silver_windows(db, c7, c30, alliance_id=albion_id)
-        battle_windows = _battle_windows(db, c7, c30, alliance_id=albion_id)
+        kill_fame = await _fame_windows(db, c7, c30, alliance_id=albion_id)
+        silver_dropped = await _silver_windows(db, c7, c30, alliance_id=albion_id)
+        battle_windows = await _battle_windows(db, c7, c30, alliance_id=albion_id)
         _load_progress[key] = (token, "members")
         # Mesmo alinhamento de default do lado guilda — ver comentário acima.
-        guilds = _guilds_in_alliance(db, albion_id, min_players=25, min_kills=5)
+        guilds = await _guilds_in_alliance(db, albion_id, min_players=25, min_kills=5)
         _load_progress[key] = (token, "history")
-        battles_count = db.scalar(
+        battles_count = (await db.scalar(
             select(func.count(func.distinct(BattleGuild.battle_id)))
             .join(Battle, Battle.id == BattleGuild.battle_id)
             .where(BattleGuild.alliance_id == albion_id, *_LETHAL_BIG)
-        ) or 0
-        roster_log = _alliance_roster_log(db, albion_id)
+        )) or 0
+        roster_log = await _alliance_roster_log(db, albion_id)
         # Primeira página da aba Batalhas — mesmo motivo do lado guilda.
         factions_cache: dict[int, list[dict]] = {}
-        page0_battles, page0_total = _battles_alliance(db, albion_id, 0, min_players=25, min_kills=5, factions_cache=factions_cache)
+        page0_battles, page0_total = await _battles_alliance(db, albion_id, 0, min_players=25, min_kills=5, factions_cache=factions_cache)
     finally:
         _pop_progress_if_owner(key, token)
 
@@ -1535,43 +1516,36 @@ async def _cold_load_alliance(albion_id: str) -> None:
     padrão de _cold_load_guild. Cacheia o resultado em _cold_cache. Timeout
     de COLD_LOAD_TIMEOUT (15min), mesmo padrão."""
     key = f"alliance:{albion_id}"
-    worker = asyncio.create_task(asyncio.to_thread(
-        _build_payload_with_session, _build_alliance_payload_sync, albion_id,
-    ))
-    try:
-        payload = await asyncio.wait_for(
-            asyncio.shield(worker),
-            timeout=COLD_LOAD_TIMEOUT.total_seconds(),
-        )
-        await asyncio.to_thread(_cold_cache_put, key, payload)
-    except asyncio.TimeoutError:
-        _load_progress[key] = (object(), "error:timeout")
-        _cold_timeout_at[key] = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
         try:
-            await worker
+            payload = await asyncio.wait_for(
+                asyncio.shield(_build_alliance_payload(db, albion_id)),
+                timeout=COLD_LOAD_TIMEOUT.total_seconds(),
+            )
+            await _cold_cache_put(key, payload)
+        except asyncio.TimeoutError:
+            _load_progress[key] = (object(), "error:timeout")
+            _cold_timeout_at[key] = datetime.now(timezone.utc)
         except Exception:
             pass
-    except Exception:
-        pass
-    finally:
-        _cold_load_tasks.pop(key, None)
+    _cold_load_tasks.pop(key, None)
 
 
 @router.get("/alliances/{albion_id}")
-async def alliance_profile(albion_id: str, db: Session = Depends(deps.db_session)):
+async def alliance_profile(albion_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Perfil de aliança. Cache-first + cold load em background — mesmo padrão
     de guild_profile. Serve do _cold_cache se válido; senão dispara task em
     background e retorna stub com _cold_load=true."""
     key = f"alliance:{albion_id}"
-    cached = _cold_cache_get(key, db)
+    cached = await _cold_cache_get(key, db)
     if cached is not None:
-        return _overlay_refresh_state(cached, db, AllianceProfile, albion_id)
+        return await _overlay_refresh_state(cached, db, AllianceProfile, albion_id)
 
-    bg_exists = db.scalars(
+    bg_exists = (await db.scalars(
         select(BattleGuild.alliance_id)
         .where(BattleGuild.alliance_id == albion_id)
         .limit(1)
-    ).first()
+    )).first()
     if not bg_exists:
         raise HTTPException(404, "Aliança não encontrada")
 
@@ -1586,7 +1560,7 @@ async def alliance_profile(albion_id: str, db: Session = Depends(deps.db_session
     return {"_cold_load": True, "albion_id": albion_id}
 
 
-async def _check_albion_entity(entity_type: str, albion_id: str, path: str, db: Session) -> dict:
+async def _check_albion_entity(entity_type: str, albion_id: str, path: str, db: AsyncSession) -> dict:
     """IDs de guilda/aliança são por REGIÃO (não existem nas outras 2, ver
     AlbionPlayer.region) — checar só o host Americas (como era antes)
     marcava "deletada" qualquer entidade de Europe/Asia, mesmo bem viva.
@@ -1615,50 +1589,50 @@ async def _check_albion_entity(entity_type: str, albion_id: str, path: str, db: 
                 if resp.status_code != 404:
                     inconclusive = True
 
-    row = db.scalar(select(DeletedProfile).where(
+    row = await db.scalar(select(DeletedProfile).where(
         DeletedProfile.entity_type == entity_type, DeletedProfile.albion_id == albion_id
     ))
     if found:
         if row is not None:
-            db.delete(row)
-            db.commit()
+            await db.delete(row)
+            await db.commit()
         return {"exists": True}
     if inconclusive:
         return {"exists": True, "unknown": True}
     if row is None:
         db.add(DeletedProfile(entity_type=entity_type, albion_id=albion_id,
                               deleted_at=datetime.now(timezone.utc)))
-        db.commit()
+        await db.commit()
     return {"exists": False}
 
 
 @router.get("/guilds/{albion_id}/check")
-async def check_guild(albion_id: str, db: Session = Depends(deps.db_session)):
+async def check_guild(albion_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     return await _check_albion_entity("guild", albion_id, "guilds", db)
 
 
 @router.get("/alliances/{albion_id}/check")
-async def check_alliance(albion_id: str, db: Session = Depends(deps.db_session)):
+async def check_alliance(albion_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     return await _check_albion_entity("alliance", albion_id, "alliances", db)
 
 
 @router.get("/guilds/{albion_id}/members")
-def guild_members(albion_id: str, min_players: int = 0, min_kills: int = 0, db: Session = Depends(deps.db_session)):
-    return _members(db, albion_id, min_players=min_players, min_kills=min_kills)
+async def guild_members(albion_id: str, min_players: int = 0, min_kills: int = 0, db: AsyncSession = Depends(deps.async_db_session)):
+    return await _members(db, albion_id, min_players=min_players, min_kills=min_kills)
 
 
 @router.get("/alliances/{albion_id}/members")
-def alliance_members(albion_id: str, min_players: int = 0, min_kills: int = 0, db: Session = Depends(deps.db_session)):
-    return _guilds_in_alliance(db, albion_id, min_players=min_players, min_kills=min_kills)
+async def alliance_members(albion_id: str, min_players: int = 0, min_kills: int = 0, db: AsyncSession = Depends(deps.async_db_session)):
+    return await _guilds_in_alliance(db, albion_id, min_players=min_players, min_kills=min_kills)
 
 
 @router.get("/guilds/{albion_id}/battles")
-def guild_battles(albion_id: str, page: int = 0, min_players: int = 25, min_kills: int = 5, db: Session = Depends(deps.db_session)):
-    battles, total = _battles_guild(db, albion_id, page, min_players=min_players, min_kills=min_kills)
+async def guild_battles(albion_id: str, page: int = 0, min_players: int = 25, min_kills: int = 5, db: AsyncSession = Depends(deps.async_db_session)):
+    battles, total = await _battles_guild(db, albion_id, page, min_players=min_players, min_kills=min_kills)
     return {"battles": battles, "total": total, "page": page, "pages": max(1, -(-total // PAGE_SIZE))}
 
 
 @router.get("/alliances/{albion_id}/battles")
-def alliance_battles(albion_id: str, page: int = 0, min_players: int = 25, min_kills: int = 5, db: Session = Depends(deps.db_session)):
-    battles, total = _battles_alliance(db, albion_id, page, min_players=min_players, min_kills=min_kills)
+async def alliance_battles(albion_id: str, page: int = 0, min_players: int = 25, min_kills: int = 5, db: AsyncSession = Depends(deps.async_db_session)):
+    battles, total = await _battles_alliance(db, albion_id, page, min_players=min_players, min_kills=min_kills)
     return {"battles": battles, "total": total, "page": page, "pages": max(1, -(-total // PAGE_SIZE))}

@@ -1,11 +1,8 @@
 # robots.txt — Ziggs (ziggs.xyz)
-# Permite crawlers do Google e do AdSense; bloqueia rotas autenticadas e
-# internas que nao fazem sentido indexar.
+# Permite crawlers; bloqueia rotas autenticadas e internas
+# que nao fazem sentido indexar.
 
 User-agent: Googlebot
-Allow: /
-
-User-agent: Mediapartners-Google
 Allow: /
 
 User-agent: *

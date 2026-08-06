@@ -1,13 +1,16 @@
 """Rotas de eventos (CTAs), escopadas por guilda."""
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.api import deps
+from app.db import SyncSessionLocal
 from app.api.schemas.events import (
     AssignIn, AssignmentOut, AttendanceIn, DeathIn, DeathUpdate, EscalationOut,
     EscalationPricesOut, EventCreate, EventDetail, EventSummary, EventUpdate,
@@ -331,7 +334,7 @@ async def regear_estimate(
     event_id: int,
     participant_id: int,
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("events.view")),
 ):
     from app.services.prices import estimate_regear
@@ -339,7 +342,7 @@ async def regear_estimate(
         est = await estimate_regear(db, participant_id, guild.id, event_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    db.commit()  # persiste preços fetchados
+    await db.commit()  # persiste preços fetchados
     return RegearEstimateOut(
         participant_id=est.participant_id,
         user_name=est.user_name,
@@ -565,7 +568,7 @@ def unassign_user(
 async def escalacao_prices(
     event_id: int,
     guild_id: int = Path(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission_provisioning("events.view")),
 ):
     """Média 5 cidades × qualidades 1-4 dos build_items de todas as roles da comp.
@@ -573,8 +576,15 @@ async def escalacao_prices(
     Honra o kill-switch: com `disable_background_fetchers=true` lê só o cache
     (ItemPriceLatest) sem rede — em dado móvel limitado fica prices={} (UI mostra
     "—"). Com fetchers ligados, sincroniza on-demand como o restante do site."""
+    # ponytail: esc_svc.build_escalation ainda é sync; roda em thread para não
+    # bloquear o event loop. Quando o serviço for migrado, remover o SyncSessionLocal
+    # e chamar direto com a AsyncSession.
+    def _build():
+        with SyncSessionLocal() as sdb:
+            return esc_svc.build_escalation(sdb, guild_id, event_id, None)
+
     try:
-        payload = esc_svc.build_escalation(db, guild_id, event_id, None)
+        payload = await asyncio.to_thread(_build)
     except esc_svc.ServiceError as e:
         raise HTTPException(status_code=404, detail=str(e))
     item_ids = {
@@ -590,13 +600,13 @@ async def escalacao_prices(
     if not get_settings().disable_background_fetchers:
         await sync_5city_prices(db, id_list)
 
-    rows = db.scalars(
+    rows = (await db.scalars(
         select(ItemPriceLatest).where(
             ItemPriceLatest.item_id.in_(id_list),
             ItemPriceLatest.city == _AVG_SENTINEL,
             ItemPriceLatest.quality.in_([2, 3, 4]),
         )
-    ).all()
+    )).all()
     by_item: dict[str, list[int]] = defaultdict(list)
     for r in rows:
         by_item[r.item_id].append(r.sell_price_min)

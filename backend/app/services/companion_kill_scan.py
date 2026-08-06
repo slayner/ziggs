@@ -14,9 +14,9 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import distinct, func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.players import PlayerKillEvent, KillIdProbe
 from app.services.kill_sweeper import _probe_kill_event
 from app.services.player_tracker import HOSTS, make_client, _record_kill_event, _upsert_event_players
@@ -71,11 +71,11 @@ def _kill_region_candidates(
 _kill_claims: dict[str, dict] = {}  # install_id -> {region, start, end, claimed_at}
 
 
-def _generate_kill_range(db: Session, region: str) -> tuple[int, int] | None:
+async def _generate_kill_range(db: AsyncSession, region: str) -> tuple[int, int] | None:
     """Gera um range de EventIds pra sondar, baseado nos buracos da região."""
-    raw = db.scalars(
+    raw = (await db.scalars(
         select(PlayerKillEvent.albion_event_id).where(PlayerKillEvent.region == region)
-    ).all()
+    )).all()
     ids: set[int] = set()
     for a in raw:
         try:
@@ -86,15 +86,15 @@ def _generate_kill_range(db: Session, region: str) -> tuple[int, int] | None:
         return None
 
     ids_desc = sorted(ids, reverse=True)
-    probed = {int(x) for x in db.scalars(select(KillIdProbe.albion_event_id)) if str(x).isdigit()}
+    probed = {int(x) for x in (await db.scalars(select(KillIdProbe.albion_event_id))) if str(x).isdigit()}
     candidates = _kill_region_candidates(ids_desc, probed | ids, KILL_RANGE_SIZE)
     if not candidates:
         return None
     return (min(candidates), max(candidates))
 
 
-def claim_kill_range(
-    db: Session, install_id: str, region: str | None = None,
+async def claim_kill_range(
+    db: AsyncSession, install_id: str, region: str | None = None,
 ) -> dict | None:
     """Companion pede trabalho de kill scan. Retorna {region, start, end} ou None."""
     now = _now()
@@ -117,7 +117,7 @@ def claim_kill_range(
     regions = [region] if region and region in COMPANION_KILL_REGIONS else list(COMPANION_KILL_REGIONS)
 
     for r in regions:
-        rng = _generate_kill_range(db, r)
+        rng = await _generate_kill_range(db, r)
         if rng:
             _kill_claims[install_id] = {
                 "region": r, "start": rng[0], "end": rng[1], "claimed_at": now,
@@ -128,7 +128,7 @@ def claim_kill_range(
 
 
 async def report_kill_range(
-    db: Session,
+    db: AsyncSession,
     install_id: str,
     region: str,
     event_id_start: int,
@@ -160,11 +160,11 @@ async def report_kill_range(
         if status == "found" and raw is not None and str(raw.get("EventId")) == str(eid):
             try:
                 await _upsert_event_players(db, raw, region)
-                _record_kill_event(db, raw, region, commit=False)
+                await _record_kill_event(db, raw, region, commit=False)
                 accepted += 1
             except Exception as e:
                 log.debug("kill_scan: erro ao ingerir event %s (%s): %s", eid, region, e)
-                db.rollback()
+                await db.rollback()
                 status = "missing"
         elif status == "missing":
             pass
@@ -172,7 +172,7 @@ async def report_kill_range(
             status = "error"
 
         if status != "error":
-            probe = db.get(KillIdProbe, str(eid))
+            probe = await db.get(KillIdProbe, str(eid))
             if probe is None:
                 db.add(KillIdProbe(
                     albion_event_id=str(eid), status=status,
@@ -183,7 +183,7 @@ async def report_kill_range(
                 probe.region = region
                 probe.probed_at = _now()
 
-    db.commit()
+    await db.commit()
     del _kill_claims[install_id]
     return (accepted, len(reported) - accepted)
 

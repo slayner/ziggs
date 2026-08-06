@@ -31,10 +31,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.auth.session import make_companion_token
-from app.db import get_session
+from app.db import get_async_session, get_session
 from app.models.events import Event, EventSignup
 from app.models.loot import ItemPriceCache
 from app.models.lootlog import LootLogSubmission
@@ -237,9 +238,9 @@ _LOOTLOG_STATES = ("in_progress", "review")
 
 
 @router.get("/companion/lootlog/active-events")
-def companion_active_events(
-    user: User = Depends(deps.require_companion_user),
-    db: Session = Depends(get_session),
+async def companion_active_events(
+    user: User = Depends(deps.require_companion_user_async),
+    db: AsyncSession = Depends(get_async_session),
 ) -> list[CompanionEventOut]:
     """Eventos do usuário em andamento ou em revisão, de TODAS as guildas.
 
@@ -247,7 +248,7 @@ def companion_active_events(
     participa e em qual guilda cada um está — pedir o snowflake da guilda ao
     usuário era trabalho manual pra descobrir algo que o backend já sabe.
     """
-    rows = db.execute(
+    rows = (await db.execute(
         select(Event, Guild.name)
         .join(EventSignup, EventSignup.event_id == Event.id)
         .outerjoin(Guild, Guild.id == Event.guild_id)
@@ -256,7 +257,7 @@ def companion_active_events(
             EventSignup.user_id == user.id,
         )
         .order_by(Event.id.desc())
-    ).all()
+    )).all()
     return [
         CompanionEventOut(
             event_id=ev.id,
@@ -340,9 +341,9 @@ class SilverEstimateOut(BaseModel):
 
 
 @router.post("/companion/lootlog/silver-estimate", response_model=SilverEstimateOut)
-def companion_lootlog_silver_estimate(
+async def companion_lootlog_silver_estimate(
     body: SilverEstimateIn,
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ) -> SilverEstimateOut:
     """Estimativa ILUSTRATIVA do valor em prata dos loots capturados nesta
     sessão. Só pra alimentar o badge da aba Lootlog no companion — não é
@@ -361,9 +362,9 @@ def companion_lootlog_silver_estimate(
     prices_by_id: dict[str, int] = {}
     for i in range(0, len(all_ids), 500):
         chunk = all_ids[i : i + 500]
-        for row in db.scalars(
+        for row in (await db.scalars(
             select(ItemPriceCache).where(ItemPriceCache.item_type.in_(chunk))
-        ):
+        )):
             prices_by_id[row.item_type] = row.silver_value
 
     return SilverEstimateOut(silver_total=sum(
@@ -382,9 +383,9 @@ class ScanClaimOut(BaseModel):
 
 
 @router.post("/companion/scan/claim")
-def scan_claim(
+async def scan_claim(
     request: Request,
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
     x_ziggs_install: str | None = Header(None),
 ) -> ScanClaimOut | None:
     """Pega a próxima tarefa de scan. Retorna 204 se não houver trabalho.
@@ -394,7 +395,7 @@ def scan_claim(
     install = _install_id(x_ziggs_install)
     if install is None:
         raise HTTPException(400, "X-Ziggs-Install inválido")
-    task = companion_scan.claim_task(db, install)
+    task = await companion_scan.claim_task(db, install)
     if task is None:
         log.info("companion/scan/claim [%s] sem trabalho", _client_ip(request))
         raise HTTPException(204)  # No Content
@@ -429,7 +430,7 @@ async def scan_report(
     payload: ScanReportIn,
     request: Request,
     x_ziggs_install: str | None = Header(None),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ) -> ScanReportOut:
     install = _install_id(x_ziggs_install)
     if install is None:
@@ -464,17 +465,17 @@ class KillScanClaimOut(BaseModel):
 
 
 @router.post("/companion/kill-scan/claim")
-def kill_scan_claim(
+async def kill_scan_claim(
     request: Request,
     region: str | None = Query(None),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
     x_ziggs_install: str | None = Header(None),
 ) -> KillScanClaimOut | None:
     """Pega um range de EventIds pra sondar. 204 = sem trabalho."""
     install = _install_id(x_ziggs_install)
     if install is None:
         raise HTTPException(400, "X-Ziggs-Install inválido")
-    result = companion_kill_scan.claim_kill_range(db, install, region)
+    result = await companion_kill_scan.claim_kill_range(db, install, region)
     if result is None:
         raise HTTPException(204)
     log.info("companion/kill-scan/claim [%s] install=%s region=%s range=%d-%d",
@@ -506,7 +507,7 @@ async def kill_scan_report(
     payload: KillScanReportIn,
     request: Request,
     x_ziggs_install: str | None = Header(None),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ) -> KillScanReportOut:
     install = _install_id(x_ziggs_install)
     if install is None:
@@ -584,9 +585,9 @@ def companion_items_map(response: Response) -> dict[str, str]:
 
 
 @router.get("/companion/price-quotes")
-def companion_price_quotes(
+async def companion_price_quotes(
     items: str = Query(description="IDs separados por vírgula"),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Preços do nosso banco — público, sem auth, sem guild_id.
     Aceita UniqueName (T4_CLOTH_LEVEL2) ou game_name ("Rare Fine Cloth").
@@ -599,9 +600,9 @@ def companion_price_quotes(
     out: list[dict] = []
     for i in range(0, len(item_ids), 500):
         chunk = item_ids[i : i + 500]
-        for row in db.scalars(
+        for row in (await db.scalars(
             select(ItemPriceLatest).where(ItemPriceLatest.item_id.in_(chunk))
-        ):
+        )):
             out.append({
                 "item_id": row.item_id,
                 "city": row.city,
@@ -617,9 +618,9 @@ class CompanionStatsOut(BaseModel):
 
 
 @router.get("/companion/stats")
-def companion_stats(db: Session = Depends(get_session)) -> CompanionStatsOut:
+async def companion_stats(db: AsyncSession = Depends(get_async_session)) -> CompanionStatsOut:
     """Quantos companions ativos agora (instalações distintas, não processos)."""
-    return CompanionStatsOut(active=companion_scan.count_active_companions(db))
+    return CompanionStatsOut(active=await companion_scan.count_active_companions(db))
 
 
 class WarmIn(BaseModel):
@@ -770,11 +771,11 @@ def market_history_submit(
 
 
 @router.post("/companion/prices/submit")
-def prices_submit(
+async def prices_submit(
     payload: PriceSubmitIn,
     request: Request,
     x_ziggs_install: str | None = Header(default=None),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(get_async_session),
 ) -> PriceSubmitOut:
     """Ingere preços de mercado capturados por companions via packet capture.
 
@@ -804,7 +805,7 @@ def prices_submit(
     total_rejected = 0
     for i in range(0, len(all_rows), _CHUNK_SIZE):
         chunk = all_rows[i : i + _CHUNK_SIZE]
-        accepted, rejected = prices.upsert_companion_prices(db, chunk, source_install=install)
+        accepted, rejected = await prices.upsert_companion_prices(db, chunk, source_install=install)
         total_accepted += accepted
         total_rejected += rejected
 

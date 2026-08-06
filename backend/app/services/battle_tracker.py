@@ -22,9 +22,9 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import (
     Battle, BattleGuild, BattleKillEvent, BattleParticipant, BattleSide, BattleSyncCursor,
 )
@@ -171,7 +171,7 @@ async def fetch_events(client: httpx.AsyncClient, host: str, albion_battle_id: s
     return events
 
 
-def upsert_battle_light(db: Session, raw: dict, region: str) -> Battle | None:
+async def upsert_battle_light(db: AsyncSession, raw: dict, region: str) -> Battle | None:
     """NÃO comita — quem chama isso num laço (sync_recent, backfill_step)
     deve comitar UMA VEZ depois do laço inteiro, não a cada batalha. Commit
     por batalha (até ~400/região por ciclo agora) significava centenas de
@@ -190,7 +190,7 @@ def upsert_battle_light(db: Session, raw: dict, region: str) -> Battle | None:
 
     now = datetime.now(timezone.utc)
     players_total = len(raw.get("players") or {})
-    battle = db.scalar(
+    battle = await db.scalar(
         select(Battle).where(Battle.region == region, Battle.albion_id == albion_id)
     )
 
@@ -198,8 +198,8 @@ def upsert_battle_light(db: Session, raw: dict, region: str) -> Battle | None:
     # nem cria — retorna None e o caller grava probe 'missing'.
     if players_total < DEEP_PROCESS_MIN_PLAYERS:
         if battle is not None:
-            db.delete(battle)
-            db.flush()
+            await db.delete(battle)
+            await db.flush()
         return None
 
     if battle is None:
@@ -216,7 +216,7 @@ def upsert_battle_light(db: Session, raw: dict, region: str) -> Battle | None:
             fetched_at=now,
         )
         db.add(battle)
-        db.flush()
+        await db.flush()
     else:
         battle.end_time = _parse_dt(raw["endTime"]) if raw.get("endTime") else battle.end_time
         battle.total_fame = raw.get("totalFame") or 0
@@ -228,7 +228,7 @@ def upsert_battle_light(db: Session, raw: dict, region: str) -> Battle | None:
         gid = g.get("id", "")
         if not gid:
             continue
-        existing = db.scalar(
+        existing = await db.scalar(
             select(BattleGuild).where(
                 BattleGuild.battle_id == battle.id,
                 BattleGuild.albion_guild_id == gid,
@@ -251,13 +251,13 @@ def upsert_battle_light(db: Session, raw: dict, region: str) -> Battle | None:
             ))
 
         gname, aid, aname = g.get("name"), g.get("allianceId") or None, g.get("alliance") or None
-        search_index.safe_upsert_entry(
+        await search_index.safe_upsert_entry_async(
             db, entity_type="guild", entity_id=gid, display_name=gname, alliance_name=aname,
         )
         if aid:
-            search_index.safe_upsert_entry(db, entity_type="alliance", entity_id=aid, display_name=aname)
+            await search_index.safe_upsert_entry_async(db, entity_type="alliance", entity_id=aid, display_name=aname)
 
-    db.flush()  # visível pra outras queries NESTA sessão, sem fsync — quem chama comita no fim do laço
+    await db.flush()  # visível pra outras queries NESTA sessão, sem fsync — quem chama comita no fim do laço
     return battle
 
 
@@ -392,7 +392,7 @@ async def _fetch_deep_data(
             await asyncio.sleep(wait)
 
 
-def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list[dict]) -> bool:
+def _write_deep_data(battle_id: int, raw: dict | None, events: list[dict]) -> bool:
     """Retorna False quando não deu pra gravar nada (API sem detalhe/eventos
     ainda, ou eventos sem participante nenhum) — NÃO significa "não tinha
     nada pra processar": Battle.kill_count>0 do resumo leve já prova que
@@ -401,207 +401,225 @@ def _write_deep_data(db: Session, battle: Battle, raw: dict | None, events: list
     indexou — o chamador (_deep_process_batch/_retry_stuck_battles) precisa
     tratar False como falha e marcar reprocess_reason, senão a batalha fica
     travada em "light" pra sempre, sem nenhum sinal de erro (foi exatamente
-    isso que deixava batalha nova com "zona desconhecida" e detalhe vazio)."""
+    isso que deixava batalha nova com "zona desconhecida" e detalhe vazio).
+
+    Roda numa thread separada (chamada via asyncio.to_thread) com sua PRÓPRIA
+    SyncSessionLocal — AsyncSession não é thread-safe. O battle_id (e não o
+    objeto Battle) é o que cruza a fronteira async→thread: a batalha é
+    re-carregada aqui dentro, e pode ter sido deletada/concorrída enquanto
+    isso — nesse caso retorna False (nada a fazer)."""
     import time as _t
     _t0 = _t.monotonic()
     if not events and not raw:
         return False
 
-    # Fecha qualquer read transaction aberta (a sessão carregou Battle e fez
-    # HTTP fetches antes de chegar aqui). Em WAL, upgrade read→write com
-    # snapshot stale dá SQLITE_BUSY_SNAPSHOT que busy_timeout NÃO resolve —
-    # fica preso até 130s+. Commitar fecha a read tx e os DELETEs abaixo
-    # abrem uma write tx nova, sem snapshot obsoleto.
-    db.commit()
+    db = SyncSessionLocal()
+    try:
+        battle = db.get(Battle, battle_id)
+        if battle is None:
+            return False
 
-    # Reconstrói do zero a cada poll: batalhas ZvZ têm no máx. ~2000 eventos,
-    # é mais simples e idempotente do que fazer merge incremental.
-    db.query(BattleKillEvent).filter(BattleKillEvent.battle_id == battle.id).delete()
-    db.query(BattleParticipant).filter(BattleParticipant.battle_id == battle.id).delete()
-    db.query(BattleSide).filter(BattleSide.battle_id == battle.id).delete()
-    db.flush()
-    _t_flush1 = _t.monotonic()
+        # Fecha qualquer read transaction aberta (a sessão carregou Battle e fez
+        # HTTP fetches antes de chegar aqui). Em WAL, upgrade read→write com
+        # snapshot stale dá SQLITE_BUSY_SNAPSHOT que busy_timeout NÃO resolve —
+        # fica preso até 130s+. Commitar fecha a read tx e os DELETEs abaixo
+        # abrem uma write tx nova, sem snapshot obsoleto.
+        db.commit()
 
-    participants: dict[str, dict] = _seed_from_summary(raw) if raw else {}
-    kills_between: dict[tuple[str, str], int] = {}
-    kill_rows: list[tuple[
-        str, str, int, int | None, str | None, str | None,
-        dict | None, dict | None, list[dict] | None, list[dict] | None,
-    ]] = []
+        # Reconstrói do zero a cada poll: batalhas ZvZ têm no máx. ~2000 eventos,
+        # é mais simples e idempotente do que fazer merge incremental.
+        db.query(BattleKillEvent).filter(BattleKillEvent.battle_id == battle.id).delete()
+        db.query(BattleParticipant).filter(BattleParticipant.battle_id == battle.id).delete()
+        db.query(BattleSide).filter(BattleSide.battle_id == battle.id).delete()
+        db.flush()
+        _t_flush1 = _t.monotonic()
 
-    for ev in events:
-        killer, victim = ev.get("Killer") or {}, ev.get("Victim") or {}
-        krow, vrow = _touch_participant(participants, killer), _touch_participant(participants, victim)
-        killer_id = killer.get("Id") or killer.get("id")
+        participants: dict[str, dict] = _seed_from_summary(raw) if raw else {}
+        kills_between: dict[tuple[str, str], int] = {}
+        kill_rows: list[tuple[
+            str, str, int, int | None, str | None, str | None,
+            dict | None, dict | None, list[dict] | None, list[dict] | None,
+        ]] = []
 
-        for p in (ev.get("Participants") or []):
-            prow = _touch_participant(participants, p)
-            if prow is not None:
-                prow["damage_dealt"] += float(p.get("DamageDone") or 0)
-                prow["healing_done"] += float(p.get("SupportHealingDone") or 0)
-                # Participants[] inclui o próprio matador — só conta assist
-                # quem participou SEM ser quem deu o golpe final.
-                pid = p.get("Id") or p.get("id")
-                if pid and pid != killer_id:
-                    prow["assists"] += 1
+        for ev in events:
+            killer, victim = ev.get("Killer") or {}, ev.get("Victim") or {}
+            krow, vrow = _touch_participant(participants, killer), _touch_participant(participants, victim)
+            killer_id = killer.get("Id") or killer.get("id")
 
-        # kills/deaths/kill_fame já vêm autoritativos do resumo (_seed_from_summary)
-        # — aqui só soma dano tomado, que não existe lá.
-        if vrow is not None:
-            vrow["damage_taken"] += sum(
-                float(p.get("DamageDone") or 0) for p in (ev.get("Participants") or [])
-            )
+            for p in (ev.get("Participants") or []):
+                prow = _touch_participant(participants, p)
+                if prow is not None:
+                    prow["damage_dealt"] += float(p.get("DamageDone") or 0)
+                    prow["healing_done"] += float(p.get("SupportHealingDone") or 0)
+                    # Participants[] inclui o próprio matador — só conta assist
+                    # quem participou SEM ser quem deu o golpe final.
+                    pid = p.get("Id") or p.get("id")
+                    if pid and pid != killer_id:
+                        prow["assists"] += 1
 
-        fame = int(ev.get("TotalVictimKillFame") or 0)
-        group_member_count = ev.get("groupMemberCount")
-        group_member_count = int(group_member_count) if group_member_count is not None else None
-        if krow is not None and vrow is not None:
-            kf = battle_sides.faction_key(krow["guild_id"], krow["alliance_id"], krow["albion_player_id"])
-            vf = battle_sides.faction_key(vrow["guild_id"], vrow["alliance_id"], vrow["albion_player_id"])
-            kills_between[(kf, vf)] = kills_between.get((kf, vf), 0) + 1
+            # kills/deaths/kill_fame já vêm autoritativos do resumo (_seed_from_summary)
+            # — aqui só soma dano tomado, que não existe lá.
+            if vrow is not None:
+                vrow["damage_taken"] += sum(
+                    float(p.get("DamageDone") or 0) for p in (ev.get("Participants") or [])
+                )
 
-        kill_rows.append((
-            str(ev.get("EventId")), ev.get("TimeStamp"), fame, group_member_count,
-            killer.get("Id") or killer.get("id"),
-            victim.get("Id") or victim.get("id"),
-            _simplify_equipment(killer["Equipment"]) if killer.get("Equipment") else None,
-            _simplify_equipment(victim["Equipment"]) if victim.get("Equipment") else None,
-            _simplify_inventory(killer.get("Inventory")),
-            _simplify_inventory(victim.get("Inventory")),
-        ))
+            fame = int(ev.get("TotalVictimKillFame") or 0)
+            group_member_count = ev.get("groupMemberCount")
+            group_member_count = int(group_member_count) if group_member_count is not None else None
+            if krow is not None and vrow is not None:
+                kf = battle_sides.faction_key(krow["guild_id"], krow["alliance_id"], krow["albion_player_id"])
+                vf = battle_sides.faction_key(vrow["guild_id"], vrow["alliance_id"], vrow["albion_player_id"])
+                kills_between[(kf, vf)] = kills_between.get((kf, vf), 0) + 1
 
-    if not participants:
-        return False
-
-    factions, player_faction = battle_sides.build_factions(participants)
-
-    analysis = battle_sides.analyze(factions, kills_between)
-
-    side_rows: dict[str, BattleSide] = {}
-    for label in set(analysis.side_of.values()):
-        side = BattleSide(
-            battle_id=battle.id, label=label, is_rats=(label == "rats"),
-            player_count=analysis.player_count.get(label, 0),
-            score=analysis.score.get(label, 0),
-        )
-        db.add(side)
-        side_rows[label] = side
-    db.flush()
-    _t_flush2 = _t.monotonic()
-
-    participant_rows: dict[str, BattleParticipant] = {}
-    for pid, row in participants.items():
-        side = side_rows.get(analysis.side_of.get(player_faction[pid], "rats"))
-        prow = BattleParticipant(
-            battle_id=battle.id, albion_player_id=pid, name=row["name"],
-            guild_id=row["guild_id"], guild_name=row["guild_name"],
-            alliance_id=row["alliance_id"], alliance_name=row["alliance_name"],
-            side_id=side.id if side else None,
-            kills=row["kills"], deaths=row["deaths"], kill_fame=row["kill_fame"],
-            ip=row["ip"], damage_dealt=row["damage_dealt"],
-            damage_taken=row["damage_taken"], healing_done=row["healing_done"],
-            assists=row["assists"], equipment=row["equipment"],
-        )
-        db.add(prow)
-        participant_rows[pid] = prow
-        search_index.safe_upsert_entry(
-            db, entity_type="player", entity_id=pid, display_name=row["name"],
-            region=battle.region, guild_name=row["guild_name"], alliance_name=row["alliance_name"],
-        )
-    db.flush()
-    _t_flush3 = _t.monotonic()
-
-    has_large_group = False
-    small_group_failed = False
-    zero_fame = False
-    for albion_event_id, ts, fame, group_member_count, kid, vid, killer_equipment, victim_equipment, killer_inventory, victim_inventory in kill_rows:
-        krow, vrow = participant_rows.get(kid), participant_rows.get(vid)
-        db.add(BattleKillEvent(
-            battle_id=battle.id, albion_event_id=albion_event_id,
-            timestamp=_parse_dt(ts), fame=fame,
-            killer_participant_id=krow.id if krow else None,
-            victim_participant_id=vrow.id if vrow else None,
-            killer_side_id=krow.side_id if krow else None,
-            victim_side_id=vrow.side_id if vrow else None,
-            killer_equipment=killer_equipment,
-            victim_equipment=victim_equipment,
-            killer_inventory=killer_inventory,
-            victim_inventory=victim_inventory,
-        ))
-        if fame <= 0:
-            zero_fame = True
-        elif group_member_count is not None and group_member_count > ORANGE_GROUP_LIMIT:
-            # groupMemberCount é o grupo real do matador, não guilda nem todos
-            # os contributors. Zona laranja limita grupo a 3; um evento acima
-            # disso prova que o mapa é lethal.
-            has_large_group = True
-        elif not is_likely_lethal(fame, victim_equipment, group_member_count):
-            small_group_failed = True
-
-    # Cada Battle.albion_id é um mapa só. Fame zero prova não-lethal; grupo >3
-    # prova que não é laranja. Sem essa prova, todos os grupos pequenos precisam
-    # passar pela estimativa conservadora.
-    is_lethal = not zero_fame and (has_large_group or not small_group_failed)
-
-    for bg in db.scalars(select(BattleGuild).where(BattleGuild.battle_id == battle.id)):
-        # BattleGuild só existe pra guilda de verdade (albion_guild_id nunca
-        # vazio aqui, ver upsert_battle_light) — nunca cai no fallback por
-        # jogador, não precisa de player_id.
-        fk = battle_sides.faction_key(bg.albion_guild_id, bg.alliance_id, None)
-        label = analysis.side_of.get(fk)
-        bg.side_id = side_rows[label].id if label else None
-
-    battle.processing_tier = "deep"
-    a_count = analysis.player_count.get("A", 0)
-    b_count = analysis.player_count.get("B", 0)
-    battle.is_zvz = a_count >= ZVZ_MIN_PLAYERS_PER_SIDE and b_count >= ZVZ_MIN_PLAYERS_PER_SIDE
-    battle.is_lethal = is_lethal
-
-    # Batalha não-letal (arena/duelo) com >=10 jogadores: deep-processamos pra
-    # descobrir que NÃO é lethal, mas não armazenamos — é a mesma doutrina das
-    # batalhas pequenas. CASCADE limpa participants/sides/events/guilds que
-    # acabamos de gravar. Grava probe 'missing' pra o sweeper/companion não
-    # re-sondar o ID (se não existir ainda — batalhas do feed normal não têm
-    # probe). Retorna False pra o caller não tentar re-deep-processar.
-    if not is_lethal:
-        from app.models.battles import BattleIdProbe
-        aid = battle.albion_id
-        if db.get(BattleIdProbe, aid) is None:
-            db.add(BattleIdProbe(
-                albion_id=aid, status="missing", region=battle.region,
-                probed_at=datetime.now(timezone.utc),
+            kill_rows.append((
+                str(ev.get("EventId")), ev.get("TimeStamp"), fame, group_member_count,
+                killer.get("Id") or killer.get("id"),
+                victim.get("Id") or victim.get("id"),
+                _simplify_equipment(killer["Equipment"]) if killer.get("Equipment") else None,
+                _simplify_equipment(victim["Equipment"]) if victim.get("Equipment") else None,
+                _simplify_inventory(killer.get("Inventory")),
+                _simplify_inventory(victim.get("Inventory")),
             ))
-        db.delete(battle)
+
+        if not participants:
+            return False
+
+        factions, player_faction = battle_sides.build_factions(participants)
+
+        analysis = battle_sides.analyze(factions, kills_between)
+
+        side_rows: dict[str, BattleSide] = {}
+        for label in set(analysis.side_of.values()):
+            side = BattleSide(
+                battle_id=battle.id, label=label, is_rats=(label == "rats"),
+                player_count=analysis.player_count.get(label, 0),
+                score=analysis.score.get(label, 0),
+            )
+            db.add(side)
+            side_rows[label] = side
+        db.flush()
+        _t_flush2 = _t.monotonic()
+
+        participant_rows: dict[str, BattleParticipant] = {}
+        for pid, row in participants.items():
+            side = side_rows.get(analysis.side_of.get(player_faction[pid], "rats"))
+            prow = BattleParticipant(
+                battle_id=battle.id, albion_player_id=pid, name=row["name"],
+                guild_id=row["guild_id"], guild_name=row["guild_name"],
+                alliance_id=row["alliance_id"], alliance_name=row["alliance_name"],
+                side_id=side.id if side else None,
+                kills=row["kills"], deaths=row["deaths"], kill_fame=row["kill_fame"],
+                ip=row["ip"], damage_dealt=row["damage_dealt"],
+                damage_taken=row["damage_taken"], healing_done=row["healing_done"],
+                assists=row["assists"], equipment=row["equipment"],
+            )
+            db.add(prow)
+            participant_rows[pid] = prow
+            search_index.safe_upsert_entry(
+                db, entity_type="player", entity_id=pid, display_name=row["name"],
+                region=battle.region, guild_name=row["guild_name"], alliance_name=row["alliance_name"],
+            )
+        db.flush()
+        _t_flush3 = _t.monotonic()
+
+        has_large_group = False
+        small_group_failed = False
+        zero_fame = False
+        for albion_event_id, ts, fame, group_member_count, kid, vid, killer_equipment, victim_equipment, killer_inventory, victim_inventory in kill_rows:
+            krow, vrow = participant_rows.get(kid), participant_rows.get(vid)
+            db.add(BattleKillEvent(
+                battle_id=battle.id, albion_event_id=albion_event_id,
+                timestamp=_parse_dt(ts), fame=fame,
+                killer_participant_id=krow.id if krow else None,
+                victim_participant_id=vrow.id if vrow else None,
+                killer_side_id=krow.side_id if krow else None,
+                victim_side_id=vrow.side_id if vrow else None,
+                killer_equipment=killer_equipment,
+                victim_equipment=victim_equipment,
+                killer_inventory=killer_inventory,
+                victim_inventory=victim_inventory,
+            ))
+            if fame <= 0:
+                zero_fame = True
+            elif group_member_count is not None and group_member_count > ORANGE_GROUP_LIMIT:
+                # groupMemberCount é o grupo real do matador, não guilda nem todos
+                # os contributors. Zona laranja limita grupo a 3; um evento acima
+                # disso prova que o mapa é lethal.
+                has_large_group = True
+            elif not is_likely_lethal(fame, victim_equipment, group_member_count):
+                small_group_failed = True
+
+        # Cada Battle.albion_id é um mapa só. Fame zero prova não-lethal; grupo >3
+        # prova que não é laranja. Sem essa prova, todos os grupos pequenos precisam
+        # passar pela estimativa conservadora.
+        is_lethal = not zero_fame and (has_large_group or not small_group_failed)
+
+        for bg in db.scalars(select(BattleGuild).where(BattleGuild.battle_id == battle.id)):
+            # BattleGuild só existe pra guilda de verdade (albion_guild_id nunca
+            # vazio aqui, ver upsert_battle_light) — nunca cai no fallback por
+            # jogador, não precisa de player_id.
+            fk = battle_sides.faction_key(bg.albion_guild_id, bg.alliance_id, None)
+            label = analysis.side_of.get(fk)
+            bg.side_id = side_rows[label].id if label else None
+
+        battle.processing_tier = "deep"
+        a_count = analysis.player_count.get("A", 0)
+        b_count = analysis.player_count.get("B", 0)
+        battle.is_zvz = a_count >= ZVZ_MIN_PLAYERS_PER_SIDE and b_count >= ZVZ_MIN_PLAYERS_PER_SIDE
+        battle.is_lethal = is_lethal
+
+        # Batalha não-letal (arena/duelo) com >=10 jogadores: deep-processamos pra
+        # descobrir que NÃO é lethal, mas não armazenamos — é a mesma doutrina das
+        # batalhas pequenas. CASCADE limpa participants/sides/events/guilds que
+        # acabamos de gravar. Grava probe 'missing' pra o sweeper/companion não
+        # re-sondar o ID (se não existir ainda — batalhas do feed normal não têm
+        # probe). Retorna False pra o caller não tentar re-deep-processar.
+        if not is_lethal:
+            from app.models.battles import BattleIdProbe
+            aid = battle.albion_id
+            if db.get(BattleIdProbe, aid) is None:
+                db.add(BattleIdProbe(
+                    albion_id=aid, status="missing", region=battle.region,
+                    probed_at=datetime.now(timezone.utc),
+                ))
+            db.delete(battle)
+            _t_c0 = _t.monotonic()
+            db.commit()
+            _t_commit = _t.monotonic() - _t_c0
+            _dt = _t.monotonic() - _t0
+            if _dt > 1.0:
+                log.warning("_write_deep_data: LENTO — %s (%d eventos, %.1fs, não-lethal) flush1=%.1fs flush2=%.1fs flush3=%.1fs mid=%.1fs commit=%.1fs",
+                            battle.albion_id, len(events), _dt,
+                            _t_flush1 - _t0, _t_flush2 - _t_flush1, _t_flush3 - _t_flush2,
+                            _t_c0 - _t_flush3, _t_commit)
+            return True  # deep-processou de verdade (e descartou)
+
         _t_c0 = _t.monotonic()
         db.commit()
         _t_commit = _t.monotonic() - _t_c0
         _dt = _t.monotonic() - _t0
         if _dt > 1.0:
-            log.warning("_write_deep_data: LENTO — %s (%d eventos, %.1fs, não-lethal) flush1=%.1fs flush2=%.1fs flush3=%.1fs mid=%.1fs commit=%.1fs",
+            log.warning("_write_deep_data: LENTO — %s (%d eventos, %.1fs) flush1=%.1fs flush2=%.1fs flush3=%.1fs mid=%.1fs commit=%.1fs",
                         battle.albion_id, len(events), _dt,
                         _t_flush1 - _t0, _t_flush2 - _t_flush1, _t_flush3 - _t_flush2,
                         _t_c0 - _t_flush3, _t_commit)
-        return True  # deep-processou de verdade (e descartou)
-
-    _t_c0 = _t.monotonic()
-    db.commit()
-    _t_commit = _t.monotonic() - _t_c0
-    _dt = _t.monotonic() - _t0
-    if _dt > 1.0:
-        log.warning("_write_deep_data: LENTO — %s (%d eventos, %.1fs) flush1=%.1fs flush2=%.1fs flush3=%.1fs mid=%.1fs commit=%.1fs",
-                    battle.albion_id, len(events), _dt,
-                    _t_flush1 - _t0, _t_flush2 - _t_flush1, _t_flush3 - _t_flush2,
-                    _t_c0 - _t_flush3, _t_commit)
-    return True
+        return True
+    finally:
+        db.close()
 
 
-async def deep_process(client: httpx.AsyncClient, db: Session, battle: Battle, host: str) -> None:
+async def deep_process(client: httpx.AsyncClient, db: AsyncSession, battle: Battle, host: str) -> None:
     raw, events = await _fetch_deep_data(client, host, battle)
     # ponytail: SQL síncrono offloaded — sem to_thread trava o event loop inteiro
-    ok = await asyncio.to_thread(_write_deep_data, db, battle, raw, events)
+    ok = await asyncio.to_thread(_write_deep_data, battle.id, raw, events)
     if not ok:
-        battle.reprocess_reason = battle.reprocess_reason or REPROCESS_REASON_EMPTY
-        db.commit()
+        # _write_deep_data rodou numa sessão sync separada; re-carrega a batalha
+        # da sessão async antes de tocar (pode ter sido deletada/concorrída).
+        fresh = await db.get(Battle, battle.id)
+        if fresh is not None:
+            fresh.reprocess_reason = fresh.reprocess_reason or REPROCESS_REASON_EMPTY
+            await db.commit()
 
 
 async def fetch_battle_detail(client: httpx.AsyncClient, host: str, albion_id: str) -> dict | None:
@@ -613,19 +631,19 @@ async def fetch_battle_detail(client: httpx.AsyncClient, host: str, albion_id: s
     return data if isinstance(data, dict) and data.get("id") else None
 
 
-async def resolve_by_albion_id(client: httpx.AsyncClient, db: Session, albion_id: str) -> Battle | None:
+async def resolve_by_albion_id(client: httpx.AsyncClient, db: AsyncSession, albion_id: str) -> Battle | None:
     """Acha a batalha pelo ID cru do Albion — primeiro na nossa base (qualquer
     região), senão tenta os 3 hosts (cada ID só existe de fato numa região, as
     outras 2 respondem 404). Resolvida explicitamente por alguém, sempre processa
     em profundidade (builds/lados) mesmo que a luta seja pequena."""
-    existing = db.scalars(
+    existing = (await db.scalars(
         select(Battle).where(Battle.albion_id == albion_id).order_by(Battle.start_time.desc())
-    ).all()
+    )).all()
     battle = existing[0] if existing else None
     host = HOSTS.get(battle.region) if battle else None
     # Libera read tx antes do HTTP — read tx aberta durante await impede
     # wal_checkpoint, cresce o WAL, commit futuro fsync-o inteiro.
-    db.commit()
+    await db.commit()
 
     if battle is None:
         for region, candidate_host in HOSTS.items():
@@ -635,8 +653,8 @@ async def resolve_by_albion_id(client: httpx.AsyncClient, db: Session, albion_id
                 continue
             if raw is None:
                 continue
-            battle = upsert_battle_light(db, raw, region)
-            db.commit()
+            battle = await upsert_battle_light(db, raw, region)
+            await db.commit()
             host = candidate_host
             break
 
@@ -652,12 +670,12 @@ async def resolve_by_albion_id(client: httpx.AsyncClient, db: Session, albion_id
     return battle
 
 
-async def _get_cursor(db: Session, region: str) -> BattleSyncCursor:
-    cursor = db.get(BattleSyncCursor, region)
+async def _get_cursor(db: AsyncSession, region: str) -> BattleSyncCursor:
+    cursor = await db.get(BattleSyncCursor, region)
     if cursor is None:
         cursor = BattleSyncCursor(region=region, next_offset=0, done=False)
         db.add(cursor)
-        db.flush()
+        await db.flush()
     return cursor
 
 
@@ -721,7 +739,7 @@ async def _backfill_deep_fetch_all(
 RETRY_STUCK_BATCH = 20  # batalhas travadas em "light" retentadas por região a cada ciclo
 
 
-async def _retry_stuck_battles(client: httpx.AsyncClient, db: Session, region: str, host: str) -> int:
+async def _retry_stuck_battles(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str) -> int:
     """Batalhas que qualificavam pra deep (players_total >= DEEP_PROCESS_MIN_PLAYERS)
     mas tiveram o fetch falhando uma vez (rede instável, rate limit etc.) nunca são
     revisitadas pelo fluxo normal: o cursor do backfill só avança pra frente e o
@@ -736,7 +754,7 @@ async def _retry_stuck_battles(client: httpx.AsyncClient, db: Session, region: s
     falhasse no primeiro attempt ficava travada em "light" indefinidamente,
     sem ninguém pra tentar de novo — era exatamente o sintoma de "batalha
     fantasma" logo após o servidor subir."""
-    stuck = db.scalars(
+    stuck = (await db.scalars(
         select(Battle)
         .where(
             Battle.region == region,
@@ -745,13 +763,13 @@ async def _retry_stuck_battles(client: httpx.AsyncClient, db: Session, region: s
         )
         .order_by(Battle.start_time.desc())
         .limit(RETRY_STUCK_BATCH)
-    ).all()
+    )).all()
     if not stuck:
         return 0
 
     # Libera read tx antes do HTTP (_backfill_deep_fetch_all faz N chamadas
     # concorrentes à API do Albion — read tx aberta impede wal_checkpoint).
-    db.commit()
+    await db.commit()
 
     now = datetime.now(timezone.utc)
     # retry_stuck: batalha nova (não-frozen) que falhou → NEW_*; antiga → OLD_*.
@@ -763,19 +781,23 @@ async def _retry_stuck_battles(client: httpx.AsyncClient, db: Session, region: s
             log.warning("battle_tracker: retry de %s (%s) falhou de novo: %r",
                         battle.albion_id, region, result[1])
             battle.reprocess_reason = battle.reprocess_reason or REPROCESS_REASON_FAILED
-            db.commit()
+            await db.commit()
             continue
         _, raw, events = result
         try:
-            ok = await asyncio.to_thread(_write_deep_data, db, battle, raw, events)
+            ok = await asyncio.to_thread(_write_deep_data, battle.id, raw, events)
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             log.warning("battle_tracker: falha ao salvar retry de %s (%s): %r",
                         battle.albion_id, region, e)
             ok = False
         if not ok:
-            battle.reprocess_reason = battle.reprocess_reason or REPROCESS_REASON_EMPTY
-            db.commit()
+            # _write_deep_data rodou numa sessão sync separada; re-carrega antes
+            # de tocar (pode ter sido deletada/concorrída).
+            fresh = await db.get(Battle, battle.id)
+            if fresh is not None:
+                fresh.reprocess_reason = fresh.reprocess_reason or REPROCESS_REASON_EMPTY
+                await db.commit()
     return len(stuck)
 
 
@@ -788,24 +810,22 @@ async def run_retry_stuck_forever() -> None:
     _finish_lap."""
     log.info("battle_tracker: retry de batalhas travadas iniciando")
     while True:
-        db = SessionLocal()
-        try:
-            async with make_client() as client:
-                for region, host in HOSTS.items():
-                    try:
-                        n = await _retry_stuck_battles(client, db, region, host)
-                        if n:
-                            log.info("battle_tracker: %d batalhas travadas retentadas (%s)", n, region)
-                    except Exception as e:
-                        log.warning("battle_tracker: erro no retry de travadas (%s): %s", region, e)
-        except Exception as e:
-            log.error("battle_tracker: erro no loop de retry: %s", e)
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                async with make_client() as client:
+                    for region, host in HOSTS.items():
+                        try:
+                            n = await _retry_stuck_battles(client, db, region, host)
+                            if n:
+                                log.info("battle_tracker: %d batalhas travadas retentadas (%s)", n, region)
+                        except Exception as e:
+                            log.warning("battle_tracker: erro no retry de travadas (%s): %s", region, e)
+            except Exception as e:
+                log.error("battle_tracker: erro no loop de retry: %s", e)
         await asyncio.sleep(RETRY_STUCK_INTERVAL)
 
 
-async def _finish_lap(db: Session, cursor: BattleSyncCursor) -> None:
+async def _finish_lap(db: AsyncSession, cursor: BattleSyncCursor) -> None:
     """Fim de uma volta completa na janela paginável da API (ver
     BATTLES_API_OFFSET_LIMIT) — reseta o cursor pro início em vez de travar
     em done=True pra sempre. A API do Albion só expõe as ~10000 batalhas MAIS
@@ -823,11 +843,11 @@ async def _finish_lap(db: Session, cursor: BattleSyncCursor) -> None:
     deixando batalha nova travada sem rede de segurança nenhuma)."""
     cursor.done = True
     cursor.next_offset = 0
-    db.commit()
+    await db.commit()
 
 
 async def _deep_process_batch(
-    client: httpx.AsyncClient, db: Session, region: str, host: str, qualifying: list[Battle],
+    client: httpx.AsyncClient, db: AsyncSession, region: str, host: str, qualifying: list[Battle],
     *, priority_fn, raw_by_battle: dict[int, dict] | None = None,
 ) -> None:
     """Deep-processa em paralelo uma lista de batalhas JÁ qualificadas (ver
@@ -856,21 +876,25 @@ async def _deep_process_batch(
             log.warning("battle_tracker: falha no deep-process de %s (%s): %r",
                         battle.albion_id, region, result[1])
             battle.reprocess_reason = battle.reprocess_reason or REPROCESS_REASON_FAILED
-            db.commit()
+            await db.commit()
             continue
         _, raw, events = result
         try:
-            ok = await asyncio.to_thread(_write_deep_data, db, battle, raw, events)
+            ok = await asyncio.to_thread(_write_deep_data, battle.id, raw, events)
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             log.warning("battle_tracker: falha ao salvar %s (%s): %r", battle.albion_id, region, e)
             ok = False
         if not ok:
-            battle.reprocess_reason = battle.reprocess_reason or REPROCESS_REASON_EMPTY
-            db.commit()
+            # _write_deep_data rodou numa sessão sync separada; re-carrega antes
+            # de tocar (pode ter sido deletada/concorrída).
+            fresh = await db.get(Battle, battle.id)
+            if fresh is not None:
+                fresh.reprocess_reason = fresh.reprocess_reason or REPROCESS_REASON_EMPTY
+                await db.commit()
 
 
-async def _process_battle_batch(client: httpx.AsyncClient, db: Session, region: str, host: str, batch: list[dict], *, priority_fn) -> None:
+async def _process_battle_batch(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str, batch: list[dict], *, priority_fn) -> None:
     """Fluxo comum de uma página de batalhas cruas da API: upsert leve,
     filtra quem qualifica pra deep, e deep-processa (ver _deep_process_batch).
     Usado pelo avanço normal do backfill (backfill_step) e pela varredura
@@ -885,9 +909,9 @@ async def _process_battle_batch(client: httpx.AsyncClient, db: Session, region: 
     raw_by_battle: dict[int, dict] = {}
     for raw in batch:
         try:
-            battle = upsert_battle_light(db, raw, region)
+            battle = await upsert_battle_light(db, raw, region)
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             log.debug("battle_tracker: skip backfill %s (%s): %s", raw.get("id"), region, e)
             continue
         if battle is None or battle.processing_tier == "deep" or battle.players_total < DEEP_PROCESS_MIN_PLAYERS:
@@ -895,7 +919,7 @@ async def _process_battle_batch(client: httpx.AsyncClient, db: Session, region: 
         qualifying.append(battle)
         raw_by_battle[battle.id] = raw
     try:
-        db.commit()
+        await db.commit()
     except Exception as e:
         # Sem isto, "database is locked" (contenção transitória com outro
         # serviço de fundo) deixava a Session numa transação já abortada —
@@ -907,14 +931,14 @@ async def _process_battle_batch(client: httpx.AsyncClient, db: Session, region: 
         # processing desta página: as batalhas voltam a ser vistas no
         # próximo lap do backfill perpétuo normal (mesmo princípio de
         # resiliência já documentado pra falha de rede/429).
-        db.rollback()
+        await db.rollback()
         log.warning("battle_tracker: falha ao comitar página (%s): %r — recoberta num ciclo depois", region, e)
         return
 
     await _deep_process_batch(client, db, region, host, qualifying, priority_fn=priority_fn, raw_by_battle=raw_by_battle)
 
 
-async def backfill_step(client: httpx.AsyncClient, db: Session, region: str, host: str) -> None:
+async def backfill_step(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str) -> None:
     """Avança a paginação da região dentro da janela de ~10000 batalhas mais
     recentes que a API do Albion expõe (ver BATTLES_API_OFFSET_LIMIT),
     processa em profundidade (em paralelo, ver _backfill_deep_fetch_all) as
@@ -956,10 +980,10 @@ async def backfill_step(client: httpx.AsyncClient, db: Session, region: str, hos
             if reached_cutoff or len(batch) < BACKFILL_PAGE_SIZE:
                 await _finish_lap(db, cursor)
                 return
-            db.commit()
+            await db.commit()
 
 
-async def _reverse_startup_sweep(client: httpx.AsyncClient, db: Session, region: str, host: str) -> None:
+async def _reverse_startup_sweep(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str) -> None:
     """Varredura única, só no startup do servidor: cobre a janela de ~10000
     batalhas mais recentes que a API expõe (ver BATTLES_API_OFFSET_LIMIT) de
     TRÁS PRA FRENTE (offset mais alto → 0) — o oposto do sentido normal do
@@ -1053,9 +1077,8 @@ async def sync_recent() -> int:
     Albion. Falha em qualquer batalha aqui não é definitiva: cai na fila de
     reprocess_reason (ver _deep_process_batch) até conseguir."""
     now = datetime.now(timezone.utc)
-    db = SessionLocal()
     count = 0
-    try:
+    async with AsyncSessionLocal() as db:
         async with make_client() as client:
             for region, host in HOSTS.items():
                 # Cada página é tentada isoladamente — antes, timeout numa página
@@ -1090,7 +1113,7 @@ async def sync_recent() -> int:
                 raw_by_battle: dict[int, dict] = {}
                 for raw in battles:
                     try:
-                        battle = upsert_battle_light(db, raw, region)
+                        battle = await upsert_battle_light(db, raw, region)
                     except Exception as e:
                         log.debug("battle_tracker: skip %s (%s): %s", raw.get("id"), region, e)
                         continue
@@ -1104,29 +1127,24 @@ async def sync_recent() -> int:
                         continue
                     qualifying.append(battle)
                     raw_by_battle[battle.id] = raw
-                db.commit()
+                await db.commit()
 
                 await _deep_process_batch(
                     client, db, region, host, qualifying,
                     priority_fn=_prio_new, raw_by_battle=raw_by_battle,
                 )
-    finally:
-        db.close()
     return count
 
 
 async def backfill_cycle() -> None:
     """Um ciclo de backfill histórico das 3 regiões — ver run_backfill_forever."""
-    db = SessionLocal()
-    try:
+    async with AsyncSessionLocal() as db:
         async with make_client() as client:
             for region, host in HOSTS.items():
                 try:
                     await backfill_step(client, db, region, host)
                 except Exception as e:
                     log.warning("battle_tracker: falha no backfill (%s): %s", region, e)
-    finally:
-        db.close()
 
 
 async def run_forever() -> None:
@@ -1162,8 +1180,7 @@ async def run_backfill_forever() -> None:
     log.info("battle_tracker: backfill iniciando (bg pool do albion_gate)")
     await asyncio.sleep(STARTUP_GRACE_DELAY)
 
-    db = SessionLocal()
-    try:
+    async with AsyncSessionLocal() as db:
         async with make_client() as client:
             for region, host in HOSTS.items():
                 try:
@@ -1173,9 +1190,7 @@ async def run_backfill_forever() -> None:
                     # Backstop: mesma sessão é reusada pra região seguinte (não
                     # recriada por região) — sem isto, uma falha aqui deixaria
                     # a próxima região herdar uma transação já abortada.
-                    db.rollback()
-    finally:
-        db.close()
+                    await db.rollback()
 
     while True:
         try:

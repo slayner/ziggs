@@ -24,7 +24,7 @@ from app.api.routes.battles import (
     ASSISTS_PER_POINT, HEALING_PER_POINT,
     _wbase, _weapon_function_map, eligible_guild_battles_subquery, lethal_with_healing_filter,
 )
-from app.db import SessionLocal
+from app.db import SyncSessionLocal
 from app.models.battles import Battle, BattleGuild, BattleParticipant
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerWeaponStat
 
@@ -42,7 +42,10 @@ def _empty_counters() -> dict[str, int]:
 
 
 def rebuild_player_weapon_stats(db: Session) -> int:
-    weapon_fn = _weapon_function_map(db)
+    import asyncio
+    # ponytail: _weapon_function_map é async (migração async DB), mas weapon_stats
+    # roda em thread (to_thread) — asyncio.run cria loop efêmero.
+    weapon_fn = asyncio.run(_weapon_function_map(db))
     stats: dict[tuple[str, str], dict[str, int]] = {}
 
     # Materializa TODOS os SELECTs com .all() e fecha a read tx ANTES de
@@ -166,7 +169,7 @@ def rebuild_player_weapon_stats(db: Session) -> int:
 
 
 def _rebuild_sync() -> int:
-    db = SessionLocal()
+    db = SyncSessionLocal()
     try:
         return rebuild_player_weapon_stats(db)
     except Exception:

@@ -22,9 +22,9 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.players import PlayerKillEvent
 from app.services.lethality import is_likely_lethal
 from app.services.prices import get_battle_prices
@@ -53,7 +53,7 @@ def _has_gear(ev: PlayerKillEvent) -> bool:
     return any(inv and inv.get("Type") for inv in (ev.victim_inventory or []))
 
 
-async def _price_events(db: Session, events: list[PlayerKillEvent]) -> int:
+async def _price_events(db: AsyncSession, events: list[PlayerKillEvent]) -> int:
     """Precifica e grava silver_dropped nos eventos do lote. Devolve quantos
     foram atualizados (todos com gear; podem ficar 0 se preço ausente, mas
     nunca reprocessam — já foram escritos)."""
@@ -85,7 +85,7 @@ async def _price_events(db: Session, events: list[PlayerKillEvent]) -> int:
         ev.silver_dropped = total
         updated += 1
     t1 = time.monotonic()
-    db.commit()
+    await db.commit()
     t_commit = time.monotonic() - t1
     if t_fetch > 2.0 or t_commit > 1.0:
         log.warning("silver_dropped: LENTO — %d eventos, fetch=%.1fs commit=%.1fs (%d itens)",
@@ -96,11 +96,11 @@ async def _price_events(db: Session, events: list[PlayerKillEvent]) -> int:
     return updated
 
 
-async def _process_batch(db: Session) -> int:
+async def _process_batch(db: AsyncSession) -> int:
     # Lê o lote em ordem e marca rejeitados com zero: deixá-los NULL faria os
     # mesmos primeiros eventos bloquearem a fila para sempre. Histórico sem
     # group_member_count também passa pela estimativa conservadora.
-    rows = list(db.scalars(
+    rows = list((await db.scalars(
         select(PlayerKillEvent)
         .where(
             PlayerKillEvent.silver_dropped.is_(None),
@@ -108,7 +108,7 @@ async def _process_batch(db: Session) -> int:
         )
         .order_by(PlayerKillEvent.id.desc())
         .limit(BATCH_SIZE)
-    ).all())
+    )).all())
     candidates = []
     for ev in rows:
         if _has_gear(ev) and is_likely_lethal(
@@ -118,12 +118,12 @@ async def _process_batch(db: Session) -> int:
         else:
             ev.silver_dropped = 0
     if not candidates:
-        db.commit()
+        await db.commit()
         return len(rows)
     # Libera read tx antes do HTTP (get_battle_prices faz chamadas à AODP).
     # Read tx aberta durante await impede wal_checkpoint → WAL cresce →
     # commit futuro fsync-o inteiro.
-    db.commit()
+    await db.commit()
     await _price_events(db, candidates)
     return len(rows)
 
@@ -134,27 +134,19 @@ async def run_forever() -> None:
     # acordando (battle_tracker/backfill/sweeper fazem rajada de requests ao
     # subir). O backlog de silver é tolerante (já esperou desde sempre).
     await asyncio.sleep(30)
-    # A migration z8d9e0f1a2b3 invalida totais feitos antes da mediana
-    # anti-troll. Só recalcula depois que o cache _battle_spot_ antigo terminou
-    # de ser refeito; sem esta barreira, os dois workers corriam e o ledger
-    # podia gravar novamente o preço contaminado antes da correção chegar.
-    from app.services import battle_price_reprocessor
-    await battle_price_reprocessor.ready.wait()
     while True:
-        db = SessionLocal()
         n = 0
         t_cycle = time.monotonic()
-        try:
-            n = await _process_batch(db)
-            t_total = time.monotonic() - t_cycle
-            if n:
-                if t_total > 10.0:
-                    log.warning("silver_dropped: CICLO LENTO — %d eventos em %.1fs", n, t_total)
-                else:
-                    log.info("silver_dropped: %d eventos em %.1fs", n, t_total)
-        except Exception as e:
-            db.rollback()
-            log.error("silver_dropped: erro: %s", e)
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                n = await _process_batch(db)
+                t_total = time.monotonic() - t_cycle
+                if n:
+                    if t_total > 10.0:
+                        log.warning("silver_dropped: CICLO LENTO — %d eventos em %.1fs", n, t_total)
+                    else:
+                        log.info("silver_dropped: %d eventos em %.1fs", n, t_total)
+            except Exception as e:
+                await db.rollback()
+                log.error("silver_dropped: erro: %s", e)
         await asyncio.sleep(BUSY_INTERVAL if n > 0 else IDLE_INTERVAL)

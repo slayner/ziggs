@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.models.claims import CLAIM_COOLDOWN, CLAIM_EXPIRY, CharacterClaim, RegisteredCharacter
@@ -27,10 +27,10 @@ class ClaimRequest(BaseModel):
 
 
 @router.post("/character")
-def create_claim(
+async def create_claim(
     body: ClaimRequest,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ) -> dict:
     """Cria uma nova reivindicação de personagem para o usuário logado.
 
@@ -41,7 +41,7 @@ def create_claim(
     depois de expirar sem cumprir), uma nova claim é bloqueada.
     """
     now = datetime.now(timezone.utc)
-    last = db.scalar(
+    last = await db.scalar(
         select(CharacterClaim)
         .where(
             CharacterClaim.user_id == user.id,
@@ -71,26 +71,26 @@ def create_claim(
         challenge=challenge,
     )
     db.add(claim)
-    db.commit()
-    db.refresh(claim)
+    await db.commit()
+    await db.refresh(claim)
     return _claim_dict(claim)
 
 
 @router.get("/my")
-def my_claims(
+async def my_claims(
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ) -> dict:
     """Lista claims e personagens registrados do usuário logado."""
-    claims = db.scalars(
+    claims = (await db.scalars(
         select(CharacterClaim)
         .where(CharacterClaim.user_id == user.id)
         .order_by(CharacterClaim.created_at.desc())
-    ).all()
+    )).all()
 
-    registered = db.scalars(
+    registered = (await db.scalars(
         select(RegisteredCharacter).where(RegisteredCharacter.user_id == user.id)
-    ).all()
+    )).all()
 
     return {
         "claims": [_claim_dict(c) for c in claims],
@@ -99,31 +99,31 @@ def my_claims(
 
 
 @router.put("/main/{registered_id}")
-def set_main_character(
+async def set_main_character(
     registered_id: int,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ) -> dict:
     """Define qual personagem registrado é a conta principal do usuário.
     Devolve o mesmo shape do GET /claims/my (o frontend substitui a lista)."""
-    target = db.get(RegisteredCharacter, registered_id)
+    target = await db.get(RegisteredCharacter, registered_id)
     if target is None or target.user_id != user.id:
         raise HTTPException(404, "Personagem não encontrado")
-    for rc in db.scalars(
+    for rc in (await db.scalars(
         select(RegisteredCharacter).where(RegisteredCharacter.user_id == user.id)
-    ):
+    )):
         rc.is_main = rc.id == registered_id
-    db.commit()
-    return my_claims(user, db)
+    await db.commit()
+    return await my_claims(user, db)
 
 
 @router.get("/character/{claim_id}")
-def get_claim(
+async def get_claim(
     claim_id: int,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ) -> dict:
-    claim = db.scalar(select(CharacterClaim).where(CharacterClaim.id == claim_id))
+    claim = await db.scalar(select(CharacterClaim).where(CharacterClaim.id == claim_id))
     if not claim or claim.user_id != user.id:
         raise HTTPException(404, "Claim não encontrado")
     return _claim_dict(claim)

@@ -6,7 +6,7 @@ Focus efficiency é por conta Discord, não por guilda — a calculadora de craf
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.api.schemas.craft import FocusEfficiencyIn
@@ -23,13 +23,13 @@ def get_focus_efficiency(user: User | None = Depends(deps.optional_user)) -> dic
 
 
 @router.put("/focus-efficiency")
-def set_focus_efficiency(
+async def set_focus_efficiency(
     body: FocusEfficiencyIn,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ) -> dict[str, int]:
     settings = dict(user.craft_settings or {})
     settings["focus_efficiency"] = body.values
     user.craft_settings = settings
-    db.commit()
+    await db.commit()
     return settings["focus_efficiency"]

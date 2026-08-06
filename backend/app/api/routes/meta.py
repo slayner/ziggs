@@ -14,7 +14,7 @@ import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.models.battles import Battle, ReprocessCampaign
@@ -83,11 +83,11 @@ def albion_gate_status() -> dict:
 
 
 @router.get("/reprocess-progress")
-def reprocess_progress(db: Session = Depends(deps.db_session)) -> dict:
+async def reprocess_progress(db: AsyncSession = Depends(deps.async_db_session)) -> dict:
     """% de batalhas já reprocessadas, somado entre todas as campanhas de
     Battle.reprocess_reason já marcadas (ver app/services/battle_reprocessor.py)."""
-    total = db.scalar(select(func.sum(ReprocessCampaign.total))) or 0
-    pending = db.scalar(select(func.count()).where(Battle.reprocess_reason.isnot(None))) or 0
+    total = await db.scalar(select(func.sum(ReprocessCampaign.total))) or 0
+    pending = await db.scalar(select(func.count()).where(Battle.reprocess_reason.isnot(None))) or 0
     if total == 0:
         return {"total": 0, "pending": 0, "percent": 100.0}
     done = max(total - pending, 0)

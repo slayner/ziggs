@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
 
+from app.api import deps
 from app.db import get_session
 from app.models.prices import MarketSnapshot
 from app.services import market_history as svc
@@ -62,9 +63,9 @@ class SnapshotRow(BaseModel):
 
 
 @router.get("/snapshot")
-def snapshot(
+async def snapshot(
     region: str = Query("west"),
-    db: Session = Depends(get_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ) -> list[SnapshotRow]:
     """Resumo de mercado pré-computado (preço, margem 7d, demanda 7d) da região
     pedida, mantido quente pelo varredor de fundo — leitura pura, sem consulta
@@ -76,10 +77,10 @@ def snapshot(
     from datetime import datetime, timedelta, timezone
 
     fresh_after = datetime.now(timezone.utc) - timedelta(days=3)
-    rows = db.scalars(select(MarketSnapshot).where(
+    rows = (await db.scalars(select(MarketSnapshot).where(
         MarketSnapshot.region == _region(region),
         MarketSnapshot.price_ts.is_not(None),
-    )).all()
+    ))).all()
     out = []
     for r in rows:
         ts = r.price_ts
@@ -94,6 +95,8 @@ def snapshot(
     return out
 
 
+# ponytail: item_history chama svc.get_history (sync, recebe Session) — não dá
+# pra passar AsyncSession. Migra quando o service migrar.
 @router.get("/{item_id}")
 def item_history(
     item_id: str,
@@ -101,7 +104,7 @@ def item_history(
     quality: int = Query(1, ge=1, le=5),
     timescale: int = Query(1, ge=0, le=2),
     location: str | None = Query(None),
-    db: Session = Depends(get_session),
+    db=Depends(get_session),
 ) -> HistoryOut:
     """Histórico agregado de um item (da região). `location` None = todas as cidades."""
     buckets = svc.get_history(db, item_id, _region(region), quality, timescale, location)

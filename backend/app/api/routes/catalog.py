@@ -7,7 +7,7 @@ from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.api.schemas.catalog import (
@@ -44,19 +44,19 @@ def _detail(role: GameRole, weapon: Weapon | None) -> GameRoleDetail:
     )
 
 
-def _get_weapon(db: Session, weapon_id: int | None) -> Weapon | None:
-    return db.get(Weapon, weapon_id) if weapon_id else None
+async def _get_weapon(db: AsyncSession, weapon_id: int | None) -> Weapon | None:
+    return await db.get(Weapon, weapon_id) if weapon_id else None
 
 
 # ── armas (catálogo global) ───────────────────────────────────────────────────
 
 @router.get("/weapons", response_model=list[WeaponOut])
-def list_weapons(
+async def list_weapons(
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("comps.view")),
 ):
-    rows = db.scalars(select(Weapon).order_by(Weapon.name))
+    rows = (await db.scalars(select(Weapon).order_by(Weapon.name))).all()
     return [
         WeaponOut(
             id=r.id, item_id=r.item_id, name=r.name,
@@ -69,17 +69,17 @@ def list_weapons(
 # ── funções da guilda (game roles) ───────────────────────────────────────────
 
 @router.get("/roles", response_model=list[GameRoleOut])
-def list_roles(
+async def list_roles(
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("comps.view")),
 ):
-    rows = db.execute(
+    rows = (await db.execute(
         select(GameRole.id, GameRole.name, Weapon.invisible_function)
         .join(Weapon, GameRole.weapon_id == Weapon.id, isouter=True)
         .where(GameRole.guild_id == guild.id)
         .order_by(GameRole.name)
-    ).all()
+    )).all()
     return [
         GameRoleOut(id=r.id, name=r.name, invisible_function=r.invisible_function)
         for r in rows
@@ -87,27 +87,27 @@ def list_roles(
 
 
 @router.get("/roles/{role_id}", response_model=GameRoleDetail)
-def get_role(
+async def get_role(
     role_id: int,
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("comps.view")),
 ):
-    role = db.get(GameRole, role_id)
+    role = await db.get(GameRole, role_id)
     if role is None or role.guild_id != guild.id:
         raise HTTPException(status_code=404, detail="função não encontrada")
-    return _detail(role, _get_weapon(db, role.weapon_id))
+    return _detail(role, await _get_weapon(db, role.weapon_id))
 
 
 @router.get("/weapons/{base_id}/spells", response_model=list[WeaponSpellOut])
-def get_weapon_spells(
+async def get_weapon_spells(
     base_id: str,
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("comps.view")),
 ):
     """Retorna os feitiços Q/W/passivo disponíveis para um tipo base de arma."""
-    rows = db.scalars(
+    rows = (await db.scalars(
         select(WeaponSpell)
         .where(
             WeaponSpell.weapon_base_id == base_id.upper(),
@@ -119,15 +119,15 @@ def get_weapon_spells(
             ),
         )
         .order_by(WeaponSpell.slot, WeaponSpell.order_idx)
-    ).all()
+    )).all()
     return rows
 
 
 @router.post("/roles", response_model=GameRoleDetail, status_code=201)
-def create_role(
+async def create_role(
     payload: GameRoleCreate,
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("comps.manage")),
 ):
     role = GameRole(
@@ -144,23 +144,23 @@ def create_role(
     )
     db.add(role)
     try:
-        db.flush()
-        db.commit()
+        await db.flush()
+        await db.commit()
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=409, detail=f"Já existe uma função com o nome '{payload.name}'")
-    return _detail(role, _get_weapon(db, role.weapon_id))
+    return _detail(role, await _get_weapon(db, role.weapon_id))
 
 
 @router.patch("/roles/{role_id}", response_model=GameRoleDetail)
-def update_role(
+async def update_role(
     role_id: int,
     payload: GameRoleUpdate,
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("comps.manage")),
 ):
-    role = db.get(GameRole, role_id)
+    role = await db.get(GameRole, role_id)
     if role is None or role.guild_id != guild.id:
         raise HTTPException(status_code=404, detail="função não encontrada")
 
@@ -175,23 +175,23 @@ def update_role(
     if payload.gear_spells is not None:
         role.gear_spells = _json.dumps(payload.gear_spells)
 
-    db.flush()
-    db.commit()
-    return _detail(role, _get_weapon(db, role.weapon_id))
+    await db.flush()
+    await db.commit()
+    return _detail(role, await _get_weapon(db, role.weapon_id))
 
 
 @router.delete("/roles/{role_id}", status_code=204)
-def delete_role(
+async def delete_role(
     role_id: int,
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("comps.manage")),
 ):
-    role = db.get(GameRole, role_id)
+    role = await db.get(GameRole, role_id)
     if role is None or role.guild_id != guild.id:
         raise HTTPException(status_code=404, detail="função não encontrada")
-    db.delete(role)
-    db.commit()
+    await db.delete(role)
+    await db.commit()
 
 
 # ── preços (média histórica 5 cidades) ───────────────────────────────────────
@@ -201,7 +201,7 @@ async def get_prices(
     items: str = Query(description="IDs separados por vírgula"),
     quality: int = 1,  # kept for compat but ignored
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("comps.view")),
 ) -> dict:
     """Retorna a média histórica 5 cidades × qualidades 2-4 para uma lista de itens.
@@ -214,13 +214,13 @@ async def get_prices(
     if not item_ids:
         return {"prices": {}}
     await sync_5city_prices(db, item_ids)
-    rows = db.scalars(
+    rows = (await db.scalars(
         select(ItemPriceLatest).where(
             ItemPriceLatest.item_id.in_(item_ids),
             ItemPriceLatest.city == _AVG_SENTINEL,
             ItemPriceLatest.quality.in_([2, 3, 4]),
         )
-    ).all()
+    )).all()
     # Average across available qualities per item
     by_item: dict[str, list[int]] = defaultdict(list)
     for r in rows:
@@ -233,7 +233,7 @@ async def get_prices(
 @router.get("/price-quotes")
 async def get_price_quotes(
     items: str = Query(description="IDs separados por vírgula"),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ) -> dict:
     """Devolve preços por (item_id, city, quality) do nosso banco — captura
     do companion + sync AODP. Preços são globais — sem auth.
@@ -248,9 +248,9 @@ async def get_price_quotes(
     out: list[dict] = []
     for i in range(0, len(item_ids), 500):
         chunk = item_ids[i : i + 500]
-        for row in db.scalars(
+        for row in (await db.scalars(
             select(ItemPriceLatest).where(ItemPriceLatest.item_id.in_(chunk))
-        ):
+        )).all():
             out.append({
                 "item_id": row.item_id,
                 "city": row.city,
@@ -264,24 +264,24 @@ async def get_price_quotes(
 # ── sugestão de build (escopo guilda) ────────────────────────────────────────
 
 @router.post("/suggest", response_model=BuildSuggestionOut)
-def suggest(
+async def suggest(
     payload: SuggestRequest,
     guild: Guild = Depends(deps.tenant_guild),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
     _member=Depends(deps.require_permission("comps.view")),
 ):
     """
     Sugere build para uma função invisível olhando TODAS as funções da guilda
     com a mesma invisible_function. Não depende de comp — útil ao criar/editar roles.
     """
-    roles = db.scalars(
+    roles = (await db.scalars(
         select(GameRole).where(GameRole.guild_id == guild.id)
-    ).all()
+    )).all()
 
     wids = {r.weapon_id for r in roles if r.weapon_id}
     weapons: dict[int, Weapon] = {}
     if wids:
-        weapons = {w.id: w for w in db.scalars(select(Weapon).where(Weapon.id.in_(wids)))}
+        weapons = {w.id: w for w in (await db.scalars(select(Weapon).where(Weapon.id.in_(wids))))}
 
     builds = [
         RoleBuild(

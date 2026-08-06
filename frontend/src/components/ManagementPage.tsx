@@ -107,7 +107,7 @@ export default function ManagementPage({ guildId, perms, active = true, empty }:
               ))}
               {docsLink(visible.length + 1)}
             </aside>
-            <AdBanner variant="skyscraper" />
+            <AdBanner slot="management" variant="skyscraper" />
           </div>
         )}
         <div className="management-workspace">

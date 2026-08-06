@@ -11,6 +11,7 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -458,17 +459,17 @@ async def update_guild_settings(
     guild_id: int,
     body: GuildSettingsIn,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
-    _require_admin(db, user, guild_id)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    await _require_admin_async(db, user, guild_id)
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
 
     settings = dict(g.settings or {})
     # Libera read tx antes do HTTP (_lookup_albion_guild chama a API do Albion).
     # expire_on_commit=False: g permanece válido após commit.
-    db.commit()
+    await db.commit()
     if "albion_guild_region" in body.model_fields_set:
         if body.albion_guild_region in HOSTS:
             settings["albion_guild_region"] = body.albion_guild_region
@@ -590,7 +591,7 @@ async def update_guild_settings(
             # que o bot chama ao auto-criar. Cursor já setado = continua de
             # onde parou, sem gap nem dump.
             if "logs_last_sent_id" not in settings:
-                max_id = db.scalar(select(func.max(AuditLog.id)).where(AuditLog.guild_id == guild_id)) or 0
+                max_id = await db.scalar(select(func.max(AuditLog.id)).where(AuditLog.guild_id == guild_id)) or 0
                 settings["logs_last_sent_id"] = max_id
         else:
             # null = volta pro auto-create do bot (canal logs-bot admin-only).
@@ -605,7 +606,7 @@ async def update_guild_settings(
                 # Inicializa cursor no maior Battle.id existente — senão trocar
                 # de canal despejaria todo o histórico no canal novo.
                 from app.models.battles import Battle
-                settings["battle_feed_last_id"] = db.scalar(select(func.max(Battle.id))) or 0
+                settings["battle_feed_last_id"] = await db.scalar(select(func.max(Battle.id))) or 0
         else:
             settings.pop("battle_feed_channel_id", None)
     if "battle_feed_min_players" in body.model_fields_set:
@@ -620,7 +621,7 @@ async def update_guild_settings(
                 # Inicializa cursor no maior PlayerKillEvent.id existente —
                 # senão trocar de canal despejaria histórico no canal novo.
                 from app.models.players import PlayerKillEvent
-                settings["juicy_kill_last_id"] = db.scalar(select(func.max(PlayerKillEvent.id))) or 0
+                settings["juicy_kill_last_id"] = await db.scalar(select(func.max(PlayerKillEvent.id))) or 0
         else:
             settings.pop("juicy_kill_channel_id", None)
     if "juicy_kill_min_silver" in body.model_fields_set:
@@ -638,7 +639,7 @@ async def update_guild_settings(
         settings["juicy_kill_regions"] = regs  # [] = todas
     g.settings = settings
 
-    db.commit()
+    await db.commit()
     return {"ok": True, "albion_guild_resolved": albion_guild_resolved}
 
 
@@ -670,7 +671,7 @@ async def _is_guild_in_alliance(guild_id: str, alliance_id: str, region: str | N
 async def guild_allies(
     guild_id: int,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Guildas conhecidas da mesma aliança (vistas pelo tracker de batalhas),
     pra montar a lista de aliados permitidos no /register. A aliança em si é
@@ -678,27 +679,27 @@ async def guild_allies(
     ainda, devolve lista vazia. Cada candidata é reconfirmada ao vivo (ver
     _is_guild_in_alliance) antes de entrar na resposta, pra não mostrar guilda
     que já saiu da aliança só porque apareceu numa batalha antiga."""
-    _require_admin(db, user, guild_id)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    await _require_admin_async(db, user, guild_id)
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
     if not g.albion_alliance_id:
         return []
-    rows = db.execute(
+    rows = (await db.execute(
         select(BattleGuild.albion_guild_id, BattleGuild.guild_name)
         .where(
             BattleGuild.alliance_id == g.albion_alliance_id,
             BattleGuild.albion_guild_id != str(g.albion_guild_id),
         )
         .distinct()
-    ).all()
+    )).all()
     if not rows:
         return []
 
     region = (g.settings or {}).get("albion_guild_region")
     alliance_id = g.albion_alliance_id
     # Libera read tx antes do HTTP (gather de _is_guild_in_alliance chama Albion).
-    db.commit()
+    await db.commit()
     still_in = await asyncio.gather(*(
         _is_guild_in_alliance(gid, alliance_id, region) for gid, _ in rows
     ))
@@ -777,15 +778,15 @@ class RolePermissionsIn(BaseModel):
 
 
 @router.patch("/auth/guild-discord-roles/{guild_id}/{role_id}")
-def update_role_permissions(
+async def update_role_permissions(
     guild_id: int,
     role_id: int,
     body: RolePermissionsIn,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
-    _require_admin(db, user, guild_id)
-    rp = db.scalar(select(GuildRolePermission).where(
+    await _require_admin_async(db, user, guild_id)
+    rp = await db.scalar(select(GuildRolePermission).where(
         GuildRolePermission.guild_id == guild_id,
         GuildRolePermission.discord_role_id == role_id,
     ))
@@ -799,7 +800,7 @@ def update_role_permissions(
         db.add(rp)
     rp.discord_role_name = body.role_name
     rp.permissions = {k: bool(v) for k, v in body.permissions.items() if k in PERMISSION_KEYS}
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
@@ -881,13 +882,13 @@ EXTRA_PERMISSION_KEYS = {"register_others"}
 
 
 @router.get("/auth/guild-commands/{guild_id}")
-def guild_commands(
+async def guild_commands(
     guild_id: int,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
-    _require_admin(db, user, guild_id)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    await _require_admin_async(db, user, guild_id)
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     settings = (g.settings or {}) if g else {}
     disabled: set[str] = set(settings.get("disabled_commands", []))
     command_roles: dict = settings.get("command_roles", {})
@@ -910,17 +911,17 @@ class CommandToggleIn(BaseModel):
 
 
 @router.patch("/auth/guild-commands/{guild_id}/{command_name}")
-def toggle_guild_command(
+async def toggle_guild_command(
     guild_id: int,
     command_name: str,
     body: CommandToggleIn,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
-    _require_admin(db, user, guild_id)
+    await _require_admin_async(db, user, guild_id)
     if command_name not in {c["name"] for c in COMMANDS_REGISTRY}:
         raise HTTPException(404, "comando desconhecido")
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if not g:
         raise HTTPException(404)
     settings = dict(g.settings or {})
@@ -931,7 +932,7 @@ def toggle_guild_command(
         disabled.add(command_name)
     settings["disabled_commands"] = sorted(disabled)
     g.settings = settings
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
@@ -941,17 +942,17 @@ class CommandRolesIn(BaseModel):
 
 
 @router.patch("/auth/guild-commands/{guild_id}/{command_name}/roles")
-def update_command_roles(
+async def update_command_roles(
     guild_id: int,
     command_name: str,
     body: CommandRolesIn,
     user: User = Depends(deps.require_user),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
-    _require_admin(db, user, guild_id)
+    await _require_admin_async(db, user, guild_id)
     if command_name not in {c["name"] for c in COMMANDS_REGISTRY} | EXTRA_PERMISSION_KEYS:
         raise HTTPException(404, "comando desconhecido")
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if not g:
         raise HTTPException(404)
     settings = dict(g.settings or {})
@@ -962,18 +963,18 @@ def update_command_roles(
         command_roles.pop(command_name, None)
     settings["command_roles"] = command_roles
     g.settings = settings
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
 @router.get("/bot/guild-commands/{guild_id}")
-def bot_guild_commands(
+async def bot_guild_commands(
     guild_id: int,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     settings = (g.settings or {}) if g else {}
     command_roles = dict(settings.get("command_roles", {}))
     for name, default in DEFAULT_ALLOWED_ROLES.items():
@@ -1020,42 +1021,42 @@ class LogsChannelIn(BaseModel):
 
 
 @router.post("/bot/guilds/{guild_id}/logs-channel")
-def bot_set_logs_channel(
+async def bot_set_logs_channel(
     guild_id: int, body: LogsChannelIn,
-    authorization: str = Header(...), db: Session = Depends(deps.db_session),
+    authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Chamado uma vez pelo bot logo após criar o canal. Inicializa o cursor no
     id máximo ATUAL do AuditLog da guilda — sem isso, a ativação despejaria todo
     o histórico acumulado (inclusive de antes da feature existir) no canal novo."""
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
-    max_id = db.scalar(select(func.max(AuditLog.id)).where(AuditLog.guild_id == guild_id)) or 0
+    max_id = await db.scalar(select(func.max(AuditLog.id)).where(AuditLog.guild_id == guild_id)) or 0
     settings = dict(g.settings or {})
     settings["logs_channel_id"] = body.channel_id
     settings.setdefault("logs_last_sent_id", max_id)
     g.settings = settings
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
 @router.get("/bot/guilds/{guild_id}/audit-log")
-def bot_audit_log_work(
-    guild_id: int, authorization: str = Header(...), db: Session = Depends(deps.db_session),
+async def bot_audit_log_work(
+    guild_id: int, authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Próximo lote de AuditLog ainda não retransmitido (cursor em
     Guild.settings.logs_last_sent_id). Bot posta e confirma via
     /audit-log-synced pra avançar o cursor."""
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     since_id = (g.settings or {}).get("logs_last_sent_id", 0) if g else 0
-    rows = db.scalars(
+    rows = (await db.scalars(
         select(AuditLog)
         .where(AuditLog.guild_id == guild_id, AuditLog.id > since_id)
         .order_by(AuditLog.id.asc())
         .limit(_AUDIT_LOG_BATCH)
-    ).all()
+    )).all()
     return {"entries": [
         {
             "id": r.id, "actor_id": str(r.actor_id) if r.actor_id else None,
@@ -1073,18 +1074,18 @@ class AuditLogSyncedIn(BaseModel):
 
 
 @router.post("/bot/guilds/{guild_id}/audit-log-synced")
-def bot_audit_log_synced(
+async def bot_audit_log_synced(
     guild_id: int, body: AuditLogSyncedIn,
-    authorization: str = Header(...), db: Session = Depends(deps.db_session),
+    authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
     settings = dict(g.settings or {})
     settings["logs_last_sent_id"] = max(int(settings.get("logs_last_sent_id", 0)), body.last_id)
     g.settings = settings
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
@@ -1098,8 +1099,8 @@ _BATTLE_FEED_BATCH = 10
 
 
 @router.get("/bot/guilds/{guild_id}/battle-feed")
-def bot_battle_feed(
-    guild_id: int, authorization: str = Header(...), db: Session = Depends(deps.db_session),
+async def bot_battle_feed(
+    guild_id: int, authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Próximo lote de batalhas ainda não postadas no canal de feed da guilda.
     Cursor em Guild.settings.battle_feed_last_id. Filtra por mínimo de
@@ -1109,7 +1110,7 @@ def bot_battle_feed(
     Só retorna batalhas deep-processadas (sides analisados) — batalhas "light"
     não têm factions_summary e o embed ficaria vazio."""
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
     settings = g.settings or {}
@@ -1142,16 +1143,16 @@ def bot_battle_feed(
             )
             q = q.where(Battle.id.in_(guild_battle_ids))
 
-    battles = db.scalars(q.order_by(Battle.id.asc()).limit(_BATTLE_FEED_BATCH)).all()
+    battles = (await db.scalars(q.order_by(Battle.id.asc()).limit(_BATTLE_FEED_BATCH))).all()
     if not battles:
         return {"battles": []}
 
     # Garante que toda batalha tem um public_id (cria em lote se faltar).
-    groups = battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
+    groups = await battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
 
+    from app.api.routes.battles import _factions_summary, _aware
     out = []
     for b in battles:
-        from app.api.routes.battles import _factions_summary, _aware
         out.append({
             "id": b.id,
             "public_id": groups[b.id].public_id,
@@ -1162,7 +1163,7 @@ def bot_battle_feed(
             "cluster": b.cluster,
             "players_total": b.players_total,
             "is_zvz": b.is_zvz,
-            "factions": _factions_summary(db, b.id),
+            "factions": await _factions_summary(db, b.id),
         })
     return {"battles": out}
 
@@ -1172,19 +1173,19 @@ class BattleFeedSyncedIn(BaseModel):
 
 
 @router.post("/bot/guilds/{guild_id}/battle-feed-synced")
-def bot_battle_feed_synced(
+async def bot_battle_feed_synced(
     guild_id: int, body: BattleFeedSyncedIn,
-    authorization: str = Header(...), db: Session = Depends(deps.db_session),
+    authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Avança o cursor após o bot postar as batalhas com sucesso."""
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
     settings = dict(g.settings or {})
     settings["battle_feed_last_id"] = max(int(settings.get("battle_feed_last_id", 0)), body.last_id)
     g.settings = settings
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
@@ -1200,13 +1201,13 @@ async def bot_register(
     guild_id: int,
     body: BotRegisterIn,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Chamado pelo /register do bot. Verifica se o personagem está na guilda
     Albion configurada e devolve o cargo a atribuir — quem efetivamente
     atribui o cargo é o bot (já tem o Member da interação em mãos)."""
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404, "servidor não encontrado")
     if not g.albion_guild_id:
@@ -1217,7 +1218,7 @@ async def bot_register(
     # Resposta perdida depois do commit: reaplica o cargo sem depender de uma
     # segunda consulta à API da Albion (que pode estar instável justamente
     # durante a repetição).
-    previous = db.scalar(select(BotRegistration).where(
+    previous = await db.scalar(select(BotRegistration).where(
         BotRegistration.guild_id == guild_id,
         BotRegistration.discord_user_id == int(body.discord_user_id),
         func.lower(BotRegistration.albion_player_name) == nl,
@@ -1234,7 +1235,7 @@ async def bot_register(
     any_host_ok = False
     guild_region = (g.settings or {}).get("albion_guild_region")
     # Libera read tx antes do HTTP (busca na API do Albion por região).
-    db.commit()
+    await db.commit()
     # Alianças e guildas não cruzam região (cada região é um servidor de jogo
     # separado) — se a região da guilda já é conhecida, busca só nela, senão um
     # personagem com o mesmo nick em outra região pode "casar" com a guilda errada.
@@ -1295,7 +1296,7 @@ async def bot_register(
         return {"ok": False, "reason": "no_role_configured"}
 
     albion_player_id = found["Id"]
-    existing = db.scalar(select(BotRegistration).where(
+    existing = await db.scalar(select(BotRegistration).where(
         BotRegistration.guild_id == guild_id,
         BotRegistration.albion_player_id == albion_player_id,
     ))
@@ -1329,7 +1330,7 @@ async def bot_register(
             is_ally=is_ally,
             active=True,
         ))
-    db.commit()
+    await db.commit()
     return {"ok": True, "role_id": str(role_id), "albion_player_name": found["Name"]}
 
 
@@ -1339,11 +1340,11 @@ class BotUnregisterIn(BaseModel):
 
 
 @router.post("/bot/unregister/{guild_id}")
-def bot_unregister(
+async def bot_unregister(
     guild_id: int,
     body: BotUnregisterIn,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Comando de controle /unregister (admin): desliga todos os registros
     ativos do usuário-alvo nessa guilda — identificado pelo Discord (id) OU
@@ -1358,14 +1359,14 @@ def bot_unregister(
     else:
         raise HTTPException(400, "informe discord_user_id ou albion_player_name")
 
-    regs = db.scalars(select(BotRegistration).where(*conditions)).all()
+    regs = (await db.scalars(select(BotRegistration).where(*conditions))).all()
     if not regs:
         return {"ok": False, "reason": "not_registered"}
     role_ids = sorted({str(r.role_id) for r in regs})
     discord_user_ids = sorted({str(r.discord_user_id) for r in regs})
     for r in regs:
         r.active = False
-    db.commit()
+    await db.commit()
     return {"ok": True, "role_ids": role_ids, "discord_user_ids": discord_user_ids}
 
 
@@ -1374,24 +1375,24 @@ class BotMemberGoneIn(BaseModel):
 
 
 @router.post("/bot/registration-left-guild/{guild_id}")
-def bot_registration_left_guild(
+async def bot_registration_left_guild(
     guild_id: int,
     body: BotMemberGoneIn,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Chamado pelo bot em on_member_remove/on_member_ban: o usuário saiu do
     Discord, então qualquer registro ativo dele nessa guilda não faz mais
     sentido (não há cargo pra remover — ele já não está mais no servidor)."""
     _require_bot_secret(authorization)
-    regs = db.scalars(select(BotRegistration).where(
+    regs = (await db.scalars(select(BotRegistration).where(
         BotRegistration.guild_id == guild_id,
         BotRegistration.discord_user_id == int(body.discord_user_id),
         BotRegistration.active.is_(True),
-    )).all()
+    ))).all()
     for r in regs:
         r.active = False
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
@@ -1401,11 +1402,11 @@ class BotRoleRemovedIn(BaseModel):
 
 
 @router.post("/bot/registration-role-removed/{guild_id}")
-def bot_registration_role_removed(
+async def bot_registration_role_removed(
     guild_id: int,
     body: BotRoleRemovedIn,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Chamado pelo bot em on_member_update quando algum cargo é tirado do
     membro manualmente: se o cargo removido era o de um registro ativo, esse
@@ -1413,15 +1414,15 @@ def bot_registration_role_removed(
     "esquecido" no banco mesmo sem o membro ter mais o cargo)."""
     _require_bot_secret(authorization)
     removed = {int(x) for x in body.removed_role_ids}
-    regs = db.scalars(select(BotRegistration).where(
+    regs = (await db.scalars(select(BotRegistration).where(
         BotRegistration.guild_id == guild_id,
         BotRegistration.discord_user_id == int(body.discord_user_id),
         BotRegistration.active.is_(True),
-    )).all()
+    ))).all()
     for r in regs:
         if r.role_id in removed:
             r.active = False
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
@@ -1433,14 +1434,14 @@ class HeartbeatIn(BaseModel):
 
 
 @router.post("/bot/heartbeat/{guild_id}")
-def bot_heartbeat(
+async def bot_heartbeat(
     guild_id: int,
     body: HeartbeatIn,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None and body.guild_name:
         g = Guild(id=guild_id, name=body.guild_name, icon=body.guild_icon)
         db.add(g)
@@ -1448,23 +1449,23 @@ def bot_heartbeat(
         g.bot_present = True
         if body.guild_name:
             g.name = body.guild_name
-        db.commit()
+        await db.commit()
     return {"ok": True}
 
 
 # ── Bot goodbye ───────────────────────────────────────────────────────────────
 
 @router.post("/bot/goodbye/{guild_id}")
-def bot_goodbye(
+async def bot_goodbye(
     guild_id: int,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g:
         g.bot_present = False
-        db.commit()
+        await db.commit()
     return {"ok": True}
 
 
@@ -1475,6 +1476,8 @@ def bot_goodbye(
 # existem aqui). Regras de negócio tipo "quem pode usar" ficam do lado do bot
 # (check_command_access, já configurável pelo site); aqui só valida o dinheiro
 # em si (valor positivo, saldo suficiente).
+# ponytail: rotas sync — economy_svc (get_or_create_balance) ainda não migrado
+# pra async; rodam em threadpool do FastAPI, não bloqueiam o event loop.
 
 _get_or_create_balance = economy_svc.get_or_create_balance
 
@@ -1682,37 +1685,37 @@ def bot_economy_undo(
 
 
 @router.get("/bot/economy/leaderboard/{guild_id}")
-def bot_economy_leaderboard(
+async def bot_economy_leaderboard(
     guild_id: int,
     limit: int = 10,
     offset: int = 0,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     _require_bot_secret(authorization)
-    total = db.scalar(
+    total = await db.scalar(
         select(func.count()).select_from(EconomyBalance).where(EconomyBalance.guild_id == guild_id)
     ) or 0
-    rows = db.execute(
+    rows = (await db.execute(
         select(EconomyBalance.discord_user_id, EconomyBalance.balance)
         .where(EconomyBalance.guild_id == guild_id)
         .order_by(EconomyBalance.balance.desc(), EconomyBalance.discord_user_id.asc())
         .limit(limit).offset(offset)
-    ).all()
+    )).all()
     return {"total": total, "rows": [{"discord_user_id": uid, "balance": bal} for uid, bal in rows]}
 
 
 @router.get("/bot/economy/stats/{guild_id}")
-def bot_economy_stats(
+async def bot_economy_stats(
     guild_id: int,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     _require_bot_secret(authorization)
-    row = db.execute(
+    row = (await db.execute(
         select(func.count(), func.coalesce(func.sum(EconomyBalance.balance), 0))
         .where(EconomyBalance.guild_id == guild_id)
-    ).one()
+    )).one()
     return {"user_count": row[0], "balances_sum": int(row[1])}
 
 
@@ -1720,6 +1723,8 @@ def bot_economy_stats(
 # Fonte da verdade do gate/inscrições é o site — o bot só chama estas rotas e
 # renderiza; nunca reimplementa a cascata de parties/cargos (ver
 # app/services/event_gates.py e event_signups.py).
+# ponytail: rotas sync — event_signups_svc/events_svc ainda não migrados pra
+# async; rodam em threadpool do FastAPI, não bloqueiam o event loop.
 
 def _parse_role_ids(raw: str | None) -> set[int]:
     if not raw:
@@ -1955,22 +1960,22 @@ def bot_events_upsert_signup(
 
 
 @router.get("/bot/events/{guild_id}/{event_id}/signups/{user_id}")
-def bot_events_get_signup(
+async def bot_events_get_signup(
     guild_id: int,
     event_id: int,
     user_id: int,
     authorization: str = Header(...),
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Confirmação read-after-write usada pelo bot quando a resposta do POST
     pode ter se perdido depois do commit."""
     _require_bot_secret(authorization)
-    event = db.scalar(select(Event).where(
+    event = await db.scalar(select(Event).where(
         Event.id == event_id, Event.guild_id == guild_id,
     ))
     if event is None:
         raise HTTPException(404, "evento não encontrado")
-    row = db.scalar(select(EventSignup).where(
+    row = await db.scalar(select(EventSignup).where(
         EventSignup.event_id == event_id,
         EventSignup.guild_id == guild_id,
         EventSignup.user_id == user_id,
@@ -2639,6 +2644,9 @@ def bot_events_lootlog_thread_archived(
 # ── Bot: nodes (calendário) ────────────────────────────────────────────────────
 # O bot-v2 renderiza o calendário embed e faz proxy por aqui. Gate de cargo é
 # feito no bot (como em /bot/economy/*); o endpoint confia no BOT_API_SECRET.
+# ponytail: rotas sync — nodes_svc ainda não migrado pra async; rodam em
+# threadpool do FastAPI, não bloqueiam o event loop (exceto bot_nodes_clear,
+# que é own-DB só e foi migrado).
 
 class BotNodeEventIn(BaseModel):
     node_type: str
@@ -2792,20 +2800,20 @@ def bot_nodes_remove_map(guild_id: int, map_name: str,
 
 
 @router.post("/bot/guilds/{guild_id}/nodes/clear")
-def bot_nodes_clear(guild_id: int, authorization: str = Header(...),
-                    db: Session = Depends(deps.db_session)):
+async def bot_nodes_clear(guild_id: int, authorization: str = Header(...),
+                    db: AsyncSession = Depends(deps.async_db_session)):
     """Equivalente ao /stopnode do bot-v1: poda TODOS os nodes vivos e zera o
     calendário (channel_id/message_id). O log permanente (`node_event_log`) é
     preservado — é auditoria."""
     _require_bot_secret(authorization)
     from sqlalchemy import delete as _delete
-    from app.models.nodes import NodeEvent, NodeCalendar
-    db.execute(_delete(NodeEvent).where(NodeEvent.guild_id == guild_id))
-    cal = db.get(NodeCalendar, guild_id)
+    from app.models.nodes import NodeCalendar
+    await db.execute(_delete(NodeEvent).where(NodeEvent.guild_id == guild_id))
+    cal = await db.get(NodeCalendar, guild_id)
     if cal is not None:
         cal.channel_id = None
         cal.message_id = None
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
@@ -2854,15 +2862,15 @@ _JUICY_KILL_HARD_FLOOR = 20_000_000  # mínimo absoluto — nenhum guilda desce 
 
 
 @router.get("/bot/guilds/{guild_id}/juicy-kill/queue")
-def bot_juicy_kill_queue(
-    guild_id: int, authorization: str = Header(...), db: Session = Depends(deps.db_session),
+async def bot_juicy_kill_queue(
+    guild_id: int, authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Próximo lote de juicy kills (silver_dropped >= min) ainda não postados.
     Cursor em Guild.settings.juicy_kill_last_id."""
     _require_bot_secret(authorization)
     from app.models.players import PlayerKillEvent
     from app.services.lethality import is_likely_lethal
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
     settings = g.settings or {}
@@ -2883,7 +2891,7 @@ def bot_juicy_kill_queue(
         q = q.where(PlayerKillEvent.fame >= min_fame)
     if regions:
         q = q.where(PlayerKillEvent.region.in_(regions))
-    candidates = db.scalars(q.order_by(PlayerKillEvent.id.asc()).limit(_JUICY_KILL_BATCH * 4)).all()
+    candidates = (await db.scalars(q.order_by(PlayerKillEvent.id.asc()).limit(_JUICY_KILL_BATCH * 4))).all()
     events = []
     dirty = False
     for ev in candidates:
@@ -2897,13 +2905,13 @@ def bot_juicy_kill_queue(
         if len(events) == _JUICY_KILL_BATCH:
             break
     if dirty:
-        db.commit()
+        await db.commit()
     if not events:
         return {"kills": []}
 
     out = []
     for ev in events:
-        out.append(_juicy_kill_payload(db, ev))
+        out.append(await _juicy_kill_payload_async(db, ev))
     return {"kills": out}
 
 
@@ -2916,6 +2924,21 @@ def _juicy_kill_payload(db: Session, ev) -> dict:
     killer = db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.killer_player_id)) if ev.killer_player_id else None
     victim = db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.victim_player_id)) if ev.victim_player_id else None
     delay = publish_delay_status().get(ev.region, {})
+    return _juicy_kill_build(ev, killer, victim, delay)
+
+
+async def _juicy_kill_payload_async(db: AsyncSession, ev) -> dict:
+    # ponytail: espelho async de _juicy_kill_payload — só bot_juicy_kill_queue
+    # (async) chama; a versão sync fica pro bot_juicy_kill_image (ainda sync-DB).
+    from app.models.players import AlbionPlayer
+    from app.services.battle_tracker import publish_delay_status
+    killer = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.killer_player_id)) if ev.killer_player_id else None
+    victim = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.victim_player_id)) if ev.victim_player_id else None
+    delay = publish_delay_status().get(ev.region, {})
+    return _juicy_kill_build(ev, killer, victim, delay)
+
+
+def _juicy_kill_build(ev, killer, victim, delay) -> dict:
     return {
         "id": ev.id,
         "region": ev.region,
@@ -2953,22 +2976,25 @@ class JuicyKillSyncedIn(BaseModel):
 
 
 @router.post("/bot/guilds/{guild_id}/juicy-kill/synced")
-def bot_juicy_kill_synced(
+async def bot_juicy_kill_synced(
     guild_id: int, body: JuicyKillSyncedIn,
-    authorization: str = Header(...), db: Session = Depends(deps.db_session),
+    authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Avança o cursor após o bot postar as kills com sucesso."""
     _require_bot_secret(authorization)
-    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
     settings = dict(g.settings or {})
     settings["juicy_kill_last_id"] = max(int(settings.get("juicy_kill_last_id", 0)), body.last_id)
     g.settings = settings
-    db.commit()
+    await db.commit()
     return {"ok": True}
 
 
+# ponytail: rota async com Session sync — render_juicy_kill_image ainda usa
+# db.get/Scalar síncronos; trocar por AsyncSession quebra. Roda em threadpool
+# via deps.db_session; o await só cobre o HTTP de ícones dentro do render.
 @router.get("/bot/guilds/{guild_id}/juicy-kill/{kill_id}/image")
 async def bot_juicy_kill_image(
     guild_id: int, kill_id: int, authorization: str = Header(...),
@@ -2999,6 +3025,24 @@ def _require_member(db: Session, user: User, guild_id: int) -> GuildMember:
 
 def _require_admin(db: Session, user: User, guild_id: int) -> GuildMember:
     m = _require_member(db, user, guild_id)
+    if not m.is_guild_admin:
+        raise HTTPException(403, "requer admin do servidor")
+    return m
+
+
+# ponytail: versões async dos helpers de filiação — só as rotas async usam. As
+# sync continuam com as versões `Session` acima (que rodam em threadpool).
+async def _require_member_async(db: AsyncSession, user: User, guild_id: int) -> GuildMember:
+    m = await db.scalar(select(GuildMember).where(
+        GuildMember.guild_id == guild_id, GuildMember.user_id == user.id,
+    ))
+    if m is None:
+        raise HTTPException(403, "sem acesso")
+    return m
+
+
+async def _require_admin_async(db: AsyncSession, user: User, guild_id: int) -> GuildMember:
+    m = await _require_member_async(db, user, guild_id)
     if not m.is_guild_admin:
         raise HTTPException(403, "requer admin do servidor")
     return m

@@ -14,6 +14,10 @@ from app.api.schemas.comps import (
 from app.models.tenancy import Guild
 from app.services import comps as svc
 
+# ponytail: todas as rotas chamam services síncronos (svc.list_comps/create_comp/
+# get_comp/update_comp/delete_comp/suggest) que recebem Session sync — não dá
+# pra passar AsyncSession. Migra quando o service comps migrar.
+
 router = APIRouter(prefix="/guilds/{guild_id}/comps", tags=["comps"])
 
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")

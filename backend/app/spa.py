@@ -29,7 +29,7 @@ _EVENT_RE = re.compile(r"^(?:eventos|events)/(\d+)/(\d+)(?:/(?:escalacao|escalat
 _REGION_NAME = {"am": "Americas", "as": "Asia", "eu": "Europe"}
 
 
-def _og_for_path(path: str) -> tuple[str, str, str | None]:
+async def _og_for_path(path: str) -> tuple[str, str, str | None]:
     """(title, description, image_url|None) da rota — só com a URL, sem DB.
 
     Batalha por código busca o resumo no banco: /{code} é tanto a URL pública
@@ -48,11 +48,11 @@ def _og_for_path(path: str) -> tuple[str, str, str | None]:
                 "Escalação e inscrições do evento no Ziggs.", None)
 
     if _BATTLE_IDS_RE.match(path) or path == "multi":
-        return ("Batalha — Ziggs", "Detalhes da batalha: kills, fama e composições.", None)
+        return ("Batalha", "", None)
 
     if _BATTLE_CODE_RE.match(path):
-        title, image = _battle_summary(path)
-        return (title, "Detalhes da batalha: kills, fama e composições.", image)
+        title, image = await _battle_summary(path)
+        return (title, "", image)
 
     if path.startswith(("guild/", "alliance/")):
         return ("Perfil de guilda — Ziggs", "Batalhas e jogadores da guilda no Albion Online.", None)
@@ -60,29 +60,39 @@ def _og_for_path(path: str) -> tuple[str, str, str | None]:
     return ("", "", None)  # rota sem OG específico → index como está
 
 
-def _battle_summary(public_id: str) -> tuple[str, str | None]:
+async def _battle_summary(public_id: str) -> tuple[str, str | None]:
     """Título + URL do PNG de preview da batalha."""
     try:
         from app.config import get_settings
-        from app.db import SessionLocal
+        from app.db import AsyncSessionLocal
         from app.models.battles import Battle
         from app.services import battle_groups
+        from app.api.routes.battles import _factions_summary
 
-        db = SessionLocal()
-        try:
-            ids = battle_groups.get_group_battle_ids(db, public_id)
+        async with AsyncSessionLocal() as db:
+            ids = await battle_groups.get_group_battle_ids(db, public_id)
             if not ids:
                 return ("", None)
-            b = db.get(Battle, ids[0])
+            b = await db.get(Battle, ids[0])
             if not b:
                 return ("", None)
-            title = f"{b.players_total} players · {b.kill_count} kills"
-            if b.cluster:
-                title += f" · {b.cluster}"
+            # Tags das factions vs (mesmo formato da imagem de preview)
+            all_factions: dict[str, dict] = {}
+            for bid in ids:
+                for f in await _factions_summary(db, bid):
+                    key = f["alliance_name"] or f["guild_name"]
+                    if key in all_factions:
+                        all_factions[key]["kills"] += f["kills"]
+                    else:
+                        all_factions[key] = dict(f)
+            top = sorted(all_factions.values(), key=lambda r: r["kills"], reverse=True)[:4]
+            tags = []
+            for f in top:
+                tag = f"[{f['alliance_name']}]" if f["alliance_name"] else f["guild_name"]
+                tags.append(tag[:12])
+            title = "  vs  ".join(tags) if tags else f"{b.players_total} players · {b.kill_count} kills"
             image = f"{get_settings().frontend_url}/battles/preview/{public_id}.png"
             return (title, image)
-        finally:
-            db.close()
     except Exception:
         return ("", None)  # DB fora/erro → OG genérico, página abre igual
 
@@ -91,18 +101,49 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
 
-def _inject_og(index_html: str, path: str) -> str:
-    title, desc, image = _og_for_path(path)
-    if not title:
+async def _inject_og(index_html: str, path: str) -> str:
+    title, desc, image = await _og_for_path(path)
+    if not title and not image:
         return index_html
     html = index_html
-    html = re.sub(r"<title>[^<]*</title>", f"<title>{_esc(title)} · Ziggs</title>", html, count=1)
+    html = re.sub(r"<title>[^<]*</title>", f"<title>{_esc(title)}</title>", html, count=1)
     html = re.sub(r'(property="og:title" content=")[^"]*(")', rf"\g<1>{_esc(title)}\g<2>", html, count=1)
     html = re.sub(r'(property="og:description" content=")[^"]*(")', rf"\g<1>{_esc(desc)}\g<2>", html, count=1)
     html = re.sub(r'(name="description" content=")[^"]*(")', rf"\g<1>{_esc(desc)}\g<2>", html, count=1)
     if image:
-        html = html.replace("</head>", f'<meta property="og:image" content="{_esc(image)}" />\n</head>', 1)
+        # Remove o og:image padrão (/logo.png) pra o crawler não pegar o 1º.
+        # Sem og:image:width/height e sem twitter:card — o Discord busca a
+        # imagem e usa as dimensões reais sem forçar um aspect ratio (que
+        # amassa a tira 3.3:1 no card grande esperado 1.91:1).
+        html = re.sub(r'<meta\s+property="og:image"[^>]*/?>', "", html)
+        html = re.sub(r'<meta\s+name="twitter:card"[^>]*/?>', "", html)
+        tags = [
+            f'<meta property="og:image" content="{_esc(image)}" />',
+            f'<meta property="og:image:type" content="image/png" />',
+            '<meta name="twitter:card" content="summary_large_image" />',
+        ]
+        html = html.replace("</head>", "\n".join(tags) + "\n</head>", 1)
     return html
+
+
+def _preview_dimensions(image_url: str) -> tuple[int, int]:
+    """Largura/altura do PNG de preview. A largura é fixa (600); a altura
+    vem do arquivo renderizado. Se não conseguir ler, usa o mínimo do
+    Discord (315px)."""
+    try:
+        from pathlib import Path
+        # Extrai o public_id da URL: .../battles/preview/{id}.png
+        name = image_url.rsplit("/", 1)[-1]  # {id}.png
+        public_id = name.replace(".png", "")
+        cache_dir = Path(__file__).resolve().parents[1] / "data" / "battle_preview_cache"
+        path = cache_dir / f"{public_id}.png"
+        if path.exists():
+            from PIL import Image as PILImage
+            with PILImage.open(path) as img:
+                return (img.width, img.height)
+    except Exception:
+        pass
+    return (600, 315)
 
 
 def install(app: FastAPI) -> None:
@@ -130,4 +171,5 @@ def install(app: FastAPI) -> None:
         request_host = request.headers.get("host", "").split(":", 1)[0].lower()
         if docs_file.is_file() and docs_host and request_host == docs_host:
             return FileResponse(docs_file)
-        return HTMLResponse(_inject_og(index_html, full_path))
+        return HTMLResponse(await _inject_og(index_html, full_path),
+                            headers={"Cache-Control": "no-cache"})

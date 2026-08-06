@@ -2,10 +2,10 @@ import { useLang, type Lang } from "../i18n";
 
 // Páginas legais e institucionais do Ziggs. Texto em PT/EN/ES, baseado no que
 // o site coleta de fato (Discord OAuth — identify+guilds, sem email; cookies
-// de sessão; AdSense; dados públicos da API do Albion). Placeholder de email
-// (contato@ziggs.xyz) e publisher ID (ca-pub-...) pra preencher quando tiver.
+// de sessão; dados públicos da API do Albion). Placeholder de email
+// (contato@ziggs.xyz) pra preencher quando tiver.
 //
-// Não é conselho jurídico — é o mínimo que cobre o que AdSense e LGPD pedem.
+// Não é conselho jurídico — é o mínimo que cobre o que LGPD pede.
 // Revise com um advogado antes de publicar em produção.
 
 const CONTACT_EMAIL = "contato@ziggs.xyz";
@@ -221,11 +221,11 @@ const PRIVACY: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨UL¨
 ¨LI¨¨B¨Discord Inc.¨/B¨ — para autenticação (OAuth 2.0);¨/LI¨
 ¨LI¨¨B¨Sandbox Interactive GmbH (Albion Online API)¨/B¨ — para buscar dados públicos de jogo;¨/LI¨
-¨LI¨¨B¨Google LLC (Google AdSense)¨/B¨ — para exibição de anúncios. O AdSense pode coletar cookies e dados de navegação para personalização. Consulte nossa ¨A¨/cookies¨/A¨.¨/LI¨
+¨LI¨¨B¨Adsterra LLC¨/B¨ — para exibição de anúncios em iframes de terceiros. Consulte nossa ¨A¨/cookies¨/A¨.¨/LI¨
 ¨/UL¨
 
 ¨H2¨6. Cookies¨/H2¨
-¨P¨Usamos cookies de sessão (necessários para o login) e cookies de terceiros (Google AdSense). Detalhes na nossa ¨A¨/cookies¨/A¨.¨/P¨
+¨P¨Usamos cookies de sessão (necessários para o login). Detalhes na nossa ¨A¨/cookies¨/A¨.¨/P¨
 
 ¨H2¨7. Retenção¨/H2¨
 ¨P¨Mantemos seus dados pelo tempo necessário para fornecer o serviço. Dados de uso são mantidos por no máximo 90 dias. Dados de conta (Discord ID, personagens vinculados) são mantidos enquanto sua conta estiver ativa e podem ser excluídos mediante solicitação.¨/P¨
@@ -297,11 +297,11 @@ const PRIVACY: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨UL¨
 ¨LI¨¨B¨Discord Inc.¨/B¨ — for authentication (OAuth 2.0);¨/LI¨
 ¨LI¨¨B¨Sandbox Interactive GmbH (Albion Online API)¨/B¨ — to fetch public game data;¨/LI¨
-¨LI¨¨B¨Google LLC (Google AdSense)¨/B¨ — for ad display. AdSense may collect cookies and browsing data for personalization. See our ¨A¨/cookies¨/A¨.¨/LI¨
+¨LI¨¨B¨Adsterra LLC¨/B¨ — for ad display in third-party iframes. See our ¨A¨/cookies¨/A¨.¨/LI¨
 ¨/UL¨
 
 ¨H2¨6. Cookies¨/H2¨
-¨P¨We use session cookies (necessary for login) and third-party cookies (Google AdSense). Details in our ¨A¨/cookies¨/A¨.¨/P¨
+¨P¨We use session cookies (necessary for login). Details in our ¨A¨/cookies¨/A¨.¨/P¨
 
 ¨H2¨7. Retention¨/H2¨
 ¨P¨We keep your data for as long as necessary to provide the service. Usage data is kept for a maximum of 90 days. Account data (Discord ID, linked characters) is kept while your account is active and can be deleted upon request.¨/P¨
@@ -373,11 +373,11 @@ const PRIVACY: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨UL¨
 ¨LI¨¨B¨Discord Inc.¨/B¨ — para autenticación (OAuth 2.0);¨/LI¨
 ¨LI¨¨B¨Sandbox Interactive GmbH (API de Albion Online)¨/B¨ — para obtener datos públicos del juego;¨/LI¨
-¨LI¨¨B¨Google LLC (Google AdSense)¨/B¨ — para mostrar anuncios. AdSense puede recopilar cookies y datos de navegación para personalización. Consulta nuestra ¨A¨/cookies¨/A¨.¨/LI¨
+¨LI¨¨B¨Adsterra LLC¨/B¨ — para mostrar anuncios en iframes de terceros. Consulta nuestra ¨A¨/cookies¨/A¨.¨/LI¨
 ¨/UL¨
 
 ¨H2¨6. Cookies¨/H2¨
-¨P¨Usamos cookies de sesión (necesarias para el inicio de sesión) y cookies de terceros (Google AdSense). Detalles en nuestra ¨A¨/cookies¨/A¨.¨/P¨
+¨P¨Usamos cookies de sesión (necesarias para el inicio de sesión). Detalles en nuestra ¨A¨/cookies¨/A¨.¨/P¨
 
 ¨H2¨7. Retención¨/H2¨
 ¨P¨Mantenemos tus datos durante el tiempo necesario para proporcionar el servicio. Los datos de uso se conservan un máximo de 90 días. Los datos de la cuenta (ID de Discord, personajes vinculados) se mantienen mientras la cuenta esté activa y pueden eliminarse previa solicitud.¨/P¨
@@ -422,12 +422,8 @@ const COOKIES: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨LI¨¨B¨ziggs_session¨/B¨ — cookie de sessão assinado, necessário para manter você autenticado. Sem ele, você seria deslogado a cada navegação. Não pode ser desativado.¨/LI¨
 ¨/UL¨
 
-¨H3¨Cookies de terceiros (Google AdSense)¨/H3¨
-¨UL¨
-¨LI¨¨B¨__gads, __gpi, IDE¨/B¨ — cookies do Google AdSense para exibição de anúncios e medição de performance;¨/LI¨
-¨LI¨¨B¨NID¨/B¨ — cookie do Google para preferências de anúncios.¨/LI¨
-¨/UL¨
-¨P¨Cookies de terceiros só são carregados se você consentir (ver banner de cookies). Sem consentimento, servimos apenas anúncios não personalizados ou nenhum anúncio.¨/P¨
+¨H3¨Anúncios de terceiros (Adsterra)¨/H3¨
+¨P¨Os anúncios são exibidos em iframes de terceiro (Adsterra). Esses iframes podem definir cookies próprios do domínio do Adsterra, fora do nosso controle. A maioria desses cookies é de sessão e não persiste entre visitas.¨/P¨
 
 ¨H2¨3. Gerenciamento¨/H2¨
 ¨P¨Você pode gerenciar ou excluir cookies a qualquer momento nas configurações do seu navegador:¨/P¨
@@ -436,13 +432,8 @@ const COOKIES: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨LI¨¨A¨https://support.mozilla.org/pt-BR/kb/limpar-cookies-dados-sites-firefox¨/A¨ (Mozilla Firefox);¨/LI¨
 ¨LI¨¨A¨https://support.apple.com/pt-br/guide/safari/sfri11471/mac¨/A¨ (Safari).¨/LI¨
 ¨/UL¨
-¨P¨Você também pode gerenciar suas preferências de publicidade do Google em ¨A¨https://ads.google.com/home/settings/ads-settings¨/A¨.¨/P¨
-
-¨H2¨4. Consentimento¨/H2¨
-¨P¨Ao clicar em "Aceitar tudo" no banner de cookies, você consente com o uso de cookies de terceiros para anúncios personalizados. Ao clicar em "Só necessários", apenas os cookies essenciais serão usados. Você pode revisar sua escolha a qualquer momento limpando os cookies do navegador.¨/P¨
-
-¨H2¨5. Contato¨/H2¨
-¨P¨Dúvidas sobre cookies podem ser enviadas para ¨EMAIL¨.¨/P¨`,
+¨H2¨4. Contato¨/H2¨
+¨P¨Dúvidas sobre cookies podem ser enviadas para ¨EMAIL¨.¨/P`,
   },
   en: {
     title: "Cookie Policy",
@@ -456,12 +447,8 @@ const COOKIES: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨LI¨¨B¨ziggs_session¨/B¨ — signed session cookie, necessary to keep you authenticated. Without it, you would be logged out on every navigation. Cannot be disabled.¨/LI¨
 ¨/UL¨
 
-¨H3¨Third-party cookies (Google AdSense)¨/H3¨
-¨UL¨
-¨LI¨¨B¨__gads, __gpi, IDE¨/B¨ — Google AdSense cookies for ad display and performance measurement;¨/LI¨
-¨LI¨¨B¨NID¨/B¨ — Google cookie for ad preferences.¨/LI¨
-¨/UL¨
-¨P¨Third-party cookies are only loaded if you consent (see cookie banner). Without consent, we serve only non-personalized ads or no ads.¨/P¨
+¨H3¨Third-party ads (Adsterra)¨/H3¨
+¨P¨Ads are displayed in third-party iframes (Adsterra). These iframes may set their own cookies on the Adsterra domain, outside our control. Most of these cookies are session-scoped and do not persist between visits.¨/P¨
 
 ¨H2¨3. Management¨/H2¨
 ¨P¨You can manage or delete cookies at any time in your browser settings:¨/P¨
@@ -470,13 +457,8 @@ const COOKIES: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨LI¨¨A¨https://support.mozilla.org/en-US/kb/clear-cookies-and-site-data-firefox¨/A¨ (Mozilla Firefox);¨/LI¨
 ¨LI¨¨A¨https://support.apple.com/guide/safari/sfri11471/mac¨/A¨ (Safari).¨/LI¨
 ¨/UL¨
-¨P¨You can also manage your Google ad preferences at ¨A¨https://ads.google.com/home/settings/ads-settings¨/A¨.¨/P¨
-
-¨H2¨4. Consent¨/H2¨
-¨P¨By clicking "Accept all" in the cookie banner, you consent to the use of third-party cookies for personalized ads. By clicking "Necessary only", only essential cookies will be used. You can review your choice at any time by clearing your browser cookies.¨/P¨
-
-¨H2¨5. Contact¨/H2¨
-¨P¨Questions about cookies can be sent to ¨EMAIL¨.¨/P¨`,
+¨H2¨4. Contact¨/H2¨
+¨P¨Questions about cookies can be sent to ¨EMAIL¨.¨/P`,
   },
   es: {
     title: "Política de Cookies",
@@ -490,12 +472,8 @@ const COOKIES: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨LI¨¨B¨ziggs_session¨/B¨ — cookie de sesión firmado, necesario para mantener tu autenticación. Sin él, serías desconectado en cada navegación. No se puede desactivar.¨/LI¨
 ¨/UL¨
 
-¨H3¨Cookies de terceros (Google AdSense)¨/H3¨
-¨UL¨
-¨LI¨¨B¨__gads, __gpi, IDE¨/B¨ — cookies de Google AdSense para mostrar anuncios y medir el rendimiento;¨/LI¨
-¨LI¨¨B¨NID¨/B¨ — cookie de Google para preferencias de anuncios.¨/LI¨
-¨/UL¨
-¨P¨Las cookies de terceros solo se cargan si das tu consentimiento (ver banner de cookies). Sin consentimiento, mostramos solo anuncios no personalizados o ningún anuncio.¨/P¨
+¨H3¨Anuncios de terceros (Adsterra)¨/H3¨
+¨P¨Los anuncios se muestran en iframes de terceros (Adsterra). Estos iframes pueden establecer sus propias cookies en el dominio de Adsterra, fuera de nuestro control. La mayoría de estas cookies son de sesión y no persisten entre visitas.¨/P¨
 
 ¨H2¨3. Gestión¨/H2¨
 ¨P¨Puedes gestionar o eliminar cookies en cualquier momento en la configuración de tu navegador:¨/P¨
@@ -504,13 +482,8 @@ const COOKIES: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨LI¨¨A¨https://support.mozilla.org/es/kb/eliminar-cookies-datos-sitios-firefox¨/A¨ (Mozilla Firefox);¨/LI¨
 ¨LI¨¨A¨https://support.apple.com/es/guide/safari/sfri11471/mac¨/A¨ (Safari).¨/LI¨
 ¨/UL¨
-¨P¨También puedes gestionar tus preferencias de publicidad de Google en ¨A¨https://ads.google.com/home/settings/ads-settings¨/A¨.¨/P¨
-
-¨H2¨4. Consentimiento¨/H2¨
-¨P¨Al hacer clic en "Aceptar todo" en el banner de cookies, das tu consentimiento para el uso de cookies de terceros para anuncios personalizados. Al hacer clic en "Solo necesarias", solo se usarán las cookies esenciales. Puedes revisar tu elección en cualquier momento borrando las cookies de tu navegador.¨/P¨
-
-¨H2¨5. Contacto¨/H2¨
-¨P¨Las dudas sobre cookies pueden enviarse a ¨EMAIL¨.¨/P¨`,
+¨H2¨4. Contacto¨/H2¨
+¨P¨Las dudas sobre cookies pueden enviarse a ¨EMAIL¨.¨/P¨¨`,
   },
 };
 

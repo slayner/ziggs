@@ -22,9 +22,10 @@ import time
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import SyncSessionLocal
 from app.models.battles import Battle, BattleGuild, BattleParticipant
 from app.models.players import AlbionPlayer, SearchEntry
 from app.services.search_norm import normalize
@@ -45,19 +46,15 @@ _last_lock_log = 0.0
 
 
 def upsert_entry(
-    db: Session, entity_type: str, entity_id: str | None, display_name: str | None, *,
+    db: Session | AsyncSession, entity_type: str, entity_id: str | None, display_name: str | None, *,
     region: str | None = None, guild_name: str | None = None,
     alliance_name: str | None = None, guild_count: int | None = None,
-) -> None:
-    """INSERT ... ON CONFLICT DO UPDATE, não select-then-insert: battle_tracker
-    roda sync_recent e backfill_cycle em tasks concorrentes com sessões
-    separadas (ver run_forever/run_backfill_forever), então dois SELECTs
-    podem ver a MESMA aliança/guilda como inexistente ao mesmo tempo e ambos
-    tentar inserir — UNIQUE constraint failed, e como o INSERT do ORM só
-    dispara no flush (não no db.add), o try/except de safe_upsert_entry nem
-    pegava o erro. execute() aqui roda a SQL na hora, dentro do try/except."""
+):
+    """INSERT ... ON CONFLICT DO UPDATE. Retorna o resultado de db.execute(stmt)
+    — Result (sync) ou coroutine (async). O caller decide se precisa await.
+    `safe_upsert_entry` (sync) e `safe_upsert_entry_async` (async) encapsulam."""
     if not entity_id or not display_name:
-        return
+        return None
     norm = normalize(display_name)
     stmt = pg_insert(SearchEntry).values(
         entity_type=entity_type, entity_id=entity_id,
@@ -77,29 +74,42 @@ def upsert_entry(
             "guild_count": func.coalesce(stmt.excluded.guild_count, SearchEntry.guild_count),
         },
     )
-    db.execute(stmt)
+    return db.execute(stmt)
 
 
-def safe_upsert_entry(db: Session, **kwargs) -> None:
-    """Como upsert_entry, mas nunca propaga — a ingestão de batalhas/
-    jogadores não pode quebrar por causa do índice de busca."""
-    if _rebuilding.is_set():
-        return  # rebuild reconcilia tudo da fonte; não disputar o lock com ele
-    try:
-        upsert_entry(db, **kwargs)
-    except OperationalError as e:
-        if "database is locked" not in str(e).lower():
-            log.exception("search_index: falha ao indexar %s", kwargs.get("entity_id"))
-            return
-        # Lock é benigno e esperado sob concorrência — o rebuild periódico
-        # reconcilia. Só não floodar o log: 1 aviso curto por minuto, sem stack.
+def _handle_upsert_error(e: Exception, entity_id: str | None) -> None:
+    if isinstance(e, OperationalError) and "database is locked" in str(e).lower():
         global _last_lock_log
         now = time.monotonic()
         if now - _last_lock_log > 60:
             _last_lock_log = now
             log.warning("search_index: SQLite ocupado, upsert pulado (rebuild reconcilia)")
-    except Exception:
-        log.exception("search_index: falha ao indexar %s", kwargs.get("entity_id"))
+        return
+    log.exception("search_index: falha ao indexar %s", entity_id)
+
+
+def safe_upsert_entry(db: Session, **kwargs) -> None:
+    """Versão SYNC — pra callers com Session síncrona (battle_tracker, profiles
+    sync). Nunca propaga — a ingestão não pode quebrar por causa do índice."""
+    if _rebuilding.is_set():
+        return
+    try:
+        upsert_entry(db, **kwargs)
+    except Exception as e:
+        _handle_upsert_error(e, kwargs.get("entity_id"))
+
+
+async def safe_upsert_entry_async(db: AsyncSession, **kwargs) -> None:
+    """Versão ASYNC — pra callers com AsyncSession (player_tracker migrado,
+    profiles async). Nunca propaga."""
+    if _rebuilding.is_set():
+        return
+    try:
+        result = upsert_entry(db, **kwargs)
+        if asyncio.iscoroutine(result):
+            await result
+    except Exception as e:
+        _handle_upsert_error(e, kwargs.get("entity_id"))
 
 
 def _flush_chunk(db: Session, rows: list[dict]) -> None:
@@ -277,7 +287,7 @@ def rebuild(db: Session) -> dict[str, int]:
 
 def _rebuild_sync() -> dict[str, int]:
     _rebuilding.set()  # write-path pausa upserts enquanto reescrevemos tudo
-    db = SessionLocal()
+    db = SyncSessionLocal()
     try:
         return rebuild(db)
     except Exception:
@@ -290,7 +300,7 @@ def _rebuild_sync() -> dict[str, int]:
 
 async def run_forever() -> None:
     log.info("search_index: iniciando (intervalo=%ds)", REBUILD_INTERVAL)
-    db = SessionLocal()
+    db = SyncSessionLocal()
     try:
         is_empty = db.scalar(select(func.count()).select_from(SearchEntry)) == 0
     finally:

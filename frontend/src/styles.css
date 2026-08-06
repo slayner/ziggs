@@ -46,8 +46,7 @@ a { color: var(--info); text-decoration: none; }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; }
 .brand .logo {
   width: 30px; height: 30px;
-  background: var(--gold-soft); color: var(--gold);
-  display: flex; align-items: center; justify-content: center; font-size: 18px;
+  object-fit: contain;
 }
 .badge {
   font-size: 11px; padding: 3px 9px; border-radius: 999px;
@@ -105,8 +104,7 @@ a { color: var(--info); text-decoration: none; }
 .login-card { width: 340px; text-align: center; }
 .login-card .logo-big {
   width: 56px; height: 56px; margin: 0 auto 16px;
-  background: var(--gold-soft); color: var(--gold);
-  display: flex; align-items: center; justify-content: center; font-size: 30px;
+  object-fit: contain;
 }
 
 /* ── CompBuilder: planilha ───────────────────────────────── */
@@ -236,37 +234,6 @@ a { color: var(--info); text-decoration: none; }
   color: var(--hint); text-transform: uppercase;
   display: flex; align-items: center; gap: 4px; white-space: nowrap;
 }
-
-/* CTA do Companion entre a navegação pública e a área de gestão. */
-.companion-nav-cta {
-  position: relative; display: flex; align-items: center; gap: 8px; min-width: 188px;
-  min-height: 38px; padding: 4px 10px; overflow: hidden;
-  border: 1px solid rgba(212, 163, 56, .55); color: var(--text);
-  background: linear-gradient(110deg, rgba(212, 163, 56, .22), rgba(91, 141, 239, .1));
-  box-shadow: inset 0 0 18px rgba(212, 163, 56, .06);
-}
-.companion-nav-cta::after {
-  content: ""; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.09) 50%, transparent 65%);
-  transform: translateX(-110%); transition: transform .45s ease;
-}
-.companion-nav-cta:hover::after { transform: translateX(110%); }
-.companion-nav-cta:hover, .companion-nav-cta.active { border-color: var(--gold); }
-.companion-nav-cta-orbit {
-  display: grid; place-items: center; width: 27px; height: 27px; flex: 0 0 auto;
-  border: 1px solid rgba(212, 163, 56, .45); color: var(--gold); background: rgba(14,15,19,.45);
-  animation: companion-orbit 5s ease-in-out infinite;
-}
-.companion-nav-cta-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; text-align: left; line-height: 1.15; }
-.companion-nav-cta-copy strong { color: #f0d58f; font-size: 11px; letter-spacing: .09em; text-transform: uppercase; }
-.companion-nav-cta-copy small {
-  display: flex; align-items: center; gap: 4px; margin-top: 2px; overflow: hidden;
-  color: var(--muted); font-size: 10px; white-space: nowrap; text-overflow: ellipsis;
-  animation: companion-feature-in .28s ease-out;
-}
-.companion-nav-cta-arrow { color: var(--gold); font-size: 13px; }
-@keyframes companion-orbit { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg) scale(1.04); } }
-@keyframes companion-feature-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 /* Primeiro contato do header: anúncio compacto; o menu tradicional aparece
    depois do clique e permanece via sessionStorage durante a sessão OAuth. */
@@ -1531,8 +1498,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .management-workspace-head p { margin: 0 0 0 auto; max-width: 290px; color: var(--hint); font-size: 11px; text-align: right; }
 
 @media (max-width: 1180px) {
-  .companion-nav-cta { min-width: 40px; padding-right: 8px; }
-  .companion-nav-cta-copy { display: none; }
   .discord-mini-promo :is(button, a) { min-width: 40px; }
   .discord-mini-promo :is(button, a) > span:nth-child(2), .discord-mini-arrow { display: none; }
 }
@@ -1540,7 +1505,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   .topbar { flex-wrap: wrap; padding: 9px 12px; }
   .nav-public { order: 3; width: 100%; margin-left: 0; overflow-x: auto; }
   .nav-sep { display: none; }
-  .companion-nav-cta { margin-left: auto; }
   .management-layout { grid-template-columns: 1fr; }
   .management-rail-wrap > .ad-slot { display: none; }
   .management-rail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1554,10 +1518,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   .management-hero h1 { font-size: 19px; }
   .management-rail { grid-template-columns: 1fr; }
   .management-rail :is(button, a) { min-height: 52px; border-right: 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .companion-nav-cta-orbit, .companion-nav-cta-copy small { animation: none; }
-  .companion-nav-cta::after { display: none; }
 }
 
 /* Temas de perfil de jogador (PlayerProfilePage) — sobrescreve os acentos
@@ -1609,7 +1569,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   gap: 8px; text-align: center; border: 1px dashed var(--border);
   color: var(--hint); font-size: 12px; padding: 8px 16px;
 }
-/* Placeholder (só dev/sem AdSense): "área reservada" de planta técnica —
+/* Placeholder (só dev/sem ad network): "área reservada" de planta técnica —
    hachura diagonal, cantos retos, rótulo micro uppercase. */
 .ad-slot-placeholder {
   border-color: #2a2d36;
@@ -1621,6 +1581,12 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .ad-slot-blocked { color: var(--gold); border-color: var(--gold-soft); background: var(--gold-soft); }
 .ad-slot-blocked i { font-size: 16px; }
+
+/* /ad/300x250 e /ad/728x90 — páginas standalone alvo de iframe do companion.
+   Body vazio sem topbar/footer; só o anúncio centralizado. Fundo transparente
+   pra herdar o fundo do iframe (companion usa as mesmas cores do site). */
+.ad-page { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: transparent; }
+.ad-page .ad-slot { margin: 0; }
 
 /* EventsPage — lista única de participantes (ver components/EventsPage.tsx).
    Nome/%/remover são cruciais e sempre aparecem; o resto (trial, % na call,
@@ -2270,43 +2236,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .site-footer-disclaimer {
   color: var(--hint); font-size: 11px; margin: 0; text-align: center;
   max-width: 560px; line-height: 1.4;
-}
-
-/* ── Banner de consentimento de cookies ────────────────────────────────── */
-.cookie-consent {
-  position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000;
-  background: var(--surface); border-top: 1px solid var(--border);
-  box-shadow: 0 -2px 12px rgba(0,0,0,.25);
-  animation: cookieSlideUp .25s ease-out;
-}
-@keyframes cookieSlideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-.cookie-consent-inner {
-  max-width: 980px; margin: 0 auto; padding: 12px 16px;
-  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-}
-.cookie-consent-text {
-  flex: 1; min-width: 240px;
-  display: flex; align-items: center; gap: 10px;
-  color: var(--text); font-size: 13px; line-height: 1.45;
-}
-.cookie-consent-text i { font-size: 20px; color: var(--gold); flex-shrink: 0; }
-.cookie-consent-link { color: var(--info); text-decoration: none; }
-.cookie-consent-link:hover { text-decoration: underline; }
-.cookie-consent-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.cookie-consent-nec {
-  background: transparent; color: var(--muted); border: 1px solid var(--border);
-  padding: 7px 14px; font-size: 12.5px;
-}
-.cookie-consent-nec:hover { color: var(--text); border-color: var(--border-strong); }
-.cookie-consent-all {
-  background: var(--gold); color: #1a1a1a; border: none;
-  padding: 7px 14px; font-size: 12.5px; font-weight: 600;
-}
-.cookie-consent-all:hover { filter: brightness(1.08); }
-@media (max-width: 600px) {
-  .cookie-consent-inner { flex-direction: column; align-items: stretch; }
-  .cookie-consent-actions { justify-content: stretch; }
-  .cookie-consent-nec, .cookie-consent-all { flex: 1; }
 }
 
 /* ── Páginas legais (Termos, Privacidade, etc.) ─────────────────────────── */

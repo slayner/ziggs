@@ -14,9 +14,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import Battle, BattleParticipant
 from app.models.guild_profiles import AllianceProfile, GuildProfile
 from app.models.players import AlbionPlayer
@@ -64,7 +65,7 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-async def _warm_player(client, db: Session, host: str, region: str, albion_id: str, *, force: bool = False) -> bool:
+async def _warm_player(client, db: AsyncSession, host: str, region: str, albion_id: str, *, force: bool = False) -> bool:
     """Aquece o perfil. Retorna True se buscou e gravou com sucesso, False se
     pulou (fresh), falhou ou host inválido. O caller usa isso pra decidir se
     limpa `refresh_requested_at` — só limpa em sucesso, senão o pedido volta
@@ -75,14 +76,14 @@ async def _warm_player(client, db: Session, host: str, region: str, albion_id: s
     Em falha NÃO limpa o stage aqui — o caller (sync_refresh_requests) reseta
     pra 'queued' quando mantém o pedido na fila, pra o usuário ver voltar pra
     fila em vez de ficar travado num stage morto."""
-    player = db.scalar(
+    player = await db.scalar(
         select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id, AlbionPlayer.region == region)
     )
     if not force and player is not None and (datetime.now(timezone.utc) - _aware(player.last_seen_at)) < STALE_AFTER:
         return True  # fresco conta como sucesso — não há trabalho a fazer
     # Fecha a read tx ANTES do HTTP — read tx aberta durante await impede
     # wal_checkpoint, cresce o WAL, e commit futuro fsync-o inteiro (173s+).
-    db.commit()
+    await db.commit()
     try:
         _refresh_progress[albion_id] = "fetching"
         async with slot():
@@ -101,7 +102,7 @@ async def _warm_player(client, db: Session, host: str, region: str, albion_id: s
         # feed de atividade, que já vem quase todo do feed global. `skip_id` no
         # sync_player_kills garante que ele não sobrescreve este upsert com o
         # snapshot (mais velho) embutido nos eventos.
-        upsert_player(db, raw, region)
+        await upsert_player(db, raw, region)
         _refresh_progress[albion_id] = "kills"
         await sync_player_kills(client, db, host, region, albion_id)
         log.info("warm: player %s (%s) — %s aquecido", raw.get("Name") or albion_id, region, "refresh" if force else "backfill")
@@ -135,7 +136,7 @@ def _trim_member(m: dict) -> dict:
     }
 
 
-def _upsert_guild_profile(db: Session, raw: dict, region: str, members: list | None) -> None:
+async def _upsert_guild_profile(db: AsyncSession, raw: dict, region: str, members: list | None) -> None:
     """Grava/atualiza o perfil de guilda a partir do payload cru da Albion.
 
     `members` vem de uma chamada SEPARADA (`_warm_guild`): /gameinfo/guilds/{id}
@@ -143,7 +144,7 @@ def _upsert_guild_profile(db: Session, raw: dict, region: str, members: list | N
     Confirmado contra a API real em 21/07/2026; antes lia `raw.get("members")`,
     que não existe nesse payload e sempre voltava None (`GuildProfile.members`
     nunca era preenchido)."""
-    gp = db.scalar(select(GuildProfile).where(GuildProfile.albion_id == raw["Id"]))
+    gp = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == raw["Id"]))
     if gp is None:
         gp = GuildProfile(albion_id=raw["Id"], name=raw.get("Name", raw["Id"]), region=region)
         db.add(gp)
@@ -161,10 +162,10 @@ def _upsert_guild_profile(db: Session, raw: dict, region: str, members: list | N
     gp.members = [_trim_member(m) for m in members] if members else None
     gp.founder_id = str(raw.get("FounderId") or "") or None
     gp.last_seen_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
 
 
-def _upsert_alliance_profile(db: Session, raw: dict, region: str) -> None:
+async def _upsert_alliance_profile(db: AsyncSession, raw: dict, region: str) -> None:
     """Grava/atualiza o perfil de aliança a partir do payload cru da Albion.
 
     A chave primária do payload de aliança é "AllianceId", não "Id" (só o
@@ -172,7 +173,7 @@ def _upsert_alliance_profile(db: Session, raw: dict, region: str) -> None:
     o lookup abaixo levantava KeyError toda vez (o caller já filtra por
     raw.get("AllianceId") antes de chamar, mas o bug ficava aqui se alguém
     reusasse a função)."""
-    ap = db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == raw["AllianceId"]))
+    ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == raw["AllianceId"]))
     if ap is None:
         ap = AllianceProfile(albion_id=raw["AllianceId"], name=raw.get("AllianceName", raw["AllianceId"]), region=region)
         db.add(ap)
@@ -187,10 +188,10 @@ def _upsert_alliance_profile(db: Session, raw: dict, region: str) -> None:
     ap.guilds = raw.get("Guilds") or None
     ap.founder_id = str(raw.get("FounderId") or "") or None
     ap.last_seen_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
 
 
-async def _warm_guild(client, db: Session, host: str, region: str, albion_id: str) -> bool:
+async def _warm_guild(client, db: AsyncSession, host: str, region: str, albion_id: str) -> bool:
     """Busca o perfil de guilda na Albion e grava no GuildProfile. Retorna
     True em sucesso, False em falha — mesmo contrato do _warm_player."""
     try:
@@ -220,7 +221,7 @@ async def _warm_guild(client, db: Session, host: str, region: str, albion_id: st
         except Exception as e:
             log.debug("profile_warmer: members de guild %s (%s) falhou: %s", albion_id, region, e)
         _refresh_progress[f"g:{albion_id}"] = "building"
-        _upsert_guild_profile(db, raw, region, members)
+        await _upsert_guild_profile(db, raw, region, members)
         log.info("warm: guild %s (%s) — %s aquecida (%d membros)",
                  raw.get("Name") or albion_id, region, "refresh",
                  len(members) if members else 0)
@@ -230,7 +231,7 @@ async def _warm_guild(client, db: Session, host: str, region: str, albion_id: st
         return False
 
 
-async def _warm_alliance(client, db: Session, host: str, region: str, albion_id: str) -> bool:
+async def _warm_alliance(client, db: AsyncSession, host: str, region: str, albion_id: str) -> bool:
     """Busca o perfil de aliança na Albion e grava no AllianceProfile. Retorna
     True em sucesso, False em falha — mesmo contrato do _warm_player."""
     try:
@@ -249,7 +250,7 @@ async def _warm_alliance(client, db: Session, host: str, region: str, albion_id:
             log.info("warm: alliance %s (%s) — payload vazio", albion_id, region)
             return False
         _refresh_progress[f"a:{albion_id}"] = "building"
-        _upsert_alliance_profile(db, raw, region)
+        await _upsert_alliance_profile(db, raw, region)
         log.info("warm: alliance %s (%s) — %s aquecida",
                  raw.get("AllianceName") or albion_id, region, "refresh")
         return True
@@ -295,26 +296,25 @@ async def sync_refresh_requests() -> int:
     Roda em albion_scope(PROFILE): pedido explícito é user-facing (alguém
     esperando), vai pro reserved pool em vez de competir no bg com todo o
     backfill/sweeper de batalhas (era OTHER → até 3min esperando slot)."""
-    db = SessionLocal()
     processed = 0
     # Poda o cooldown antes de tudo (roda todo ciclo) — entrada mais velha que o
     # TTL já passou do cooldown, é inútil e só ocuparia memória.
     _cutoff = datetime.now(timezone.utc) - _REFRESH_DONE_TTL
     for _k in [k for k, t in _refresh_done_at.items() if t < _cutoff]:
         _refresh_done_at.pop(_k, None)
-    try:
-        players = db.scalars(
+    async with AsyncSessionLocal() as db:
+        players = (await db.scalars(
             select(AlbionPlayer)
             .where(AlbionPlayer.refresh_requested_at.isnot(None))
             .order_by(AlbionPlayer.refresh_requested_at)
             .limit(REFRESH_BATCH_SIZE)
-        ).all()
+        )).all()
         if not players:
             return 0
         # Materializa (albion_id, region) e commit antes do HTTP — read tx
         # aberta durante await impede wal_checkpoint.
         refresh_list = [(p.albion_id, p.region) for p in players]
-        db.commit()
+        await db.commit()
         async with make_client() as client:
             async with albion_scope(PROFILE):
                 for albion_id, region in refresh_list:
@@ -332,10 +332,10 @@ async def sync_refresh_requests() -> int:
                     # automático, sem o usuário precisar clicar de novo).
                     # Timeout → esquece (não adianta refazer se a Albion travou).
                     if ok or host is None or _refresh_progress.get(albion_id) == "error:timeout":
-                        p = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id, AlbionPlayer.region == region))
+                        p = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id, AlbionPlayer.region == region))
                         if p is not None:
                             p.refresh_requested_at = None
-                            db.commit()
+                            await db.commit()
                         if ok:
                             # Só refresh de VERDADE arma o cooldown (timeout/host
                             # inválido não atualizou nada — não deve bloquear retry).
@@ -348,8 +348,6 @@ async def sync_refresh_requests() -> int:
                         # pra fila em vez de ficar travado num stage intermediário.
                         _refresh_progress[albion_id] = "queued"
                     processed += 1
-    finally:
-        db.close()
     return processed
 
 
@@ -359,19 +357,18 @@ async def sync_guild_refresh_requests() -> int:
     GuildProfile, só limpa refresh_requested_at em sucesso (retry automático
     em falha). Stages em _refresh_progress com prefixo 'g:' pra não colidir
     com players."""
-    db = SessionLocal()
     processed = 0
-    try:
-        guilds = db.scalars(
+    async with AsyncSessionLocal() as db:
+        guilds = (await db.scalars(
             select(GuildProfile)
             .where(GuildProfile.refresh_requested_at.isnot(None))
             .order_by(GuildProfile.refresh_requested_at)
             .limit(REFRESH_BATCH_SIZE)
-        ).all()
+        )).all()
         if not guilds:
             return 0
         refresh_list = [(g.albion_id, g.region) for g in guilds]
-        db.commit()
+        await db.commit()
         async with make_client() as client:
             async with albion_scope(PROFILE):
                 for albion_id, region in refresh_list:
@@ -384,36 +381,33 @@ async def sync_guild_refresh_requests() -> int:
                             albion_id, f"g:{albion_id}",
                         )
                     if ok or host is None or _refresh_progress.get(f"g:{albion_id}") == "error:timeout":
-                        g = db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
+                        g = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
                         if g is not None:
                             g.refresh_requested_at = None
-                            db.commit()
+                            await db.commit()
                         if _refresh_progress.get(f"g:{albion_id}") != "error:timeout":
                             _refresh_progress.pop(f"g:{albion_id}", None)
                     else:
                         _refresh_progress[f"g:{albion_id}"] = "queued"
                     processed += 1
-    finally:
-        db.close()
     return processed
 
 
 async def sync_alliance_refresh_requests() -> int:
     """Processa refreshes pendentes de alianças (POST /public/alliances/{id}/refresh).
     Mesma mecânica de sync_guild_refresh_requests, com prefixo 'a:' nos stages."""
-    db = SessionLocal()
     processed = 0
-    try:
-        alliances = db.scalars(
+    async with AsyncSessionLocal() as db:
+        alliances = (await db.scalars(
             select(AllianceProfile)
             .where(AllianceProfile.refresh_requested_at.isnot(None))
             .order_by(AllianceProfile.refresh_requested_at)
             .limit(REFRESH_BATCH_SIZE)
-        ).all()
+        )).all()
         if not alliances:
             return 0
         refresh_list = [(a.albion_id, a.region) for a in alliances]
-        db.commit()
+        await db.commit()
         async with make_client() as client:
             async with albion_scope(PROFILE):
                 for albion_id, region in refresh_list:
@@ -426,17 +420,15 @@ async def sync_alliance_refresh_requests() -> int:
                             albion_id, f"a:{albion_id}",
                         )
                     if ok or host is None or _refresh_progress.get(f"a:{albion_id}") == "error:timeout":
-                        a = db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
+                        a = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
                         if a is not None:
                             a.refresh_requested_at = None
-                            db.commit()
+                            await db.commit()
                         if _refresh_progress.get(f"a:{albion_id}") != "error:timeout":
                             _refresh_progress.pop(f"a:{albion_id}", None)
                     else:
                         _refresh_progress[f"a:{albion_id}"] = "queued"
                     processed += 1
-    finally:
-        db.close()
     return processed
 
 
@@ -469,63 +461,61 @@ async def warm_by_name(name: str, region: str) -> dict:
     host = HOSTS.get(region)
     if host is None:
         return {"status": "bad_region"}
-    db = SessionLocal()
-    try:
-        player = db.scalar(
-            select(AlbionPlayer).where(
-                AlbionPlayer.region == region, func.lower(AlbionPlayer.name) == name.lower()
-            )
-        )
-        if player is not None:
-            # Conhecido: só refetcha se de fato velho (não spamma a Albion com
-            # char que já está fresco). O loop pega pelo refresh_requested_at.
-            if player.refresh_requested_at is None and (
-                datetime.now(timezone.utc) - _aware(player.last_seen_at) > STALE_AFTER
-            ):
-                player.refresh_requested_at = datetime.now(timezone.utc)
-                db.commit()
-                request_refresh()
-                return {"status": "queued"}
-            db.commit()
-            return {"status": "fresh"}
-
-        # Desconhecido: bootstrap. Nome da Albion é case-sensitive ("Moskka" ≠
-        # "MosKKa" = contas distintas), então match exato primeiro.
-        # WARM (não PROFILE): é warm de FUNDO do companion, não pode furar a
-        # descoberta de batalha nova (ver cadeia de prioridade no albion_gate).
-        db.commit()  # libera read tx antes do HTTP
-        async with make_client() as client:
-            async with albion_scope(WARM):
-                async with slot():
-                    resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
-                if resp.status_code != 200:
-                    log.info("warm: %s (%s) — busca falhou HTTP %d", name, region, resp.status_code)
-                    return {"status": "search_failed"}
-                cands = resp.json().get("players", [])
-                match = next((p for p in cands if p.get("Name") == name), None) or next(
-                    (p for p in cands if p.get("Name", "").lower() == name.lower()), None
+    async with AsyncSessionLocal() as db:
+        try:
+            player = await db.scalar(
+                select(AlbionPlayer).where(
+                    AlbionPlayer.region == region, func.lower(AlbionPlayer.name) == name.lower()
                 )
-                if not match:
-                    log.info("warm: %s (%s) — não encontrado na busca", name, region)
-                    return {"status": "not_found"}
-                async with slot():
-                    pr = await client.get(f"https://{host}/api/gameinfo/players/{match['Id']}")
-                if pr.status_code != 200:
-                    log.info("warm: %s (%s) — perfil falhou HTTP %d", name, region, pr.status_code)
-                    return {"status": "fetch_failed"}
-                raw = pr.json()
-                if not (isinstance(raw, dict) and raw.get("Id")):
-                    log.info("warm: %s (%s) — perfil vazio", name, region)
-                    return {"status": "fetch_failed"}
-                await sync_player_kills(client, db, host, region, raw["Id"])
-                upsert_player(db, raw, region)
-        log.info("warm: %s (%s) — bootstrap de %s", name, region, raw["Id"])
-        return {"status": "bootstrapped"}
-    except Exception as e:
-        log.debug("warm_by_name %s/%s: %s", region, name, e)
-        return {"status": "error"}
-    finally:
-        db.close()
+            )
+            if player is not None:
+                # Conhecido: só refetcha se de fato velho (não spamma a Albion com
+                # char que já está fresco). O loop pega pelo refresh_requested_at.
+                if player.refresh_requested_at is None and (
+                    datetime.now(timezone.utc) - _aware(player.last_seen_at) > STALE_AFTER
+                ):
+                    player.refresh_requested_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    request_refresh()
+                    return {"status": "queued"}
+                await db.commit()
+                return {"status": "fresh"}
+
+            # Desconhecido: bootstrap. Nome da Albion é case-sensitive ("Moskka" ≠
+            # "MosKKa" = contas distintas), então match exato primeiro.
+            # WARM (não PROFILE): é warm de FUNDO do companion, não pode furar a
+            # descoberta de batalha nova (ver cadeia de prioridade no albion_gate).
+            await db.commit()  # libera read tx antes do HTTP
+            async with make_client() as client:
+                async with albion_scope(WARM):
+                    async with slot():
+                        resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
+                    if resp.status_code != 200:
+                        log.info("warm: %s (%s) — busca falhou HTTP %d", name, region, resp.status_code)
+                        return {"status": "search_failed"}
+                    cands = resp.json().get("players", [])
+                    match = next((p for p in cands if p.get("Name") == name), None) or next(
+                        (p for p in cands if p.get("Name", "").lower() == name.lower()), None
+                    )
+                    if not match:
+                        log.info("warm: %s (%s) — não encontrado na busca", name, region)
+                        return {"status": "not_found"}
+                    async with slot():
+                        pr = await client.get(f"https://{host}/api/gameinfo/players/{match['Id']}")
+                    if pr.status_code != 200:
+                        log.info("warm: %s (%s) — perfil falhou HTTP %d", name, region, pr.status_code)
+                        return {"status": "fetch_failed"}
+                    raw = pr.json()
+                    if not (isinstance(raw, dict) and raw.get("Id")):
+                        log.info("warm: %s (%s) — perfil vazio", name, region)
+                        return {"status": "fetch_failed"}
+                    await sync_player_kills(client, db, host, region, raw["Id"])
+                    await upsert_player(db, raw, region)
+            log.info("warm: %s (%s) — bootstrap de %s", name, region, raw["Id"])
+            return {"status": "bootstrapped"}
+        except Exception as e:
+            log.debug("warm_by_name %s/%s: %s", region, name, e)
+            return {"status": "error"}
 
 
 def queue_refresh_seen(names: list[str], region: str) -> dict:
@@ -543,7 +533,7 @@ def queue_refresh_seen(names: list[str], region: str) -> dict:
     wanted = {n.strip().lower() for n in names if n and n.strip()}
     if not wanted:
         return {"seen": len(names), "known": 0, "queued": 0}
-    db = SessionLocal()
+    db = SyncSessionLocal()
     queued = 0
     rows = []
     try:
@@ -572,38 +562,35 @@ def queue_refresh_seen(names: list[str], region: str) -> dict:
 
 async def sync_once() -> int:
     """Processa um lote de batalhas pendentes. Retorna quantas processou."""
-    db = SessionLocal()
     processed = 0
-    try:
-        battles = db.scalars(
+    async with AsyncSessionLocal() as db:
+        battles = (await db.scalars(
             select(Battle).where(Battle.profiles_synced.is_(False)).order_by(Battle.id).limit(BATCH_SIZE)
-        ).all()
+        )).all()
         if not battles:
             return 0
         # Materializa IDs das batalhas e commita antes do HTTP — read tx aberta
         # durante await impede wal_checkpoint. battle.id é estável (autoincrement).
         battle_ids = [(b.id, b.region) for b in battles]
-        db.commit()
+        await db.commit()
         async with make_client() as client:
             for battle_id, region in battle_ids:
                 host = HOSTS.get(region)
                 if host is not None:
-                    player_ids = db.scalars(
+                    player_ids = (await db.scalars(
                         select(BattleParticipant.albion_player_id).where(BattleParticipant.battle_id == battle_id)
-                    ).all()
+                    )).all()
                     # Commit antes do HTTP: libera read tx do SELECT de player_ids.
-                    db.commit()
+                    await db.commit()
                     for albion_id in player_ids:
                         await _warm_player(client, db, host, region, albion_id)
                 # Rebusca a battle pra marcar profiles_synced (não guardar ORM
                 # obsoleto da SELECT inicial, já commited e expirado).
-                b = db.get(Battle, battle_id)
+                b = await db.get(Battle, battle_id)
                 if b is not None:
                     b.profiles_synced = True
-                    db.commit()
+                    await db.commit()
                 processed += 1
-    finally:
-        db.close()
     return processed
 
 

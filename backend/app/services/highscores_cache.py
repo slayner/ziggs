@@ -22,7 +22,7 @@ import time
 
 from sqlalchemy import select
 
-from app.db import SessionLocal
+from app.db import SyncSessionLocal
 from app.models.dashboard_cache import DashboardCache
 
 logger = logging.getLogger(__name__)
@@ -86,15 +86,19 @@ def highlights_cache_key(region_list: list[str] | None) -> str | None:
 def _compute_all() -> dict[str, dict]:
     """Computa todos os caches de highscores em uma única sessão de leitura.
     Devolve {cache_key: payload}."""
+    import asyncio
     from app.api.routes.highscores import _compute_highlights, _compute_rankings, _window_start
 
     payloads: dict[str, dict] = {}
-    db_read = SessionLocal()
+    db_read = SyncSessionLocal()
     try:
+        # ponytail: _compute_highlights/_compute_rankings são async (migração async
+        # DB), mas highscores_cache roda em thread (to_thread) — asyncio.run cria
+        # loop efêmero. Se virar gargalo, migrar highscores_cache pra async direto.
         for region_list in REGION_SELECTIONS:
             hl_key = highlights_cache_key(region_list)
             if hl_key:
-                payloads[hl_key] = _compute_highlights(db_read, region_list)
+                payloads[hl_key] = asyncio.run(_compute_highlights(db_read, region_list))
 
             for window in WINDOWS:
                 week_start = _window_start(window)
@@ -103,14 +107,14 @@ def _compute_all() -> dict[str, dict]:
                     if not key:
                         continue
                     lim = GUILD_FULL_LIMIT if kind in GUILD_CACHED_KINDS else TOP_N
-                    payloads[key] = _compute_rankings(db_read, kind, region_list, week_start, None, lim, 0)
+                    payloads[key] = asyncio.run(_compute_rankings(db_read, kind, region_list, week_start, None, lim, 0))
 
                 if window == "alltime":
                     for kind in _GATHER_SILVER_KINDS:
                         key = rankings_cache_key(kind, "alltime", region_list)
                         if not key:
                             continue
-                        payloads[key] = _compute_rankings(db_read, kind, region_list, None, None, TOP_N, 0)
+                        payloads[key] = asyncio.run(_compute_rankings(db_read, kind, region_list, None, None, TOP_N, 0))
     finally:
         db_read.close()
     return payloads
@@ -120,7 +124,7 @@ def _write_all(payloads: dict[str, dict]) -> int:
     """Grava todos os payloads numa única transação. Retorna quantidade."""
     if not payloads:
         return 0
-    db_write = SessionLocal()
+    db_write = SyncSessionLocal()
     written = 0
     try:
         existing = {

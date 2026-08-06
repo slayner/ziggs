@@ -61,7 +61,6 @@ def _build_embed(kill: dict, filename: str) -> discord.Embed:
         color=discord.Color.gold(),
     )
     embed.set_image(url=f"attachment://{filename}")
-    embed.set_footer(text=f"{PUBLIC_URL} · {JUICY_MARKER}{kill['id']}")
     return embed
 
 
@@ -116,10 +115,9 @@ class JuicyKills(commands.Cog):
                 f"/bot/guilds/{guild.id}/juicy-kill/queue", tag="juicy_kills",
             )
             kills = (data or {}).get("kills") or []
-            history_ids = await _history_kill_ids(channel, guild.me.id if guild.me else 0)
             last_id = None
             for kill in kills:
-                if kill["id"] <= self._sent.get(guild.id, 0) or kill["id"] in history_ids:
+                if kill["id"] <= self._sent.get(guild.id, 0):
                     last_id = kill["id"]
                     self._sent[guild.id] = last_id
                     continue

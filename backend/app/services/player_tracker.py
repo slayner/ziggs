@@ -8,9 +8,9 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerSnapshot, KillSyncCursor
 from app.services import search_index
 from app.services.albion_gate import NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, albion_scope, observe_response, slot
@@ -50,7 +50,7 @@ def make_client() -> httpx.AsyncClient:
     )
 
 
-def upsert_player(db: Session, data: dict, region: str, *, commit: bool = True) -> AlbionPlayer:
+async def upsert_player(db: AsyncSession, data: dict, region: str, *, commit: bool = True) -> AlbionPlayer:
     """Salva/atualiza jogador e tira snapshot quando a guilda muda (ou quando
     o último snapshot já passou de SNAPSHOT_MAX_AGE — dá resolução pro
     gráfico de crescimento de fama sem precisar de um job dedicado, já que
@@ -99,7 +99,7 @@ def upsert_player(db: Session, data: dict, region: str, *, commit: bool = True) 
         fishing_fame = None  # type: ignore[assignment]
 
     now = datetime.now(timezone.utc)
-    player = db.query(AlbionPlayer).filter_by(albion_id=albion_id).first()
+    player = await db.scalar(select(AlbionPlayer).filter_by(albion_id=albion_id))
     is_new = player is None
     guild_changed = not is_new and player.guild_id != guild_id
 
@@ -121,7 +121,7 @@ def upsert_player(db: Session, data: dict, region: str, *, commit: bool = True) 
             first_seen_at=now, last_seen_at=now,
         )
         db.add(player)
-        db.flush()
+        await db.flush()
     else:
         player.name = name
         player.guild_id = guild_id
@@ -149,11 +149,10 @@ def upsert_player(db: Session, data: dict, region: str, *, commit: bool = True) 
 
     last_snapshot_stale = False
     if not is_new and not guild_changed:
-        last = (
-            db.query(PlayerSnapshot)
+        last = await db.scalar(
+            select(PlayerSnapshot)
             .filter_by(player_id=player.id)
             .order_by(PlayerSnapshot.snapshotted_at.desc())
-            .first()
         )
         last_snapshot_stale = last is None or (now - _aware(last.snapshotted_at)) > SNAPSHOT_MAX_AGE
 
@@ -166,13 +165,13 @@ def upsert_player(db: Session, data: dict, region: str, *, commit: bool = True) 
             snapshotted_at=now,
         ))
 
-    search_index.safe_upsert_entry(
+    await search_index.safe_upsert_entry_async(
         db, entity_type="player", entity_id=albion_id, display_name=name,
         region=region, guild_name=guild_name, alliance_name=alliance_name,
     )
 
     if commit:
-        db.commit()
+        await db.commit()
     return player
 
 
@@ -180,7 +179,7 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _record_kill_event(db: Session, ev: dict, region: str, *, commit: bool = True) -> None:
+async def _record_kill_event(db: AsyncSession, ev: dict, region: str, *, commit: bool = True) -> None:
     """Registra o kill no ledger (PlayerKillEvent), dedupe por
     region+albion_event_id — chamado depois de upsert_player do killer/vítima,
     então killer_player_id/victim_player_id já existem.
@@ -189,7 +188,7 @@ def _record_kill_event(db: Session, ev: dict, region: str, *, commit: bool = Tru
     event_id = str(ev.get("EventId") or "")
     if not event_id:
         return
-    existing = db.scalar(
+    existing = await db.scalar(
         select(PlayerKillEvent).where(
             PlayerKillEvent.region == region, PlayerKillEvent.albion_event_id == event_id,
         )
@@ -199,8 +198,8 @@ def _record_kill_event(db: Session, ev: dict, region: str, *, commit: bool = Tru
 
     killer, victim = ev.get("Killer") or {}, ev.get("Victim") or {}
     killer_id, victim_id = killer.get("Id"), victim.get("Id")
-    killer_row = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == killer_id)) if killer_id else None
-    victim_row = db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == victim_id)) if victim_id else None
+    killer_row = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == killer_id)) if killer_id else None
+    victim_row = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == victim_id)) if victim_id else None
 
     participant_count = ev.get("numberOfParticipants") or 1
     row = PlayerKillEvent(region=region, albion_event_id=event_id)
@@ -227,13 +226,13 @@ def _record_kill_event(db: Session, ev: dict, region: str, *, commit: bool = Tru
     row.victim_guild_name = victim.get("GuildName") or None
     db.add(row)
     if commit:
-        db.commit()
+        await db.commit()
 
 
 PLAYER_SYNC_LIMIT = 50  # kills/mortes buscados por sincronização ativa, sem paginar mais que isso
 
 
-async def _upsert_event_players(db: Session, ev: dict, region: str, skip_id: str | None = None) -> None:
+async def _upsert_event_players(db: AsyncSession, ev: dict, region: str, skip_id: str | None = None) -> None:
     """skip_id: não re-upserta esse albion_id a partir dos dados embutidos no
     evento — um kill/death ANTIGO traz a guilda/fama do jogador NA ÉPOCA
     daquele evento, não o estado atual. Usado quando o evento veio da
@@ -244,18 +243,18 @@ async def _upsert_event_players(db: Session, ev: dict, region: str, skip_id: str
         p = ev.get(role)
         if p and p.get("Id") and p.get("Id") != skip_id:
             try:
-                upsert_player(db, p, region, commit=False)
+                await upsert_player(db, p, region, commit=False)
             except Exception as e:
                 log.debug("player_tracker: skip %s (%s): %s", p.get("Id"), region, e)
     for participant in (ev.get("Participants") or []):
         if participant and participant.get("Id") and participant.get("Id") != skip_id:
             try:
-                upsert_player(db, participant, region, commit=False)
+                await upsert_player(db, participant, region, commit=False)
             except Exception as e:
                 log.debug("player_tracker: skip participant %s (%s): %s", participant.get("Id"), region, e)
 
 
-async def sync_player_kills(client: httpx.AsyncClient, db: Session, host: str, region: str, albion_id: str) -> int:
+async def sync_player_kills(client: httpx.AsyncClient, db: AsyncSession, host: str, region: str, albion_id: str) -> int:
     """Busca as kills/mortes recentes desse jogador direto na API (endpoint
     por jogador, não o feed global) e registra no ledger — o feed global só
     pega quem está nos 51 eventos mais recentes da região no momento exato
@@ -292,7 +291,7 @@ async def sync_player_kills(client: httpx.AsyncClient, db: Session, host: str, r
             # travando o event loop (SQLAlchemy síncrono em código async). Evento
             # já registrado → pula o upsert dos players E o record.
             event_id = str(ev.get("EventId") or "")
-            if event_id and db.scalar(
+            if event_id and await db.scalar(
                 select(PlayerKillEvent.id).where(
                     PlayerKillEvent.region == region,
                     PlayerKillEvent.albion_event_id == event_id,
@@ -301,15 +300,15 @@ async def sync_player_kills(client: httpx.AsyncClient, db: Session, host: str, r
                 # Commit libera read tx do SELECT de dedup antes da próxima
                 # iteração (que faz HTTP no topo do loop). Sem isto, a read tx
                 # fica aberta durante o await do próximo evento.
-                db.commit()
+                await db.commit()
                 continue
             await _upsert_event_players(db, ev, region, skip_id=albion_id)
             try:
-                _record_kill_event(db, ev, region, commit=False)
-                db.commit()  # batch: 1 commit por evento, não por jogador/kill
+                await _record_kill_event(db, ev, region, commit=False)
+                await db.commit()  # batch: 1 commit por evento, não por jogador/kill
                 count += 1
             except Exception as e:
-                db.rollback()
+                await db.rollback()
                 log.debug("player_tracker: skip sync event %s (%s): %s", ev.get("EventId"), region, e)
         if events:
             log.info("sync_kills: %s (%s) — %d %s ingeridos", albion_id, region, len(events), kind)
@@ -321,8 +320,7 @@ async def poll_once() -> int:
     novos (ou atingir FEED_MAX_PAGES). Upserta jogadores e registra cada kill
     no ledger. Retorna contagem de jogadores upsertados."""
     count = 0
-    db = SessionLocal()
-    try:
+    async with AsyncSessionLocal() as db:
         async with make_client() as c:
             for region, host in HOSTS.items():
                 seen_event_ids: set[str] = set()
@@ -352,7 +350,7 @@ async def poll_once() -> int:
 
                         # Dedupe contra o banco: se já temos este event_id,
                         # pula o upsert pesado (igual sync_player_kills faz).
-                        if db.scalar(
+                        if await db.scalar(
                             select(PlayerKillEvent.id).where(
                                 PlayerKillEvent.region == region,
                                 PlayerKillEvent.albion_event_id == event_id,
@@ -364,17 +362,17 @@ async def poll_once() -> int:
                             for role in ("Killer", "Victim"):
                                 p = ev.get(role)
                                 if p and p.get("Id"):
-                                    upsert_player(db, p, region, commit=False)
+                                    await upsert_player(db, p, region, commit=False)
                                     count += 1
                             for assist in (ev.get("Participants") or []):
                                 if assist and assist.get("Id"):
-                                    upsert_player(db, assist, region, commit=False)
+                                    await upsert_player(db, assist, region, commit=False)
                                     count += 1
-                            _record_kill_event(db, ev, region, commit=False)
-                            db.commit()
+                            await _record_kill_event(db, ev, region, commit=False)
+                            await db.commit()
                             new_count += 1
                         except Exception as e:
-                            db.rollback()
+                            await db.rollback()
                             log.debug("player_tracker: skip event %s (%s): %s", event_id, region, e)
 
                     # Se esta página não teve eventos novos, não vale a pena
@@ -383,8 +381,6 @@ async def poll_once() -> int:
                         break
 
                 log.debug("player_tracker: %s — %d eventos novos em %d páginas", region, len(seen_event_ids), page + 1)
-    finally:
-        db.close()
 
     return count
 
@@ -413,16 +409,16 @@ KILL_BACKFILL_CYCLE_INTERVAL = 20  # segundos entre ciclos (mesmo ritmo do battl
 KILL_BACKFILL_OFFSET_LIMIT = 999  # teto duro da API de events (offset+limit > 1000 → 500)
 
 
-async def _get_kill_cursor(db: Session, region: str) -> KillSyncCursor:
-    cursor = db.get(KillSyncCursor, region)
+async def _get_kill_cursor(db: AsyncSession, region: str) -> KillSyncCursor:
+    cursor = await db.get(KillSyncCursor, region)
     if cursor is None:
         cursor = KillSyncCursor(region=region, next_offset=0, done=False)
         db.add(cursor)
-        db.flush()
+        await db.flush()
     return cursor
 
 
-async def backfill_kills_step(client: httpx.AsyncClient, db: Session, region: str, host: str) -> None:
+async def backfill_kills_step(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str) -> None:
     """Avança a paginação de events da região dentro da janela de ~1000.
     Processa events que o poll recente não pegou (dedup por event_id).
     Ao completar uma volta, reseta o cursor e recomeça."""
@@ -433,7 +429,7 @@ async def backfill_kills_step(client: httpx.AsyncClient, db: Session, region: st
             if cursor.next_offset + KILL_BACKFILL_PAGE_SIZE > KILL_BACKFILL_OFFSET_LIMIT:
                 cursor.done = True
                 cursor.next_offset = 0
-                db.commit()
+                await db.commit()
                 return
 
             try:
@@ -452,7 +448,7 @@ async def backfill_kills_step(client: httpx.AsyncClient, db: Session, region: st
             if not isinstance(events, list) or not events:
                 cursor.done = True
                 cursor.next_offset = 0
-                db.commit()
+                await db.commit()
                 return
 
             new_count = 0
@@ -460,7 +456,7 @@ async def backfill_kills_step(client: httpx.AsyncClient, db: Session, region: st
                 event_id = str(ev.get("EventId") or "")
                 if not event_id:
                     continue
-                if db.scalar(
+                if await db.scalar(
                     select(PlayerKillEvent.id).where(
                         PlayerKillEvent.region == region,
                         PlayerKillEvent.albion_event_id == event_id,
@@ -471,24 +467,24 @@ async def backfill_kills_step(client: httpx.AsyncClient, db: Session, region: st
                     for role in ("Killer", "Victim"):
                         p = ev.get(role)
                         if p and p.get("Id"):
-                            upsert_player(db, p, region, commit=False)
+                            await upsert_player(db, p, region, commit=False)
                     for assist in (ev.get("Participants") or []):
                         if assist and assist.get("Id"):
-                            upsert_player(db, assist, region, commit=False)
-                    _record_kill_event(db, ev, region, commit=False)
-                    db.commit()
+                            await upsert_player(db, assist, region, commit=False)
+                    await _record_kill_event(db, ev, region, commit=False)
+                    await db.commit()
                     new_count += 1
                 except Exception as e:
-                    db.rollback()
+                    await db.rollback()
                     log.debug("player_tracker: skip backfill event %s (%s): %s", event_id, region, e)
 
             cursor.next_offset += len(events)
             if len(events) < KILL_BACKFILL_PAGE_SIZE:
                 cursor.done = True
                 cursor.next_offset = 0
-                db.commit()
+                await db.commit()
                 return
-            db.commit()
+            await db.commit()
 
     if new_count:
         log.info("player_tracker: backfill kills %s offset=%d — %d events novos", region, cursor.next_offset, new_count)
@@ -496,16 +492,13 @@ async def backfill_kills_step(client: httpx.AsyncClient, db: Session, region: st
 
 async def backfill_kills_cycle() -> None:
     """Um ciclo de backfill de kills das 3 regiões."""
-    db = SessionLocal()
-    try:
+    async with AsyncSessionLocal() as db:
         async with make_client() as client:
             for region, host in HOSTS.items():
                 try:
                     await backfill_kills_step(client, db, region, host)
                 except Exception as e:
                     log.warning("player_tracker: falha no backfill de kills (%s): %s", region, e)
-    finally:
-        db.close()
 
 
 async def run_backfill_forever() -> None:

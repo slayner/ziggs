@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import case, select
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.battles import Battle
 from app.services.albion_gate import NEW_ELIGIBLE, battle_priority
 from app.services.battle_tracker import (
@@ -45,10 +45,10 @@ _URGENT_REASONS = (REPROCESS_REASON_EMPTY, REPROCESS_REASON_FAILED)
 
 async def _reprocess_batch(client, db) -> int:
     priority = case((Battle.reprocess_reason.in_(_URGENT_REASONS), 0), else_=1)
-    battles = db.scalars(
+    battles = (await db.scalars(
         select(Battle).where(Battle.reprocess_reason.isnot(None))
         .order_by(priority, Battle.id).limit(BATCH_SIZE)
-    ).all()
+    )).all()
     if not battles:
         return 0
 
@@ -56,11 +56,11 @@ async def _reprocess_batch(client, db) -> int:
     # (deep fetch pode levar minutos) impede wal_checkpoint.
     battle_specs = [(b.id, b.albion_id, b.region, b.reprocess_reason,
                      b.start_time, b.players_total) for b in battles]
-    db.commit()
+    await db.commit()
 
     by_region: dict[str, list[Battle]] = {}
     for bid, albion_id, region, reason, start_time, players_total in battle_specs:
-        b = db.get(Battle, bid)
+        b = await db.get(Battle, bid)
         if b is not None:
             by_region.setdefault(b.region, []).append(b)
 
@@ -71,7 +71,7 @@ async def _reprocess_batch(client, db) -> int:
         if host is None:
             for b in region_battles:
                 b.reprocess_reason = None
-            db.commit()
+            await db.commit()
             continue
         # Grupo inteiro urgente (batalha nova, ver _URGENT_REASONS) → NEW_ELIGIBLE
         # (topo do bg pool, atrás só de perfil/claim/regear que usam reserved).
@@ -88,9 +88,9 @@ async def _reprocess_batch(client, db) -> int:
                 continue
             _, raw, events = result
             try:
-                ok = _write_deep_data(db, battle, raw, events)
+                ok = await asyncio.to_thread(_write_deep_data, battle.id, raw, events)
             except Exception as e:
-                db.rollback()
+                await db.rollback()
                 log.warning("battle_reprocessor: falha ao salvar %s (%s): %r", battle.albion_id, region, e)
                 continue
             # _write_deep_data pode retornar False sem levantar exceção (API
@@ -101,10 +101,10 @@ async def _reprocess_batch(client, db) -> int:
             if ok:
                 # Batalha não-lethal é deletada dentro de _write_deep_data.
                 # Não acesse o objeto expirado depois desse DELETE.
-                remaining = db.get(Battle, battle_id)
+                remaining = await db.get(Battle, battle_id)
                 if remaining is not None:
                     remaining.reprocess_reason = None
-                    db.commit()
+                    await db.commit()
                 processed += 1
 
     return processed
@@ -113,15 +113,13 @@ async def _reprocess_batch(client, db) -> int:
 async def run_forever() -> None:
     log.info("battle_reprocessor: iniciando")
     while True:
-        db = SessionLocal()
-        n = 0
-        try:
-            async with make_client() as client:
-                n = await _reprocess_batch(client, db)
-            if n:
-                log.info("battle_reprocessor: %d batalhas reprocessadas", n)
-        except Exception as e:
-            log.error("battle_reprocessor: erro: %s", e)
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            n = 0
+            try:
+                async with make_client() as client:
+                    n = await _reprocess_batch(client, db)
+                if n:
+                    log.info("battle_reprocessor: %d batalhas reprocessadas", n)
+            except Exception as e:
+                log.error("battle_reprocessor: erro: %s", e)
         await asyncio.sleep(BUSY_INTERVAL if n > 0 else IDLE_INTERVAL)

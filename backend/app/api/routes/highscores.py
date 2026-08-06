@@ -9,7 +9,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.api.routes.battles import (
@@ -70,11 +70,11 @@ def _base_battle_filters(region_list: list[str] | None, week_start: datetime | N
 # ── métricas por guilda (fama / eficiência / mais batalhas compartilham a
 # mesma agregação base — só mudam o que ordenam) ───────────────────────────
 
-def _guild_base_stats(db: Session, battle_filters: list) -> list[tuple[str, int, float, int]]:
+async def _guild_base_stats(db: AsyncSession, battle_filters: list) -> list[tuple[str, int, float, int]]:
     """(guild_id, fame, avg_players, battles) por guilda, entre as batalhas
     elegíveis que passam em `battle_filters`."""
     eligible_sq = eligible_guild_battles_subquery()
-    rows = db.execute(
+    rows = (await db.execute(
         select(
             BattleGuild.albion_guild_id,
             func.sum(BattleGuild.kill_fame).label("fame"),
@@ -88,16 +88,16 @@ def _guild_base_stats(db: Session, battle_filters: list) -> list[tuple[str, int,
         )
         .where(*battle_filters)
         .group_by(BattleGuild.albion_guild_id)
-    ).all()
+    )).all()
     return [(r.albion_guild_id, int(r.fame or 0), float(r.avg_players or 0), r.battles) for r in rows]
 
 
-def _underdog_candidates(db: Session, battle_filters: list) -> list[tuple[str, int]]:
+async def _underdog_candidates(db: AsyncSession, battle_filters: list) -> list[tuple[str, int]]:
     """(guild_id, kills) — soma os kills das vezes que a guilda teve MENOS
     jogadores no próprio lado do que a soma dos outros lados (não-ratos)
     NESSA luta. Ordenado desc."""
     eligible_sq = eligible_guild_battles_subquery()
-    rows = db.execute(
+    rows = (await db.execute(
         select(BattleGuild.albion_guild_id, BattleGuild.battle_id, BattleGuild.side_id, BattleGuild.kills)
         .join(Battle, Battle.id == BattleGuild.battle_id)
         .join(
@@ -105,16 +105,16 @@ def _underdog_candidates(db: Session, battle_filters: list) -> list[tuple[str, i
             (eligible_sq.c.battle_id == BattleGuild.battle_id) & (eligible_sq.c.guild_id == BattleGuild.albion_guild_id),
         )
         .where(*battle_filters, BattleGuild.side_id.isnot(None))
-    ).all()
+    )).all()
     if not rows:
         return []
 
     battle_ids = list({r.battle_id for r in rows})
     sides_by_battle: dict[int, dict[int, tuple[int, bool]]] = {}
-    for bid, sid, pc, is_rats in db.execute(
+    for bid, sid, pc, is_rats in (await db.execute(
         select(BattleSide.battle_id, BattleSide.id, BattleSide.player_count, BattleSide.is_rats)
         .where(BattleSide.battle_id.in_(battle_ids))
-    ):
+    )):
         sides_by_battle.setdefault(bid, {})[sid] = (pc, is_rats)
 
     underdog_kills: dict[str, int] = {}
@@ -134,8 +134,8 @@ def _underdog_candidates(db: Session, battle_filters: list) -> list[tuple[str, i
 # routes/players.py _weapon_points pro equivalente single-player — mesmas
 # constantes de pontuação, importadas de battles.py) ───────────────────────
 
-def _bulk_weapon_points(
-    db: Session, region_list: list[str] | None, week_start: datetime | None,
+async def _bulk_weapon_points(
+    db: AsyncSession, region_list: list[str] | None, week_start: datetime | None,
     weapon_base: str | None = None,
 ) -> dict[str, dict[str, int]]:
     """albion_player_id -> {weapon_base: points}.
@@ -150,17 +150,17 @@ def _bulk_weapon_points(
     linhas em vez das ~214k da tabela inteira. `weapon_scorer` (melhor arma de
     cada jogador) precisa de TODAS, aí vem None."""
     if week_start is None:
-        return _bulk_weapon_points_alltime(db, region_list, weapon_base)
-    return _bulk_weapon_points_live(db, region_list, week_start, weapon_base)
+        return await _bulk_weapon_points_alltime(db, region_list, weapon_base)
+    return await _bulk_weapon_points_live(db, region_list, week_start, weapon_base)
 
 
-def _bulk_weapon_points_alltime(
-    db: Session, region_list: list[str] | None, weapon_base: str | None = None,
+async def _bulk_weapon_points_alltime(
+    db: AsyncSession, region_list: list[str] | None, weapon_base: str | None = None,
 ) -> dict[str, dict[str, int]]:
     """Aplica a fórmula de pontos (ver PlayerWeaponStat) por cima dos
     contadores brutos pré-calculados — leitura é só um join + aritmética,
     nada de escanear batalha/kill aqui."""
-    weapon_fn = _weapon_function_map(db)
+    weapon_fn = await _weapon_function_map(db)
     points: dict[str, dict[str, int]] = {}
 
     # Só faz join com AlbionPlayer quando precisa filtrar região — alguns
@@ -179,7 +179,7 @@ def _bulk_weapon_points_alltime(
         query = query.join(
             AlbionPlayer, AlbionPlayer.albion_id == PlayerWeaponStat.albion_player_id
         ).where(AlbionPlayer.region.in_(region_list))
-    rows = db.execute(query)
+    rows = await db.execute(query)
     for albion_id, wb, kills, pierce_points, healer_points, zd_fights, tank_fights in rows:
         role = weapon_fn.get(wb, "dps")
         pts = kills
@@ -195,13 +195,13 @@ def _bulk_weapon_points_alltime(
     return points
 
 
-def _bulk_weapon_points_live(
-    db: Session, region_list: list[str] | None, week_start: datetime | None,
+async def _bulk_weapon_points_live(
+    db: AsyncSession, region_list: list[str] | None, week_start: datetime | None,
     weapon_base: str | None = None,
 ) -> dict[str, dict[str, int]]:
     """albion_player_id -> {weapon_base: points} — escaneado ao vivo, usado
     só pra "esta semana" (janela curta, ver _bulk_weapon_points)."""
-    weapon_fn = _weapon_function_map(db)
+    weapon_fn = await _weapon_function_map(db)
     points: dict[str, dict[str, int]] = {}
 
     kill_filters = [PlayerKillEvent.fame > 0]
@@ -209,11 +209,11 @@ def _bulk_weapon_points_live(
         kill_filters.append(PlayerKillEvent.region.in_(region_list))
     if week_start:
         kill_filters.append(PlayerKillEvent.timestamp >= week_start)
-    for albion_id, equip in db.execute(
+    for albion_id, equip in (await db.execute(
         select(AlbionPlayer.albion_id, PlayerKillEvent.killer_equipment)
         .join(AlbionPlayer, AlbionPlayer.id == PlayerKillEvent.killer_player_id)
         .where(*kill_filters)
-    ):
+    )):
         wb = _wbase(((equip or {}).get("MainHand") or {}).get("Type"))
         if wb and (weapon_base is None or wb == weapon_base):
             bucket = points.setdefault(albion_id, {})
@@ -236,35 +236,35 @@ def _bulk_weapon_points_live(
 
     # Select de colunas só (não a entidade ORM inteira) — hidratar ~470k
     # objetos BattleParticipant pra ler 5 campos cada é o maior custo dessa
-    # função; isso devolve tuplas crás, bem mais barato em massa.
-    bp_rows = db.execute(
+    # função; isso devolve tuplas cras, bem mais barato em massa.
+    bp_rows = (await db.execute(
         select(
             BattleParticipant.battle_id, BattleParticipant.albion_player_id, BattleParticipant.guild_id,
             BattleParticipant.equipment, BattleParticipant.assists, BattleParticipant.healing_done, BattleParticipant.deaths,
         )
         .join(Battle, Battle.id == BattleParticipant.battle_id)
         .where(*rw_filters, BattleParticipant.equipment.isnot(None))
-    ).all()
+    )).all()
     if not bp_rows:
         return points
 
-    lethal_healing_ids = set(db.scalars(
+    lethal_healing_ids = set((await db.scalars(
         select(Battle.id).where(*rw_filters, *lethal_with_healing_filter())
-    ).all())
+    )).all())
     eligible_sq = eligible_guild_battles_subquery()
     guild_player_count = {
-        (bid, gid): cnt for bid, gid, cnt in db.execute(
+        (bid, gid): cnt for bid, gid, cnt in (await db.execute(
             select(eligible_sq.c.battle_id, eligible_sq.c.guild_id, eligible_sq.c.player_count)
             .join(Battle, Battle.id == eligible_sq.c.battle_id)
             .where(*rw_filters)
-        )
+        ))
     }
     deaths_by_battle: dict[int, dict[str, int]] = {}
-    for bid, gid, deaths in db.execute(
+    for bid, gid, deaths in (await db.execute(
         select(BattleGuild.battle_id, BattleGuild.albion_guild_id, BattleGuild.deaths)
         .join(Battle, Battle.id == BattleGuild.battle_id)
         .where(*rw_filters)
-    ):
+    )):
         deaths_by_battle.setdefault(bid, {})[gid] = deaths
 
     for battle_id, albion_player_id, guild_id, equipment, assists, healing_done, deaths in bp_rows:
@@ -300,10 +300,10 @@ def _bulk_weapon_points_live(
     return points
 
 
-def _player_info(db: Session, albion_ids: list[str]) -> dict[str, AlbionPlayer]:
+async def _player_info(db: AsyncSession, albion_ids: list[str]) -> dict[str, AlbionPlayer]:
     if not albion_ids:
         return {}
-    return {p.albion_id: p for p in db.scalars(select(AlbionPlayer).where(AlbionPlayer.albion_id.in_(albion_ids)))}
+    return {p.albion_id: p for p in (await db.scalars(select(AlbionPlayer).where(AlbionPlayer.albion_id.in_(albion_ids))))}
 
 
 def _guild_out(gid: str, names: dict[str, tuple[str, str | None]]) -> dict:
@@ -324,8 +324,8 @@ def _player_out(p: AlbionPlayer | None, albion_id: str) -> dict:
 # Agregam de AlbionPlayer/PlayerKillEvent diretamente, sem batalha — "alltime"
 # só (famas acumulativas da conta, não janela semanal).
 
-def _gather_ranking(
-    db: Session, kind: str, region_list: list[str] | None,
+async def _gather_ranking(
+    db: AsyncSession, kind: str, region_list: list[str] | None,
     search_term: str | None, limit: int, offset: int,
 ) -> dict:
     """Ranking de coleta por recurso — ORDER BY coluna DESC em albion_players.
@@ -341,7 +341,7 @@ def _gather_ranking(
     if search_term:
         q = q.where(norm_sql(AlbionPlayer.name).like(f"%{norm_name(search_term)}%"))
     q = q.order_by(col.desc())
-    rows = db.execute(q).all()
+    rows = (await db.execute(q)).all()
     total = len(rows)
     page = rows[offset:offset + limit]
     return {
@@ -357,8 +357,8 @@ def _gather_ranking(
     }
 
 
-def _silver_ranking(
-    db: Session, region_list: list[str] | None,
+async def _silver_ranking(
+    db: AsyncSession, region_list: list[str] | None,
     search_term: str | None, limit: int, offset: int,
 ) -> dict:
     """Ranking de prata dropada — SUM(silver_dropped) por vítima em
@@ -379,17 +379,17 @@ def _silver_ranking(
     if search_term:
         filters.append(norm_sql(AlbionPlayer.name).like(f"%{norm_name(search_term)}%"))
     joined = silver_by_player.join(AlbionPlayer, AlbionPlayer.id == silver_by_player.c.player_id)
-    total = db.scalar(
+    total = (await db.scalar(
         select(func.count()).select_from(joined).where(*filters)
-    ) or 0
-    page = db.execute(
+    )) or 0
+    page = (await db.execute(
         select(AlbionPlayer, silver_by_player.c.silver)
         .select_from(joined)
         .where(*filters)
         .order_by(silver_by_player.c.silver.desc(), AlbionPlayer.id)
         .offset(offset)
         .limit(limit)
-    ).all()
+    )).all()
     return {
         "total": total,
         "rows": [
@@ -402,7 +402,7 @@ def _silver_ranking(
 # ── destaques semanais (4 cards) ────────────────────────────────────────────
 
 @router.get("/highlights")
-def highscore_highlights(regions: str | None = None, db: Session = Depends(deps.db_session)):
+async def highscore_highlights(regions: str | None = None, db: AsyncSession = Depends(deps.async_db_session)):
     """Os 4 destaques do topo da página Highscores — sempre semanais (reseta
     domingo 00:00 UTC), mesmo critério de elegibilidade do ranking semanal de
     fama (battles.battle_highlights).
@@ -415,19 +415,19 @@ def highscore_highlights(regions: str | None = None, db: Session = Depends(deps.
     region_list = _region_list(regions)
     ckey = hc.highlights_cache_key(region_list)
     if ckey:
-        cached = db.get(DashboardCache, ckey)
+        cached = await db.get(DashboardCache, ckey)
         if cached is not None:
             return cached.payload
-    return _compute_highlights(db, region_list)
+    return await _compute_highlights(db, region_list)
 
 
-def _compute_highlights(db: Session, region_list: list[str] | None) -> dict:
+async def _compute_highlights(db: AsyncSession, region_list: list[str] | None) -> dict:
     week_start = _week_start_utc()
     battle_filters = _base_battle_filters(region_list, week_start)
 
-    guild_stats = _guild_base_stats(db, battle_filters)
+    guild_stats = await _guild_base_stats(db, battle_filters)
     guild_ids = [g[0] for g in guild_stats]
-    names = latest_guild_names(db, guild_ids)
+    names = await latest_guild_names(db, guild_ids)
 
     efficiency = None
     most_battles = None
@@ -441,14 +441,14 @@ def _compute_highlights(db: Session, region_list: list[str] | None) -> dict:
         most_battles = {"guild": _guild_out(mb_gid, names), "battles": mb_battles}
 
     underdog = None
-    underdog_candidates = _underdog_candidates(db, battle_filters)
+    underdog_candidates = await _underdog_candidates(db, battle_filters)
     if underdog_candidates:
         gid, kills = underdog_candidates[0]
-        underdog_names = latest_guild_names(db, [gid])
+        underdog_names = await latest_guild_names(db, [gid])
         underdog = {"guild": _guild_out(gid, underdog_names), "kills": kills}
 
     weapon_scorer = None
-    bulk_points = _bulk_weapon_points(db, region_list, week_start)
+    bulk_points = await _bulk_weapon_points(db, region_list, week_start)
     best: tuple[str, str, int] | None = None
     for albion_id, weapons in bulk_points.items():
         if not weapons:
@@ -461,7 +461,7 @@ def _compute_highlights(db: Session, region_list: list[str] | None) -> dict:
             best = (albion_id, wb, pts)
     if best:
         albion_id, wb, pts = best
-        player = _player_info(db, [albion_id]).get(albion_id)
+        player = (await _player_info(db, [albion_id])).get(albion_id)
         weapon_scorer = {"player": _player_out(player, albion_id), "weapon_base": wb, "points": pts}
 
     return {
@@ -483,8 +483,8 @@ _PLAYER_SCOPE_KINDS = {"pvp_fame", "most_battles"}
 _GUILD_SCOPE_KINDS = {"crafting"}
 
 
-def _player_battle_rankings(
-    db: Session, kind: str, battle_filters: list,
+async def _player_battle_rankings(
+    db: AsyncSession, kind: str, battle_filters: list,
     search_term: str | None, limit: int, offset: int,
 ) -> dict:
     """scope=player para pvp_fame/most_battles: agrega BattleParticipant."""
@@ -492,25 +492,25 @@ def _player_battle_rankings(
         val_expr = func.sum(BattleParticipant.kill_fame)
     else:  # most_battles
         val_expr = func.count(func.distinct(BattleParticipant.battle_id))
-    rows = db.execute(
+    rows = (await db.execute(
         select(BattleParticipant.albion_player_id, val_expr.label("val"))
         .join(Battle, Battle.id == BattleParticipant.battle_id)
         .where(*battle_filters)
         .group_by(BattleParticipant.albion_player_id)
-    ).all()
+    )).all()
     candidates = [(r.albion_player_id, int(r.val or 0)) for r in rows if r.val]
     candidates.sort(key=lambda kv: kv[1], reverse=True)
     ranked = list(enumerate(candidates, start=1))
     if search_term:
-        matching_ids = set(db.scalars(
+        matching_ids = set((await db.scalars(
             select(AlbionPlayer.albion_id).where(norm_sql(AlbionPlayer.name).like(f"%{norm_name(search_term)}%"))
-        ).all())
+        )).all())
         if not matching_ids:
             return {"total": 0, "rows": []}
         ranked = [(rank, c) for rank, c in ranked if c[0] in matching_ids]
     total = len(ranked)
     page = ranked[offset:offset + limit]
-    players = _player_info(db, [c[0] for _, c in page])
+    players = await _player_info(db, [c[0] for _, c in page])
     return {
         "total": total,
         "rows": [
@@ -520,8 +520,8 @@ def _player_battle_rankings(
     }
 
 
-def _guild_gather_rankings(
-    db: Session, kind: str, region_list: list[str] | None,
+async def _guild_gather_rankings(
+    db: AsyncSession, kind: str, region_list: list[str] | None,
     search_term: str | None, limit: int, offset: int,
 ) -> dict:
     """scope=guild para crafting/gather: soma fama de AlbionPlayer por guild_name."""
@@ -538,7 +538,7 @@ def _guild_gather_rankings(
     if region_list:
         q = q.where(AlbionPlayer.region.in_(region_list))
     q = q.group_by(AlbionPlayer.guild_name)
-    rows = db.execute(q).all()
+    rows = (await db.execute(q)).all()
     candidates = [(r.guild_name, r.alliance, int(r.val or 0)) for r in rows if r.val]
     candidates.sort(key=lambda kv: kv[2], reverse=True)
     ranked = list(enumerate(candidates, start=1))
@@ -572,7 +572,7 @@ def _filter_cached_rows(kind: str, rows: list[dict], search_term: str) -> list[d
 
 
 @router.get("/rankings")
-def highscore_rankings(
+async def highscore_rankings(
     kind: str,
     regions: str | None = None,
     window: str = "alltime",
@@ -580,7 +580,7 @@ def highscore_rankings(
     limit: int = 50,
     offset: int = 0,
     scope: str = "default",
-    db: Session = Depends(deps.db_session),
+    db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Servido do precompute de 5min (highscores_cache) para a forma comum —
     seleção de regiões conhecida, sem busca, página dentro do top-N. Busca,
@@ -594,7 +594,7 @@ def highscore_rankings(
     # scope não-default bypassa cache (precompute só cobre default).
     ckey = hc.rankings_cache_key(kind, window, region_list) if scope == "default" else None
     if ckey:
-        cached = db.get(DashboardCache, ckey)
+        cached = await db.get(DashboardCache, ckey)
         if cached is not None:
             rows = cached.payload.get("rows", [])
             total = cached.payload.get("total", len(rows))
@@ -620,25 +620,25 @@ def highscore_rankings(
                 if total <= len(rows):
                     return {"total": 0, "rows": []}
 
-    return _compute_rankings(db, kind, region_list, _window_start(window), search_term, limit, offset, scope)
+    return await _compute_rankings(db, kind, region_list, _window_start(window), search_term, limit, offset, scope)
 
 
-def _compute_rankings(
-    db: Session, kind: str, region_list: list[str] | None,
+async def _compute_rankings(
+    db: AsyncSession, kind: str, region_list: list[str] | None,
     week_start: datetime | None, search_term: str | None, limit: int, offset: int,
     scope: str = "default",
 ) -> dict:
     # scope=player em kinds de guilda de batalha: agrega por BattleParticipant.
     if scope == "player" and kind in _PLAYER_SCOPE_KINDS:
         battle_filters = _base_battle_filters(region_list, week_start)
-        return _player_battle_rankings(db, kind, battle_filters, search_term, limit, offset)
+        return await _player_battle_rankings(db, kind, battle_filters, search_term, limit, offset)
 
     if kind in _GUILD_KINDS:
         battle_filters = _base_battle_filters(region_list, week_start)
         if kind == "underdog":
-            candidates = _underdog_candidates(db, battle_filters)
+            candidates = await _underdog_candidates(db, battle_filters)
         else:
-            guild_stats = _guild_base_stats(db, battle_filters)
+            guild_stats = await _guild_base_stats(db, battle_filters)
             if kind == "pvp_fame":
                 candidates = [(g[0], g[1]) for g in guild_stats]
             elif kind == "efficiency":
@@ -647,7 +647,7 @@ def _compute_rankings(
                 candidates = [(g[0], g[3]) for g in guild_stats]
             candidates.sort(key=lambda kv: kv[1], reverse=True)
 
-        names = latest_guild_names(db, [gid for gid, _ in candidates])
+        names = await latest_guild_names(db, [gid for gid, _ in candidates])
         # Posição no ranking COMPLETO, não na lista já filtrada por busca —
         # senão a 1ª guilda que sobra depois de buscar por nome sempre virava
         # "#1", como se fosse ranking próprio dela em vez da posição real
@@ -666,10 +666,10 @@ def _compute_rankings(
     # ── kinds de coleta: agregação direta em albion_players ──────────────
     if kind in _GATHER_KINDS:
         if scope == "guild":
-            return _guild_gather_rankings(db, kind, region_list, search_term, limit, offset)
-        return _gather_ranking(db, kind, region_list, search_term, limit, offset)
+            return await _guild_gather_rankings(db, kind, region_list, search_term, limit, offset)
+        return await _gather_ranking(db, kind, region_list, search_term, limit, offset)
     if kind == _SILVER_KIND:
-        return _silver_ranking(db, region_list, search_term, limit, offset)
+        return await _silver_ranking(db, region_list, search_term, limit, offset)
 
     # kinds de jogador+arma: "weapon_scorer" (melhor arma de cada jogador,
     # qualquer arma) ou "weapon:<base>" (um arma específica)
@@ -685,14 +685,14 @@ def _compute_rankings(
     # do teto de parâmetros do SQLite); cruzado com os candidatos em Python.
     matching_ids: set[str] | None = None
     if search_term:
-        matching_ids = set(db.scalars(
+        matching_ids = set((await db.scalars(
             select(AlbionPlayer.albion_id).where(norm_sql(AlbionPlayer.name).like(f"%{norm_name(search_term)}%"))
-        ).all())
+        )).all())
         if not matching_ids:
             return {"total": 0, "rows": []}
     # weapon_base != None restringe a query a essa arma (índice) em vez de
     # computar pontos de todas; weapon_scorer (weapon_base=None) precisa de todas.
-    bulk_points = _bulk_weapon_points(db, region_list, week_start, weapon_base)
+    bulk_points = await _bulk_weapon_points(db, region_list, week_start, weapon_base)
     candidates3: list[tuple[str, str, int]] = []
     for albion_id, weapons in bulk_points.items():
         if weapon_base is not None:
@@ -719,7 +719,7 @@ def _compute_rankings(
         ranked3 = [(rank, c) for rank, c in ranked3 if c[0] in matching_ids]
     total = len(ranked3)
     page = ranked3[offset:offset + limit]
-    players = _player_info(db, [c[0] for _, c in page])
+    players = await _player_info(db, [c[0] for _, c in page])
     return {
         "total": total,
         "rows": [
@@ -730,12 +730,12 @@ def _compute_rankings(
 
 
 @router.get("/weapons")
-def highscore_weapons(db: Session = Depends(deps.db_session)):
+async def highscore_weapons(db: AsyncSession = Depends(deps.async_db_session)):
     """Todas as armas do catálogo (base + função) — público, sem auth, pro
     dropdown de rankings por arma do Highscores. Nome/ícone ficam a cargo do
     frontend (albion-items.ts já tem nome localizado + render por base)."""
     seen: dict[str, str | None] = {}
-    for item_id, fn in db.execute(select(Weapon.item_id, Weapon.invisible_function)):
+    for item_id, fn in (await db.execute(select(Weapon.item_id, Weapon.invisible_function))):
         wb = _wbase(item_id)
         if wb and wb not in seen and wb not in REMOVED_WEAPON_BASES:
             seen[wb] = fn

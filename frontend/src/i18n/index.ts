@@ -764,16 +764,11 @@ const S = {
     recDiedWith: "Morreu com", recRecovered: "Recuperado do cadáver", recDeposited: "Depositado", recDepositedBy: "Depositado por", recEmpty: "Nenhum dado p/ este evento. Envie loggers + baú + mortes.",
     recStolen: "Roubado", recVerified: "Conferido", recVerifyHint: "Clique nos itens vermelhos p/ marcar como conferido (fica amarelo).", recByPlayer: "Devido por jogador", recNoOwed: "Ninguém devendo — tudo depositado ou perdido em morte.",
 
-    // Footer + consent
+    // Footer
     footerLegal: "Termos · Privacidade · Cookies",
     footerTerms: "Termos", footerPrivacy: "Privacidade", footerCookies: "Cookies",
     footerAbout: "Sobre", footerContact: "Contato",
     footerNotAffiliated: "Não afiliado à Sandbox Interactive GmbH ou Discord Inc.",
-    consentTitle: "Consentimento de cookies",
-    consentText: "Usamos cookies de sessão (necessários) e cookies do Google AdSense (opcional).",
-    consentLearn: "Saiba mais",
-    consentNec: "Só necessários",
-    consentAll: "Aceitar tudo",
   },
   en: {
     search: "Search item…",
@@ -1520,16 +1515,11 @@ const S = {
     recDiedWith: "Died with", recRecovered: "Recovered from corpse", recDeposited: "Deposited", recDepositedBy: "Deposited by", recEmpty: "No data for this event. Send loggers + chest + deaths.",
     recStolen: "Stolen", recVerified: "Verified", recVerifyHint: "Click red items to mark them verified (turns yellow).", recByPlayer: "Owed by player", recNoOwed: "Nobody owing — everything deposited or lost on death.",
 
-    // Footer + consent
+    // Footer
     footerLegal: "Terms · Privacy · Cookies",
     footerTerms: "Terms", footerPrivacy: "Privacy", footerCookies: "Cookies",
     footerAbout: "About", footerContact: "Contact",
     footerNotAffiliated: "Not affiliated with Sandbox Interactive GmbH or Discord Inc.",
-    consentTitle: "Cookie consent",
-    consentText: "We use session cookies (necessary) and Google AdSense cookies (optional).",
-    consentLearn: "Learn more",
-    consentNec: "Necessary only",
-    consentAll: "Accept all",
   },
   es: {
     search: "Buscar objeto…",
@@ -2275,16 +2265,11 @@ const S = {
     recDiedWith: "Murió con", recRecovered: "Recuperado del cadáver", recDeposited: "Depositado", recDepositedBy: "Depositado por", recEmpty: "Sin datos para este evento. Envía loggers + baúl + muertes.",
     recStolen: "Robado", recVerified: "Verificado", recVerifyHint: "Clic en ítems rojos para marcarlos verificados (se ponen amarillos).", recByPlayer: "Debido por jugador", recNoOwed: "Nadie debiendo — todo depositado o perdido en muerte.",
 
-    // Footer + consent
+    // Footer
     footerLegal: "Términos · Privacidad · Cookies",
     footerTerms: "Términos", footerPrivacy: "Privacidad", footerCookies: "Cookies",
     footerAbout: "Sobre", footerContact: "Contacto",
     footerNotAffiliated: "No afiliado a Sandbox Interactive GmbH ni Discord Inc.",
-    consentTitle: "Consentimiento de cookies",
-    consentText: "Usamos cookies de sesión (necesarias) y cookies de Google AdSense (opcional).",
-    consentLearn: "Saber más",
-    consentNec: "Solo necesarias",
-    consentAll: "Aceptar todo",
   },
 } as const;
 

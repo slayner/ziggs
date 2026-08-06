@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, lazy, Suspense, Component, type ReactNode } from "react";
 import { useLocation, navigate, navigateReplace, goBack, parseBattleRoute, parsePlayerRoute, parseGuildRoute, parseEventRoute, parseRegearRoute, parseRegearEventFilter } from "./router";
 import { api, setGuild, onBackendDown, setBackendDown, NO_PERMS, type Me, type Permissions, type SiteGuild } from "./api";
-import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, REGION_LABELS, type Lang, type GameServer, type TKey } from "./i18n";
+import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, REGION_LABELS, type Lang, type GameServer } from "./i18n";
 import AdBanner from "./components/AdBanner";
-import CookieConsent from "./components/CookieConsent";
 import { TermsPage, PrivacyPage, CookiesPage, AboutPage, ContactPage } from "./components/LegalPages";
 
 // code-split por página: cada view só baixa seu próprio JS quando é aberta
@@ -24,17 +23,9 @@ const ClaimsPanel = lazy(() => import("./components/ClaimsPanel"));
 const CompanionPage = lazy(() => import("./components/CompanionPage"));
 const GuildSetup = lazy(() => import("./components/GuildSetup"));
 
-type PublicView = "dashboard" | "craft" | "battles" | "highscores";
+type PublicView = "dashboard" | "craft" | "battles" | "highscores" | "companion";
 type GuildView = "config" | "management";
 type View = PublicView | GuildView;
-
-const COMPANION_CTA_FEATURES: { icon: string; label: TKey }[] = [
-  { icon: "ti-radar-2", label: "companionFeatScanTitle" },
-  { icon: "ti-world-bolt", label: "companionFeatDnsTitle" },
-  { icon: "ti-route", label: "companionFeatTunnelTitle" },
-  { icon: "ti-clipboard-text", label: "companionFeatLootlogTitle" },
-  { icon: "ti-layout-bottombar", label: "companionFeatTrayTitle" },
-];
 
 // ponytail: boundary mínimo — sem ele, qualquer throw no render de uma página
 // (lazy ou não) derruba a árvore inteira e vira tela branca sem mensagem. Aqui
@@ -104,8 +95,7 @@ function apiDelayColor(secs: number): string {
   return secs < 900 ? "var(--success)" : secs < 7200 ? "#e0a23b" : "var(--alert)";
 }
 
-// Footer global — links pra páginas legais + aviso de não-afiliação. AdSense
-// exige que as páginas legais sejam acessíveis de qualquer página do site.
+// Footer global — links pra páginas legais + aviso de não-afiliação.
 function SiteFooter({ t }: { t: (k: import("./i18n").TKey) => string }) {
   return (
     <footer className="site-footer">
@@ -127,13 +117,42 @@ function SiteFooter({ t }: { t: (k: import("./i18n").TKey) => string }) {
   );
 }
 
+const ADSTERRA_KEYS: Record<string, string> = {
+  "300x250": "67b53d8ceb5bbe360fbf869679d47b70",
+  "728x90": "349d923ad542f5d656d1fcfb46f22eb6",
+};
+const AD_DIMS: Record<string, [number, number]> = {
+  "300x250": [300, 250],
+  "728x90": [728, 90],
+};
+
+// Fallback de dev: em prod o Caddy serve public/ad/*.html estático. Scripts
+// injetados via DOM porque dangerouslySetInnerHTML em <script> não executa.
+function AdPage({ size }: { size: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const key = ADSTERRA_KEYS[size];
+    const [w, h] = AD_DIMS[size] ?? [300, 250];
+    const s1 = document.createElement("script");
+    s1.text = `atOptions = { 'key' : '${key}', 'format' : 'iframe', 'height' : ${h}, 'width' : ${w}, 'params' : {} };`;
+    const s2 = document.createElement("script");
+    s2.src = `https://www.highperformanceformat.com/${key}/invoke.js`;
+    s2.async = true;
+    el.appendChild(s1);
+    el.appendChild(s2);
+  }, [size]);
+  const [w, h] = AD_DIMS[size] ?? [300, 250];
+  return <div ref={ref} style={{ width: w, height: h, margin: 0, padding: 0, overflow: "hidden" }} />;
+}
+
 export default function App() {
   const { lang, setLang } = useLang();
   const { server, setServer, servers, toggleServer } = useServer();
   const t = useT();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [view, setView] = useState<View>("dashboard");
-  const [companionCtaIndex, setCompanionCtaIndex] = useState(0);
 
   // Deep link pro Highscores a partir do perfil de um jogador: /highscores?
   // kind=gather_wood&player=ID&rank=481&regions=americas. Abre na kind certa,
@@ -184,7 +203,6 @@ export default function App() {
   const regearEventFilter = parseRegearEventFilter(loc);
   // /download (não /companion — esse prefixo é da API do backend em prod).
   const companionActive = loc.split("?")[0] === "/download";
-  // Páginas legais/institucionais — renderizam standalone (sem topbar/nav),
   // só com o footer. Detectadas aqui, não no router.ts, porque são estáticas.
   const legalPath = loc.split("?")[0];
   const legalPage: "terms" | "privacy" | "cookies" | "about" | "contact" | null =
@@ -193,6 +211,13 @@ export default function App() {
     legalPath === "/cookies" ? "cookies" :
     legalPath === "/about" ? "about" :
     legalPath === "/contact" ? "contact" : null;
+  // /ad/300x250 e /ad/728x90 — páginas de anúncio standalone pra embedar via
+  // iframe no companion (webview Tauri não serve o script de ad network direto).
+  // Só o loader, sem topbar/footer.
+  const adPath = loc.split("?")[0];
+  const adSize: "300x250" | "728x90" | null =
+    adPath === "/ad/300x250" ? "300x250" :
+    adPath === "/ad/728x90" ? "728x90" : null;
   // /highscores?kind=&player=&rank=&regions= — deep link do perfil. Detecta
   // aqui (não no router.ts) porque highscores é view em memória, não rota de
   // URL própria; o App seta a view e os params, e limpa a URL em seguida pra
@@ -208,12 +233,6 @@ export default function App() {
       navigateReplace("/");
     }
   }, [loc]);
-
-  useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const id = setInterval(() => setCompanionCtaIndex(i => (i + 1) % COMPANION_CTA_FEATURES.length), 3200);
-    return () => clearInterval(id);
-  }, []);
 
   useEffect(() => {
     // a página de batalha também mostra o topbar (login/idioma/servidor), então
@@ -336,6 +355,7 @@ export default function App() {
       const map: Partial<Record<View, string>> = {
         battles: t("battles"),
         highscores: t("highscores"), craft: t("craft"),
+        companion: t("companionNav"),
         management: t("management"), config: "Config",
       };
       label = map[view] ?? "";
@@ -367,6 +387,14 @@ export default function App() {
   // era a causa da tela branca eterna.
   if (me === undefined) return null;
 
+  // /ad/:size — página de anúncio standalone (iframe alvo do companion e do
+  // AdBanner do site). Em prod o Caddy serve HTML estático (public/ad/*.html)
+  // direto; este handler é o fallback de dev (Vite SPA). Scripts precisam ser
+  // injetados via DOM (dangerouslySetInnerHTML em <script> não executa).
+  if (adSize) {
+    return <AdPage size={adSize} />;
+  }
+
   // Páginas legais/institucionais — standalone, sem topbar/nav. Renderizam
   // antes do fluxo principal (não precisam de login nem guilda).
   if (legalPage) {
@@ -385,7 +413,6 @@ export default function App() {
           {page}
         </div>
         <SiteFooter t={t} />
-        <CookieConsent />
       </div>
     );
   }
@@ -418,7 +445,7 @@ export default function App() {
   }
 
   const nb = (v: View, icon: string, label: string) => (
-    <button className={!battleRoute && !playerRoute && !guildRoute && !companionActive && view === v ? "active" : ""} onClick={() => { navigate("/"); setView(v); }}>
+    <button className={!battleRoute && !playerRoute && !guildRoute && view === v ? "active" : ""} onClick={() => { if (companionActive) navigate("/"); setView(v); }}>
       <i className={`ti ${icon}`} aria-hidden="true" /> {label}
     </button>
   );
@@ -562,22 +589,6 @@ export default function App() {
   );
 
   // ── Conteúdo ─────────────────────────────────────────────────────────────
-  const companionCtaFeature = COMPANION_CTA_FEATURES[companionCtaIndex];
-  const companionCta = (
-    <button
-      type="button"
-      className={`companion-nav-cta${companionActive ? " active" : ""}`}
-      onClick={() => navigate("/download")}
-      aria-label={`${t("companionCtaLabel")}: ${t(companionCtaFeature.label)}`}
-    >
-      <span className="companion-nav-cta-orbit" aria-hidden="true"><i className="ti ti-device-desktop" /></span>
-      <span className="companion-nav-cta-copy">
-        <strong>{t("companionCtaLabel")}</strong>
-        <small key={companionCtaFeature.label}><i className={`ti ${companionCtaFeature.icon}`} aria-hidden="true" /> {t(companionCtaFeature.label)}</small>
-      </span>
-      <i className="ti ti-arrow-right companion-nav-cta-arrow" aria-hidden="true" />
-    </button>
-  );
 
   const loginGate = (
     <div className="login-gate">
@@ -598,7 +609,7 @@ export default function App() {
     content = <RegearPage guildId={regearRoute.guildId} initialRequestId={regearRoute.requestId} />;
   } else if (regearEventFilter && me?.guild_id) {
     content = <RegearPage guildId={String(me.guild_id)} eventId={regearEventFilter} />;;
-  } else if (companionActive) {
+  } else if (companionActive || view === "companion") {
     content = <CompanionPage />;
   } else if (battleRoute) {
     content = battleRoute.type === "code"
@@ -726,14 +737,15 @@ export default function App() {
       )}
       <div className="topbar">
         <button className="brand" onClick={() => { navigate("/"); setView("dashboard"); }} title={t("dashboard")}>
-          <span className="logo"><i className="ti ti-shield-half" /></span>
+          <img className="logo" src="/logo.png" alt="Ziggs" />
           Ziggs
         </button>
 
         <nav className="nav nav-public">
           {nb("battles", "ti-shield-bolt",    t("battles"))}
           {nb("highscores", "ti-trophy",      t("highscores"))}
-          {nb("craft",   "ti-hammer",         t("craft"))}
+          {nb("craft", "ti-hammer",          t("craft"))}
+          {nb("companion", "ti-device-desktop", t("companionNav"))}
         </nav>
 
         <div className="nav-sep" />
@@ -789,7 +801,6 @@ export default function App() {
             </div>
           )}
           {serverQuickSwitch}
-          {companionCta}
           {userMenu}
         </div>
       </div>
@@ -803,7 +814,7 @@ export default function App() {
       <div className="dash-root">
       {view !== "craft" && (
         <div style={{ padding: "10px 16px 0" }}>
-          <AdBanner variant="leaderboard" mobileVariant="mobileBanner" />
+          <AdBanner key={`top-${view}`} slot={`top-${view}`} variant="leaderboard" mobileVariant="mobileBanner" />
         </div>
       )}
       <ErrorBoundary>
@@ -860,7 +871,6 @@ export default function App() {
       </ErrorBoundary>
       </div>
       <SiteFooter t={t} />
-      <CookieConsent />
     </div>
   );
 }

@@ -30,9 +30,9 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.prices import ItemPriceHistory, MarketSnapshot
 from app.services.market_history import get_catalog
 
@@ -77,20 +77,20 @@ def _summarize(points: list[tuple[int, int, int]]) -> tuple[int, float, int, int
     return (last, round(change, 1), demand, pts[-1][0])
 
 
-def _own_summary(db: Session, item_id: str, region: str, cutoff_ms: int) -> tuple[int, float, int, int] | None:
+async def _own_summary(db: AsyncSession, item_id: str, region: str, cutoff_ms: int) -> tuple[int, float, int, int] | None:
     """Resumo a partir do histórico próprio (da região) ; None se cobertura
     insuficiente.
 
     Usa UM timescale só (prefere 1=7d, depois 0, depois 2) — somar buckets de
     escalas diferentes contaria a mesma venda duas vezes.
     """
-    rows = db.scalars(
+    rows = (await db.scalars(
         select(ItemPriceHistory).where(
             ItemPriceHistory.item_id == item_id,
             ItemPriceHistory.region == region,
             ItemPriceHistory.quality == 1,
         )
-    ).all()
+    )).all()
     if not rows:
         return None
     for scale in (1, 0, 2):
@@ -137,13 +137,13 @@ async def _fetch_aodp_batch(client: httpx.AsyncClient, host: str, ids: list[str]
     return out
 
 
-def _upsert(db: Session, item_id: str, region: str, price: int, change: float,
+async def _upsert(db: AsyncSession, item_id: str, region: str, price: int, change: float,
             demand: int, source: str, now: datetime, price_ts_ms: int = 0) -> None:
     price_ts = (
         datetime.fromtimestamp(price_ts_ms / 1000, tz=timezone.utc)
         if price_ts_ms > 0 else None
     )
-    row = db.scalar(select(MarketSnapshot).where(
+    row = await db.scalar(select(MarketSnapshot).where(
         MarketSnapshot.item_id == item_id, MarketSnapshot.region == region,
     ))
     if row:
@@ -171,8 +171,7 @@ async def _process_batch(client: httpx.AsyncClient, region: str, batch: list[str
     cutoff_ms = int((now - _WINDOW).timestamp() * 1000)
     filled = 0
     empty = 0
-    db = SessionLocal()
-    try:
+    async with AsyncSessionLocal() as db:
         # 1) AODP: UM request por lote (host da região) — varredura periódica.
         #    Se falhar, o lote fica pra próxima volta (idempotente).
         try:
@@ -197,32 +196,30 @@ async def _process_batch(client: httpx.AsyncClient, region: str, batch: list[str
                 a_demand = 0
 
             # Nosso histórico (da região): só vira se tiver ≥2 buckets na janela.
-            own = _own_summary(db, iid, region, cutoff_ms)
+            own = await _own_summary(db, iid, region, cutoff_ms)
 
             # Decide fonte por idade (price_ts). empate ou nosso mais novo
             # → 'ziggs'; AODP mais novo → 'aodp'. Sem nenhum dos dois → empty.
             if own and (a_price == 0 or own[3] >= a_seen_ms):
-                _upsert(db, iid, region, own[0], own[1], own[2], "ziggs", now, own[3])
+                await _upsert(db, iid, region, own[0], own[1], own[2], "ziggs", now, own[3])
                 filled += 1
             elif a_price > 0:
-                _upsert(db, iid, region, a_price, a_change, a_demand, "aodp", now, a_seen_ms)
+                await _upsert(db, iid, region, a_price, a_change, a_demand, "aodp", now, a_seen_ms)
                 filled += 1
             else:
                 empty += 1
         try:
             t_c0 = time.monotonic()
-            db.commit()
+            await db.commit()
             t_commit = time.monotonic() - t_c0
             if t_commit > 1.0:
                 log.warning("market_snapshot: commit lento — %s/%d em %.1fs", region, len(batch), t_commit)
         except OperationalError as e:
             if "database is locked" in str(e).lower():
                 log.warning("market_snapshot: db locked — lote %s reprocessado próximo ciclo", region)
-                db.rollback()
+                await db.rollback()
             else:
                 raise
-    finally:
-        db.close()
     return (filled, empty)
 
 
@@ -243,7 +240,7 @@ async def sweep_once(region: str = "west") -> tuple[int, int]:
 async def run_forever() -> None:
     """Gotejamento contínuo: 1 lote (= 1 request ao AODP) a cada BATCH_PAUSE
     segundos. Round-robin de região a cada tick — west, east, europe, west… —
-    pra as 3 regiões avancarem juntas (nenhuma passa fome no cold start). Um
+    pra as 3 regiões avançarem juntas (nenhuma passa fome no cold start). Um
     ciclo completo cobre catálogo × 3 regiões."""
     await asyncio.sleep(_STARTUP_DELAY)
     n = 0  # contador global; região = n % 3, lote = (n // 3) % n_batches

@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.prices import ItemPriceLatest
 from app.services.prices import _BATTLE_SENTINEL, get_battle_prices
 
@@ -50,14 +50,14 @@ async def _reprocess_batch(db) -> int:
     # Itens cacheados ANTES do processo subir (potencial bug da média antiga).
     # get_battle_prices agora tem TTL de 8h e faz ON CONFLICT DO UPDATE, então
     # só chamar nos IDs stale re-busca e sobrescreve — não precisa mais DELETE.
-    item_ids = db.scalars(
+    item_ids = (await db.scalars(
         select(ItemPriceLatest.item_id)
         .where(ItemPriceLatest.city == _BATTLE_SENTINEL, ItemPriceLatest.recorded_at < _CUTOFF)
         .limit(BATCH_SIZE)
-    ).all()
+    )).all()
     if not item_ids:
         return 0
-    db.commit()  # fecha a read tx antes do HTTP (ver _write_deep_data fix)
+    await db.commit()  # fecha a read tx antes do HTTP (ver _write_deep_data fix)
     await get_battle_prices(db, item_ids)
     return len(item_ids)
 
@@ -65,16 +65,14 @@ async def _reprocess_batch(db) -> int:
 async def run_forever() -> None:
     log.info("battle_price_reprocessor: iniciando")
     while True:
-        db = SessionLocal()
         n = 0
-        try:
-            n = await _reprocess_batch(db)
-            if n:
-                log.info("battle_price_reprocessor: %d preços recalculados", n)
-            else:
-                ready.set()
-        except Exception as e:
-            log.error("battle_price_reprocessor: erro: %s", e)
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                n = await _reprocess_batch(db)
+                if n:
+                    log.info("battle_price_reprocessor: %d preços recalculados", n)
+                else:
+                    ready.set()
+            except Exception as e:
+                log.error("battle_price_reprocessor: erro: %s", e)
         await asyncio.sleep(BUSY_INTERVAL if n > 0 else IDLE_INTERVAL)

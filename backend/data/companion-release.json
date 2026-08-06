@@ -1,0 +1,11 @@
+{
+  "version": "0.1.2",
+  "notes": "Fix: firewall kick via netsh (no PowerShell terminals). Fix: tunnel_start on first activation. Fix: lootlog clear persists. Fix: fast app exit. Busy column during route change.",
+  "pub_date": "2026-08-05T01:30:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmZqOUNIUk9hU2lteFJna05qMTZ1TnEvSFFLc254cUhFc3JNZHd4d2xLWkx5cWd2NVlKYmM2Y0xMTDh2UTB0UGJpZzAyQ2dhemM2YWdWZG53MEd6bXcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1ODg4ODQzCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4yX3g2NC1zZXR1cC5leGUKNGEzS25Ma1hlN1Y2d2ppbm91K2lNRHpuZUlFb2FkNXBzWCtLaTJqelJUc3VJaUpUdVVmQ2p2TlF0OWhmZXlxbmVjRFBEWDVPOWdydFRpdWljR0RTQlE9PQo=",
+      "url": "https://ziggs.xyz/companion/Ziggs-Companion_0.1.2_x64-setup.exe"
+    }
+  }
+}

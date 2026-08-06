@@ -3,14 +3,19 @@ Dependências das rotas.
 
 A identidade vem da SESSÃO do Discord (cookie assinado). A autorização por cargo
 (council/logistic/...) entra depois, junto com a sincronização de membros pelo bot.
+
+DB: rotas async usam ``async_db_session()`` (AsyncSession). Rotas ``def``
+síncronas e deps que só fazem 1 query pontual continuam com ``db_session()``
+(Session sync) — rodam em threadpool do FastAPI, não bloqueiam o event loop.
 """
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 import secrets
 
 from fastapi import Depends, Header, HTTPException, Path, Request
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.auth import discord
@@ -18,10 +23,20 @@ from app.auth.crypto import decrypt_token
 from app.auth.permissions import has_permission
 from app.auth.session import verify_session, verify_companion_token
 from app.config import get_settings
-from app.db import get_session
+from app.db import get_async_session, get_session
 from app.models.tenancy import Guild, GuildMember, User
 
 
+# Rotas async — usar esta. Cada ``await db.execute/scalars(...)`` devolve o
+# controle pro event loop durante o I/O do Postgres (não bloqueia outras
+# tasks/requests).
+async def async_db_session() -> AsyncIterator[AsyncSession]:
+    async for db in get_async_session():
+        yield db
+
+
+# Rotas ``def`` síncronas — FastAPI roda em threadpool, não bloqueia o loop.
+# NÃO usar em handlers ``async def`` (bloqueia o loop inteiro).
 def db_session() -> Iterator[Session]:
     yield from get_session()
 
@@ -118,6 +133,24 @@ def require_companion_user(
     if uid is None:
         raise HTTPException(401, detail="token companion inválido ou expirado")
     user = db.scalar(select(User).where(User.id == uid))
+    if user is None:
+        raise HTTPException(401, detail="usuário não encontrado")
+    return user
+
+
+async def require_companion_user_async(
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(async_db_session),
+) -> User:
+    """Variante async de require_companion_user pra rotas /companion async.
+    Mesma lógica, mas com AsyncSession (await db.scalar)."""
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(401, detail="token companion ausente")
+    token = authorization[7:]
+    uid = verify_companion_token(token)
+    if uid is None:
+        raise HTTPException(401, detail="token companion inválido ou expirado")
+    user = await db.scalar(select(User).where(User.id == uid))
     if user is None:
         raise HTTPException(401, detail="usuário não encontrado")
     return user

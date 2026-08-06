@@ -15,9 +15,9 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as _pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.prices import GoldPriceSnapshot
 
 log = logging.getLogger(__name__)
@@ -53,14 +53,14 @@ async def _fetch_chunk(region: str, start: datetime, end: datetime) -> list[dict
         return resp.json()
 
 
-def _region_cursor(db: Session, region: str) -> datetime:
-    row = db.scalar(select(func.max(GoldPriceSnapshot.recorded_at)).where(GoldPriceSnapshot.region == region))
+async def _region_cursor(db: AsyncSession, region: str) -> datetime:
+    row = await db.scalar(select(func.max(GoldPriceSnapshot.recorded_at)).where(GoldPriceSnapshot.region == region))
     if row is None:
         return _SINCE
     return row if row.tzinfo else row.replace(tzinfo=timezone.utc)
 
 
-def _insert_rows(db: Session, region: str, raw: list[dict]) -> int:
+async def _insert_rows(db: AsyncSession, region: str, raw: list[dict]) -> int:
     rows = [
         {"region": region, "price": r["price"], "recorded_at": _parse_ts(r["timestamp"])}
         for r in raw if r.get("price")
@@ -70,22 +70,22 @@ def _insert_rows(db: Session, region: str, raw: list[dict]) -> int:
     # on_conflict_do_nothing: idempotente por construção — reprocessar uma
     # janela já coberta (retomada após crash, ou overlap do poll com o fim
     # do backfill) nunca duplica, só ignora o que já existe.
-    db.execute(_pg_insert(GoldPriceSnapshot).on_conflict_do_nothing(), rows)
-    db.commit()
+    await db.execute(_pg_insert(GoldPriceSnapshot).on_conflict_do_nothing(), rows)
+    await db.commit()
     return len(rows)
 
 
-async def backfill(db: Session) -> None:
+async def backfill(db: AsyncSession) -> None:
     """Por região, avança em janelas de 180 dias a partir do cursor (MAX já
     salvo, ou 2017-01-01 se vazio) até agora. Resumível por construção: uma
     interrupção no meio simplesmente recomeça do MAX real na próxima chamada,
     sem re-percorrer o que já foi salvo nem duplicar."""
     now = datetime.now(timezone.utc)
     for region in HOSTS:
-        cursor = _region_cursor(db, region)
+        cursor = await _region_cursor(db, region)
         # Libera read tx antes do HTTP — read tx aberta durante await impede
         # wal_checkpoint, cresce o WAL, commit futuro fsync-o inteiro.
-        db.commit()
+        await db.commit()
         while cursor < now:
             window_end = min(cursor + _BACKFILL_WINDOW, now)
             try:
@@ -93,13 +93,13 @@ async def backfill(db: Session) -> None:
             except Exception as e:
                 log.error("gold_price: backfill %s [%s..%s] falhou: %s", region, cursor.date(), window_end.date(), e)
                 break  # próximo ciclo de run_forever tenta essa janela de novo
-            n = _insert_rows(db, region, raw)
+            n = await _insert_rows(db, region, raw)
             log.info("gold_price: backfill %s [%s..%s] +%d", region, cursor.date(), window_end.date(), n)
             cursor = window_end
             await asyncio.sleep(2)  # gentil com a AODP
 
 
-async def _poll_once(db: Session) -> None:
+async def _poll_once(db: AsyncSession) -> None:
     now = datetime.now(timezone.utc)
     start = now - _POLL_WINDOW
     for region in HOSTS:
@@ -108,27 +108,23 @@ async def _poll_once(db: Session) -> None:
         except Exception as e:
             log.error("gold_price: poll %s falhou: %s", region, e)
             continue
-        _insert_rows(db, region, raw)
+        await _insert_rows(db, region, raw)
         await asyncio.sleep(2)
 
 
 async def run_forever() -> None:
     await asyncio.sleep(_STARTUP_DELAY)
     log.info("gold_price: iniciando backfill (desde %s)", _SINCE.date())
-    db = SessionLocal()
-    try:
-        await backfill(db)
-    except Exception as e:
-        log.error("gold_price: erro no backfill: %s", e)
-    finally:
-        db.close()
+    async with AsyncSessionLocal() as db:
+        try:
+            await backfill(db)
+        except Exception as e:
+            log.error("gold_price: erro no backfill: %s", e)
     log.info("gold_price: backfill concluído, poll a cada %ds", POLL_INTERVAL)
     while True:
-        db = SessionLocal()
-        try:
-            await _poll_once(db)
-        except Exception as e:
-            log.error("gold_price: erro no poll: %s", e)
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                await _poll_once(db)
+            except Exception as e:
+                log.error("gold_price: erro no poll: %s", e)
         await asyncio.sleep(POLL_INTERVAL)

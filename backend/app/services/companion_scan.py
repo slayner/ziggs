@@ -15,13 +15,13 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import distinct, func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.battles import Battle, BattleIdProbe
 from app.models.companion import (
     CLAIM_TTL, CompanionScanTask, RANGE_SIZE, COMPANION_REGIONS,
 )
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.services.battle_sweeper import _probe_detail, _region_candidates
 from app.services.battle_tracker import upsert_battle_light, REPROCESS_REASON_SWEEPER
 from app.services.player_tracker import HOSTS, make_client
@@ -38,7 +38,7 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _release_expired_claims(db: Session) -> int:
+async def _release_expired_claims(db: AsyncSession) -> int:
     """Tarefas claim que expiraram voltam a 'pending'.
 
     synchronize_session=False: o UPDATE roda no banco e pronto. Com a sincronia
@@ -47,7 +47,7 @@ def _release_expired_claims(db: Session) -> int:
     comparação com _now() (aware) explodia com TypeError. Quem precisa do
     estado novo re-consulta logo abaixo.
     """
-    result = db.execute(
+    result = await db.execute(
         update(CompanionScanTask)
         .where(
             CompanionScanTask.status == "claimed",
@@ -59,14 +59,14 @@ def _release_expired_claims(db: Session) -> int:
     return result.rowcount or 0
 
 
-def _generate_tasks_for_region(db: Session, region: str) -> int:
+async def _generate_tasks_for_region(db: AsyncSession, region: str) -> int:
     """Gera tarefas pending para uma região baseadas nos buracos da sequência.
 
     Reaproveita _region_candidates do battle_sweeper (mesma lógica: buracos
     entre IDs conhecidos, do mais novo pro mais antigo, mais janela abaixo do
     mínimo). Cada RANGE_SIZE IDs vira uma tarefa.
     """
-    existing_pending = db.scalar(
+    existing_pending = await db.scalar(
         select(CompanionScanTask.id)
         .where(CompanionScanTask.region == region, CompanionScanTask.status == "pending")
         .limit(1)
@@ -74,7 +74,7 @@ def _generate_tasks_for_region(db: Session, region: str) -> int:
     if existing_pending is not None:
         return 0  # ainda tem trabalho pending
 
-    raw = db.scalars(select(Battle.albion_id).where(Battle.region == region)).all()
+    raw = (await db.scalars(select(Battle.albion_id).where(Battle.region == region))).all()
     ids: set[int] = set()
     for a in raw:
         try:
@@ -85,7 +85,7 @@ def _generate_tasks_for_region(db: Session, region: str) -> int:
         return 0
 
     ids_desc = sorted(ids, reverse=True)
-    probed = {int(x) for x in db.scalars(select(BattleIdProbe.albion_id)) if str(x).isdigit()}
+    probed = {int(x) for x in (await db.scalars(select(BattleIdProbe.albion_id))).all() if str(x).isdigit()}
     candidates = _region_candidates(ids_desc, probed | ids, CANDIDATES_PER_REGION)
 
     created = 0
@@ -104,26 +104,26 @@ def _generate_tasks_for_region(db: Session, region: str) -> int:
         ))
         created += 1
     if created:
-        db.commit()
+        await db.commit()
     return created
 
 
-def generate_tasks(db: Session) -> int:
+async def generate_tasks(db: AsyncSession) -> int:
     """Garante que cada região tenha tarefas pending disponíveis."""
-    _release_expired_claims(db)
+    await _release_expired_claims(db)
     total = 0
     for region in COMPANION_REGIONS:
         try:
-            total += _generate_tasks_for_region(db, region)
+            total += await _generate_tasks_for_region(db, region)
         except Exception as e:
             log.warning("companion_scan: erro ao gerar tarefas (%s): %s", region, e)
-            db.rollback()
+            await db.rollback()
     if total:
-        db.commit()
+        await db.commit()
     return total
 
 
-def claim_task(db: Session, install_id: str | None = None) -> CompanionScanTask | None:
+async def claim_task(db: AsyncSession, install_id: str | None = None) -> CompanionScanTask | None:
     """Companion pede trabalho. Retorna a tarefa de maior prioridade pendente,
     ou None se não houver. Marca como claimed com TTL de CLAIM_TTL.
 
@@ -132,10 +132,10 @@ def claim_task(db: Session, install_id: str | None = None) -> CompanionScanTask 
     vez de um novo. Reabrir o app (ou ter 2 cópias abertas durante um rebuild)
     continua sendo um companion só. Sem install_id → comportamento antigo.
     """
-    _release_expired_claims(db)
+    await _release_expired_claims(db)
 
     if install_id:
-        held = db.scalar(
+        held = await db.scalar(
             select(CompanionScanTask)
             .where(
                 CompanionScanTask.claimed_by == install_id,
@@ -150,10 +150,10 @@ def claim_task(db: Session, install_id: str | None = None) -> CompanionScanTask 
             now = _now()
             held.claimed_at = now
             held.claim_expires_at = now + CLAIM_TTL
-            db.commit()
+            await db.commit()
             return held
 
-    task = db.scalar(
+    task = await db.scalar(
         select(CompanionScanTask)
         .where(CompanionScanTask.status == "pending")
         .order_by(CompanionScanTask.priority.desc(), CompanionScanTask.id.asc())
@@ -161,8 +161,8 @@ def claim_task(db: Session, install_id: str | None = None) -> CompanionScanTask 
     )
     if task is None:
         # tenta gerar mais tarefas sob demanda
-        generate_tasks(db)
-        task = db.scalar(
+        await generate_tasks(db)
+        task = await db.scalar(
             select(CompanionScanTask)
             .where(CompanionScanTask.status == "pending")
             .order_by(CompanionScanTask.priority.desc(), CompanionScanTask.id.asc())
@@ -176,12 +176,12 @@ def claim_task(db: Session, install_id: str | None = None) -> CompanionScanTask 
     task.claimed_by = install_id
     task.claimed_at = now
     task.claim_expires_at = now + CLAIM_TTL
-    db.commit()
-    db.refresh(task)
+    await db.commit()
+    await db.refresh(task)
     return task
 
 
-def count_active_companions(db: Session) -> int:
+async def count_active_companions(db: AsyncSession) -> int:
     """Instalações distintas que pediram trabalho dentro do CLAIM_TTL.
 
     Conta install_id, não processo nem IP: 3 cópias abertas no mesmo PC contam
@@ -189,16 +189,16 @@ def count_active_companions(db: Session) -> int:
     do que inflar o número.
     """
     since = _now() - CLAIM_TTL
-    return db.scalar(
+    return (await db.scalar(
         select(func.count(distinct(CompanionScanTask.claimed_by))).where(
             CompanionScanTask.claimed_by.is_not(None),
             CompanionScanTask.claimed_at >= since,
         )
-    ) or 0
+    )) or 0
 
 
 async def report_task(
-    db: Session,
+    db: AsyncSession,
     task_id: int,
     found: list[int],
     missing: list[int],
@@ -213,7 +213,7 @@ async def report_task(
     este report CRIOU ganham found_by=nick (agradecimento na página pública).
     Endpoint sem auth → só aceita nicks no formato do Albion (alfanumérico
     3-16 chars); qualquer outra coisa é ignorada, não rejeita o report."""
-    task = db.get(CompanionScanTask, task_id)
+    task = await db.get(CompanionScanTask, task_id)
     if task is None:
         raise LookupError("tarefa não encontrada")
     if task.status != "claimed" or not task.claimed_by or task.claimed_by != install_id:
@@ -236,7 +236,7 @@ async def report_task(
 
     # Libera read tx antes do HTTP (gather de _probe_detail faz N chamadas
     # concorrentes à API do Albion — read tx aberta impede wal_checkpoint).
-    db.commit()
+    await db.commit()
 
     accepted = 0
     region = task.region
@@ -251,12 +251,12 @@ async def report_task(
         battle = None
         try:
             if status == "found" and raw is not None and str(raw.get("id")) == str(aid):
-                is_new = nick is not None and db.scalar(
+                is_new = nick is not None and await db.scalar(
                     select(Battle.id).where(
                         Battle.region == region, Battle.albion_id == str(aid)
                     )
                 ) is None
-                battle = upsert_battle_light(db, raw, region)
+                battle = await upsert_battle_light(db, raw, region)
                 if battle is not None:
                     battle.reprocess_reason = REPROCESS_REASON_SWEEPER
                     if is_new:
@@ -278,7 +278,7 @@ async def report_task(
             verified_errors += 1
 
         if status != "error":
-            probe = db.get(BattleIdProbe, str(aid))
+            probe = await db.get(BattleIdProbe, str(aid))
             if probe is None:
                 db.add(BattleIdProbe(
                     albion_id=str(aid), status=status, region=region,
@@ -295,7 +295,7 @@ async def report_task(
     task.found_count = accepted
     task.missing_count = verified_missing
     task.error_count = verified_errors
-    db.commit()
+    await db.commit()
     return (accepted, len(reported) - accepted)
 
 
@@ -310,14 +310,12 @@ SCAN_TASK_INTERVAL = 120  # segundos
 async def run_forever() -> None:
     log.info("companion_scan: scheduler iniciado (interval=%ds)", SCAN_TASK_INTERVAL)
     while True:
-        db = SessionLocal()
-        try:
-            n = generate_tasks(db)
-            if n:
-                log.info("companion_scan: %d tarefas geradas", n)
-        except Exception as e:
-            log.error("companion_scan: erro no scheduler: %s", e)
-            db.rollback()
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                n = await generate_tasks(db)
+                if n:
+                    log.info("companion_scan: %d tarefas geradas", n)
+            except Exception as e:
+                log.error("companion_scan: erro no scheduler: %s", e)
+                await db.rollback()
         await asyncio.sleep(SCAN_TASK_INTERVAL)

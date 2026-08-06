@@ -19,7 +19,7 @@ import logging
 
 from sqlalchemy import select
 
-from app.db import SessionLocal
+from app.db import AsyncSessionLocal
 from app.models.battles import Battle
 from app.models.players import PlayerKillEvent
 from app.services.albion_gate import NEW_SMALL, albion_scope
@@ -44,7 +44,7 @@ _last_kill_event_id: dict[str, int] = {}
 
 async def _discover_region(client, db, region: str) -> int:
     last_id = _last_kill_event_id.get(region, 0)
-    rows = db.execute(
+    rows = (await db.execute(
         select(PlayerKillEvent.id, PlayerKillEvent.albion_battle_id)
         .where(
             PlayerKillEvent.region == region,
@@ -53,20 +53,20 @@ async def _discover_region(client, db, region: str) -> int:
         )
         .order_by(PlayerKillEvent.id)
         .limit(BATCH_SIZE)
-    ).all()
+    )).all()
     if not rows:
         return 0
     _last_kill_event_id[region] = rows[-1][0]
 
     candidate_ids = sorted({albion_battle_id for _, albion_battle_id in rows})
-    known = set(db.scalars(
+    known = set((await db.scalars(
         select(Battle.albion_id).where(Battle.region == region, Battle.albion_id.in_(candidate_ids))
-    ).all())
+    )).all())
     missing = [cid for cid in candidate_ids if cid not in known]
 
     # Libera read tx antes do loop de HTTP (resolve_by_albion_id bate na API
     # do Albion pra cada ID — read tx aberta impede wal_checkpoint).
-    db.commit()
+    await db.commit()
 
     for albion_id in missing:
         try:
@@ -84,16 +84,14 @@ async def _discover_region(client, db, region: str) -> int:
 async def run_forever() -> None:
     log.info("small_battle_discovery: iniciando")
     while True:
-        db = SessionLocal()
         total_new = 0
-        try:
-            async with make_client() as client:
-                for region in HOSTS:
-                    total_new += await _discover_region(client, db, region)
-            if total_new:
-                log.info("small_battle_discovery: %d batalhas pequenas resolvidas", total_new)
-        except Exception as e:
-            log.error("small_battle_discovery: erro: %s", e)
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                async with make_client() as client:
+                    for region in HOSTS:
+                        total_new += await _discover_region(client, db, region)
+                if total_new:
+                    log.info("small_battle_discovery: %d batalhas pequenas resolvidas", total_new)
+            except Exception as e:
+                log.error("small_battle_discovery: erro: %s", e)
         await asyncio.sleep(BUSY_INTERVAL if total_new else IDLE_INTERVAL)

@@ -25,7 +25,7 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as _pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +85,44 @@ def _is_unconverted(uid: str) -> bool:
     encontra (leitores buscam por game_name)."""
     return uid.startswith("T") and "_" in uid and uid[1:2].isdigit()
 
+# Teto de preço por tier — listagem acima disso é troll e descartada antes
+# da mediana. Valores em prata; item T8.3 topo de mercado ~50M, T4 ~1M.
+_TIER_CAP = {2: 2_000_000, 3: 5_000_000, 4: 10_000_000, 5: 20_000_000,
+             6: 30_000_000, 7: 50_000_000, 8: 100_000_000}
+
+def _tier_from_game_id(game_id: str) -> int:
+    """Extrai o tier (1-8) de um game_name ou UniqueName."""
+    s = game_id.strip()
+    if s.startswith("T") and s[1:2].isdigit():
+        return int(s[1])
+    return 8  # fallback conservador (teto alto)
+
+def _robust_median(vals: list[int]) -> int:
+    """Mediana com corte de outliers: remove valores acima do teto do tier
+    e aplica IQR se houver >=4 amostras. Item ilíquido com 1 listagem troll
+    vira 0 (sem preço confiável) em vez de 100M."""
+    if not vals:
+        return 0
+    if len(vals) == 1:
+        # 1 listagem: confia só se for <= 500k (item barato/ilíquido OK)
+        return vals[0] if vals[0] <= 500_000 else 0
+    if len(vals) == 2:
+        # 2 listagens: usa a menor (troll tipicamente é o preço alto)
+        return min(vals)
+    # >=3: IQR cutoff
+    sorted_vals = sorted(vals)
+    n = len(sorted_vals)
+    q1 = sorted_vals[n // 4]
+    q3 = sorted_vals[3 * n // 4]
+    iqr = q3 - q1
+    if iqr > 0:
+        lo = q1 - 1.5 * iqr
+        hi = q3 + 1.5 * iqr
+        filtered = [v for v in sorted_vals if lo <= v <= hi]
+        if filtered:
+            return round(statistics.median(filtered))
+    return round(statistics.median(sorted_vals))
+
 # ── constantes ────────────────────────────────────────────────────────────────
 
 _BASE_URL = "https://west.albion-online-data.com/api/v2/stats/prices"
@@ -117,8 +155,8 @@ def _aware(dt: datetime) -> datetime:
 # ── Companion: ingest de preços capturados via packet capture (Fase 2) ────────
 
 
-def upsert_companion_prices(
-    db: Session,
+async def upsert_companion_prices(
+    db: AsyncSession,
     rows: list[dict[str, Any]],
     source_install: str | None = None,
 ) -> tuple[int, int]:
@@ -171,7 +209,7 @@ def upsert_companion_prices(
         return (0, rejected)
 
     # Histórico append-only: 1 INSERT multi-values (bulk_insert_mappings).
-    db.bulk_insert_mappings(ItemPrice, history_rows)
+    await db.run_sync(lambda s: s.bulk_insert_mappings(ItemPrice, history_rows))
 
     # Latest: 1 upsert nativo por chunk. WHERE preserva "age mais próxima vence"
     # — só sobrescreve se o novo price_date for estritamente mais recente que o
@@ -185,8 +223,8 @@ def upsert_companion_prices(
               "recorded_at": stmt.excluded.recorded_at},
         where=ItemPriceLatest.price_date < stmt.excluded.price_date,
     )
-    db.execute(stmt)
-    db.commit()
+    await db.execute(stmt)
+    await db.commit()
     log.info("upsert_companion_prices: %d rows (%d chaves únicas) install=%s",
              len(history_rows), len(latest_rows), source_install or "?")
     return (len(history_rows), rejected)
@@ -208,8 +246,8 @@ async def _fetch_from_api(
         return resp.json()
 
 
-def _upsert_latest(
-    db: Session,
+async def _upsert_latest(
+    db: AsyncSession,
     data: list[dict[str, Any]],
     now: datetime,
     source_install: str | None = None,
@@ -239,7 +277,7 @@ def _upsert_latest(
             source_install=source_install,
         ))
         key = (item_id, city, quality)
-        existing = pending.get(key) or db.scalar(
+        existing = pending.get(key) or await db.scalar(
             select(ItemPriceLatest).where(
                 ItemPriceLatest.item_id == item_id,
                 ItemPriceLatest.city == city,
@@ -263,11 +301,11 @@ def _upsert_latest(
             )
             db.add(obj)
             pending[key] = obj
-    db.flush()
+    await db.flush()
 
 
 async def sync_prices(
-    db: Session,
+    db: AsyncSession,
     item_ids: list[str],
     city: str = _DEFAULT_CITY,
     quality: int = 1,
@@ -278,13 +316,13 @@ async def sync_prices(
     now = datetime.now(timezone.utc)
     stale_before = now - _PRICE_TTL
     if not force:
-        rows = db.scalars(
+        rows = (await db.scalars(
             select(ItemPriceLatest).where(
                 ItemPriceLatest.item_id.in_(item_ids),
                 ItemPriceLatest.city == city,
                 ItemPriceLatest.quality == quality,
             )
-        ).all()
+        )).all()
         fresh = {r.item_id for r in rows if _aware(r.recorded_at) >= stale_before}
         to_fetch = [i for i in item_ids if i not in fresh]
     else:
@@ -292,7 +330,7 @@ async def sync_prices(
     if not to_fetch:
         return
     # Libera read tx antes do HTTP (gather de _fetch_from_api chama AODP).
-    db.commit()
+    await db.commit()
     tasks = [
         _fetch_from_api(to_fetch[i:i + _BATCH_SIZE], city, quality)
         for i in range(0, len(to_fetch), _BATCH_SIZE)
@@ -300,17 +338,17 @@ async def sync_prices(
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for result in results:
         if isinstance(result, list):
-            _upsert_latest(db, result, now)
+            await _upsert_latest(db, result, now)
 
 
 async def get_price(
-    db: Session,
+    db: AsyncSession,
     item_id: str,
     city: str = _DEFAULT_CITY,
     quality: int = 1,
 ) -> int:
     await sync_prices(db, [item_id], city, quality)
-    row = db.scalar(
+    row = await db.scalar(
         select(ItemPriceLatest).where(
             ItemPriceLatest.item_id == item_id,
             ItemPriceLatest.city == city,
@@ -349,7 +387,7 @@ def _iqr_trim(vals: list[int]) -> list[int]:
     # ponytail: IQR sobre as ~5 médias por cidade — capto a "cidade troll"
     # (1 listing absurdo num mercado fino) sem cortar variação real. Com 5
     # pontos IQR é grosso; upgrade path = IQR cruzando dia×cidade (~35 pts)
-    # se trolls persistentes num mesmo mercado viesarem além disso.
+    # se trolls persistentes num mesmo mercado viessem além disso.
     Se todos caem fora (caso patológico) devolve o conjunto original."""
     if len(vals) < 4:
         return vals
@@ -408,8 +446,8 @@ def _compute_5city_avg(history_data: list[dict]) -> dict[tuple[str, int], int]:
     }
 
 
-def _upsert_avg(db: Session, item_id: str, quality: int, price: int, now: datetime) -> None:
-    existing = db.scalar(
+async def _upsert_avg(db: AsyncSession, item_id: str, quality: int, price: int, now: datetime) -> None:
+    existing = await db.scalar(
         select(ItemPriceLatest).where(
             ItemPriceLatest.item_id == item_id,
             ItemPriceLatest.city == _AVG_SENTINEL,
@@ -428,7 +466,7 @@ def _upsert_avg(db: Session, item_id: str, quality: int, price: int, now: dateti
 
 
 async def sync_5city_prices(
-    db: Session,
+    db: AsyncSession,
     item_ids: list[str],
     quality: int = 1,  # kept for compat but ignored — always fetches q1-4
     force: bool = False,
@@ -447,13 +485,13 @@ async def sync_5city_prices(
 
     if not force:
         # use quality=1 as proxy: if q1 is fresh, all qualities were fetched together
-        rows = db.scalars(
+        rows = (await db.scalars(
             select(ItemPriceLatest).where(
                 ItemPriceLatest.item_id.in_(item_ids),
                 ItemPriceLatest.city == _AVG_SENTINEL,
                 ItemPriceLatest.quality == 1,
             )
-        ).all()
+        )).all()
         fresh = {r.item_id for r in rows if _aware(r.recorded_at) >= stale_before}
         to_fetch = [i for i in item_ids if i not in fresh]
     else:
@@ -463,7 +501,7 @@ async def sync_5city_prices(
         return
 
     # Libera read tx antes do HTTP (gather de _fetch_history chama AODP).
-    db.commit()
+    await db.commit()
     tasks = [
         _fetch_history(to_fetch[i:i + _BATCH_SIZE])
         for i in range(0, len(to_fetch), _BATCH_SIZE)
@@ -475,9 +513,9 @@ async def sync_5city_prices(
             continue
         avgs = _compute_5city_avg(result)
         for (iid, q), price in avgs.items():
-            _upsert_avg(db, iid, q, price, now)
+            await _upsert_avg(db, iid, q, price, now)
 
-    db.flush()
+    await db.flush()
 
 
 _BATTLE_SENTINEL = "_battle_spot_"
@@ -500,7 +538,7 @@ async def _fetch_spot_prices(item_ids: list[str]) -> list[dict[str, Any]]:
         return resp.json()
 
 
-async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
+async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, int]:
     """Preço de loot de batalha — cache permanente, sem TTL.
 
     Diferente do resto desse módulo (que mantém o preço fresco pra cálculo de
@@ -537,12 +575,12 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
     # reprocessar o mesmo lote.
     now = datetime.now(timezone.utc)
     ttl_before = now - BATTLE_PRICE_TTL
-    rows = db.scalars(
+    rows = (await db.scalars(
         select(ItemPriceLatest).where(
             ItemPriceLatest.item_id.in_(market_game_ids),
             ItemPriceLatest.city == _BATTLE_SENTINEL,
         )
-    ).all()
+    )).all()
     cached = {}
     stale_ids = set()
     for r in rows:
@@ -550,7 +588,7 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
         ra = _aware(r.recorded_at)
         if ra is None or ra < ttl_before:
             stale_ids.add(r.item_id)
-    db.commit()  # fecha a read-only tx antes do HTTP
+    await db.commit()  # fecha a read-only tx antes do HTTP
     # Dedup: vários UniqueNames podem mapear pro mesmo game_name.
     # Sem isto, o ON CONFLICT DO UPDATE recebe chaves duplicadas no mesmo
     # INSERT e estoura CardinalityViolation.
@@ -576,14 +614,15 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
                 by_item.setdefault(_unique_to_game(row["item_id"]), []).append(row["sell_price_min"])
         rows = []
         for item_id in missing:
-            vals = by_item.get(item_id, [])
-            # Mediana, não média — item ilíquido pode ter só 1-2 listagens
-            # reais entre as ~28 combinações (cidade × qualidade) e o resto
-            # zero/ausente; uma única listagem "troll" (vendedor sem
-            # concorrência pedendo um preço absurdo) já bastava pra puxar a
-            # MÉDIA pra um valor completamente fora da realidade. Mediana
-            # ignora esse tipo de outlier isolado.
-            price = round(statistics.median(vals)) if vals else 0
+            # Mediana com corte IQR — remove listagens troll (preço absurdamente
+            # alto de vendedor sem concorrência) antes de calcular. Mediana pura
+            # funciona com N>=3, mas item ilíquido pode ter 1-2 listagens e a
+            # mediana de 1 valor é esse valor. IQR corta outliers mesmo com N=2.
+            vals = sorted(v for v in by_item.get(item_id, []) if v > 0)
+            if vals:
+                price = _robust_median(vals)
+            else:
+                price = 0
             cached[item_id] = price
             rows.append({"item_id": item_id, "city": _BATTLE_SENTINEL, "quality": 1,
                          "sell_price_min": price, "price_date": now, "recorded_at": now})
@@ -599,8 +638,8 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
                       "price_date": stmt.excluded.price_date,
                       "recorded_at": stmt.excluded.recorded_at},
             )
-            db.execute(stmt)
-            db.commit()
+            await db.execute(stmt)
+            await db.commit()
             t_commit = time.monotonic() - t_c0
             if t_fetch > 2.0 or t_commit > 1.0:
                 log.warning("get_battle_prices: LENTO — %d itens, fetch=%.1fs commit=%.1fs",
@@ -618,10 +657,10 @@ async def get_battle_prices(db: Session, item_ids: list[str]) -> dict[str, int]:
     return result
 
 
-async def get_5city_avg_price(db: Session, item_id: str, quality: int = 1) -> int:
+async def get_5city_avg_price(db: AsyncSession, item_id: str, quality: int = 1) -> int:
     """Retorna a média histórica 5 cidades para um item (busca se o cache estiver expirado)."""
     await sync_5city_prices(db, [item_id], quality)
-    row = db.scalar(
+    row = await db.scalar(
         select(ItemPriceLatest).where(
             ItemPriceLatest.item_id == item_id,
             ItemPriceLatest.city == _AVG_SENTINEL,
@@ -673,7 +712,7 @@ class RegearEstimate:
 
 
 async def estimate_regear(
-    db: Session,
+    db: AsyncSession,
     participant_id: int,
     guild_id: int,
     event_id: int,
@@ -684,7 +723,7 @@ async def estimate_regear(
     """
     from app.models.events import EventParticipant
 
-    participant = db.get(EventParticipant, participant_id)
+    participant = await db.get(EventParticipant, participant_id)
     if participant is None or participant.event_id != event_id or participant.guild_id != guild_id:
         raise ValueError("participante não encontrado")
 
@@ -699,7 +738,7 @@ async def estimate_regear(
     if participant.game_role_id is None:
         return base
 
-    role = db.get(GameRole, participant.game_role_id)
+    role = await db.get(GameRole, participant.game_role_id)
     if role is None:
         return base
 
@@ -713,7 +752,7 @@ async def estimate_regear(
 
     if item_ids:
         # Libera read tx antes do HTTP (sync_5city_prices chama AODP).
-        db.commit()
+        await db.commit()
         await sync_5city_prices(db, item_ids)
 
     results: list[RegearItemEstimate] = []
@@ -726,7 +765,7 @@ async def estimate_regear(
         quality = int(bi.get("quality", 1))
         quantity = int(bi.get("quantity", 1))
 
-        row = db.scalar(
+        row = await db.scalar(
             select(ItemPriceLatest).where(
                 ItemPriceLatest.item_id == iid,
                 ItemPriceLatest.city == _AVG_SENTINEL,
@@ -784,7 +823,7 @@ def slot_category(slot: str) -> str | None:
 
 
 async def suggest_regear_price(
-    db: Session,
+    db: AsyncSession,
     items: list[dict],
     coverage_pct: int,
     enabled_categories: set[str] | None = None,
@@ -830,7 +869,7 @@ async def suggest_regear_price(
     for rec in out_items:
         if not rec["eligible"] or not rec["item_id"]:
             continue
-        row = db.scalar(
+        row = await db.scalar(
             select(ItemPriceLatest).where(
                 ItemPriceLatest.item_id == rec["item_id"],
                 ItemPriceLatest.city == _AVG_SENTINEL,
@@ -846,7 +885,7 @@ async def suggest_regear_price(
 
     if need_spot:
         # Libera read tx antes do HTTP (get_battle_prices chama AODP).
-        db.commit()
+        await db.commit()
         spot = await get_battle_prices(db, list(dict.fromkeys(need_spot)))
         for rec in out_items:
             if rec["eligible"] and rec["unit_price"] == 0 and rec["item_id"] in spot:
@@ -880,7 +919,7 @@ def _demo_iqr() -> None:
     print(f"iqr ok: raw={mean_raw:.0f} trim={mean_trim:.0f} kept={trimmed}")
 
 
-def _demo_freshest_wins() -> None:
+async def _demo_freshest_wins() -> None:
     """Afirma que _upsert_latest mantém o preço de dado mais recente, venha da
     nossa captura (companion) ou do AODP — 'age mais próxima vence'."""
     from datetime import datetime, timezone
@@ -896,9 +935,9 @@ def _demo_freshest_wins() -> None:
             self.added = []
         def add(self, obj):
             self.added.append(obj)
-        def scalar(self, _q):
+        async def scalar(self, _q):
             return self.row
-        def flush(self):
+        async def flush(self):
             pass
 
     old = datetime(2026, 7, 1, tzinfo=timezone.utc)
@@ -908,14 +947,14 @@ def _demo_freshest_wins() -> None:
     # Existente é VELHO; chega um preço NOVO → sobrescreve.
     row = _Row(100, old)
     db = _FakeDB(row)
-    _upsert_latest(db, [{"item_id": "T4_BAG", "city": "Martlock", "quality": 1,
+    await _upsert_latest(db, [{"item_id": "T4_BAG", "city": "Martlock", "quality": 1,
                          "sell_price_min": 250, "sell_price_min_date": new.isoformat()}], now)
     assert row.sell_price_min == 250, "preço mais fresco deveria vencer"
 
     # Existente é NOVO; chega um preço VELHO → mantém o novo.
     row = _Row(250, new)
     db = _FakeDB(row)
-    _upsert_latest(db, [{"item_id": "T4_BAG", "city": "Martlock", "quality": 1,
+    await _upsert_latest(db, [{"item_id": "T4_BAG", "city": "Martlock", "quality": 1,
                          "sell_price_min": 100, "sell_price_min_date": old.isoformat()}], now)
     assert row.sell_price_min == 250, "dado velho não deveria sobrescrever o fresco"
     print("freshest-wins OK")
@@ -923,7 +962,7 @@ def _demo_freshest_wins() -> None:
 
 if __name__ == "__main__":
     _demo_iqr()
-    _demo_freshest_wins()
+    asyncio.run(_demo_freshest_wins())
     # item_base_id sanity
     assert item_base_id("T5_HEAD_PLATE_SET1@2") == "HEAD_PLATE_SET1"
     assert item_base_id("T8_MOUNT_OX") == "MOUNT_OX"

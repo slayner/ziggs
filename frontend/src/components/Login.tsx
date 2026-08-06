@@ -11,9 +11,7 @@ export default function Login({ onDemo }: Props) {
   return (
     <div className="login-wrap">
       <div className="card login-card">
-        <div className="logo-big">
-          <i className="ti ti-shield-half" aria-hidden="true" />
-        </div>
+        <img className="logo-big" src="/logo.png" alt="Ziggs" />
         <h1 style={{ fontSize: 24, margin: 0 }}>Ziggs</h1>
         <p className="muted" style={{ fontSize: 13, margin: "6px 0 22px" }}>
           {t("loginTagline")}

@@ -1481,7 +1481,7 @@ function SettingsPanel({
     </aside>
     {/* Anúncio 300×250 — fora de qualquer quadrante, abaixo de especializações */}
     <div className="mt-4">
-      <AdBanner variant="mediumRectangle" />
+      <AdBanner slot="craft" variant="mediumRectangle" />
     </div>
     </>
   );

@@ -62,12 +62,6 @@ interface RankingRow {
   weapon_base?: string; value: number; rank: number;
 }
 
-const PLAYER_KINDS = new Set(["weapon_scorer", "silver_dropped",
-  "gather_total", "gather_wood", "gather_hide", "gather_ore", "gather_rock", "gather_fiber", "fishing", "crafting"]);
-function isPlayerKind(kind: RankingKind): boolean {
-  return PLAYER_KINDS.has(kind) || kind.startsWith("weapon:");
-}
-
 const REGION_PREFIX: Record<string, string> = { americas: "am", asia: "as", europe: "eu" };
 
 // ── destaques (4 cards) ──────────────────────────────────────────────────
@@ -366,13 +360,17 @@ function RankingTypeSelect({ kind, onChange, weapons }: {
 // memo: a lista de 50 linhas re-renderizava a cada tecla na busca / toggle de
 // loading mesmo com as linhas iguais. Props estáveis (row vem do array de
 // estado, kind/rank primitivos), então memo pula quando nada mudou.
-const RankingRowView = memo(function RankingRowView({ rank, row, kind, highlight }: { rank: number; row: RankingRow; kind: RankingKind; highlight?: boolean }) {
-  const player = isPlayerKind(kind);
+const RankingRowView = memo(function RankingRowView({ rank, row, highlight, fallbackRegion }: { rank: number; row: RankingRow; highlight?: boolean; fallbackRegion?: string }) {
+  // Deriva do DADO, não do kind: pvp_fame/most_battles com scope=player devolvem
+  // linhas de jogador (têm albion_id), mas isPlayerKind(kind) é false — o que
+  // fazia o frontend tratar como guilda e prependar a tag de aliança no nome.
+  const player = !!row.albion_id;
+  const region = row.region || fallbackRegion;
   // Aliança fica de fora do link (pedido explícito) — só nome/guilda levam
   // pro perfil, cada linha inteira é UM link só: guilda pro perfil da
   // guilda, jogador pro perfil dele.
   const href = player
-    ? (row.region && REGION_PREFIX[row.region] ? `/${REGION_PREFIX[row.region]}/${encodeURIComponent(row.name)}` : null)
+    ? (region && REGION_PREFIX[region] ? `/${REGION_PREFIX[region]}/${encodeURIComponent(row.name)}` : null)
     : (row.albion_guild_id ? `/guild/${encodeURIComponent(row.albion_guild_id)}` : null);
   const allianceTag = row.alliance_name ? `[${row.alliance_name}] ` : "";
   // Guilda: aliança vem antes do nome da guilda. Jogador: nome plano, aliança
@@ -476,6 +474,8 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
     return Array.from({ length: to - start + 1 }, (_, i) => start + i);
   }, [page, totalPages]);
 
+  const fallbackRegion = regions.split(",")[0] || undefined;
+
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6">
       <GlobalSearch />
@@ -518,7 +518,7 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
         {loading
           ? Array.from({ length: RANKING_SKELETON_ROWS }, (_, i) => <RankingRowSkeleton key={i} />)
           : rows?.map((row, i) => (
-              <RankingRowView key={row.albion_guild_id ?? row.albion_id ?? i} rank={row.rank} row={row} kind={kind} highlight={!!initial.highlightPlayer && row.albion_id === initial.highlightPlayer} />
+              <RankingRowView key={row.albion_guild_id ?? row.albion_id ?? i} rank={row.rank} row={row} highlight={!!initial.highlightPlayer && row.albion_id === initial.highlightPlayer} fallbackRegion={fallbackRegion} />
             ))}
       </div>
 

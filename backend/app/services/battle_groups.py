@@ -8,12 +8,12 @@ Combinar batalhas reusa o mesmo código se a combinação exata já existir
 """
 from __future__ import annotations
 
+import asyncio
 import secrets
-import time
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.battles import BattleGroup, BattleGroupMember
 
@@ -23,7 +23,7 @@ CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 CODE_LENGTH = 7
 
 
-def _generate_code(db: Session) -> str:
+async def _generate_code(db: AsyncSession) -> str:
     # ponytail: 36^7 ~= 78 bilhões de combinações — colisão é praticamente
     # impossível, o retry é só rede de segurança.
     for _ in range(20):
@@ -32,7 +32,7 @@ def _generate_code(db: Session) -> str:
         # Albion (que o front trata como rota separada, ver router.ts).
         if code.isdigit():
             continue
-        if not db.scalar(select(BattleGroup).where(BattleGroup.public_id == code)):
+        if not await db.scalar(select(BattleGroup).where(BattleGroup.public_id == code)):
             return code
     raise RuntimeError("battle_groups: não consegui gerar um código único")
 
@@ -41,37 +41,37 @@ def _fingerprint(battle_ids: list[int]) -> str:
     return ",".join(str(i) for i in sorted(set(battle_ids)))
 
 
-def get_or_create_group(db: Session, battle_ids: list[int]) -> BattleGroup:
+async def get_or_create_group(db: AsyncSession, battle_ids: list[int]) -> BattleGroup:
     fingerprint = _fingerprint(battle_ids)
-    group = db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fingerprint))
+    group = await db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fingerprint))
     if group is not None:
         return group
 
     for attempt in range(2):
         try:
             try:
-                with db.begin_nested():  # savepoint — rollback parcial se houver corrida
-                    group = BattleGroup(public_id=_generate_code(db), fingerprint=fingerprint)
+                async with db.begin_nested():  # savepoint — rollback parcial se houver corrida
+                    group = BattleGroup(public_id=await _generate_code(db), fingerprint=fingerprint)
                     db.add(group)
-                    db.flush()
+                    await db.flush()
                     for position, battle_id in enumerate(sorted(set(battle_ids))):
                         db.add(BattleGroupMember(group_id=group.id, battle_id=battle_id, position=position))
             except IntegrityError:
-                group = db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fingerprint))
-            db.commit()
+                group = await db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fingerprint))
+            await db.commit()
             return group
         except OperationalError:
             # contenção passageira (escrita de fundo de outros serviços) — pode
             # bater tanto no flush (dentro do savepoint) quanto no commit, por
             # isso os dois ficam dentro do mesmo retry. 1 retry curto.
-            db.rollback()
+            await db.rollback()
             if attempt == 1:
                 raise
-            time.sleep(1.0)
+            await asyncio.sleep(1.0)
     raise AssertionError("unreachable")
 
 
-def get_or_create_groups_bulk(db: Session, battle_ids: list[int]) -> dict[int, BattleGroup]:
+async def get_or_create_groups_bulk(db: AsyncSession, battle_ids: list[int]) -> dict[int, BattleGroup]:
     """Versão em lote de get_or_create_group pra grupos "solo" (1 batalha =
     1 grupo) — usado pela listagem (list_battles.py), que soma até `limit`
     chamadas por request (uma por batalha da página). Um commit só no fim,
@@ -99,9 +99,9 @@ def get_or_create_groups_bulk(db: Session, battle_ids: list[int]) -> dict[int, B
     for attempt in range(2):
         try:
             existing = {
-                g.fingerprint: g for g in db.scalars(
+                g.fingerprint: g for g in (await db.scalars(
                     select(BattleGroup).where(BattleGroup.fingerprint.in_(fingerprints.values()))
-                )
+                )).all()
             }
             out: dict[int, BattleGroup] = {}
             for bid in battle_ids:
@@ -109,30 +109,30 @@ def get_or_create_groups_bulk(db: Session, battle_ids: list[int]) -> dict[int, B
                 group = existing.get(fp)
                 if group is None:
                     try:
-                        with db.begin_nested():  # savepoint — rollback só deste item se perder a corrida
-                            group = BattleGroup(public_id=_generate_code(db), fingerprint=fp)
+                        async with db.begin_nested():  # savepoint — rollback só deste item se perder a corrida
+                            group = BattleGroup(public_id=await _generate_code(db), fingerprint=fp)
                             db.add(group)
-                            db.flush()
+                            await db.flush()
                             db.add(BattleGroupMember(group_id=group.id, battle_id=bid, position=0))
                     except IntegrityError:
-                        group = db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fp))
+                        group = await db.scalar(select(BattleGroup).where(BattleGroup.fingerprint == fp))
                     existing[fp] = group
                 out[bid] = group
 
-            db.commit()
+            await db.commit()
             return out
         except OperationalError:
             # contenção passageira (escrita de fundo de outros serviços) — pode
             # bater tanto num flush (dentro do savepoint) quanto no commit, por
             # isso a tentativa inteira fica dentro do mesmo retry.
-            db.rollback()
+            await db.rollback()
             if attempt == 1:
                 raise
-            time.sleep(1.0)
+            await asyncio.sleep(1.0)
     raise AssertionError("unreachable")  # o laço sempre retorna ou levanta antes de chegar aqui
 
 
-def get_existing_groups_bulk(db: Session, battle_ids: list[int]) -> dict[int, BattleGroup]:
+async def get_existing_groups_bulk(db: AsyncSession, battle_ids: list[int]) -> dict[int, BattleGroup]:
     """Só lê — nunca cria (sem flush/commit, sem risco de 'database is
     locked'). Usado por refresh de background (dashboard_cache) que roda
     sem pedido de usuário: batalha sem grupo ainda fica de fora do cache
@@ -140,20 +140,20 @@ def get_existing_groups_bulk(db: Session, battle_ids: list[int]) -> dict[int, Ba
     dela — não vale forçar escrita extra num loop periódico só por isso."""
     fingerprints = {bid: _fingerprint([bid]) for bid in battle_ids}
     existing = {
-        g.fingerprint: g for g in db.scalars(
+        g.fingerprint: g for g in (await db.scalars(
             select(BattleGroup).where(BattleGroup.fingerprint.in_(fingerprints.values()))
-        )
+        )).all()
     }
     return {bid: existing[fp] for bid, fp in fingerprints.items() if fp in existing}
 
 
-def get_group_battle_ids(db: Session, public_id: str) -> list[int] | None:
-    group = db.scalar(select(BattleGroup).where(BattleGroup.public_id == public_id))
+async def get_group_battle_ids(db: AsyncSession, public_id: str) -> list[int] | None:
+    group = await db.scalar(select(BattleGroup).where(BattleGroup.public_id == public_id))
     if group is None:
         return None
-    members = db.scalars(
+    members = (await db.scalars(
         select(BattleGroupMember)
         .where(BattleGroupMember.group_id == group.id)
         .order_by(BattleGroupMember.position)
-    ).all()
+    )).all()
     return [m.battle_id for m in members]

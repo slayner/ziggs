@@ -20,6 +20,12 @@ from app.models.audit import AuditLog
 from app.models.tenancy import Guild
 from app.services import regear, regear_config
 
+# ponytail: a maioria das rotas chama services síncronos (regear.list_requests/
+# get_request/get_request_row/update_request/remove_request, regear_config.*)
+# que recebem Session sync — não dá pra passar AsyncSession. ingest_screenshot é
+# async (await file.read + regear.ingest async) mas regear.ingest faz db ops
+# síncronas internamente; mantém db_session sync. Migra quando os services migrarem.
+
 router = APIRouter(tags=["regear"])
 
 
