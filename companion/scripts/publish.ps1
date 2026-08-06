@@ -46,26 +46,27 @@ if (-not $Notes) {
     $Notes = "Companion v$version"
 }
 
-# --- 1. GitHub release no slayner/ziggs ---
+# --- 1. GitHub release no slayner/ziggs-site (privado) ---
 Write-Host ""
 Write-Host "[1/4] GitHub release..." -ForegroundColor Yellow
 $tag = "v$version"
+$repo = "slayner/ziggs-site"
 
 # Deleta release anterior se existir (mesma tag)
 $existingTag = $null
-try { $existingTag = gh release view $tag --repo slayner/ziggs 2>&1 } catch {}
+try { $existingTag = gh release view $tag --repo $repo 2>&1 } catch {}
 if ($LASTEXITCODE -eq 0 -and $existingTag) {
     Write-Host "  Release $tag ja existe, deletando..."
-    gh release delete $tag --repo slayner/ziggs --yes 2>&1 | Out-Null
+    gh release delete $tag --repo $repo --yes 2>&1 | Out-Null
     Start-Sleep -Seconds 2
 }
 
-gh release create $tag $exePath $sigPath --repo slayner/ziggs --title "v$version" --notes $Notes --latest 2>&1
+gh release create $tag $exePath $sigPath --repo $repo --title "v$version" --notes $Notes --latest 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRO: gh release create falhou" -ForegroundColor Red
     exit 1
 }
-Write-Host "  Release criado: https://github.com/slayner/ziggs/releases/tag/$tag"
+Write-Host "  Release criado: https://github.com/slayner/ziggs-site/releases/tag/$tag"
 
 # --- 2. Copia exe + sig pra VPS de producao ---
 Write-Host ""
@@ -129,6 +130,6 @@ Write-Host "  Backend reiniciado na producao"
 
 Write-Host ""
 Write-Host "=== Release v$version publicado! ===" -ForegroundColor Green
-Write-Host "  GitHub:  https://github.com/slayner/ziggs/releases/tag/$tag"
+Write-Host "  GitHub:  https://github.com/slayner/ziggs-site/releases/tag/$tag"
 Write-Host "  Download: https://ziggs.xyz/companion/$exeUrlName"
 Write-Host "  Auto-updater ativo - companions instalados vao atualizar sozinhos"
