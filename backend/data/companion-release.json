@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlFyczFyOGV2MDBDV25TNlkwYkkydHNIaFlydFdnOWx2bDY2cFMxa3U3Z3luUVNwSW9rOFU1U0hNOGZNRVZxQkowNElmSXJSL0pxZ29XRnZFUU5OdUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDU0NzkwCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4xMF94NjQtc2V0dXAuZXhlCkJHbXJBZUltMzA2djVCdEJUVXA0RmNXckxEYTRYeVFzM0xiOEtlbDVCR2x5Ym9UUkg1NEFSVGRIU0s4d1lCYlVIUUxENzlLb0RoaHJVTlZoWWNDNURBPT0K",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZllFb0I1WHBQL1F0VXNZdC9QVkpSeFh0b2ZmZzd6Nk9CYkpSbFdTa05hUnN5YkR5Vlp4U2NOalhCbStuTmp3THlqazNHQlhpLzlDb2hvRk9PSkpqU2c4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDU3MDIwCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4xMF94NjQtc2V0dXAuZXhlCnY2UkkyWDdBT0dOc2s3ZGkxTURPTnA1UjFaUGZiNWVHb1BLQWQwQzJwemxzTHZwSUZPQTBjREg3Z2hEZWlFZGRndlZRTzlXOU9nVm9YQS9LQlRmNEJBPT0K",
                                              "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.10_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-06T19:20:17Z",
+    "pub_date":  "2026-08-06T19:57:28Z",
     "version":  "0.1.10",
-    "notes":  "v0.1.10: Nao bloqueia instalacao sem Npcap. Abas Damage/Loot ficam locked (??) e mostram tutorial ao clicar. Aba Rota funciona sem Npcap. Fix: ms VPS reais, TunnelHero persistente."
+    "notes":  "v0.1.10: Delay-load wpcap.dll — app abre sem Npcap instalado. Nova logo do site. Abas Damage/Loot locked com tutorial quando Npcap falta. Fix ms VPS reais. TunnelHero persistente."
 }
