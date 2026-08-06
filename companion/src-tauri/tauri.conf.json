@@ -39,7 +39,9 @@
     "longDescription": "Battle scanner distribu\u00eddo, otimizador de rota/DNS e auxiliar de lootlog para a plataforma Ziggs.",
     "windows": {
       "nsis": {
-        "installerHooks": "nsis/installer-hooks.nsh"
+        "installerHooks": "nsis/installer-hooks.nsh",
+        "languages": ["English", "Portuguese", "Spanish"],
+        "displayLanguageSelector": false
       }
     }
   },
