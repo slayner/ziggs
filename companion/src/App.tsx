@@ -442,7 +442,7 @@ export default function App() {
               selected={tab === "route"}
               onSelect={() => setTab("route")}
               expandedContent={
-                sideMatrix && tab === "route" ? (
+                sideMatrix ? (
                   <div className="ck-side-route-mini">
                     {sideMatrix.albion.map(s => {
                       const assigned = sideMatrix.routing[s.region];
@@ -532,6 +532,7 @@ export default function App() {
             <div className="ck-route-col">
               <div className="ck-route-scroll">
                 <TunnelHero config={config} tunnelStatus={tunnelStatus} hist={hist} />
+                <ConnPanel config={config} tunnelStatus={tunnelStatus} />
               </div>
               <AdSlot />
             </div>
