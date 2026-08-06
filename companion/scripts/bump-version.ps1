@@ -27,5 +27,5 @@ if ($Set) {
     $conf.version = "$major.$minor.$patch"
 }
 
-$conf | ConvertTo-Json -Depth 10 | Set-Content $path -NoNewline
+$conf | ConvertTo-Json -Depth 10 | ForEach-Object { [System.IO.File]::WriteAllText($path, $_, [System.Text.UTF8Encoding]::new($false)) }
 Write-Host "Version bumped to: $($conf.version)"
