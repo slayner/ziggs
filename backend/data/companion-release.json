@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlQ4QXVOdE5nMnFlMEw3Z1ZvL2JzMDA1dXNaRWdmTlhabmhnUnVlWDdBaWtZY20wM3kzbkNJV3B5MDJDYys4NFdiRHBzbVI0dUdab21zbXQ3SWozYVEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDUxMTUzCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS45X3g2NC1zZXR1cC5leGUKK1JpU3lPWDJkRDBMM3hERjhhRnNBZnM3Zld3MnJnVmNWdnpvckNHZjlFS3NSM0UrZ1dlV1BpMnZmaE4vNEZJMG9jU3VZT1MxOFFQM1R1cGQxbnhzREE9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.9_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlFyczFyOGV2MDBDV25TNlkwYkkydHNIaFlydFdnOWx2bDY2cFMxa3U3Z3luUVNwSW9rOFU1U0hNOGZNRVZxQkowNElmSXJSL0pxZ29XRnZFUU5OdUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDU0NzkwCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4xMF94NjQtc2V0dXAuZXhlCkJHbXJBZUltMzA2djVCdEJUVXA0RmNXckxEYTRYeVFzM0xiOEtlbDVCR2x5Ym9UUkg1NEFSVGRIU0s4d1lCYlVIUUxENzlLb0RoaHJVTlZoWWNDNURBPT0K",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.10_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-06T18:19:36Z",
-    "version":  "0.1.9",
-    "notes":  "v0.1.9: Fix ms VPS — pings reais por VPS/regiao (nao sobrescreve com valor unico). TunnelHero sempre montado (display:none ao trocar tab). Sidebar mini-route persistente."
+    "pub_date":  "2026-08-06T19:20:17Z",
+    "version":  "0.1.10",
+    "notes":  "v0.1.10: Nao bloqueia instalacao sem Npcap. Abas Damage/Loot ficam locked (??) e mostram tutorial ao clicar. Aba Rota funciona sem Npcap. Fix: ms VPS reais, TunnelHero persistente."
 }
