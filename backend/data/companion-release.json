@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlU2SDdWQkN4dTUzT0R4S0thUnpXY0R2Yy9HQnhvd2hYNkNlUCtmd3BtVmFjMjFrQnBlRDgxUnZIUDVoZ2hjblhyaG1CZkJ0OUFVcDVraWxWZHVEM3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQ2NDY5CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS43X3g2NC1zZXR1cC5leGUKQWQxNjNITFFra0d6ZHl5UUcrZVpGVVNTcDlKbVNCenY1MnBkNDd4WVV2RDRWdFRyMjVGZGh3K3U4MEFKZlZQNk1oL0JjbGpOODJBdjJCQ0oyMkdoQlE9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.7_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlQ4QXVOdE5nMnFlMEw3Z1ZvL2JzMDA1dXNaRWdmTlhabmhnUnVlWDdBaWtZY20wM3kzbkNJV3B5MDJDYys4NFdiRHBzbVI0dUdab21zbXQ3SWozYVEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDUxMTUzCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS45X3g2NC1zZXR1cC5leGUKK1JpU3lPWDJkRDBMM3hERjhhRnNBZnM3Zld3MnJnVmNWdnpvckNHZjlFS3NSM0UrZ1dlV1BpMnZmaE4vNEZJMG9jU3VZT1MxOFFQM1R1cGQxbnhzREE9PQo=",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.9_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-06T17:01:33Z",
-    "version":  "0.1.7",
-    "notes":  "v0.1.7: Fix travamento ao clicar Nao — agora aborta limpo em vez de ficar estatico."
+    "pub_date":  "2026-08-06T18:19:36Z",
+    "version":  "0.1.9",
+    "notes":  "v0.1.9: Fix ms VPS — pings reais por VPS/regiao (nao sobrescreve com valor unico). TunnelHero sempre montado (display:none ao trocar tab). Sidebar mini-route persistente."
 }
