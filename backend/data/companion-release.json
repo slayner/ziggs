@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlJhaERZQXA0eVFmMlZqcjl3UzlGRHp2MVBzTkRXaGxudXZCcVljTjdzLy9aMEtuaDFVSUhqMklHUkZRbUZRVFdrRHhoQ2YwVVBQRUhKTlE2QmpJbkFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQ1ODUzCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS42X3g2NC1zZXR1cC5leGUKamo3Tzh1L2JUS2ZGYmhLUlVKckgyTVdoMjhENVBFTjk0TFdubGZYNHFjQWFHOVJsR2hwNTNVVWo5VUgrUy9Fcy95cEdWVElpUmh6bmh0R1RBc1BvRFE9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.6_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlU2SDdWQkN4dTUzT0R4S0thUnpXY0R2Yy9HQnhvd2hYNkNlUCtmd3BtVmFjMjFrQnBlRDgxUnZIUDVoZ2hjblhyaG1CZkJ0OUFVcDVraWxWZHVEM3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQ2NDY5CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS43X3g2NC1zZXR1cC5leGUKQWQxNjNITFFra0d6ZHl5UUcrZVpGVVNTcDlKbVNCenY1MnBkNDd4WVV2RDRWdFRyMjVGZGh3K3U4MEFKZlZQNk1oL0JjbGpOODJBdjJCQ0oyMkdoQlE9PQo=",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.7_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-06T16:51:17Z",
-    "version":  "0.1.6",
-    "notes":  "v0.1.6: Melhor UX do instalador — Nao volta ao tutorial (nao aborta), tela de espera com OK/Cancelar, instrues mais claras."
+    "pub_date":  "2026-08-06T17:01:33Z",
+    "version":  "0.1.7",
+    "notes":  "v0.1.7: Fix travamento ao clicar Nao — agora aborta limpo em vez de ficar estatico."
 }
