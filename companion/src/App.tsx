@@ -1196,15 +1196,6 @@ function TunnelHero({ config, tunnelStatus, hist }: {
   usePoll(async () => {
     try {
       const m = await invoke<RoutingMatrix>("tunnel_regions");
-      // When tunnel is active, replace VPS cell pings with real end-to-end latency
-      if (tunnelStatus?.tunnel_latency_ms != null && m.vps.length > 1) {
-        const real = tunnelStatus.tunnel_latency_ms;
-        for (let i = 1; i < m.vps.length; i++) {
-          for (const s of m.albion) {
-            m.vps[i].cell_pings[s.region] = real;
-          }
-        }
-      }
       setMatrix(m);
       setOptimisticRouting(null);
     } catch {}
