@@ -2310,9 +2310,26 @@ const VALID_SERVERS: readonly GameServer[] = ["europe", "west", "east"];
 // <App/> em main.tsx, antes de qualquer ErrorBoundary existir — tela branca
 // eterna, sem stack trace, sem console.error. Este era o bug do "site sempre
 // fica em branco".
+//
+// Detecção de idioma (1ª visita, sem lang no localStorage):
+//   navigator.language → "pt-BR", "en-US", "es-ES", "de-DE", etc.
+//   Extrai o prefixo (pt/en/es), mapeia pro Lang suportado.
+//   Se não for pt/en/es, cai em inglês (fallback universal).
+function detectLang(): Lang {
+  const nav = (typeof navigator !== "undefined" ? navigator.language : "") || "en";
+  const prefix = nav.slice(0, 2).toLowerCase();
+  if (prefix === "pt") return "pt";
+  if (prefix === "es") return "es";
+  return "en";
+}
+
 function readLang(): Lang {
   const v = localStorage.getItem("lang");
-  return (VALID_LANGS as readonly string[]).includes(v ?? "") ? (v as Lang) : "pt";
+  if ((VALID_LANGS as readonly string[]).includes(v ?? "")) return v as Lang;
+  // Sem preferência salva — detecta do navegador
+  const detected = detectLang();
+  localStorage.setItem("lang", detected);
+  return detected;
 }
 function readServer(): GameServer {
   const v = localStorage.getItem("server");
