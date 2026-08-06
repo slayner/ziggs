@@ -108,8 +108,9 @@ $manifestPath = "../backend/data/companion-release.json"
 $manifest | ConvertTo-Json -Depth 5 | Set-Content $manifestPath -NoNewline
 Write-Host "  $manifestPath atualizado"
 
-# Copia o manifest pra VPS de producao tambem
+# Copia o manifest pra VPS de producao (backend data + static companion dir)
 scp -i $sshKey $manifestPath "${prodHost}:/home/ziggs/ziggs/backend/data/companion-release.json"
+ssh -i $sshKey $prodHost "cp /home/ziggs/ziggs/backend/data/companion-release.json /var/www/ziggs.xyz/companion/latest.json" 2>&1 | Out-Null
 Write-Host "  Manifest copiado pra VPS de producao"
 
 # --- 4. Commit + push no ziggs-site ---
