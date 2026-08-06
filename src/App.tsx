@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useT, useLang, LANG_LABELS, LANG_FULL, type Lang, type LangPref } from "./i18n";
+import { useT, useLang, LANG_LABELS, LANG_FULL, type Lang, type LangPref, type TKey } from "./i18n";
 
 // Mirrors CompanionConfig from Rust. Character name, region, and backend URL
 // are not here — they are auto-detected/hardcoded in the binary. Battles and
@@ -26,6 +26,7 @@ type CompanionConfig = {
   auto_lootlog_submit: boolean;
   install_id: string;
   spell_index_offset: number;
+  region: string;
 };
 
 type InternetPath = {
@@ -281,12 +282,10 @@ export default function App() {
   const [config, setConfig] = useState<CompanionConfig | null>(null);
   const [sniffStats, setSniffStats] = useState<SniffStats | null>(null);
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<"downloading" | "installed" | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<"available" | "downloading" | "installed" | null>(null);
   // Live tabs: Route/Tunnel is the default; Damage and Lootlog have their own
   // tabs. Badges read App state because tab components unmount when not focused.
   const [gearOpen, setGearOpen] = useState(false);
-  // Local connection details from tunnel failover.
-  const [routesOpen, setRoutesOpen] = useState(false);
   const [tab, setTab] = useState<"route" | "damage" | "loot">("route");
   const [pending, setPending] = useState(0);
   // Damage Meter filters live in App state, not DamageTab, so they survive
@@ -299,6 +298,8 @@ export default function App() {
   // Tunnel vs direct latency history lives in App, not TunnelHero, to survive
   // tab switching. 120 samples × 5s = 10 min.
   const [hist, setHist] = useState<{ d: number | null; tn: number | null }[]>([]);
+  // Lightweight matrix for the sidebar mini-route display. TunnelHero has its own.
+  const [sideMatrix, setSideMatrix] = useState<RoutingMatrix | null>(null);
   // Session clock (1s tick) + packet rate derived from poll deltas. Rust only
   // exposes accumulated counts, not rate.
   const sessionStart = useRef(Date.now());
@@ -321,7 +322,7 @@ export default function App() {
     }).then((u) => (unlisten = u));
     let unlistenUpd: UnlistenFn | null = null;
     listen<string>("update-status", (e) => {
-      setUpdateStatus(e.payload as "downloading" | "installed");
+      setUpdateStatus(e.payload as "available" | "downloading" | "installed");
     }).then((u) => (unlistenUpd = u));
     let unlistenCfg: UnlistenFn | null = null;
     listen("config-changed", () => { refreshConfig(); }).then((u) => (unlistenCfg = u));
@@ -356,6 +357,13 @@ export default function App() {
     try { setPending(await invoke<number>("pending_count")); } catch { /* sem fila */ }
   }, 15000);
 
+  usePoll(async () => {
+    try {
+      const m = await invoke<RoutingMatrix>("tunnel_regions");
+      setSideMatrix(m);
+    } catch {}
+  }, 12000);
+
   const albionStatus: AlbionStatus = (() => {
     if (sniffStats?.error && sniffStats.running) {
       return { kind: "sniff_error", msg: sniffStats.error };
@@ -366,7 +374,7 @@ export default function App() {
   })();
 
   if (!config) {
-    return <div className="splash"><div className="splash-logo">Z</div><div className="splash-text">{t("splashText")}</div></div>;
+    return <div className="splash"><img className="splash-logo" src="/logo.png" alt="Ziggs" /><div className="splash-text">{t("splashText")}</div></div>;
   }
 
   const npcapMissing = !!(sniffStats?.error && /npcap/i.test(sniffStats.error));
@@ -400,7 +408,7 @@ export default function App() {
           getCurrentWindow().startDragging();
         }}
       >
-        <span className="logo">Z</span>
+        <img className="logo" src="/logo.png" alt="Ziggs" />
         <span className="ck-brand">ZIGGS</span>
         <span className="ck-sep" />
         <span className="ck-chip"><span className="ck-lbl">{t("ckSession")}</span><b className="ck-num">{uptime}</b></span>
@@ -430,14 +438,27 @@ export default function App() {
           <nav className="ck-side-tabs">
             <SideTab
               label={t("navTunnel")}
-              value={tunnelStatus?.using_tunnel && tunnelStatus?.tunnel_latency_ms != null ? `${tunnelStatus.tunnel_latency_ms.toFixed(0)}ms` : ""}
-              valueTone="ok"
+              value=""
               selected={tab === "route"}
               onSelect={() => setTab("route")}
               expandedContent={
-                tunnelStatus?.using_tunnel && tunnelStatus.direct_latency_ms != null && tunnelStatus.tunnel_latency_ms != null && tunnelStatus.direct_latency_ms > 0
-                  ? `−${(tunnelStatus.direct_latency_ms - tunnelStatus.tunnel_latency_ms).toFixed(0)}ms`
-                  : null
+                sideMatrix && tab === "route" ? (
+                  <div className="ck-side-route-mini">
+                    {sideMatrix.albion.map(s => {
+                      const assigned = sideMatrix.routing[s.region];
+                      const vpsRow = sideMatrix.vps.find(v => v.region === assigned);
+                      const ping = vpsRow ? vpsRow.cell_pings[s.region] : sideMatrix.vps[0]?.cell_pings[s.region];
+                      const conn = vpsRow ? vpsRow.label.slice(0, 3).toUpperCase() : t("ckDirect");
+                      return (
+                        <div key={s.region} className="ck-mini-region">
+                          <span className="ck-mini-region-label">{albionShort(s.region)}</span>
+                          <span className="ck-mini-region-conn">{conn}</span>
+                          <span className="ck-mini-region-ms ck-num">{ping != null ? `${ping.toFixed(0)}ms` : "—"}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null
               }
             />
             <SideTab
@@ -462,10 +483,9 @@ export default function App() {
             />
           </nav>
 
-          {/* Two vertical ad slots below the tabs. Sidebar width already fits a
-              300px creative with minor overflow only once the creative loads. */}
+          {/* One vertical ad slot below the tabs. Sidebar is 240px wide;
+              300px creative loads with minor overflow, which is fine. */}
           <div className="ck-side-ads">
-            <AdSlot variant="side" />
             <AdSlot variant="side" />
           </div>
 
@@ -484,26 +504,25 @@ export default function App() {
           <div className="ck-side-foot">
             <div className="ck-side-status" title={albionStatus.kind === "sniff_error" ? albionStatus.msg : t("albionClosedHint")}>
               <span className={`status-dot ${albionStatus.kind === "ok" ? "on" : "off"}`} />
-              {albionStatus.kind === "ok" ? (
-                <div className="ck-side-status-main">
-                  <b>{playerName || t("statusLoading")}</b>
-                  {sniffStats?.guild_name && <span className="ck-side-guild">{sniffStats.guild_name}</span>}
-                </div>
-              ) : (
-                <div className="ck-side-status-main">
+              <div className="ck-side-status-main">
+                {albionStatus.kind === "ok" ? (
+                  <b>{sniffStats?.last_map_name || t("statusLoading")}</b>
+                ) : (
                   <b className="ck-off">{albionStatus.kind === "closed" ? t("albionClosed") : t("albionSniffError")}</b>
-                </div>
+                )}
+              </div>
+            </div>
+            <div className="ck-side-foot-btns">
+              <button className="ck-side-gear" onClick={() => setGearOpen(true)} title={t("navConfig")}>
+                <Icon name="gear" />
+                <span>{t("navConfig")}</span>
+              </button>
+              {updateStatus === "available" && (
+                <button className="ck-side-update" onClick={() => invoke("check_and_apply_update")} title={t("updateAvailable")}>
+                  <Icon name="download" />
+                </button>
               )}
             </div>
-            {sniffStats?.last_map_name && (
-              <div className={`ck-side-zone ${zone}`}>
-                {sniffStats.last_map_name}{zone === "blue" ? ` · ${t("ckZoneBlue")}` : zone === "pvp" ? " · PVP" : ""}
-              </div>
-            )}
-            <button className="ck-side-gear" onClick={() => setGearOpen(true)} title={t("navConfig")}>
-              <Icon name="gear" />
-              <span>{t("navConfig")}</span>
-            </button>
             <DiscordButton config={config} onChange={refreshConfig} />
           </div>
         </aside>
@@ -512,8 +531,7 @@ export default function App() {
           {tab === "route" && (
             <div className="ck-route-col">
               <div className="ck-route-scroll">
-                <TunnelHero config={config} tunnelStatus={tunnelStatus} hist={hist} onOpenRoutes={() => setRoutesOpen(true)} />
-                <ConnPanel config={config} tunnelStatus={tunnelStatus} />
+                <TunnelHero config={config} tunnelStatus={tunnelStatus} hist={hist} />
               </div>
               <AdSlot />
             </div>
@@ -552,10 +570,6 @@ export default function App() {
         </div>
       )}
 
-      {routesOpen && (
-        <InternetPathsModal status={tunnelStatus} onClose={() => setRoutesOpen(false)} />
-      )}
-
       {/* Npcap tutorial shown every session while Npcap is missing. Dismissal
           is per-session; the sidebar banner remains. */}
       {npcapMissing && !npcapTutorialDismissed && (
@@ -585,7 +599,7 @@ export default function App() {
         </div>
       )}
 
-      {updateStatus && (
+      {(updateStatus === "downloading" || updateStatus === "installed") && (
         <div className="update-toast">
           <span className="update-toast-dot" />
           <span>{updateStatus === "downloading" ? t("updateDownloading") : t("updateInstalling")}</span>
@@ -644,7 +658,7 @@ function SideTab({
 
 // ─── SVG icons (JSX) ────────────────────────────────────────────────────────
 
-type IconName = "scan" | "list" | "route" | "globe" | "gear" | "sword";
+type IconName = "scan" | "list" | "route" | "globe" | "gear" | "sword" | "download";
 
 function Icon({ name }: { name: IconName }) {
   switch (name) {
@@ -654,6 +668,7 @@ function Icon({ name }: { name: IconName }) {
     case "globe": return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>;
     case "gear": return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>;
     case "sword": return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2"/></svg>;
+    case "download": return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>;
   }
 }
 
@@ -1045,29 +1060,39 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
 
 // ─── Hero: Route/Tunnel (main cockpit view) ──────────────────────────────────
 
-/// Ad slot embedded via iframe from ziggs.xyz/ad/:size. AdSense doesn't run
-// directly in a Tauri webview (no public URL for the crawler to verify), so
-// we load the ad page hosted on the site — which already has ads.txt and the
-// AdSense client configured. The companion doesn't handle cookies itself;
-// consent is governed by the site's cookie banner in the iframe context.
+/// Ad slot — Adsterra injected via iframe srcdoc (same approach as the site's
+/// AdBanner). Each iframe gets its own window.atOptions, so multiple banners
+/// on the same page don't collide.
+const ADSTERRA_KEYS: Record<string, string> = {
+  "300x250": "67b53d8ceb5bbe360fbf869679d47b70",
+  "728x90": "349d923ad542f5d656d1fcfb46f22eb6",
+};
 function AdSlot({ variant = "strip" }: { variant?: "strip" | "side" } = {}) {
   const t = useT();
-  // side: 300×250 vertical under the tabs.
-  // strip: 728×90 horizontal at the bottom of the tab content.
   const size = variant === "side" ? "300x250" : "728x90";
   const w = variant === "side" ? 300 : 728;
   const h = variant === "side" ? 250 : 90;
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.innerHTML = "";
+    const key = ADSTERRA_KEYS[size];
+    const bust = Date.now() + Math.random();
+    const html = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;overflow:hidden;width:${w}px;height:${h}px}</style></head><body><script>atOptions={'key':'${key}','format':'iframe','height':${h},'width':${w},'params':{}};<\/script><script src="https://www.highperformanceformat.com/${key}/invoke.js?z=${bust}" async><\/script></body></html>`;
+    const iframe = document.createElement("iframe");
+    iframe.srcdoc = html;
+    iframe.width = String(w);
+    iframe.height = String(h);
+    iframe.style.cssText = `border:0;width:100%;height:100%;max-width:${w}px;max-height:${h}px;overflow:hidden`;
+    iframe.setAttribute("loading", "eager");
+    iframe.setAttribute("scrolling", "no");
+    el.appendChild(iframe);
+  }, [size, w, h]);
   return (
-    <div className={`ck-ad ck-ad-${variant}`} style={{ width: w, height: h }}>
+    <div className={`ck-ad ck-ad-${variant}`} style={{ width: "100%", height: h, maxWidth: w, overflow: "hidden" }}>
       <span className="ck-ad-tag">{t("ckAd")}</span>
-      <iframe
-        src={`https://ziggs.xyz/ad/${size}`}
-        title="ad"
-        width={w}
-        height={h}
-        style={{ border: 0, display: "block" }}
-        sandbox="allow-scripts allow-same-origin allow-popups"
-      />
+      <div ref={ref} style={{ width: "100%", height: h, display: "flex", justifyContent: "center", overflow: "hidden" }} />
     </div>
   );
 }
@@ -1110,81 +1135,126 @@ function ConnPanel({ config, tunnelStatus }: {
 /* DamageRail removed with live tabs: the Damage badge shows the live total and
    the full meter is the tab itself. */
 
-// ─── Multi-internet: local connections feeding the same VPS ────────────────
+type RegionInfo = {
+  region: string;
+  label: string;
+  country: string;
+  available: boolean;
+  endpoint: string;
+  latency_ms: number | null;
+  online: boolean;
+  cell_pings: Record<string, number | null>;
+};
 
-function InternetPathsModal({ status, onClose }: { status: TunnelStatus | null; onClose: () => void }) {
-  const t = useT();
-  const paths = status?.internet_paths ?? [];
-  return (
-    <div className="ck-modal-backdrop" onClick={onClose}>
-      <div className="ck-modal ck-routes-modal" onClick={e => e.stopPropagation()}>
-        <div className="ck-modal-head">
-          <h2>{t("ckMultiInternet")}</h2>
-          <button className="ck-modal-close" onClick={onClose} aria-label="close">✕</button>
-        </div>
-        <div className="ck-modal-body">
-          <p className="card-desc">{t("ckMultiInternetDesc")}</p>
-          {paths.length === 0 ? <div className="empty-area">{t("ckMultiInternetEmpty")}</div> : (
-            <div className="ck-internet-list">
-              {paths.map(path => (
-                <div className={`ck-internet-path${path.active ? " active" : ""}`} key={`${path.name}:${path.local_ip}`}>
-                  <span className="ck-route-prio">#{path.priority}</span>
-                  <span className={`status-dot ${path.available ? "on" : "off"}`} />
-                  <span className="ck-internet-name"><b>{path.name}</b><small>{path.local_ip}</small></span>
-                  <span className="ck-internet-lat ck-num">{path.latency_ms != null ? `${path.latency_ms.toFixed(0)} ms` : "—"}</span>
-                  <span className={`ck-internet-state ${path.active ? "active" : path.available ? "ready" : "off"}`}>
-                    {path.active ? t("ckInternetInUse") : path.available ? t("ckInternetReady") : t("ckInternetUnavailable")}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="ck-internet-foot">
-            <span>{t("ckFallbackCount", { n: status?.failover_count ?? 0 })}</span>
-            <span>{t("ckMultiInternetFixedIp")}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+type AlbionServerInfo = {
+  region: string;
+};
+
+type RoutingMatrix = {
+  vps: RegionInfo[];
+  albion: AlbionServerInfo[];
+  routing: Record<string, string>;
+};
+
+/// Main Route/Tunnel view. The routing matrix IS the control: clicking a cell
+/// assigns that VPS to that Albion server and starts the tunnel. Clicking the
+/// active cell again unassigns and stops. UI updates instantly (optimistic);
+/// the actual WireGuard handshake happens in the background.
+function albionShort(region: string): string {
+  if (region === "americas") return "AM";
+  if (region === "europe") return "EU";
+  if (region === "asia") return "AS";
+  return region;
+}
+function albionLabel(t: (k: TKey) => string, region: string): string {
+  if (region === "americas") return t("ckServerAmericas");
+  if (region === "europe") return t("ckServerEurope");
+  if (region === "asia") return t("ckServerAsia");
+  return region;
+}
+function vpsLabel(t: (k: TKey) => string, v: RegionInfo): string {
+  if (v.region === "direct") return t("ckDirectRow");
+  return v.label || v.region;
+}
+function vpsCountry(t: (k: TKey) => string, v: RegionInfo): string {
+  if (v.region === "direct") return t("ckDirectCountry");
+  return v.country || "";
 }
 
-/// Main Route/Tunnel view. No fabricated numbers — everything comes from the
-/// real tunnel_status. Unmeasured metrics (per-leg, jitter) are not shown.
-/// When VPS is not configured, renders the same skeleton in "waiting" mode.
-function TunnelHero({ config, tunnelStatus, hist, onOpenRoutes }: {
+function TunnelHero({ config, tunnelStatus, hist }: {
   config: CompanionConfig;
   tunnelStatus: TunnelStatus | null;
-  // History is accumulated in App (5s poll) so it survives tab switching.
   hist: { d: number | null; tn: number | null }[];
-  onOpenRoutes: () => void;
 }) {
   const t = useT();
-  const configured = !!config.tunnel_endpoint;
+  const [matrix, setMatrix] = useState<RoutingMatrix | null>(null);
   const [running, setRunning] = useState(false);
+  // Optimistic routing: reflects clicks immediately before the backend confirms
+  const [optimisticRouting, setOptimisticRouting] = useState<Record<string, string> | null>(null);
   useEffect(() => { setRunning(!!tunnelStatus?.running); }, [tunnelStatus?.running]);
 
-  const direct = tunnelStatus?.direct_latency_ms ?? null;
-  const tun = tunnelStatus?.tunnel_latency_ms ?? null;
-  const tunnelUp = !!tunnelStatus?.connected && !!tunnelStatus?.using_tunnel;
-  const gain = direct != null && tun != null && direct > 0 ? direct - tun : null;
+  usePoll(async () => {
+    try {
+      const m = await invoke<RoutingMatrix>("tunnel_regions");
+      // When tunnel is active, replace VPS cell pings with real end-to-end latency
+      if (tunnelStatus?.tunnel_latency_ms != null && m.vps.length > 1) {
+        const real = tunnelStatus.tunnel_latency_ms;
+        for (let i = 1; i < m.vps.length; i++) {
+          for (const s of m.albion) {
+            m.vps[i].cell_pings[s.region] = real;
+          }
+        }
+      }
+      setMatrix(m);
+      setOptimisticRouting(null);
+    } catch {}
+  }, 10000, [config.tunnel_endpoint, tunnelStatus?.tunnel_latency_ms]);
 
-  const activeHost = (config.tunnel_endpoint || "").split(":")[0];
+  const currentRouting = optimisticRouting ?? matrix?.routing ?? {};
+  const [busyRegion, setBusyRegion] = useState<string | null>(null);
 
-  const toggle = async () => {
-    if (!configured) return; // setup is in ConnPanel below
-    if (running) { await invoke("tunnel_stop"); setRunning(false); }
-    else { await invoke("tunnel_start"); setRunning(true); }
+  const clickCell = async (albionRegion: string, vpsRegion: string) => {
+    if (busyRegion) return;
+    setBusyRegion(albionRegion);
+    try {
+      if (vpsRegion === "") {
+        // Direct row — unassign any VPS for this region, stop tunnel if running
+        setOptimisticRouting(prev => {
+          const next = { ...(prev ?? matrix?.routing ?? {}) };
+          delete next[albionRegion];
+          return next;
+        });
+        if (running) { await invoke("tunnel_stop"); setRunning(false); }
+        await invoke("set_tunnel_route", { albionRegion, vpsRegion: "" });
+      } else {
+        const current = currentRouting[albionRegion];
+        if (current === vpsRegion) {
+          // Same VPS cell = unassign + stop tunnel
+          setOptimisticRouting(prev => {
+            const next = { ...(prev ?? matrix?.routing ?? {}) };
+            delete next[albionRegion];
+            return next;
+          });
+          if (running) { await invoke("tunnel_stop"); setRunning(false); }
+          await invoke("set_tunnel_route", { albionRegion, vpsRegion: "" });
+        } else {
+          // Assign VPS + start tunnel (set_tunnel_route restarts if running,
+          // or starts fresh if not)
+          setOptimisticRouting(prev => ({
+            ...(prev ?? matrix?.routing ?? {}),
+            [albionRegion]: vpsRegion,
+          }));
+          await invoke("set_tunnel_route", { albionRegion, vpsRegion });
+          if (!running) {
+            try { await invoke("tunnel_start"); } catch (e) { console.error("tunnel_start", e); }
+          }
+          setRunning(true);
+        }
+      }
+    } finally {
+      setBusyRegion(null);
+    }
   };
-
-  // Chart polylines scaled to the largest observed value (min 60ms so good
-  // connections don't amplify noise).
-  const chartMax = Math.max(60, ...hist.flatMap(h => [h.d ?? 0, h.tn ?? 0]));
-  const line = (pick: (h: { d: number | null; tn: number | null }) => number | null) =>
-    hist.map((h, i) => {
-      const v = pick(h);
-      return v == null ? null : `${(i / Math.max(1, hist.length - 1)) * 600},${90 - (v / chartMax) * 82}`;
-    }).filter(Boolean).join(" ");
 
   return (
     <div className="ck-panel ck-tun"><CardGlow />
@@ -1192,74 +1262,63 @@ function TunnelHero({ config, tunnelStatus, hist, onOpenRoutes }: {
         <h2>{t("navTunnel")}</h2>
       </div>
 
-      <div className="ck-tun-hero">
-        <div>
-          <div className="ck-lbl">{t("ckLatVia")}</div>
-          <div className="ck-tun-big ck-num">
-            <b>{tun != null ? tun.toFixed(0) : "—"}</b><small> ms</small>
-          </div>
+      {/* Routing matrix: connections (rows) × Albion servers (columns).
+          First row = direct (no VPS). VPS rows below.
+          Each cell shows the ping and is clickable to select/deselect. */}
+      {matrix && (
+        <div className="ck-routing-matrix">
+          <table>
+            <thead>
+              <tr>
+                <th className="ck-mx-corner">{t("ckConnections")}</th>
+                {matrix.albion.map(s => (
+                  <th key={s.region}>
+                    <div className="ck-mx-col-head">
+                      <span>{albionLabel(t, s.region)}</span>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {matrix.vps.map(v => {
+                const isDirect = v.region === "direct";
+                return (
+                  <tr key={v.region}>
+                    <td className="ck-mx-row-head">
+                      <div className="ck-mx-row-inner">
+                        <span>{isDirect ? t("ckDirectRow") : vpsLabel(t, v)}</span>
+                        <small>{isDirect ? t("ckDirectCountry") : vpsCountry(t, v)}</small>
+                      </div>
+                    </td>
+                    {matrix.albion.map(s => {
+                      const assigned = isDirect
+                        ? !currentRouting[s.region]
+                        : currentRouting[s.region] === v.region;
+                      const ping = v.cell_pings[s.region];
+                      const isBusy = busyRegion === s.region;
+                      return (
+                        <td key={s.region}>
+                          <button
+                            className={`ck-mx-cell ${assigned ? "assigned" : ""} ${isBusy ? "busy" : ""}`}
+                            disabled={isBusy}
+                            onClick={() => clickCell(s.region, isDirect ? "" : v.region)}
+                            title={assigned ? t("ckClickUnassign") : isDirect ? t("ckClickDirect") : t("ckClickAssign")}
+                          >
+                            <span className="ck-mx-ping ck-num">{ping != null ? `${ping.toFixed(0)}ms` : "—"}</span>
+                            {assigned && <span className="ck-mx-state">{t("ckRouted")}</span>}
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="ck-routing-hint">{t("ckRoutingHint")}</div>
         </div>
-        <div className="ck-tun-col">
-          <div className="ck-lbl">{t("ckLatDirect")}</div>
-          <div className="ck-tun-v ck-num">{direct != null ? `${direct.toFixed(0)} ms` : "—"}</div>
-        </div>
-        <div className="ck-tun-col">
-          <div className="ck-lbl">{t("ckGainLbl")}</div>
-          <div className={`ck-tun-v ck-num ${gain != null && gain > 0 ? "ck-ok" : ""}`}>
-            {gain != null ? `−${gain.toFixed(0)} ms · ${Math.round((gain / (direct as number)) * 100)}%` : "—"}
-          </div>
-        </div>
-        <div className="ck-tun-actions">
-          <button className={`ck-tun-btn ${running ? "off" : ""}`} onClick={toggle} disabled={!configured}>
-            {configured ? (running ? t("turnOffTunnel") : t("turnOnTunnel")) : t("tunnelOff")}
-          </button>
-          <button className="ck-routes-btn" onClick={onOpenRoutes}>
-            {t("ckMultiInternet")}
-            {(tunnelStatus?.internet_paths.length ?? 0) > 0 && <span className="ck-routes-count">{tunnelStatus!.internet_paths.length}</span>}
-          </button>
-        </div>
-      </div>
-
-      <div className={`ck-route ${configured ? "" : "waiting"}`}>
-        <div className={`ck-hop ${tunnelUp ? "on" : ""}`}>
-          <div className="ck-hop-ic"><Icon name="globe" /></div>
-          <b>{t("ckYou")}</b>
-        </div>
-        <div className="ck-leg" />
-        <div className={`ck-hop ${tunnelUp ? "on" : ""}`}>
-          <div className="ck-hop-ic"><Icon name="route" /></div>
-          <b>{t("ckVps")}</b>
-          <span>{configured ? activeHost : t("ckVpsWaiting")}</span>
-        </div>
-        <div className="ck-leg" />
-        <div className={`ck-hop ${tunnelUp ? "on" : ""}`}>
-          <div className="ck-hop-ic"><Icon name="sword" /></div>
-          <b>Albion</b>
-        </div>
-      </div>
-
-      <div className="ck-chart">
-        <div className="ck-chart-legend">
-          <span><i className="sw tn" />{t("navTunnel").toLowerCase()}</span>
-          <span><i className="sw d" />{t("ckLatDirect")}</span>
-          <span className="ck-chart-right">{t("ckLast10")}</span>
-        </div>
-        {/* height 140 makes the chart the hero body. preserveAspectRatio="none"
-            stretches the 90-unit viewBox without changing line() math.
-            hasData: without a VPS the history fills with null samples, so length
-            alone would show an empty box instead of "measuring". */}
-        {hist.length < 2 || !hist.some(h => h.d != null || h.tn != null) ? (
-          <div className="empty-inline">{t("ckChartEmpty")}</div>
-        ) : (
-          <svg viewBox="0 0 600 90" width="100%" height="140" preserveAspectRatio="none">
-            <polyline fill="none" stroke="#3a3f4d" strokeWidth="1.5" points={line(h => h.d)} />
-            <polyline fill="none" stroke="var(--green)" strokeWidth="2" points={line(h => h.tn)} />
-          </svg>
-        )}
-      </div>
-
-      {/* Operational metrics live in ConnPanel below. The hero shows latency,
-          hops, and the chart. */}
+      )}
     </div>
   );
 }

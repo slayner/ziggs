@@ -44,6 +44,10 @@ pub struct TunnelConfig {
     pub client_privkey: String,
     /// Enable tunnel on startup
     pub enabled: bool,
+    /// Which Albion region this tunnel serves (e.g. "asia", "americas", "europe").
+    /// Only that region's /24 game network is routed — so routing Asia doesn't
+    /// disrupt an active Americas connection.
+    pub albion_region: String,
 }
 
 impl Default for TunnelConfig {
@@ -53,6 +57,7 @@ impl Default for TunnelConfig {
             server_pubkey: String::new(),
             client_privkey: String::new(),
             enabled: false,
+            albion_region: String::new(),
         }
     }
 }
@@ -108,6 +113,9 @@ pub struct Tunnel {
     operation: Arc<Mutex<()>>,
     #[cfg(target_os = "windows")]
     preloaded_paths: Arc<Mutex<Vec<PathCandidate>>>,
+    /// The Albion region this tunnel is serving (e.g. "asia"). Used by
+    /// stop()/kick to only affect the selected region, not all three.
+    region: Arc<Mutex<String>>,
 }
 
 #[derive(Clone)]
@@ -125,6 +133,7 @@ impl Tunnel {
             operation: Arc::new(Mutex::new(())),
             #[cfg(target_os = "windows")]
             preloaded_paths: Arc::new(Mutex::new(Vec::new())),
+            region: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -134,21 +143,10 @@ impl Tunnel {
         let _operation = self.operation.lock().await;
         #[cfg(target_os = "windows")]
         {
-            let privkey = parse_key(&cfg.client_privkey).ok_or_else(|| anyhow!("invalid private key"))?;
-            let server_pub = parse_key(&cfg.server_pubkey).ok_or_else(|| anyhow!("invalid public key"))?;
             let endpoint = cfg.endpoint.clone();
-            let shutdown = Arc::clone(&self.shutdown);
-            let paths = tokio::task::spawn_blocking(move || {
-                let endpoint = resolve_endpoint(&endpoint)?;
-                let secret = StaticSecret::from(privkey);
-                let peer_pub = PublicKey::from(server_pub);
-                let mut tunn = Tunn::new(secret, peer_pub, None, KEEPALIVE, 0, None);
-                rank_internet_paths(&mut tunn, endpoint, &shutdown)
-            }).await.map_err(|e| anyhow!("preload cancelled: {e}"))??;
-            let best = paths.iter().find_map(|path| path.latency_ms);
-            self.status.lock().await.internet_paths = path_statuses(&paths, u32::MAX);
-            self.status.lock().await.tunnel_latency_ms = best;
-            *self.preloaded_paths.lock().await = paths;
+            let host = endpoint.split(':').next().unwrap_or("").to_string();
+            let lat = crate::ping_host(&host).await;
+            self.status.lock().await.tunnel_latency_ms = lat;
         }
         #[cfg(not(target_os = "windows"))]
         { let _ = cfg; }
@@ -157,8 +155,19 @@ impl Tunnel {
 
     pub async fn stop(&self) {
         self.shutdown.store(true, AtomicOrdering::Relaxed);
-        if let Err(e) = self.remove_albion_routes().await {
+        let region = self.region.lock().await.clone();
+        if let Err(e) = self.remove_albion_routes(false, &region).await {
             self.status.lock().await.last_error = Some(format!("route cleanup: {e:#}"));
+        }
+    }
+
+    /// Stop the tunnel without the 15s kick — for app exit when we just
+    /// want routes gone fast, no need to force the game to reconnect.
+    pub async fn stop_quick(&self) {
+        self.shutdown.store(true, AtomicOrdering::Relaxed);
+        let region = self.region.lock().await.clone();
+        if let Err(e) = self.remove_albion_routes(true, &region).await {
+            tracing::warn!("quick route cleanup: {e:#}");
         }
     }
 
@@ -167,9 +176,14 @@ impl Tunnel {
     }
 
     /// Remove static Albion routes (fall back to direct).
-    async fn remove_albion_routes(&self) -> Result<()> {
+    /// `force_quick` = skip the 15s kick (used on app exit — no need to
+    /// force reconnect, just remove routes and let the game go direct).
+    async fn remove_albion_routes(&self, force_quick: bool, region: &str) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
+            if !force_quick && !region.is_empty() {
+                self.kick_albion_connections(region).await;
+            }
             scrub_stale_routes_now()?;
             self.installed_routes.lock().await.clear();
         }
@@ -178,7 +192,7 @@ impl Tunnel {
 
     /// Clean orphaned routes left by previous crash/kill.
     pub async fn scrub_stale_routes(&self) -> Result<()> {
-        self.remove_albion_routes().await
+        self.remove_albion_routes(true, "").await
     }
 
     /// Main tunnel loop. Runs in a separate task.
@@ -202,7 +216,7 @@ impl Tunnel {
             }
         }
 
-        self.remove_albion_routes().await.ok();
+        self.remove_albion_routes(true, "").await.ok();
         let mut s = self.status.lock().await;
         s.running = false;
         s.using_tunnel = false;
@@ -228,35 +242,64 @@ impl Tunnel {
     }
 
     /// Add static routes for Albion IPs through the tunnel.
-    async fn add_albion_routes(&self) -> Result<()> {
+    /// `region` selects which game /24 to route — only that region's
+    /// game network is affected, so routing Asia doesn't disrupt Americas.
+    async fn add_albion_routes(&self, region: &str) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
-            let routes = albion_ips::albion_route_targets().await;
+            let routes = albion_ips::albion_route_targets_for(region).await;
+            let iface = TUNNEL_ADAPTER_NAME;
             let mut installed: Vec<InstalledRoute> = Vec::new();
             for (network, mask) in routes {
-                let gateway = TUNNEL_IPV4_GW.to_string();
-                // Delete any orphaned route from a previous crash/kill.
-                let _ = crate::winutil::no_window(std::process::Command::new("route"))
-                    .args(["delete", &network.to_string(), "mask", &mask.to_string(), &gateway])
+                let prefix = format!("{}/{}", network, mask_to_cidr(&mask));
+                let gw = TUNNEL_IPV4_GW.to_string();
+                // Delete any orphaned route from a previous run.
+                let _ = crate::winutil::no_window(std::process::Command::new("netsh"))
+                    .args(["interface", "ipv4", "delete", "route", &prefix, iface, &gw])
                     .output();
-                let output = crate::winutil::no_window(std::process::Command::new("route"))
-                    .args(["add", &network.to_string(), "mask", &mask.to_string(), &gateway, "metric", "1"])
+                let output = crate::winutil::no_window(std::process::Command::new("netsh"))
+                    .args(["interface", "ipv4", "add", "route", &prefix, iface, &format!("nexthop={}", gw), "metric=1"])
                     .output()?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
                 if !output.status.success() {
                     for added in &installed {
-                        let _ = crate::winutil::no_window(std::process::Command::new("route"))
-                            .args(["delete", &added.network.to_string(), "mask", &added.mask.to_string(), &gateway]).output();
+                        let p = format!("{}/{}", added.network, mask_to_cidr(&added.mask));
+                        let _ = crate::winutil::no_window(std::process::Command::new("netsh"))
+                            .args(["interface", "ipv4", "delete", "route", &p, iface, &gw]).output();
                     }
-                    return Err(anyhow!("Windows refused game route for {network}"));
+                    return Err(anyhow!("netsh refused game route for {network}: {stderr}{stdout}"));
                 }
                 installed.push(InstalledRoute { network, mask });
             }
             *self.installed_routes.lock().await = installed;
+
+            // Force the game to reconnect — only for the selected region.
+            // Windows UDP sockets cache the outbound interface; blocking the
+            // region's /24 for 15s causes the game to timeout and reconnect
+            // with new sockets that follow the tunnel routes.
+            self.kick_albion_connections(region).await;
         }
         Ok(())
     }
 
-    /// Main packet loop: wintun ↔ UDP via boringtun.
+    /// Block ALL traffic to the selected region's game IPs for 15s to force
+    /// the game to reconnect. Only blocks the /24 for the routed region —
+    /// so routing Asia doesn't kick an active Americas connection.
+    #[cfg(target_os = "windows")]
+    async fn kick_albion_connections(&self, region: &str) {
+        use std::time::Duration;
+        // Only block the selected region's /24 — not all three.
+        let p = match albion_ips::region_network(region) {
+            Some(p) => p,
+            None => return,
+        };
+        let ranges = format!("{}.{}.{}.0-{}.{}.{}.255", p[0], p[1], p[2], p[0], p[1], p[2]);
+        let _ = crate::firewall::add_block_rule("ZIGGS_KICK", &ranges);
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        let _ = crate::firewall::remove_rule("ZIGGS_KICK");
+    }
+
     async fn packet_loop(&self, cfg: TunnelConfig) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
@@ -265,6 +308,8 @@ impl Tunnel {
             let server_pub = parse_key(&cfg.server_pubkey)
                 .ok_or_else(|| anyhow!("invalid public key"))?;
             let endpoint = resolve_endpoint(&cfg.endpoint)?;
+            // Store the region so stop()/kick can use it.
+            *self.region.lock().await = cfg.albion_region.clone();
 
             let wintun = load_wintun()
                 .map_err(|e| anyhow!("wintun.dll: {}", e))?;
@@ -283,34 +328,64 @@ impl Tunnel {
             let peer_pub = PublicKey::from(server_pub);
             let mut tunn = Tunn::new(secret, peer_pub, None, KEEPALIVE, 0, None);
 
-            let cached = self.preloaded_paths.lock().await.clone();
-            let mut paths = if cached.is_empty() {
-                rank_internet_paths(&mut tunn, endpoint, &self.shutdown)?
-            } else {
-                merge_path_priority(&cached, enumerate_internet_paths()?)
-            };
-            let (mut udp, mut active_path, initial_latency) = connect_ranked_path(
-                &mut tunn, endpoint, &paths, None, &self.shutdown,
-            )?.ok_or_else(|| anyhow!("no internet path reaches the VPS"))?;
+            // Simple single-path UDP connection to the VPS endpoint.
+            // No multi-internet path ranking — just connect directly.
+            let udp = std::net::UdpSocket::bind("0.0.0.0:0")
+                .map_err(|e| anyhow!("bind UDP: {e}"))?;
             udp.set_nonblocking(true)?;
+            udp.connect(endpoint)
+                .map_err(|e| anyhow!("connect to VPS {endpoint}: {e}"))?;
 
-            self.add_albion_routes().await?;
+            // Initial handshake — send a keepalive to trigger it.
+            let mut send_buf = vec![0u8; WG_BUFFER_SIZE];
+            let mut recv_buf = vec![0u8; WG_BUFFER_SIZE];
+            let mut tun_out_buf = vec![0u8; WG_BUFFER_SIZE];
+
+            // Wait for handshake with timeout
+            let handshake_start = Instant::now();
+            let mut handshake_ok = false;
+            while handshake_start.elapsed() < Duration::from_secs(10) {
+                if self.shutdown.load(AtomicOrdering::Relaxed) { return Ok(()); }
+                // Send handshake initiation
+                if let TunnResult::WriteToNetwork(packet) = tunn.format_handshake_initiation(&mut send_buf, true) {
+                    let _ = udp.send(packet);
+                }
+                // Check for response
+                match udp.recv(&mut recv_buf) {
+                    Ok(n) if n > 0 => {
+                        let result = tunn.decapsulate(None, &recv_buf[..n], &mut tun_out_buf);
+                        if !matches!(result, TunnResult::Err(_)) {
+                            if let TunnResult::WriteToNetwork(resp) = result {
+                                let _ = udp.send(resp);
+                            }
+                            handshake_ok = true;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            if !handshake_ok {
+                return Err(anyhow!("WireGuard handshake timeout — VPS may be offline or key mismatch"));
+            }
+
+            // Measure latency via handshake
+            let initial_latency = handshake_start.elapsed().as_secs_f64() * 1000.0;
+
+            self.add_albion_routes(&cfg.albion_region).await?;
             {
                 let mut s = self.status.lock().await;
                 s.tunnel_latency_ms = Some(initial_latency);
                 s.using_tunnel = true;
                 s.connected = true;
-                s.active_interface = Some(active_path.name.clone());
-                s.internet_paths = path_statuses(&paths, active_path.if_index);
+                s.active_interface = Some("default".to_string());
+                s.internet_paths = Vec::new();
             }
 
-            let mut send_buf = vec![0u8; WG_BUFFER_SIZE];
-            let mut recv_buf = vec![0u8; WG_BUFFER_SIZE];
-            let mut tun_out_buf = vec![0u8; WG_BUFFER_SIZE];
             let mut next_health = Instant::now() + PATH_HEALTH_INTERVAL;
             let mut health_deadline: Option<Instant> = None;
             let mut next_timer = Instant::now() + Duration::from_secs(1);
-            let mut next_rescan = Instant::now() + Duration::from_secs(15);
 
             loop {
                 if self.shutdown.load(AtomicOrdering::Relaxed) {
@@ -355,7 +430,6 @@ impl Tunnel {
                             }
                             TunnResult::WriteToTunnelV6(_, _) => {}
                             TunnResult::WriteToNetwork(resp) => {
-                                // handshake response or cookie reply — retransmit
                                 let _ = udp.send(resp);
                             }
                             _ => {}
@@ -382,16 +456,6 @@ impl Tunnel {
                     next_timer = now + Duration::from_secs(1);
                 }
 
-                if now >= next_rescan {
-                    if let Ok(current) = enumerate_internet_paths() {
-                        let active_present = current.iter().any(|path| path.if_index == active_path.if_index && path.local_ip == active_path.local_ip);
-                        paths = merge_path_priority(&paths, current);
-                        self.status.lock().await.internet_paths = path_statuses(&paths, active_path.if_index);
-                        if !active_present { health_deadline = Some(now); }
-                    }
-                    next_rescan = now + Duration::from_secs(15);
-                }
-
                 if health_deadline.is_none() && now >= next_health {
                     if let TunnResult::WriteToNetwork(packet) = tunn.format_handshake_initiation(&mut send_buf, true) {
                         let _ = udp.send(packet);
@@ -402,42 +466,8 @@ impl Tunnel {
 
                 if health_deadline.is_some_and(|deadline| now >= deadline) {
                     self.status.lock().await.connected = false;
-                    match connect_ranked_path(&mut tunn, endpoint, &paths, Some(active_path.if_index), &self.shutdown) {
-                        Ok(Some((new_udp, new_path, latency))) => {
-                            let failed_if = active_path.if_index;
-                            let changed = new_path.if_index != active_path.if_index;
-                            udp = new_udp;
-                            udp.set_nonblocking(true)?;
-                            active_path = new_path;
-                            if let Ok(current) = enumerate_internet_paths() {
-                                paths = merge_path_priority(&paths, current);
-                            }
-                            if changed {
-                                if let Some(path) = paths.iter_mut().find(|path| path.if_index == failed_if) {
-                                    path.available = false;
-                                }
-                            }
-                            if let Some(path) = paths.iter_mut().find(|path| path.if_index == active_path.if_index) {
-                                *path = active_path.clone();
-                            }
-                            let mut s = self.status.lock().await;
-                            s.connected = true;
-                            s.tunnel_latency_ms = Some(latency);
-                            s.active_interface = Some(active_path.name.clone());
-                            if changed { s.failover_count += 1; }
-                            s.internet_paths = path_statuses(&paths, active_path.if_index);
-                            health_deadline = None;
-                            next_health = Instant::now() + PATH_HEALTH_INTERVAL;
-                        }
-                        Ok(None) => {
-                            self.status.lock().await.last_error = Some("all connections failed; using direct route".into());
-                            break;
-                        }
-                        Err(e) => {
-                            self.status.lock().await.last_error = Some(format!("failover: {e:#}"));
-                            break;
-                        }
-                    }
+                    self.status.lock().await.last_error = Some("VPS unreachable; tunnel stopped".into());
+                    break;
                 }
 
                 if !did_work {
@@ -451,18 +481,33 @@ impl Tunnel {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
+/// Convert an IPv4 netmask to CIDR prefix length (e.g. 255.255.255.0 → 24).
+fn mask_to_cidr(mask: &Ipv4Addr) -> u8 {
+    let bits = u32::from(*mask);
+    bits.count_ones() as u8
+}
+
 #[cfg(target_os = "windows")]
 fn stale_route_cleanup_script() -> &'static str {
-    "Get-NetRoute -NextHop '10.99.0.1' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction Stop"
+    // PowerShell is the only way to reliably remove routes by NextHop.
+    // netsh can only delete by prefix, not by gateway. We keep this as
+    // PowerShell but with SilentlyContinue to avoid errors on empty results.
+    "Get-NetRoute -NextHop '10.99.0.1' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue"
 }
 
 #[cfg(target_os = "windows")]
 pub fn scrub_stale_routes_now() -> Result<()> {
+    // Use PowerShell for route cleanup — it's the only way to delete by
+    // NextHop. CREATE_NO_WINDOW is applied; PowerShell may flash briefly
+    // but this only runs on tunnel stop/start, not in a loop.
     let output = crate::winutil::no_window(std::process::Command::new("powershell"))
         .args(["-NoProfile", "-NonInteractive", "-Command", stale_route_cleanup_script()])
         .output()?;
-    if !output.status.success() {
-        return Err(anyhow!("Windows failed to remove old tunnel routes"));
+    if !output.status.success() && !output.stderr.is_empty() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        if !err.contains("No matching") && !err.is_empty() {
+            return Err(anyhow!("Windows failed to remove old tunnel routes: {err}"));
+        }
     }
     Ok(())
 }
@@ -778,5 +823,12 @@ mod tests {
         let script = stale_route_cleanup_script();
         assert!(script.contains("-NextHop '10.99.0.1'"));
         assert!(script.contains("Remove-NetRoute"));
+    }
+
+    #[test]
+    fn mask_to_cidr_converts_correctly() {
+        assert_eq!(mask_to_cidr(&Ipv4Addr::new(255, 255, 255, 0)), 24);
+        assert_eq!(mask_to_cidr(&Ipv4Addr::new(255, 255, 255, 255)), 32);
+        assert_eq!(mask_to_cidr(&Ipv4Addr::new(255, 255, 0, 0)), 16);
     }
 }

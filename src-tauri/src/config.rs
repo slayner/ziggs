@@ -73,7 +73,20 @@ pub struct CompanionConfig {
     /// index→name mapping without rebuilding the companion. 0 = no offset.
     #[serde(default)]
     pub spell_index_offset: i32,
+    /// Albion region for tunnel server selection. "americas" | "asia" | "europe".
+    /// Auto-detected from AODP server when the game is open; defaults to
+    /// "americas" so the tunnel works without the game running.
+    #[serde(default = "default_region")]
+    pub region: String,
+    /// Per-region VPS assignment. Maps Albion region -> VPS region.
+    /// NOT persisted — cleared on every app launch so the user always starts
+    /// with all servers on "Direct". The matrix is a runtime control, not
+    /// a saved preference.
+    #[serde(skip)]
+    pub tunnel_routing: std::collections::HashMap<String, String>,
 }
+
+fn default_region() -> String { "americas".into() }
 
 impl Default for CompanionConfig {
     fn default() -> Self {
@@ -95,6 +108,8 @@ impl Default for CompanionConfig {
             auto_lootlog_submit: false,
             install_id: String::new(),      // generated on demand by install_id()
             spell_index_offset: 0,
+            region: default_region(),
+            tunnel_routing: std::collections::HashMap::new(),
         }
     }
 }

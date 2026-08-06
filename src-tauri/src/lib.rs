@@ -6,6 +6,7 @@ pub mod albion_detect;
 pub mod albion_ips;
 pub mod config;
 pub mod dns;
+pub mod firewall;
 pub mod lootlog;
 pub mod maps;
 pub mod photon_parser;
@@ -331,6 +332,9 @@ async fn get_captured_loot(state: tauri::State<'_, AppState>) -> Result<Vec<loot
 async fn clear_captured_loot(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut buf = state.sniffer.loot.lock().await;
     buf.clear();
+    // Also delete the persisted session file so cleared loot doesn't
+    // reappear on restart.
+    let _ = crate::lootlog::save_session(&[]);
 
     let mut s = state.sniffer.stats.lock().await;
     s.loot_count = 0;
@@ -953,24 +957,38 @@ async fn tunnel_start(state: tauri::State<'_, AppState>, app: tauri::AppHandle) 
         return Ok(());
     }
     *running = true;
-    // Fill endpoint/pubkey from the region preset if the user hasn't set them
-    // manually. The client private key is always the user's own.
-    let region = current_region(&state).await;
-    let preset = tunnel_presets::for_region(&region);
-    let mut cfg = state.config.lock().await.clone();
+    // Resolve which VPS to use. Priority:
+    // 1. tunnel_routing for the current Albion region (if game detected)
+    // 2. Any assigned route (first one — the user wants a VPS connected)
+    // 3. Preset for current region
+    let albion_region = current_region(&state).await;
+    let cfg = state.config.lock().await.clone();
+    let vps_id = cfg.tunnel_routing.get(&albion_region)
+        .cloned()
+        .or_else(|| cfg.tunnel_routing.values().next().cloned())
+        .unwrap_or_default();
+    let preset = tunnel_presets::for_id(&vps_id).await;
+    let mut cfg = cfg;
     if let Some(p) = preset {
-        if cfg.tunnel_endpoint.is_empty() {
-            cfg.tunnel_endpoint = p.endpoint.to_string();
-            cfg.tunnel_server_pubkey = p.server_pubkey.to_string();
-            let _ = config::save(&cfg);
-            let _ = app.emit("config-changed", ());
-        }
+        cfg.tunnel_endpoint = p.endpoint;
+        cfg.tunnel_server_pubkey = p.server_pubkey;
     }
+    if cfg.tunnel_endpoint.is_empty() {
+        *running = false;
+        return Err(format!("No VPS assigned for region '{}'. Assign one in the server selection table.", albion_region));
+    }
+    if cfg.tunnel_client_privkey.is_empty() {
+        let (priv_b64, _pub_b64) = tunnel::generate_keypair();
+        cfg.tunnel_client_privkey = priv_b64;
+    }
+    let _ = config::save(&cfg);
+    let _ = app.emit("config-changed", ());
     let tunnel_cfg = tunnel::TunnelConfig {
         endpoint: cfg.tunnel_endpoint,
         server_pubkey: cfg.tunnel_server_pubkey,
         client_privkey: cfg.tunnel_client_privkey,
         enabled: cfg.tunnel_enabled,
+        albion_region: albion_region.clone(),
     };
     let tunnel = state.tunnel.clone();
     tunnel.prepare_start();
@@ -982,14 +1000,15 @@ async fn tunnel_start(state: tauri::State<'_, AppState>, app: tauri::AppHandle) 
     Ok(())
 }
 
-/// Region detected from the AODP server (west/east/europe -> americas/asia/europe).
-/// Empty string if not yet detected.
+/// Region for tunnel server selection. Prefers the AODP-detected region
+/// (from the running game); falls back to the persisted config region so
+/// the tunnel works without Albion open.
 async fn current_region(state: &tauri::State<'_, AppState>) -> String {
     match state.sniffer.aodp_server.lock().await.as_ref().map(|s| s.region()) {
         Some("east") => "asia".into(),
         Some("europe") => "europe".into(),
         Some("west") => "americas".into(),
-        _ => String::new(),
+        _ => state.config.lock().await.region.clone(),
     }
 }
 
@@ -1008,6 +1027,255 @@ async fn tunnel_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 async fn tunnel_status(state: tauri::State<'_, AppState>) -> Result<TunnelStatus, String> {
     Ok(state.tunnel.status.lock().await.clone())
+}
+
+#[derive(serde::Serialize)]
+struct RegionInfo {
+    region: String,
+    label: String,
+    country: String,
+    available: bool,
+    endpoint: String,
+    latency_ms: Option<f64>,
+    online: bool,
+    /// Ping to each Albion server through this VPS (PC→VPS, same for all columns).
+    cell_pings: std::collections::HashMap<String, Option<f64>>,
+}
+
+#[derive(serde::Serialize)]
+struct AlbionServerInfo {
+    region: String,
+}
+
+#[derive(serde::Serialize)]
+struct RoutingMatrix {
+    /// VPS servers (rows) — first entry is always "direct" (no VPS)
+    vps: Vec<RegionInfo>,
+    /// Albion server regions (columns)
+    albion: Vec<AlbionServerInfo>,
+    /// Current routing: albion_region -> vps_region (from config, empty = direct)
+    routing: std::collections::HashMap<String, String>,
+}
+
+#[tauri::command]
+async fn tunnel_regions(state: tauri::State<'_, AppState>) -> Result<RoutingMatrix, String> {
+    let albion_regions: Vec<String> = tunnel_presets::ALBION_GAME_IPS.iter().map(|(r, _)| r.to_string()).collect();
+
+    // "Direct" row: ICMP ping to each Albion game server IP.
+    // Americas (5.188.125.x) blocks ICMP — will show null.
+    // Asia and Europe respond to ICMP with real game server RTT.
+    let mut direct_pings = std::collections::HashMap::new();
+    for (region, ip) in tunnel_presets::ALBION_GAME_IPS {
+        direct_pings.insert(region.to_string(), ping_host(ip).await);
+    }
+    let mut vps_rows = vec![RegionInfo {
+        region: "direct".to_string(),
+        label: String::new(),
+        country: String::new(),
+        available: true,
+        endpoint: String::new(),
+        latency_ms: None,
+        online: true,
+        cell_pings: direct_pings,
+    }];
+
+    // VPS rows: fetch manifest from the site, ping each VPS, fetch VPS→Albion
+    // pings from each VPS's own ping server. Only VPS that respond to ICMP
+    // appear — offline ones are hidden automatically.
+    let manifest = tunnel_presets::fetch_manifest().await;
+    for vps in &manifest {
+        let host = vps.endpoint.split(':').next().unwrap_or("");
+        let pc_to_vps = match ping_host(host).await {
+            Some(ms) => ms,
+            None => continue, // VPS offline — don't show it
+        };
+
+        // Fetch VPS→Albion pings from this VPS's ping server.
+        let vps_to_albion: std::collections::HashMap<String, Option<f64>> =
+            match reqwest::get(&vps.ping_url).await {
+                Ok(resp) => match resp.json::<std::collections::HashMap<String, Option<f64>>>().await {
+                    Ok(map) => map,
+                    Err(_) => std::collections::HashMap::new(),
+                },
+                Err(_) => std::collections::HashMap::new(),
+            };
+
+        let mut cell_pings = std::collections::HashMap::new();
+        for r in &albion_regions {
+            // ponytail: Americas game server blocks ICMP from VPS too; estimate ~5ms (same DC).
+            let vps_to_srv = vps_to_albion.get(r).copied().flatten().or_else(|| {
+                if r == "americas" { Some(5.0) } else { None }
+            });
+            let total = vps_to_srv.map(|v| pc_to_vps + v);
+            cell_pings.insert(r.clone(), total);
+        }
+        vps_rows.push(RegionInfo {
+            region: vps.id.clone(),
+            label: vps.label.clone(),
+            country: vps.country.clone(),
+            available: true,
+            endpoint: vps.endpoint.clone(),
+            latency_ms: Some(pc_to_vps),
+            online: true,
+            cell_pings,
+        });
+    }
+
+    let albion: Vec<AlbionServerInfo> = albion_regions.iter()
+        .map(|r| AlbionServerInfo { region: r.clone() })
+        .collect();
+    let routing = state.config.lock().await.tunnel_routing.clone();
+
+    Ok(RoutingMatrix { vps: vps_rows, albion, routing })
+}
+
+/// Set which VPS to use for an Albion region. Empty vps_region = none (direct).
+#[tauri::command]
+async fn set_tunnel_route(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    albion_region: String,
+    vps_region: String,
+) -> Result<(), String> {
+    let mut cfg = state.config.lock().await;
+    if vps_region.is_empty() {
+        cfg.tunnel_routing.remove(&albion_region);
+    } else {
+        cfg.tunnel_routing.insert(albion_region, vps_region);
+    }
+    let _ = config::save(&cfg);
+    drop(cfg);
+    let _ = app.emit("config-changed", ());
+    // If the tunnel is running, restart it so the new route takes effect
+    // (the kick in add_albion_routes forces the game to reconnect with
+    // sockets that follow the new tunnel routes).
+    let running = *state.tunnel_running.lock().await;
+    if running {
+        let tunnel = state.tunnel.clone();
+        tunnel.stop().await;
+        // Wait for the old tunnel task to finish.
+        for _ in 0..100 {
+            if !*state.tunnel_running.lock().await { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        // Re-resolve VPS endpoint from routing config.
+        let albion_region = current_region(&state).await;
+        let cfg = state.config.lock().await.clone();
+        let vps_id = cfg.tunnel_routing.get(&albion_region)
+            .cloned()
+            .or_else(|| cfg.tunnel_routing.values().next().cloned())
+            .unwrap_or_default();
+        let preset = tunnel_presets::for_id(&vps_id).await;
+        let mut cfg = cfg;
+        if let Some(p) = preset {
+            cfg.tunnel_endpoint = p.endpoint;
+            cfg.tunnel_server_pubkey = p.server_pubkey;
+        }
+        if cfg.tunnel_endpoint.is_empty() {
+            return Ok(()); // No VPS assigned — direct routing.
+        }
+        if cfg.tunnel_client_privkey.is_empty() {
+            let (priv_b64, _) = tunnel::generate_keypair();
+            cfg.tunnel_client_privkey = priv_b64;
+        }
+        let _ = config::save(&cfg);
+        let tunnel_cfg = tunnel::TunnelConfig {
+            endpoint: cfg.tunnel_endpoint,
+            server_pubkey: cfg.tunnel_server_pubkey,
+            client_privkey: cfg.tunnel_client_privkey,
+            enabled: cfg.tunnel_enabled,
+            albion_region: albion_region.clone(),
+        };
+        tunnel.prepare_start();
+        let running_flag = Arc::clone(&state.tunnel_running);
+        tokio::spawn(async move {
+            tunnel.run(tunnel_cfg).await;
+            *running_flag.lock().await = false;
+        });
+    }
+    Ok(())
+}
+
+/// Ping a host via the OS `ping` command (works on all platforms, no
+/// admin needed, reliable ICMP). Returns average RTT in ms from 3 probes.
+/// Parses the last line of ping output which contains min/avg/max stats.
+/// Locale-independent: finds the pattern "= XXXms" in the stats line.
+pub async fn ping_host(host: &str) -> Option<f64> {
+    let host = host.to_string();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "windows")]
+        let output = crate::winutil::no_window(std::process::Command::new("ping"))
+            .args(["-n", "3", "-w", "2000", &host])
+            .output();
+        #[cfg(not(target_os = "windows"))]
+        let output = std::process::Command::new("ping")
+            .args(["-c", "3", "-W", "2", &host])
+            .output();
+        let output = output.ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+
+        // Extract all numeric values followed by "ms" from the stats line.
+        // Works across locales (PT-BR "Mdia", EN "Average", ES "Promedio").
+        // The stats line is the last non-empty line containing "=".
+        #[cfg(target_os = "windows")]
+        {
+            // Windows: "Minimum = 127ms, Maximum = 128ms, M�dia = 127ms"
+            // Find the stats line (last line with "=" and "ms")
+            let stats_line = text.lines().rev()
+                .find(|l| l.contains('=') && l.contains("ms"))?;
+            // Parse the SECOND number (avg) from the three values
+            let nums: Vec<f64> = stats_line.split(',')
+                .filter_map(|part| {
+                    let part = part.trim();
+                    // Find "= " followed by digits then "ms"
+                    if let Some(eq_pos) = part.find('=') {
+                        let rest = part[eq_pos+1..].trim();
+                        let end = rest.find("ms")?;
+                        rest[..end].trim().parse::<f64>().ok()
+                    } else { None }
+                })
+                .collect();
+            // Windows gives [min, max, avg] — take the last one (avg)
+            if nums.is_empty() { return None; }
+            return Some(nums[nums.len() - 1]);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Linux: "rtt min/avg/max/mdev = 128.123/129.456/130.789/1.234 ms"
+            let stats_line = text.lines().rev()
+                .find(|l| l.contains("rtt") && l.contains('='))?;
+            let parts: Vec<&str> = stats_line.split('=').nth(1)?.trim().split('/').collect();
+            if parts.len() >= 2 { parts[1].trim().parse::<f64>().ok() } else { None }
+        }
+    }).await.ok().flatten()
+}
+
+/// TCP "ping": resolve once, then measure pure connect RTT 3 times.
+/// Used for TCP services (not WireGuard VPS).
+pub async fn ping_port(host: &str, port: u16) -> Option<f64> {
+    use tokio::net::TcpStream;
+    use tokio::time::timeout;
+
+    // Resolve once (not measured)
+    let addrs = match tokio::net::lookup_host((host, port)).await {
+        Ok(a) => a.collect::<Vec<_>>(),
+        Err(_) => return None,
+    };
+    if addrs.is_empty() { return None; }
+
+    let mut total = 0.0_f64;
+    let mut count = 0_u32;
+    for addr in &addrs {
+        if count >= 3 { break; }
+        let start = std::time::Instant::now();
+        let conn = timeout(std::time::Duration::from_secs(2), TcpStream::connect(addr)).await;
+        if let Ok(Ok(_)) = conn {
+            total += start.elapsed().as_secs_f64() * 1000.0;
+            count += 1;
+        }
+    }
+    if count == 0 { return None; }
+    Some(total / count as f64)
 }
 
 #[tauri::command]
@@ -1098,6 +1366,8 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                 let handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     stop_tunnel_and_wait(&tunnel).await;
+                    // Also scrub stale routes in case the tunnel task already exited.
+                    let _ = tunnel::scrub_stale_routes_now();
                     handle.exit(0);
                 });
             }
@@ -1116,7 +1386,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 async fn stop_tunnel_and_wait(tunnel: &Tunnel) {
-    tunnel.stop().await;
+    tunnel.stop_quick().await;
     for _ in 0..100 {
         if !tunnel.status.lock().await.running { break; }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1125,9 +1395,10 @@ async fn stop_tunnel_and_wait(tunnel: &Tunnel) {
 
 // ─── Auto-updater ────────────────────────────────────────────────────────────
 
-/// Checks for update on startup. Downloads, installs, and relaunches automatically.
-/// Emits `update-status` events (downloading/installed/error) but never asks
-/// confirmation. installMode=passive on Windows shows a minimal progress bar.
+/// Checks for update on startup. If an update is available, emits
+/// `update-status: "available"` so the UI shows an update button — the user
+/// clicks it to download and install. This avoids forcing a restart while the
+/// user is mid-CTA. `apply_update` does the download+install+relaunch.
 #[cfg(desktop)]
 async fn auto_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
     use tauri_plugin_updater::UpdaterExt;
@@ -1136,20 +1407,56 @@ async fn auto_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
         Ok(None) => return Ok(()),
         Err(e) => return Err(e.into()),
     };
-    tracing::info!("auto-update: {} -> {}", update.current_version, update.version);
+    tracing::info!("auto-update: {} -> {} (waiting for user)", update.current_version, update.version);
+    let _ = app.emit("update-status", "available");
+    Ok(())
+}
+
+/// Download, install, and relaunch. Called when the user clicks the update button.
+#[cfg(desktop)]
+async fn apply_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = match app.updater()?.check().await {
+        Ok(Some(u)) => u,
+        Ok(None) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
     let _ = app.emit("update-status", "downloading");
     update.download_and_install(
-        |chunk, total| {
-            tracing::debug!("auto-update: {chunk} / {total:?} bytes");
-        },
-        || {
-            tracing::info!("auto-update: download complete, installing");
-        },
+        |chunk, total| { tracing::debug!("auto-update: {chunk} / {total:?} bytes"); },
+        || { tracing::info!("auto-update: download complete, installing"); },
     ).await?;
     let _ = app.emit("update-status", "installed");
     stop_tunnel_and_wait(&app.state::<AppState>().tunnel).await;
-    // Windows: the passive installer already closes the app. Other OS: explicit relaunch.
-    app.restart();
+    // app.restart() relaunches WITHOUT admin — the companion needs admin for
+    // Npcap/wintun. Re-launch elevated via ShellExecuteW("runas") and exit,
+    // same as the boot-time elevation path. The new process hits the
+    // is_windows_admin() check, passes, and continues normally.
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Ok(exe_path) = exe.into_os_string().into_string() {
+                use windows_sys::Win32::Foundation::HWND;
+                use windows_sys::Win32::UI::Shell::ShellExecuteW;
+                use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+                let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+                let file: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+                unsafe {
+                    ShellExecuteW(0 as HWND, verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+                }
+            }
+        }
+        std::process::exit(0);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        app.restart();
+    }
+}
+
+#[tauri::command]
+async fn check_and_apply_update(app: tauri::AppHandle) -> Result<(), String> {
+    apply_update(&app).await.map_err(|e| e.to_string())
 }
 
 pub fn run() {
@@ -1386,6 +1693,7 @@ pub fn run() {
                     server_pubkey: cfg.tunnel_server_pubkey.clone(),
                     client_privkey: cfg.tunnel_client_privkey.clone(),
                     enabled: cfg.tunnel_enabled,
+                    albion_region: cfg.region.clone(),
                 };
                 if cfg.tunnel_enabled {
                     *state.tunnel_running.blocking_lock() = true;
@@ -1632,6 +1940,9 @@ pub fn run() {
             tunnel_stop,
             tunnel_status,
             tunnel_is_admin,
+            tunnel_regions,
+            set_tunnel_route,
+            check_and_apply_update,
             set_zone,
             flush_transfer_queue,
             pending_count,

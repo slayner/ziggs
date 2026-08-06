@@ -7,6 +7,23 @@
 //
 // Se encontrar, adiciona ao LIB path pra o linker achar wpcap.lib.
 
+fn which_rc() -> Option<String> {
+    // Procura rc.exe nos Windows Kits instalados (10.0.22621, etc.)
+    let kits = ["C:\\Program Files (x86)\\Windows Kits\\10\\bin",
+                "C:\\Program Files\\Windows Kits\\10\\bin"];
+    for kit in &kits {
+        if let Ok(entries) = std::fs::read_dir(kit) {
+            for entry in entries.flatten() {
+                let rc = entry.path().join("x64").join("rc.exe");
+                if rc.exists() {
+                    return Some(rc.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn main() {
     // Gera o ACL de permissões (capabilities/*.json → gen/schemas/) e o resto
     // do codegen que `tauri::generate_context!()` espera encontrar. SEM isso
@@ -34,12 +51,41 @@ fn main() {
         // Common Controls v6 — TaskDialogIndirect precisa de comctl32.lib
         println!("cargo:rustc-link-lib=dylib=comctl32");
 
-        // Embed do manifest Windows (RT_MANIFEST) via resource.res compilado.
-        // Pré-compilado com rc.exe porque o toolchain Rust não tem rc.
-        let res = std::path::Path::new("resource.res");
-        if res.exists() {
-            println!("cargo:rustc-link-arg=/MANIFEST:NO");
-            println!("cargo:rustc-link-arg-bins={}", res.display());
+        // O Tauri já compila resource.rc em resource.lib e linka no binário
+        // (VERSIONINFO + ícone). Mas o manifest do Common Controls v6 não
+        // está lá — new_without_app_manifest() desligou o manifest automático
+        // do Tauri pra evitar duplicação com o nosso Companion.exe.manifest.
+        // Sem manifest, comctl32 v5 é carregada e TaskDialogIndirect falta.
+        // Solução: compilar SÓ o manifest como RT_MANIFEST num .res separado
+        // e linkar, sem tocar no resource.lib do Tauri.
+        let out_dir = std::env::var("OUT_DIR").unwrap();
+        let our_manifest = std::path::Path::new("Companion.exe.manifest");
+        if our_manifest.exists() {
+            let rc_candidates = [
+                std::env::var("RC").ok(),
+                std::env::var("WindowsSdkVerBinPath").ok().map(|p| format!("{}\\x64\\rc.exe", p)),
+                which_rc(),
+            ];
+            if let Some(rc) = rc_candidates.into_iter().flatten().next() {
+                let manifest_copy = std::path::Path::new(&out_dir).join("app.manifest");
+                std::fs::copy(our_manifest, &manifest_copy).ok();
+                let manifest_rc = std::path::Path::new(&out_dir).join("manifest.rc");
+                std::fs::write(&manifest_rc, "#pragma code_page(65001)\n1 24 \"app.manifest\"\n").ok();
+
+                let res = std::path::Path::new(&out_dir).join("manifest.res");
+                let status = std::process::Command::new(&rc)
+                    .args(["/nologo", "/r", "/fo"])
+                    .arg(&res)
+                    .arg(&manifest_rc)
+                    .current_dir(&out_dir)
+                    .status();
+                if let Ok(s) = status {
+                    if s.success() && res.exists() {
+                        println!("cargo:rustc-link-arg=/MANIFEST:NO");
+                        println!("cargo:rustc-link-arg-bins={}", res.display());
+                    }
+                }
+            }
         }
 
         let candidates = [
