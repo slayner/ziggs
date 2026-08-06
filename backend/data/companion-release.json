@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmJvZ3ZWbDFsKzQ5QW5FTnRuSm9QVHBCVFJVa05ieUtSTmtwSXZTdjRkd2pwWnNuaW42M2xPUmtEWmNwUUpDclBWM0xsRENWNHQ5YjhaeHF0QWZkQmdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQ0ODY2CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS40X3g2NC1zZXR1cC5leGUKdjhQNGFIR09ML2JoOFZCSzBpR0IyTitaQzNNZjNMdFFQUXlaZzY1UnpOSUtXZ3RTMUhYemNDNTVIK29BK0JpaUhUaFBXZ1ZzSlAxQWJSbUhMbEF3QkE9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.4_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlFSeHRrRzkvOUJpd3hXNWRqbDJkbkZFR1FGa0VkR0NxMW4vcE1ZN29EZldnSEJsaHdmd2htM0o4RnphZWl5Zk05YStrQkxLRXE3VGVnU1JZMHdDZ1FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQ1Mjk0CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS41X3g2NC1zZXR1cC5leGUKb0xUNUwxRThMTW9qQ2J0OU9zU2VyeVlhT0d2Z0VRZXlvdDFLLzd6Ny9NSTE1VWZrTk5OTUVsS0Z1QUZXS1l5RUtiQzRRWWJ3blVDb3hWWmNrNTdFQUE9PQo=",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.5_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-06T16:34:49Z",
-    "version":  "0.1.4",
-    "notes":  "v0.1.4: Fix mensagem Npcap vazia em PT — usa StrCmp por idioma. Tutorial mais detalhado com passo-a-passo completo."
+    "pub_date":  "2026-08-06T16:41:56Z",
+    "version":  "0.1.5",
+    "notes":  "v0.1.5: Loop de verificacao Npcap — tutorial re-aparece apos instalar Npcap, so continua quando DLLs sao encontradas."
 }
