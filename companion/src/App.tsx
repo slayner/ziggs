@@ -528,15 +528,14 @@ export default function App() {
         </aside>
 
         <main className="ck-main">
-          {tab === "route" && (
-            <div className="ck-route-col">
-              <div className="ck-route-scroll">
-                <TunnelHero config={config} tunnelStatus={tunnelStatus} hist={hist} />
-                <ConnPanel config={config} tunnelStatus={tunnelStatus} />
-              </div>
-              <AdSlot />
+          {/* TunnelHero always mounted — hidden via CSS when not active tab.
+              Desmontar perde o poll interno da matrix de roteamento e os ms somem. */}
+          <div className="ck-route-col" style={{ display: tab === "route" ? "flex" : "none" }}>
+            <div className="ck-route-scroll">
+              <TunnelHero config={config} tunnelStatus={tunnelStatus} hist={hist} />
             </div>
-          )}
+            <AdSlot />
+          </div>
 
           {tab === "damage" && (
             <div className="ck-full">
