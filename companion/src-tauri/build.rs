@@ -98,6 +98,20 @@ fn main() {
             let lib_path = std::path::Path::new(candidate);
             if lib_path.join("wpcap.lib").exists() {
                 println!("cargo:rustc-link-search=native={}", candidate);
+                // Delay-load wpcap.dll: so the companion starts without Npcap
+                // installed. The DLL is only loaded when the sniffer first
+                // calls a pcap function, not at process startup. Without this
+                // the .exe crashes on launch with "wpcap.dll not found".
+                println!("cargo:rustc-link-arg=/DELAYLOAD:wpcap.dll");
+                println!("cargo:rustc-link-arg=/DELAYLOAD:packet.dll");
+                // delayimp.lib provides the delay-load helper
+                let delayimp = lib_path.parent().unwrap_or(lib_path).join("delayimp.lib");
+                if delayimp.exists() {
+                    println!("cargo:rustc-link-lib=dylib=delayimp");
+                } else {
+                    // delayimp.lib ships with Visual Studio / Windows SDK
+                    println!("cargo:rustc-link-lib=dylib=delayimp");
+                }
                 println!("cargo:rerun-if-env-changed=NPCAP_SDK_DIR");
                 return;
             }
