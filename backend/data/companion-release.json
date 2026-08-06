@@ -1,11 +1,11 @@
 {
-  "version": "0.1.2",
-  "notes": "Fix: firewall kick via netsh (no PowerShell terminals). Fix: tunnel_start on first activation. Fix: lootlog clear persists. Fix: fast app exit. Busy column during route change.",
-  "pub_date": "2026-08-05T01:30:00Z",
-  "platforms": {
-    "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmZqOUNIUk9hU2lteFJna05qMTZ1TnEvSFFLc254cUhFc3JNZHd4d2xLWkx5cWd2NVlKYmM2Y0xMTDh2UTB0UGJpZzAyQ2dhemM2YWdWZG53MEd6bXcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1ODg4ODQzCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4yX3g2NC1zZXR1cC5leGUKNGEzS25Ma1hlN1Y2d2ppbm91K2lNRHpuZUlFb2FkNXBzWCtLaTJqelJUc3VJaUpUdVVmQ2p2TlF0OWhmZXlxbmVjRFBEWDVPOWdydFRpdWljR0RTQlE9PQo=",
-      "url": "https://ziggs.xyz/companion/Ziggs-Companion_0.1.2_x64-setup.exe"
-    }
-  }
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmFOd2F6bTN1U3VLMk9KZXIzd1JvckQ4dXR0Mk9DSzFEZXRmWXI5OXN0bllFR2FFTmsyZEJYZkgwR1FQRGtqU2F0M0VNK2t2YXF1RXRFNDZCdDNBNncwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQxNjcxCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4yX3g2NC1zZXR1cC5leGUKWVZuNkNscDZiTmFNQVFmTGovSVFHZFRoRE1lSWd2WTMzaWV6M3dSa1kyVU9WWVNlbWY4RkZMYmZqN0gwQnJWUFRZYWlvK0kvOVFnLzdyNkJ2VS8wQ0E9PQo=",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.2_x64-setup.exe"
+                                         }
+                  },
+    "pub_date":  "2026-08-06T15:43:18Z",
+    "version":  "0.1.2",
+    "notes":  "Fix: firewall, dynamic VPS manifest, tunnel routing, ad slots via srcdoc, companion inlined in ziggs-site"
 }

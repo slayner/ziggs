@@ -1,7 +1,7 @@
-#!/usr/bin/env pwsh
+#!/usr/bin/env powershell
 # companion/scripts/bump-version.ps1
 # Incrementa o patch version no tauri.conf.json
-# Uso: pwsh scripts/bump-version.ps1 [-Kind patch|minor|major] [-Set "0.2.0"]
+# Uso: powershell -ExecutionPolicy Bypass -File scripts/bump-version.ps1 [-Kind patch|minor|major] [-Set "0.2.0"]
 
 param(
     [ValidateSet("patch","minor","major")]

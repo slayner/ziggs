@@ -1,40 +1,39 @@
-#!/usr/bin/env pwsh
+#!/usr/bin/env powershell
 # companion/scripts/publish.ps1
-# Empacota o último build do companion num release completo:
+# Empacota o ultimo build do companion num release completo:
 #   1. GitHub release no slayner/ziggs (exe + sig)
-#   2. Copia exe + sig pra VPS de produção
+#   2. Copia exe + sig pra VPS de producao
 #   3. Atualiza companion-release.json no backend
 #   4. Commit + push no ziggs-site
 #
-# Uso: cd companion && pwsh scripts/publish.ps1 [-Notes "texto"]
-# Pré-requisito: build já feito (npm run tauri build com signing key no env)
+# Uso: cd companion ; powershell -ExecutionPolicy Bypass -File scripts/publish.ps1 [-Notes "texto"]
+# Pre-requisito: build ja feito (npm run tauri build com signing key no env)
 
 param(
     [string]$Notes = ""
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot/..
 
 # --- Carrega config do companion ---
 $tauriConf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
 $version = $tauriConf.version
-$productName = $tauriConf.productName
 
 Write-Host "=== Publicando companion v$version ===" -ForegroundColor Cyan
 
-# --- Acha os artefatos do build ---
+# --- Acha os artefatos do build (versao atual) ---
 $bundleDir = "src-tauri/target/release/bundle/nsis"
-$exeName = Get-ChildItem $bundleDir -Filter "*-setup.exe" | Select-Object -First 1
-if (!$exeName) {
+$exeName = Get-ChildItem $bundleDir -Filter "*_${version}_*-setup.exe" | Select-Object -First 1
+if (-not $exeName) {
     Write-Host "ERRO: nenhum *-setup.exe em $bundleDir" -ForegroundColor Red
     Write-Host "Rode 'npm run tauri build' primeiro (com TAURI_SIGNING_PRIVATE_KEY no env)" -ForegroundColor Yellow
     exit 1
 }
 $exePath = $exeName.FullName
 $sigPath = "$exePath.sig"
-if (!(Test-Path $sigPath)) {
-    Write-Host "ERRO: $sigPath não encontrado — build não foi assinado" -ForegroundColor Red
+if (-not (Test-Path $sigPath)) {
+    Write-Host "ERRO: $sigPath nao encontrado - build nao foi assinado" -ForegroundColor Red
     Write-Host "Configure TAURI_SIGNING_PRIVATE_KEY e TAURI_SIGNING_PRIVATE_KEY_PASSWORD" -ForegroundColor Yellow
     exit 1
 }
@@ -43,37 +42,34 @@ Write-Host "Exe: $($exeName.Name)"
 Write-Host "Sig: $(Split-Path $sigPath -Leaf)"
 
 # --- Notes do release ---
-if (!$Notes) {
+if (-not $Notes) {
     $Notes = "Companion v$version"
 }
 
 # --- 1. GitHub release no slayner/ziggs ---
-Write-Host "`n[1/4] GitHub release..." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "[1/4] GitHub release..." -ForegroundColor Yellow
 $tag = "v$version"
 
 # Deleta release anterior se existir (mesma tag)
-$existing = gh release view $tag --repo slayner/ziggs 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "  Release $tag já existe, deletando..."
+$existingTag = $null
+try { $existingTag = gh release view $tag --repo slayner/ziggs 2>&1 } catch {}
+if ($LASTEXITCODE -eq 0 -and $existingTag) {
+    Write-Host "  Release $tag ja existe, deletando..."
     gh release delete $tag --repo slayner/ziggs --yes 2>&1 | Out-Null
-    # Deleta a tag também
-    git push origin --delete $tag --repo slayner/ziggs 2>$null
     Start-Sleep -Seconds 2
 }
 
-gh release create $tag $exePath $sigPath `
-    --repo slayner/ziggs `
-    --title "v$version" `
-    --notes $Notes `
-    --latest 2>&1
+gh release create $tag $exePath $sigPath --repo slayner/ziggs --title "v$version" --notes $Notes --latest 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRO: gh release create falhou" -ForegroundColor Red
     exit 1
 }
 Write-Host "  Release criado: https://github.com/slayner/ziggs/releases/tag/$tag"
 
-# --- 2. Copia exe + sig pra VPS de produção ---
-Write-Host "`n[2/4] Upload pra VPS de produção..." -ForegroundColor Yellow
+# --- 2. Copia exe + sig pra VPS de producao ---
+Write-Host ""
+Write-Host "[2/4] Upload pra VPS de producao..." -ForegroundColor Yellow
 $sshKey = "$env:USERPROFILE\.ssh\hetzner_ziggs"
 $prodHost = "root@167.233.241.191"
 $remoteDir = "/var/www/ziggs.xyz/companion"
@@ -81,18 +77,19 @@ $remoteDir = "/var/www/ziggs.xyz/companion"
 scp -i $sshKey $exePath "${prodHost}:$remoteDir/Ziggs-Companion_${version}_x64-setup.exe"
 scp -i $sshKey $sigPath "${prodHost}:$remoteDir/Ziggs-Companion_${version}_x64-setup.exe.sig"
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERRO: scp falhou (VPS de produção)" -ForegroundColor Red
+    Write-Host "ERRO: scp falhou (VPS de producao)" -ForegroundColor Red
     exit 1
 }
 Write-Host "  Copiado pra $remoteDir/"
 
 # --- 3. Atualiza companion-release.json ---
-Write-Host "`n[3/4] Atualizando manifest..." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "[3/4] Atualizando manifest..." -ForegroundColor Yellow
 
-# Lê a assinatura (base64 do conteúdo do .sig)
+# Le a assinatura (base64 do conteudo do .sig)
 $sigContent = Get-Content $sigPath -Raw
 
-# Nome do arquivo na URL pública (hifens, não underscores — bater com o que já existe)
+# Nome do arquivo na URL publica
 $exeUrlName = "Ziggs-Companion_${version}_x64-setup.exe"
 
 $manifest = @{
@@ -107,28 +104,30 @@ $manifest = @{
     }
 }
 
-$manifestPath = "backend/data/companion-release.json"
+$manifestPath = "../backend/data/companion-release.json"
 $manifest | ConvertTo-Json -Depth 5 | Set-Content $manifestPath -NoNewline
 Write-Host "  $manifestPath atualizado"
 
-# Copia o manifest pra VPS de produção também
+# Copia o manifest pra VPS de producao tambem
 scp -i $sshKey $manifestPath "${prodHost}:/home/ziggs/ziggs/backend/data/companion-release.json"
-Write-Host "  Manifest copiado pra VPS de produção"
+Write-Host "  Manifest copiado pra VPS de producao"
 
 # --- 4. Commit + push no ziggs-site ---
-Write-Host "`n[4/4] Commit no ziggs-site..." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "[4/4] Commit no ziggs-site..." -ForegroundColor Yellow
 Set-Location ..
-git add $manifestPath companion/src-tauri/tauri.conf.json
+git add backend/data/companion-release.json companion/src-tauri/tauri.conf.json
 $commitMsg = "companion: release v$version"
 git commit -m $commitMsg 2>&1 | Out-Null
 git push origin master 2>&1 | Out-Null
 Write-Host "  Commitado e pushed"
 
-# --- Reinicia backend na VPS de produção pra servir o novo manifest ---
+# --- Reinicia backend na VPS de producao pra servir o novo manifest ---
 ssh -i $sshKey $prodHost "systemctl restart ziggs-backend" 2>&1 | Out-Null
-Write-Host "  Backend reiniciado na produção"
+Write-Host "  Backend reiniciado na producao"
 
-Write-Host "`n=== Release v$version publicado! ===" -ForegroundColor Green
+Write-Host ""
+Write-Host "=== Release v$version publicado! ===" -ForegroundColor Green
 Write-Host "  GitHub:  https://github.com/slayner/ziggs/releases/tag/$tag"
 Write-Host "  Download: https://ziggs.xyz/companion/$exeUrlName"
-Write-Host "  Auto-updater já ativo — companions instalados vão atualizar sozinhos"
+Write-Host "  Auto-updater ativo - companions instalados vao atualizar sozinhos"
