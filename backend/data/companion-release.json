@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlVPeGpuUDVsUzZoVGZ1TmNZY1l5VTUvUnJLb3RSTDRiL2dWWVRrUUI3dmF3TGpwdHJmbHcrZFNxLzlQY05GVFJlRXloejR5MThkQklsalVZWlRRY1FZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQ0MjE1CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4yX3g2NC1zZXR1cC5leGUKMitQdmRGazJvZGk0U2ZhaWFhTnlqYi9wVElYT0p6M3VTYWJObHhZTUozbWN2YzcxbnVoaXlqTmNtTzdvTk1kNXYvb20zN0VWUTZpZUpGNXlPS0NsQ3c9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.2_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmV6aGpVK3FkK2VIWGxwajVxSEhPeU9CNEZoL00rbFAxU2ZrcUY5OWY0blZYaWxyUTU1eDlmcTBIWW14MHJURXNQVTNPRFRVWWlpL3c1MnhWVWhxVlFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQ0NTY1CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4zX3g2NC1zZXR1cC5leGUKc25XbkxqVmk1eFJ4bUlHK2s1aG92MlBxOWMveXY4aGltZzZ0dVhoZlVSaTZMajFCQytUclovVXBUZWNaR1dGYlB0ckk1NlROampvTlNlVnduSW8xRGc9PQo=",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.3_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-06T16:24:07Z",
-    "version":  "0.1.2",
-    "notes":  "NSIS hook multilingue (PT/EN/ES) — verifica Npcap antes de instalar. Fix: firewall, dynamic VPS manifest, tunnel routing, ad slots via srcdoc."
+    "pub_date":  "2026-08-06T16:30:24Z",
+    "version":  "0.1.3",
+    "notes":  "v0.1.3: NSIS hook multilingue (PT/EN/ES) verifica Npcap antes de instalar. Site detecta idioma do navegador na 1a visita, fallback EN."
 }
