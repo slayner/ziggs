@@ -36,7 +36,12 @@
     "resources": ["resources/wintun.dll"],
     "category": "Utility",
     "shortDescription": "Ziggs Companion",
-    "longDescription": "Battle scanner distribuído, otimizador de rota/DNS e auxiliar de lootlog para a plataforma Ziggs."
+    "longDescription": "Battle scanner distribu\u00eddo, otimizador de rota/DNS e auxiliar de lootlog para a plataforma Ziggs.",
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsh"
+      }
+    }
   },
   "plugins": {
     "updater": {

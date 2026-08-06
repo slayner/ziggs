@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmFOd2F6bTN1U3VLMk9KZXIzd1JvckQ4dXR0Mk9DSzFEZXRmWXI5OXN0bllFR2FFTmsyZEJYZkgwR1FQRGtqU2F0M0VNK2t2YXF1RXRFNDZCdDNBNncwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQxNjcxCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4yX3g2NC1zZXR1cC5leGUKWVZuNkNscDZiTmFNQVFmTGovSVFHZFRoRE1lSWd2WTMzaWV6M3dSa1kyVU9WWVNlbWY4RkZMYmZqN0gwQnJWUFRZYWlvK0kvOVFnLzdyNkJ2VS8wQ0E9PQo=",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZllRUENDNEUxKzFKbUtMbTRYbzVEY2xBYWVKekRISU5uc1B1U3pheTdwZjVPc24xbE1RQ21ML0xnZW1JRCtQZUJmRGt0MTNjRGNuczVBdjBoOXZaL1F3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDQyNDQ3CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4yX3g2NC1zZXR1cC5leGUKMDBnaWhoaWRlY09wTjhJRlpsZXMrQTNqeEpRUVd6Nnc5MFB6SzhRUFBNUVUwTVBRL0JmeHBSc3NPR0psQXVsMmpsdGZVYXNYMGhzdWtMbnYyRXBjQ1E9PQo=",
                                              "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.2_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-06T15:43:18Z",
+    "pub_date":  "2026-08-06T15:54:45Z",
     "version":  "0.1.2",
-    "notes":  "Fix: firewall, dynamic VPS manifest, tunnel routing, ad slots via srcdoc, companion inlined in ziggs-site"
+    "notes":  "NSIS hook: verifica Npcap antes de instalar, mostra guia passo-a-passo se faltar. Fix: firewall, dynamic VPS manifest, tunnel routing, ad slots via srcdoc."
 }
