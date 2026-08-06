@@ -51,3 +51,6 @@ backend/_*.png
 backend/_*.mjs
 backend/_*.log
 backend/_profile_images/
+backend/data/*.ttf
+backend/data/*.TTF
+backend/data/juicy_kill_images/
