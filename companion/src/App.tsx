@@ -388,6 +388,10 @@ export default function App() {
   if (tab === "damage" && !config.collect_damage_meter) setTab("route");
   if (tab === "loot" && !config.collect_auto_lootlog) setTab("route");
 
+  // Npcap missing: Damage/Loot tabs are click-disabled but show tutorial on click.
+  const damageLocked = npcapMissing;
+  const lootLocked = npcapMissing;
+
   return (
     <div className="ck-root">
       <header
@@ -463,23 +467,25 @@ export default function App() {
             />
             <SideTab
               label={t("navDamage")}
-              value={fmtFull(sniffStats?.damage_total ?? 0)}
+              value={damageLocked ? "🔒" : fmtFull(sniffStats?.damage_total ?? 0)}
               valueTone="ok"
               selected={tab === "damage"}
-              onSelect={() => setTab("damage")}
+              onSelect={() => damageLocked ? setNpcapTutorialDismissed(false) : setTab("damage")}
               onToggle={config.collect_damage_meter ? () => updateConfig("collect_damage_meter", false) : () => updateConfig("collect_damage_meter", true)}
               toggleOn={config.collect_damage_meter}
-              inspectable={config.collect_damage_meter}
+              inspectable={config.collect_damage_meter && !damageLocked}
+              locked={damageLocked}
             />
             <SideTab
               label="Lootlog"
-              value={String(sniffStats?.loot_count ?? 0)}
+              value={lootLocked ? "🔒" : String(sniffStats?.loot_count ?? 0)}
               valueTone="ok"
               selected={tab === "loot"}
-              onSelect={() => setTab("loot")}
+              onSelect={() => lootLocked ? setNpcapTutorialDismissed(false) : setTab("loot")}
               onToggle={config.collect_auto_lootlog ? () => updateConfig("collect_auto_lootlog", false) : () => updateConfig("collect_auto_lootlog", true)}
               toggleOn={config.collect_auto_lootlog}
-              inspectable={config.collect_auto_lootlog}
+              inspectable={config.collect_auto_lootlog && !lootLocked}
+              locked={lootLocked}
             />
           </nav>
 
@@ -616,7 +622,7 @@ export default function App() {
 /// `expandedContent` regardless of selected tab. The badge value updates live
 //  from App state, not from this component.
 function SideTab({
-  label, value, valueTone, selected, onSelect, onToggle, toggleOn, expandedContent, inspectable = true,
+  label, value, valueTone, selected, onSelect, onToggle, toggleOn, expandedContent, inspectable = true, locked = false,
 }: {
   label: string;
   value: string;
@@ -627,14 +633,14 @@ function SideTab({
   toggleOn?: boolean;
   expandedContent?: ReactNode;
   inspectable?: boolean;
+  locked?: boolean;
 }) {
   const expanded = !!expandedContent && inspectable;
+  const clickable = inspectable || locked;
   return (
     <button
-      className={`ck-side-tab${selected ? " selected" : ""}${expanded ? " expanded" : ""}${!inspectable ? " disabled" : ""}`}
-      // Don't use <button disabled>: disabled buttons don't propagate clicks
-      // to children, but the toggle must remain clickable while off.
-      onClick={inspectable ? onSelect : undefined}
+      className={`ck-side-tab${selected ? " selected" : ""}${expanded ? " expanded" : ""}${locked ? " locked" : ""}${!inspectable && !locked ? " disabled" : ""}`}
+      onClick={clickable ? onSelect : undefined}
     >
       <span className="ck-side-tab-head">
         <span className="ck-side-tab-label">{label}</span>

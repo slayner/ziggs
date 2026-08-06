@@ -280,6 +280,9 @@ input, textarea, select { font-family: inherit; }
 .ck-side-tab.disabled { cursor: default; }
 .ck-side-tab.disabled:hover { background: transparent; color: var(--hint); }
 .ck-side-tab.disabled .ck-side-tab-toggle { cursor: pointer; }
+/* Locked tab: Npcap missing — clickable (opens tutorial) but visually dimmed. */
+.ck-side-tab.locked { opacity: 0.55; }
+.ck-side-tab.locked:hover { opacity: 0.8; background: var(--surface-2); }
 .ck-side-tab.expanded { padding-bottom: 10px; }
 .ck-side-tab-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
