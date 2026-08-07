@@ -105,6 +105,7 @@ class ReportIn(BaseModel):
     found: list[int] = Field(default_factory=list, max_length=WORK_RANGE_SIZE)
     missing: list[int] = Field(default_factory=list, max_length=WORK_RANGE_SIZE)
     errors: list[int] = Field(default_factory=list, max_length=WORK_RANGE_SIZE)
+    found_data: dict[str, dict] | None = Field(default=None)
 
 
 class ReportOut(BaseModel):
@@ -123,6 +124,7 @@ async def scan_report(
         accepted, rejected = await scan_dispatcher.report_work(
             db, body.worker_id, body.task_id,
             body.found, body.missing, body.errors,
+            found_data=body.found_data,
         )
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc

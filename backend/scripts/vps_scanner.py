@@ -114,10 +114,10 @@ def _request(method: str, path: str, body: dict | None = None, timeout: int = 30
         return 0, None
 
 
-def _probe_battle(host: str, battle_id: int) -> tuple[int, str]:
+def _probe_battle(host: str, battle_id: int) -> tuple[int, str, dict | None]:
     """Probe a single battle ID against the Albion API.
 
-    Returns (battle_id, "found" | "missing" | "error").
+    Returns (battle_id, "found" | "missing" | "error", raw_data_or_None).
     """
     url = f"https://{host}/api/gameinfo/battles/{battle_id}"
     req = urllib.request.Request(url, method="GET")
@@ -128,20 +128,19 @@ def _probe_battle(host: str, battle_id: int) -> tuple[int, str]:
                 try:
                     data = json.loads(raw)
                 except json.JSONDecodeError:
-                    return battle_id, "error"
-                # Validate it has the expected "id" field matching
+                    return battle_id, "error", None
                 if isinstance(data, dict) and str(data.get("id")) == str(battle_id):
-                    return battle_id, "found"
-                return battle_id, "error"
-            return battle_id, "error"
+                    return battle_id, "found", data
+                return battle_id, "error", None
+            return battle_id, "error", None
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            return battle_id, "missing"
+            return battle_id, "missing", None
         if exc.code == 429:
-            return battle_id, "rate_limited"
-        return battle_id, "error"
+            return battle_id, "rate_limited", None
+        return battle_id, "error", None
     except (urllib.error.URLError, OSError, TimeoutError):
-        return battle_id, "error"
+        return battle_id, "error", None
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +264,7 @@ def main():
         found: list[int] = []
         missing: list[int] = []
         errors: list[int] = []
+        found_data: dict[str, dict] = {}
         t_start = time.monotonic()
 
         ids = list(range(start_id, end_id + 1))
@@ -273,7 +273,6 @@ def main():
             for bid in ids:
                 if _shutdown.is_set():
                     break
-                # Check rate-limit pause
                 if consecutive_429 >= MAX_CONSECUTIVE_429:
                     log.warning("Rate limit threshold reached (%d consecutive 429s), pausing %ds",
                                 consecutive_429, RATE_LIMIT_PAUSE)
@@ -284,29 +283,34 @@ def main():
 
             for future in as_completed(futures):
                 if _shutdown.is_set():
-                    # Cancel remaining futures
                     for f in futures:
                         f.cancel()
                     break
                 try:
-                    bid, result = future.result()
+                    bid, result, raw = future.result()
                 except Exception:
                     bid = futures[future]
                     result = "error"
+                    raw = None
                     log.debug("Probe exception for battle %d", bid, exc_info=True)
 
                 if result == "found":
                     found.append(bid)
+                    if raw is not None:
+                        found_data[str(bid)] = raw
+                    consecutive_429 = 0
                 elif result == "missing":
                     missing.append(bid)
+                    consecutive_429 = 0
                 elif result == "rate_limited":
                     consecutive_429 += 1
-                    # Retry once after 2s
                     log.debug("429 on battle %d, retrying after 2s", bid)
                     time.sleep(2)
-                    _, retry_result = _probe_battle(host, bid)
+                    _, retry_result, retry_raw = _probe_battle(host, bid)
                     if retry_result == "found":
                         found.append(bid)
+                        if retry_raw is not None:
+                            found_data[str(bid)] = retry_raw
                         consecutive_429 = 0
                     elif retry_result == "missing":
                         missing.append(bid)
@@ -329,6 +333,7 @@ def main():
                 "found": found,
                 "missing": missing,
                 "errors": errors,
+                "found_data": found_data,
             }
             status, result = _request("POST", "/scan/report", report_body, timeout=120)
             if status == 200 and result:

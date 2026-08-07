@@ -29,9 +29,8 @@ from app.models.scan_worker import (
     ScanWorker,
     ScanWorkTask,
 )
-from app.services.battle_sweeper import _probe_detail, _region_candidates
+from app.services.battle_sweeper import _region_candidates
 from app.services.battle_tracker import REPROCESS_REASON_SWEEPER, upsert_battle_light
-from app.services.player_tracker import HOSTS, make_client
 
 log = logging.getLogger(__name__)
 
@@ -212,6 +211,7 @@ async def claim_work(db: AsyncSession, worker_id: str, region: str | None = None
 async def report_work(
     db: AsyncSession, worker_id: str, task_id: int,
     found: list[int], missing: list[int], errors: list[int],
+    found_data: dict[str, dict] | None = None,
 ) -> tuple[int, int]:
     task = await db.get(ScanWorkTask, task_id)
     if task is None:
@@ -228,50 +228,47 @@ async def report_work(
     if any(aid < task.battle_id_start or aid > task.battle_id_end for aid in reported):
         raise ValueError("ID fora do range reivindicado")
 
-    await db.commit()
-
     accepted = 0
+    verified_missing = len(missing)
+    verified_errors = len(errors)
     region = task.region
-    async with make_client() as client:
-        verified = await asyncio.gather(*(
-            _probe_detail(client, HOSTS[region], str(aid)) for aid in reported
-        ))
 
-    verified_missing = 0
-    verified_errors = 0
-    for aid, (status, raw) in zip(reported, verified):
+    for aid in found:
+        raw = (found_data or {}).get(str(aid))
         battle = None
         try:
-            if status == "found" and raw is not None and str(raw.get("id")) == str(aid):
+            if raw is not None and str(raw.get("id")) == str(aid):
                 battle = await upsert_battle_light(db, raw, region)
                 if battle is not None:
                     battle.reprocess_reason = REPROCESS_REASON_SWEEPER
                     accepted += 1
-                else:
-                    # API confirmou o ID, mas lutas pequenas não são armazenadas.
-                    status = "found"
-            elif status == "missing":
-                verified_missing += 1
-            else:
-                status = "error"
-                verified_errors += 1
         except Exception as e:
             log.warning("scan_dispatcher: upsert falhou (%s): %s", aid, e)
-            status = "error"
             verified_errors += 1
 
-        if status != "error":
-            probe = await db.get(BattleIdProbe, str(aid))
-            if probe is None:
-                db.add(BattleIdProbe(
-                    albion_id=str(aid), status=status, region=region,
-                    battle_id=battle.id if battle else None, probed_at=_now(),
-                ))
-            else:
-                probe.status = status
-                probe.region = region
-                probe.battle_id = battle.id if battle else None
-                probe.probed_at = _now()
+        probe = await db.get(BattleIdProbe, str(aid))
+        if probe is None:
+            db.add(BattleIdProbe(
+                albion_id=str(aid), status="found", region=region,
+                battle_id=battle.id if battle else None, probed_at=_now(),
+            ))
+        else:
+            probe.status = "found"
+            probe.region = region
+            probe.battle_id = battle.id if battle else None
+            probe.probed_at = _now()
+
+    for aid in missing:
+        probe = await db.get(BattleIdProbe, str(aid))
+        if probe is None:
+            db.add(BattleIdProbe(
+                albion_id=str(aid), status="missing", region=region,
+                probed_at=_now(),
+            ))
+        else:
+            probe.status = "missing"
+            probe.region = region
+            probe.probed_at = _now()
 
     task.status = "done"
     task.completed_at = _now()
