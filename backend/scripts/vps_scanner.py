@@ -120,7 +120,9 @@ def _probe_battle(host: str, battle_id: int) -> tuple[int, str, dict | None]:
     Returns (battle_id, "found" | "missing" | "error", raw_data_or_None).
     """
     url = f"https://{host}/api/gameinfo/battles/{battle_id}"
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, method="GET", headers={
+        "User-Agent": "ZiggsCompanion/0.1 (https://ziggs.xyz)",
+    })
     try:
         with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as resp:
             if resp.status == 200:
