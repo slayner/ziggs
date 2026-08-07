@@ -29,6 +29,7 @@ export default defineConfig({
             "/craft": { target: "http://127.0.0.1:8000", changeOrigin: true },
             "/market-history": { target: "http://127.0.0.1:8000", changeOrigin: true },
             "/companion": { target: "http://127.0.0.1:8000", changeOrigin: true },
+            "/scan": { target: "http://127.0.0.1:8000", changeOrigin: true },
             "/health": { target: "http://127.0.0.1:8000", changeOrigin: true },
         },
     },
