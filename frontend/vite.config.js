@@ -17,6 +17,7 @@ export default defineConfig({
     },
     server: {
         port: 5173,
+        allowedHosts: ["dev.ziggs.xyz", "ziggs.xyz", "localhost"],
         // Encaminha /api e /auth pro backend FastAPI em dev (evita problema de CORS).
         proxy: {
             "/auth": { target: "http://127.0.0.1:8000", changeOrigin: true },
