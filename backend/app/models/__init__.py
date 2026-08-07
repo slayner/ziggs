@@ -36,6 +36,7 @@ from app.models.nodes import (  # noqa: F401
 from app.models.companion import (  # noqa: F401
     CompanionScanTask,
 )
+from app.models.scan_worker import ScanWorker, ScanWorkTask  # noqa: F401
 from app.models.guild_profiles import GuildProfile, AllianceProfile  # noqa: F401
 from app.models.profile_media import ProfileMediaSubmission  # noqa: F401
 
@@ -61,6 +62,7 @@ __all__ = [
     "LootLogSubmission",
     "NodeDef", "NodeEvent", "NodeEventLog", "NodeMap", "NodeMapExclusion", "NodeCalendar",
     "CompanionScanTask",
+    "ScanWorker", "ScanWorkTask",
     "GuildProfile", "AllianceProfile",
     "ProfileMediaSubmission",
 ]

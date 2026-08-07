@@ -330,6 +330,7 @@ async def main() -> None:
         await bot.load_extension("cogs.battle_feed")
         await bot.load_extension("cogs.juicy_kills")
         await bot.load_extension("cogs.profile_moderation")
+        await bot.load_extension("cogs.scan_dashboard")
         try:
             await bot.start(TOKEN)
         finally:

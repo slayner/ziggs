@@ -1,0 +1,19 @@
+[Unit]
+Description=Ziggs VPS Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+Environment=SCAN_BACKEND_URL=http://65.108.144.110:8000
+Environment=SCAN_SECRET=ziggs-scan-dev-v1
+Environment=SCAN_WORKER_NAME=%H
+Environment=SCAN_REGION_PREF=americas
+ExecStart=/usr/bin/python3 /root/vps_scanner.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

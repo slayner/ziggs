@@ -36,13 +36,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.rate_limit import RateLimitMiddleware
-from app.api.routes import auth, battles, catalog, claims, companion, comps, craft, events, highscores, loot, lootlog, market_history, meta, nodes, players, profiles, regear, render, user_profile
+from app.api.routes import auth, battles, catalog, claims, companion, comps, craft, events, highscores, loot, lootlog, market_history, meta, nodes, players, profiles, regear, render, scan, user_profile
 from app.config import get_settings
 from app.domain.states import EventState, allowed_targets
 from app.services import (
     battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, companion_scan, companion_kill_scan, dashboard_cache,
     gold_price, highscores_cache, kill_sweeper, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
-    search_index, silver_dropped, small_battle_discovery, weapon_stats,
+    scan_dispatcher, search_index, silver_dropped, small_battle_discovery, weapon_stats,
 )
 
 
@@ -70,6 +70,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(kill_sweeper.run_forever()),
             asyncio.create_task(companion_scan.run_forever()),
             asyncio.create_task(companion_kill_scan.run_forever()),
+            asyncio.create_task(scan_dispatcher.run_forever()),
             asyncio.create_task(small_battle_discovery.run_forever()),
             asyncio.create_task(player_count_snapshot.run_forever()),
             asyncio.create_task(battle_price_reprocessor.run_forever()),
@@ -129,9 +130,9 @@ app.add_middleware(RateLimitMiddleware, limit=10, window=60, prefix="/auth/disco
 # detecção de presença na call parecerem quebradas (só "funcionavam" logo após
 # reiniciar o bot, quando o bucket ainda estava zerado).
 app.add_middleware(RateLimitMiddleware, limit=600, window=60, methods=("GET", "HEAD"),
-                    exclude_prefix=("/render/item", "/bot/", "/companion/"))
+                    exclude_prefix=("/render/item", "/bot/", "/companion/", "/scan/"))
 app.add_middleware(RateLimitMiddleware, limit=90, window=60, methods=("POST", "PUT", "PATCH", "DELETE"),
-                    exclude_prefix=("/render/item", "/bot/", "/companion/"))
+                    exclude_prefix=("/render/item", "/bot/", "/companion/", "/scan/"))
 
 # Permite que o Vite dev server (localhost:5173) chame a API diretamente.
 # Em produção o frontend e o backend ficam na mesma origem — este middleware é inofensivo.
@@ -149,6 +150,7 @@ app.include_router(battles.router)
 app.include_router(claims.router)
 app.include_router(catalog.router)
 app.include_router(companion.router)
+app.include_router(scan.router)
 app.include_router(comps.router)
 app.include_router(craft.router)
 app.include_router(events.router)
