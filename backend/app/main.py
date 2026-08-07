@@ -167,11 +167,6 @@ app.include_router(render.router)
 app.include_router(user_profile.router)
 app.include_router(user_profile.bot_router)
 
-# SPA + OG por rota — precisa ser o ÚLTIMO registro (catch-all). Só ativa se
-# frontend/dist existir (build do Vite); em dev com Vite server é no-op.
-from app import spa as _spa  # noqa: E402
-_spa.install(app)
-
 
 @app.get("/health")
 def health() -> dict:
@@ -191,3 +186,9 @@ def event_states() -> dict:
             for s in EventState
         },
     }
+
+
+# SPA + OG por rota — precisa ser o ÚLTIMO registro (catch-all). Só ativa se
+# frontend/dist existir (build do Vite); em dev com Vite server é no-op.
+from app import spa as _spa  # noqa: E402
+_spa.install(app)
