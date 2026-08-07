@@ -81,7 +81,7 @@ signal.signal(signal.SIGTERM, _on_signal)
 # HTTP helpers (stdlib only — urllib)
 # ---------------------------------------------------------------------------
 
-def _request(method: str, path: str, body: dict | None = None) -> tuple[int, dict | None]:
+def _request(method: str, path: str, body: dict | None = None, timeout: int = 30) -> tuple[int, dict | None]:
     """Make an HTTP request to the backend. Returns (status_code, json_body_or_None)."""
     url = f"{BACKEND_URL.rstrip('/')}{path}"
     data = json.dumps(body).encode("utf-8") if body else None
@@ -95,7 +95,7 @@ def _request(method: str, path: str, body: dict | None = None) -> tuple[int, dic
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
             return resp.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as exc:
@@ -130,7 +130,7 @@ def _probe_battle(host: str, battle_id: int) -> tuple[int, str]:
                 except json.JSONDecodeError:
                     return battle_id, "error"
                 # Validate it has the expected "id" field matching
-                if isinstance(data, dict) and data.get("id") == battle_id:
+                if isinstance(data, dict) and str(data.get("id")) == str(battle_id):
                     return battle_id, "found"
                 return battle_id, "error"
             return battle_id, "error"
@@ -330,7 +330,7 @@ def main():
                 "missing": missing,
                 "errors": errors,
             }
-            status, result = _request("POST", "/scan/report", report_body)
+            status, result = _request("POST", "/scan/report", report_body, timeout=120)
             if status == 200 and result:
                 log.info("Report accepted=%d rejected=%d", result.get("accepted", 0), result.get("rejected", 0))
             else:
