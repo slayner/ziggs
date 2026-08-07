@@ -49,29 +49,34 @@ from app.services import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if get_settings().disable_background_fetchers:
-        # Modo dado móvel: nenhum tracker/fetcher de polling sobe. As rotas da
-        # UI continuam disponíveis (só fazem request externo sob demanda).
         print("⚠️  DISABLE_BACKGROUND_FETCHERS=true — fetchers de background desligados.")
         tasks: list[asyncio.Task] = []
     else:
+        import os as _os
+        _feed_off = _os.getenv("DISABLE_FEED_FETCHERS", "").lower() in ("1", "true", "yes")
+        if _feed_off:
+            print("⚠️  DISABLE_FEED_FETCHERS=true — feed polling delegado às VPS workers.")
         tasks = [
-            asyncio.create_task(player_tracker.run_forever()),
-            asyncio.create_task(player_tracker.run_backfill_forever()),
-            asyncio.create_task(battle_tracker.run_forever()),
-            asyncio.create_task(battle_tracker.run_backfill_forever()),
-            asyncio.create_task(battle_tracker.run_retry_stuck_forever()),
+            # Feed polling — delegado às VPS workers quando DISABLE_FEED_FETCHERS=true
+            *([] if _feed_off else [
+                asyncio.create_task(player_tracker.run_forever()),
+                asyncio.create_task(player_tracker.run_backfill_forever()),
+                asyncio.create_task(battle_tracker.run_forever()),
+                asyncio.create_task(battle_tracker.run_backfill_forever()),
+                asyncio.create_task(battle_tracker.run_retry_stuck_forever()),
+                asyncio.create_task(battle_sweeper.run_forever()),
+                asyncio.create_task(kill_sweeper.run_forever()),
+                asyncio.create_task(small_battle_discovery.run_forever()),
+            ]),
             asyncio.create_task(profile_warmer.run_forever()),
             asyncio.create_task(profile_warmer.run_refresh_forever()),
             asyncio.create_task(claim_checker.run_forever()),
             asyncio.create_task(registration_checker.run_forever()),
             asyncio.create_task(weapon_stats.run_forever()),
             asyncio.create_task(battle_reprocessor.run_forever()),
-            asyncio.create_task(battle_sweeper.run_forever()),
-            asyncio.create_task(kill_sweeper.run_forever()),
             asyncio.create_task(companion_scan.run_forever()),
             asyncio.create_task(companion_kill_scan.run_forever()),
             asyncio.create_task(scan_dispatcher.run_forever()),
-            asyncio.create_task(small_battle_discovery.run_forever()),
             asyncio.create_task(player_count_snapshot.run_forever()),
             asyncio.create_task(battle_price_reprocessor.run_forever()),
             asyncio.create_task(silver_dropped.run_forever()),

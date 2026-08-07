@@ -1,25 +1,25 @@
-"""Scan - endpoints para VPS workers de scanning de batalhas.
+"""Scan — endpoints para VPS workers de feed polling.
 
-Sem auth de sessao. Workers usam header X-Scan-Secret (segredo compartilhado).
-O dado reportado e revalidado contra a API publica do Albion no report
-(scan_dispatcher.report_work -> upsert_battle_light), nunca confiamos cegamente
-no client - mesma doutrina do companion scan.
+Workers usam header X-Scan-Secret (segredo compartilhado). O dado reportado
+vem direto da API pública do Albion (workers são nossos), o backend faz
+upsert sem revalidar.
 
 Rotas:
   POST /scan/register  -> upsert worker
   POST /scan/heartbeat -> update heartbeat
   POST /scan/claim     -> pega proxima tarefa (204 = sem trabalho)
-  POST /scan/report    -> reporta resultados (found/missing/errors), revalida
+  POST /scan/report    -> reporta dados crus do feed, backend faz upsert
   GET  /scan/stats     -> dashboard (sem auth)
 """
 from __future__ import annotations
+
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_async_session
-from app.models.scan_worker import WORK_RANGE_SIZE
 from app.services import scan_dispatcher
 
 router = APIRouter(prefix="/scan", tags=["scan"])
@@ -77,8 +77,8 @@ class ClaimIn(BaseModel):
 class ClaimOut(BaseModel):
     task_id: int
     region: str
-    battle_id_start: int
-    battle_id_end: int
+    feed_type: str
+    page_offset: int
 
 
 @router.post("/claim")
@@ -90,22 +90,21 @@ async def scan_claim(
     _check_secret(x_scan_secret)
     task = await scan_dispatcher.claim_work(db, body.worker_id, body.region)
     if task is None:
-        raise HTTPException(204)  # No Content
+        raise HTTPException(204)
     return ClaimOut(
         task_id=task.id,
         region=task.region,
-        battle_id_start=task.battle_id_start,
-        battle_id_end=task.battle_id_end,
+        feed_type=task.feed_type,
+        page_offset=task.page_offset,
     )
 
 
 class ReportIn(BaseModel):
     worker_id: str = Field(min_length=1, max_length=64)
     task_id: int
-    found: list[int] = Field(default_factory=list, max_length=WORK_RANGE_SIZE)
-    missing: list[int] = Field(default_factory=list, max_length=WORK_RANGE_SIZE)
-    errors: list[int] = Field(default_factory=list, max_length=WORK_RANGE_SIZE)
-    found_data: dict[str, dict] | None = Field(default=None)
+    found_count: int = Field(default=0)
+    error_count: int = Field(default=0)
+    data: list[dict[str, Any]] | None = Field(default=None)
 
 
 class ReportOut(BaseModel):
@@ -123,8 +122,8 @@ async def scan_report(
     try:
         accepted, rejected = await scan_dispatcher.report_work(
             db, body.worker_id, body.task_id,
-            body.found, body.missing, body.errors,
-            found_data=body.found_data,
+            body.found_count, body.error_count,
+            data=body.data,
         )
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc

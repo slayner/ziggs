@@ -1,40 +1,31 @@
-"""Scan workers — registry de VPS workers + fila de ranges de IDs pra sondar.
+"""Scan workers — registry de VPS workers + fila de tasks de feed polling.
 
-Distribui o scanning pesado da API do Albion pra 4 VPS tunnel. O backend
-vira coordenador: gera ranges a partir dos buracos da sequência por região
-(mesma lógica do battle_sweeper/companion_scan), os workers reivindicam,
-sondam a API pública e reportam. O backend revalida tudo contra a Albion
-no report (upsert_battle_light) — nunca confia no client.
+Distribui o polling da API do Albion pra VPS tunnel. O backend vira
+coordenador: gera tasks de "feed" (poll de batalhas recentes ou kill events
+por região), os workers reivindicam, buscam a página da API e reportam os
+dados crus. O backend faz upsert (nunca confia no client, mas as VPS são
+nossas — o dado vem direto da API pública).
 
 Sem auth. Workers usam header X-Scan-Secret (segredo compartilhado).
 """
 from __future__ import annotations
 
-from datetime import timedelta
-
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, BigInt, pk
+from app.models.base import Base, pk
 
 
-# Worker sem heartbeat dentro disso = marcado 'dead' e seus claims liberados.
 WORKER_HEARTBEAT_TIMEOUT = timedelta(seconds=90)
-# Claim de tarefa volta a 'pending' depois disso (worker caiu no meio).
-WORK_CLAIM_TTL = timedelta(seconds=60)
-# Tamanho de cada range de IDs enviado a um worker por claim.
-WORK_RANGE_SIZE = 50
-# Regiões suportadas (precisa bater com player_tracker.HOSTS).
+WORK_CLAIM_TTL = timedelta(seconds=120)
+FEED_PAGE_SIZE = 51
 SCAN_REGIONS = ("americas", "europe", "asia")
-# Teto de tarefas pending por região (gera mais conforme consome).
-MAX_PENDING_PER_REGION = 100
+MAX_PENDING_PER_REGION = 50
 
 
 class ScanWorker(Base):
-    """Um VPS worker registrado. Identidade por worker_id (hostname/UUID setado
-    pelo VPS), não por auth. last_heartbeat decide vivo/morto."""
     __tablename__ = "scan_workers"
 
     id: Mapped[int] = pk()
@@ -45,6 +36,7 @@ class ScanWorker(Base):
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False, index=True)
     total_tasks_done: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_battles_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_kills_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_errors: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_found: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_missing: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -54,20 +46,23 @@ class ScanWorker(Base):
 
 
 class ScanWorkTask(Base):
-    """Um range de IDs de batalha pra sondar, por região.
+    """Task de feed polling: buscar uma página do feed de batalhas ou kills.
+
+    feed_type:
+      'battles' — GET /api/gameinfo/battles?sort=recent&limit=51&offset={offset}
+      'kills'   — GET /api/gameinfo/events?limit=51&offset={offset}
 
     status:
       'pending'  — aguardando um worker pegar
-      'claimed'   — um worker pegou (claim_expires_at no futuro)
-      'done'      — reportado e revalidado
-      'failed'    — claim expirou sem report (volta a 'pending' no próximo claim)
+      'claimed'  — um worker pegou (claim_expires_at no futuro)
+      'done'     — reportado
     """
     __tablename__ = "scan_work_tasks"
 
     id: Mapped[int] = pk()
     region: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    battle_id_start: Mapped[int] = mapped_column(BigInt(), nullable=False)
-    battle_id_end: Mapped[int] = mapped_column(BigInt(), nullable=False)
+    feed_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    page_offset: Mapped[int] = mapped_column(Integer, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False, index=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), index=True)
