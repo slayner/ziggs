@@ -1,93 +1,278 @@
-"""Scan dispatcher — coordena workers de VPS que pollam o feed do Albion.
+"""Distributed Albion feed coordinator.
 
-O backend gera tasks de "feed" (poll de batalhas recentes ou kill events por
-região), workers reivindicam, buscam a página da API pública e reportam os
-dados crus. O backend faz upsert (batalhas via upsert_battle_light, kills
-via _record_kill_event + upsert_player) — nunca confia cegamente no client,
-mas as VPS são nossas e o dado vem direto da API pública.
-
-Reaproveita upsert_battle_light/REPROCESS_REASON_SWEEPER (battle_tracker),
-upsert_player/_record_kill_event/_upsert_event_players (player_tracker).
+The backend owns the strategy and cursors. VPS workers only claim pages,
+fetch them from Albion and report the raw payload. Claims are global and
+atomic, so every VPS can work on every region without overlapping another.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
-from datetime import datetime, timezone
+import secrets
+import time
+import uuid
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, case, delete, distinct, func, or_, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import AsyncSessionLocal
-from app.models.battles import Battle, BattleIdProbe
-from app.models.players import PlayerKillEvent
+from app.db import AsyncSessionLocal, async_engine
+from app.models.battles import Battle, BattleSyncCursor
+from app.models.players import KillSyncCursor, PlayerKillEvent
 from app.models.scan_worker import (
     FEED_PAGE_SIZE,
-    MAX_PENDING_PER_REGION,
     SCAN_REGIONS,
     WORK_CLAIM_TTL,
     WORKER_HEARTBEAT_TIMEOUT,
+    ScanIngestPayload,
+    ScanIncident,
+    ScanLap,
+    ScanStreamState,
     ScanWorker,
+    ScanWorkerRegionMetric,
     ScanWorkTask,
 )
-from app.services.battle_tracker import REPROCESS_REASON_SWEEPER, upsert_battle_light
-from app.services.player_tracker import _record_kill_event, _upsert_event_players, upsert_player
+from app.services.battle_tracker import (
+    BATTLES_API_OFFSET_LIMIT,
+    REPROCESS_REASON_SWEEPER,
+    fetch_battles,
+    upsert_battle_light,
+)
+from app.services.albion_gate import slot
+from app.services.player_tracker import (
+    HOSTS,
+    KILL_BACKFILL_OFFSET_LIMIT,
+    _record_kill_event,
+    _upsert_event_players,
+    make_client,
+)
 
 log = logging.getLogger(__name__)
 
-SCAN_DISPATCHER_INTERVAL = 30
+SCAN_DISPATCHER_INTERVAL = 15
+RECENT_PAGES = 8
+MAX_RECENT_PAGES = 16
+BACKFILL_PAGE_STRIDE = 40
+RECENT_INTERVAL = {"battles": timedelta(seconds=60), "kills": timedelta(seconds=120)}
+BACKFILL_TASKS_PER_WORKER = 2
+MAX_BACKFILL_TASKS_PER_STREAM = 12
+DONE_RETENTION = timedelta(hours=1)
+DEAD_WORKER_RETENTION = timedelta(hours=24)
+FAILED_RETRY_INTERVAL = timedelta(seconds=60)
+BACKEND_IDLE_SECONDS = 5.0
+INGEST_BACKPRESSURE = 100
+INGEST_FORCE_DRAIN = 300
+INGEST_MAX_ATTEMPTS = 5
+CIRCUIT_ERROR_THRESHOLD = 3
+CIRCUIT_OPEN_INTERVAL = timedelta(seconds=60)
+FOREGROUND_LATENCY_LIMIT_MS = 500.0
+FOREGROUND_LATENCY_TTL = 30.0
+DB_CHECKED_OUT_LIMIT = 20
+CLAIM_LOCK_ID = 0x5A494748
+WINDOW_RATE_ALPHA = 0.25
+LATENCY_EWMA_ALPHA = 0.25
+_BACKEND_WORKER_ID = "backend-idle"
+
+_foreground_inflight = 0
+_last_foreground_activity = time.monotonic()
+_last_foreground_latency_ms = 0.0
+# ponytail: processo web único; persistir este contador só importa se claims forem
+# distribuídas entre múltiplos processos FastAPI.
+_claim_sequence = 0
+_affinity_sequence = 0
+_INTERNAL_PREFIXES = ("/scan/", "/bot/", "/health", "/render/", "/companion/")
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _incident(
+    db: AsyncSession, event: str, *, actor: str = "system",
+    worker_id: str | None = None, region: str | None = None,
+    feed_type: str | None = None, task_id: int | None = None,
+    details: dict | None = None,
+) -> None:
+    db.add(ScanIncident(
+        event=event, actor=actor, worker_id=worker_id, region=region,
+        feed_type=feed_type, task_id=task_id, details=details,
+    ))
+
+
+def foreground_request_started(path: str) -> bool:
+    """Track user-facing HTTP pressure for the opportunistic backend worker."""
+    global _foreground_inflight, _last_foreground_activity
+    if path.startswith(_INTERNAL_PREFIXES):
+        return False
+    _foreground_inflight += 1
+    _last_foreground_activity = time.monotonic()
+    return True
+
+
+def foreground_request_finished(tracked: bool, latency_ms: float = 0.0) -> None:
+    global _foreground_inflight, _last_foreground_activity, _last_foreground_latency_ms
+    if not tracked:
+        return
+    _foreground_inflight = max(0, _foreground_inflight - 1)
+    _last_foreground_activity = time.monotonic()
+    _last_foreground_latency_ms = latency_ms
+
+
+def backend_is_idle() -> bool:
+    return (
+        _foreground_inflight == 0
+        and time.monotonic() - _last_foreground_activity >= BACKEND_IDLE_SECONDS
+    )
+
+
+def pressure_status() -> dict:
+    return {
+        "idle": backend_is_idle(),
+        "inflight": _foreground_inflight,
+        "quiet_for_s": round(max(0.0, time.monotonic() - _last_foreground_activity), 3),
+        "last_latency_ms": round(_last_foreground_latency_ms, 1),
+    }
+
+
+def _parallelism_policy(
+    active_workers: int,
+    ingest_backlog: int,
+    web_idle: bool,
+    latency_ms: float,
+    latency_age_s: float,
+    db_checked_out: int,
+) -> tuple[int, bool]:
+    pressured = (
+        not web_idle
+        or ingest_backlog >= INGEST_BACKPRESSURE
+        or (latency_ms >= FOREGROUND_LATENCY_LIMIT_MS and latency_age_s < FOREGROUND_LATENCY_TTL)
+        or db_checked_out >= DB_CHECKED_OUT_LIMIT
+    )
+    limit = max(1, active_workers // 2) if pressured else max(1, active_workers)
+    return limit, pressured
+
+
+def _backfill_due(recent_only: bool) -> bool:
+    global _claim_sequence
+    if recent_only:
+        return False
+    _claim_sequence += 1
+    return _claim_sequence % 4 == 0
+
+
+def _next_window_rate(current: float | None, new_items: int, elapsed_s: float) -> float:
+    sample = new_items * 60 / max(1.0, elapsed_s)
+    return sample if current is None else current * (1 - WINDOW_RATE_ALPHA) + sample * WINDOW_RATE_ALPHA
+
+
+def _next_latency(current: float | None, sample_ms: int) -> float:
+    return float(sample_ms) if current is None else current * (1 - LATENCY_EWMA_ALPHA) + sample_ms * LATENCY_EWMA_ALPHA
+
+
+def _affinity_due() -> bool:
+    global _affinity_sequence
+    _affinity_sequence += 1
+    return _affinity_sequence % 3 == 0
+
+
 async def register_worker(
     db: AsyncSession, worker_id: str, name: str, region_pref: str | None
-) -> ScanWorker:
-    now = _now()
-    w = await db.scalar(select(ScanWorker).where(ScanWorker.worker_id == worker_id))
-    if w is None:
-        w = ScanWorker(worker_id=worker_id, name=name, region_pref=region_pref)
-        db.add(w)
+) -> tuple[ScanWorker, str]:
+    worker = await db.scalar(select(ScanWorker).where(ScanWorker.worker_id == worker_id))
+    if worker is None:
+        worker = ScanWorker(worker_id=worker_id, name=name, region_pref=None)
+        db.add(worker)
     else:
-        w.name = name
-        w.region_pref = region_pref
-    w.status = "active"
-    w.last_heartbeat = now
+        if worker.status == "quarantined" or worker.credential_revoked:
+            raise PermissionError("worker credential revoked")
+        worker.name = name
+        worker.region_pref = None
+    worker.status = "active"
+    worker.last_heartbeat = _now()
+    token = secrets.token_urlsafe(32)
+    worker.api_token_hash = hashlib.sha256(token.encode()).hexdigest()
+    worker.credential_revoked = False
     await db.commit()
-    await db.refresh(w)
-    return w
+    await db.refresh(worker)
+    return worker, token
+
+
+async def authenticate_worker(db: AsyncSession, worker_id: str, token: str | None) -> None:
+    worker = await db.scalar(select(ScanWorker).where(ScanWorker.worker_id == worker_id))
+    if (
+        worker is None
+        or not token
+        or not worker.api_token_hash
+        or worker.credential_revoked
+        or worker.status == "quarantined"
+        or not secrets.compare_digest(
+            worker.api_token_hash, hashlib.sha256(token.encode()).hexdigest()
+        )
+    ):
+        raise PermissionError("invalid worker credential")
 
 
 async def heartbeat(db: AsyncSession, worker_id: str) -> None:
-    now = _now()
     await db.execute(
         update(ScanWorker)
         .where(ScanWorker.worker_id == worker_id)
-        .values(last_heartbeat=now, status="active")
+        .values(
+            last_heartbeat=_now(),
+            status=case((ScanWorker.status == "dead", "active"), else_=ScanWorker.status),
+            region_pref=None,
+        )
     )
     await db.commit()
+
+
+async def count_active_workers(db: AsyncSession) -> int:
+    cutoff = _now() - WORKER_HEARTBEAT_TIMEOUT
+    return int(await db.scalar(
+        select(func.count(distinct(ScanWorker.worker_id))).where(
+            ScanWorker.status == "active",
+            ScanWorker.last_heartbeat >= cutoff,
+        )
+    ) or 0)
 
 
 async def mark_dead_workers(db: AsyncSession) -> int:
     cutoff = _now() - WORKER_HEARTBEAT_TIMEOUT
     dead_ids = (await db.scalars(
         select(ScanWorker.worker_id).where(
-            ScanWorker.status == "active", ScanWorker.last_heartbeat < cutoff
+            ScanWorker.status == "active",
+            ScanWorker.last_heartbeat < cutoff,
         )
     )).all()
     if not dead_ids:
         return 0
+    dead_streams = (await db.execute(
+        select(ScanWorkTask.region, ScanWorkTask.feed_type).where(
+            ScanWorkTask.status == "claimed",
+            ScanWorkTask.claimed_by.in_(dead_ids),
+        ).distinct()
+    )).all()
+    for worker_id in dead_ids:
+        _incident(db, "worker_dead", worker_id=worker_id)
     await db.execute(
         update(ScanWorker)
         .where(ScanWorker.worker_id.in_(dead_ids))
         .values(status="dead")
         .execution_options(synchronize_session=False)
     )
+    await _reopen_half_open(db, dead_streams)
     await db.execute(
         update(ScanWorkTask)
         .where(ScanWorkTask.status == "claimed", ScanWorkTask.claimed_by.in_(dead_ids))
-        .values(status="pending", claimed_by=None, claimed_at=None, claim_expires_at=None)
+        .values(
+            status="pending",
+            claimed_by=None,
+            lease_token=None,
+            claimed_at=None,
+            claim_expires_at=None,
+        )
         .execution_options(synchronize_session=False)
     )
     await db.commit()
@@ -95,271 +280,1208 @@ async def mark_dead_workers(db: AsyncSession) -> int:
 
 
 async def _release_expired_claims(db: AsyncSession) -> int:
+    expired_streams = (await db.execute(
+        select(ScanWorkTask.region, ScanWorkTask.feed_type).where(
+            ScanWorkTask.status == "claimed",
+            ScanWorkTask.claim_expires_at < _now(),
+        ).distinct()
+    )).all()
     result = await db.execute(
         update(ScanWorkTask)
         .where(
             ScanWorkTask.status == "claimed",
             ScanWorkTask.claim_expires_at < _now(),
         )
-        .values(status="pending", claimed_by=None, claimed_at=None, claim_expires_at=None)
+        .values(
+            status="pending",
+            claimed_by=None,
+            lease_token=None,
+            claimed_at=None,
+            claim_expires_at=None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    await _reopen_half_open(db, expired_streams)
+    return result.rowcount or 0
+
+
+async def _reopen_half_open(db: AsyncSession, streams) -> None:
+    for region, feed_type in streams:
+        await db.execute(
+            update(ScanStreamState)
+            .where(
+                ScanStreamState.region == region,
+                ScanStreamState.feed_type == feed_type,
+                ScanStreamState.circuit_state == "half_open",
+            )
+            .values(circuit_state="open", opened_until=_now() + CIRCUIT_OPEN_INTERVAL)
+        )
+
+
+def _apply_circuit_result(state: ScanStreamState, success: bool, now: datetime) -> None:
+    if success:
+        state.circuit_state = "closed"
+        state.consecutive_errors = 0
+        state.opened_until = None
+        return
+    state.consecutive_errors += 1
+    if state.circuit_state == "half_open" or state.consecutive_errors >= CIRCUIT_ERROR_THRESHOLD:
+        state.circuit_state = "open"
+        state.opened_until = now + CIRCUIT_OPEN_INTERVAL
+
+
+async def _record_stream_result(
+    db: AsyncSession, task: ScanWorkTask, success: bool, item_count: int = 0
+) -> None:
+    state = await db.scalar(
+        select(ScanStreamState)
+        .where(
+            ScanStreamState.region == task.region,
+            ScanStreamState.feed_type == task.feed_type,
+        )
+        .with_for_update()
+    )
+    if state is not None:
+        was_open = state.circuit_state
+        _apply_circuit_result(state, success, _now())
+        if (
+            success
+            and task.priority > 0
+            and task.page_offset == (state.recent_pages - 1) * FEED_PAGE_SIZE
+            and item_count >= FEED_PAGE_SIZE
+        ):
+            state.recent_pages = min(MAX_RECENT_PAGES, state.recent_pages + 1)
+        if state.circuit_state == "open" and was_open != "open":
+            log.warning("scan_dispatcher: circuit open %s/%s", task.region, task.feed_type)
+            _incident(db, "circuit_open", region=task.region, feed_type=task.feed_type)
+        elif success and was_open != "closed":
+            _incident(db, "circuit_closed", region=task.region, feed_type=task.feed_type)
+
+
+async def _ensure_recent_task(
+    db: AsyncSession, region: str, feed_type: str, offset: int, priority: int
+) -> int:
+    active = await db.scalar(
+        select(ScanWorkTask.id).where(
+            ScanWorkTask.region == region,
+            ScanWorkTask.feed_type == feed_type,
+            ScanWorkTask.page_offset == offset,
+            ScanWorkTask.status.in_(("pending", "claimed", "reported")),
+        ).limit(1)
+    )
+    if active is not None:
+        return 0
+
+    recent_failure = await db.scalar(
+        select(ScanWorkTask.id).where(
+            ScanWorkTask.region == region,
+            ScanWorkTask.feed_type == feed_type,
+            ScanWorkTask.page_offset == offset,
+            ScanWorkTask.status == "failed",
+            ScanWorkTask.completed_at >= _now() - FAILED_RETRY_INTERVAL,
+        ).limit(1)
+    )
+    if recent_failure is not None:
+        return 0
+
+    reusable = await db.scalar(
+        select(ScanWorkTask)
+        .where(
+            ScanWorkTask.region == region,
+            ScanWorkTask.feed_type == feed_type,
+            ScanWorkTask.page_offset == offset,
+            ScanWorkTask.status.in_(("done", "failed")),
+        )
+        .order_by(ScanWorkTask.completed_at.desc().nullslast(), ScanWorkTask.id.desc())
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+    if (
+        reusable is not None
+        and reusable.status == "done"
+        and reusable.completed_at is not None
+        and reusable.completed_at >= _now() - RECENT_INTERVAL[feed_type]
+    ):
+        return 0
+    if reusable is None:
+        db.add(ScanWorkTask(
+            region=region,
+            feed_type=feed_type,
+            page_offset=offset,
+            priority=priority,
+            status="pending",
+        ))
+    else:
+        reusable.priority = priority
+        reusable.status = "pending"
+        reusable.claimed_by = None
+        reusable.lease_token = None
+        reusable.claimed_at = None
+        reusable.claim_expires_at = None
+        reusable.completed_at = None
+        reusable.found_count = 0
+        reusable.missing_count = 0
+        reusable.error_count = 0
+    return 1
+
+
+def _stream_limits(feed_type: str, stride: int = FEED_PAGE_SIZE) -> tuple[int, int]:
+    start = RECENT_PAGES * FEED_PAGE_SIZE
+    api_limit = BATTLES_API_OFFSET_LIMIT if feed_type == "battles" else KILL_BACKFILL_OFFSET_LIMIT
+    max_offset = api_limit - FEED_PAGE_SIZE
+    last = start + ((max_offset - start) // stride) * stride
+    return start, max(start, last)
+
+
+async def _locked_cursor(db: AsyncSession, region: str, feed_type: str):
+    model = BattleSyncCursor if feed_type == "battles" else KillSyncCursor
+    cursor = await db.scalar(
+        select(model).where(model.region == region).with_for_update().limit(1)
+    )
+    if cursor is None:
+        cursor = model(region=region, next_offset=RECENT_PAGES * FEED_PAGE_SIZE, done=False)
+        db.add(cursor)
+        await db.flush()
+    return cursor
+
+
+async def _reserve_backfill_tasks(
+    db: AsyncSession, region: str, feed_type: str, target: int
+) -> int:
+    lap = await db.scalar(
+        select(ScanLap).where(
+            ScanLap.region == region,
+            ScanLap.feed_type == feed_type,
+            ScanLap.status == "active",
+        ).with_for_update().limit(1)
+    )
+    if lap is None:
+        start, last = _stream_limits(feed_type, BACKFILL_PAGE_STRIDE)
+        available_pages = ((last - start) // BACKFILL_PAGE_STRIDE) + 1
+        lap = ScanLap(
+            region=region,
+            feed_type=feed_type,
+            status="active",
+            expected_pages=available_pages,
+            completed_pages=0,
+            page_stride=BACKFILL_PAGE_STRIDE,
+        )
+        db.add(lap)
+        await db.flush()
+        await db.execute(
+            update(ScanWorkTask).where(
+                ScanWorkTask.region == region,
+                ScanWorkTask.feed_type == feed_type,
+                ScanWorkTask.priority == 0,
+                ScanWorkTask.status.in_(("pending", "claimed", "reported")),
+                ScanWorkTask.lap_id.is_(None),
+            ).values(lap_id=lap.id)
+        )
+    start, last = _stream_limits(feed_type, lap.page_stride)
+    available_pages = ((last - start) // lap.page_stride) + 1
+    target = min(target, available_pages)
+    current = int(await db.scalar(
+        select(func.count()).select_from(ScanWorkTask).where(
+            ScanWorkTask.region == region,
+            ScanWorkTask.feed_type == feed_type,
+            ScanWorkTask.priority == 0,
+            ScanWorkTask.status.in_(("pending", "claimed", "reported")),
+        )
+    ) or 0)
+    needed = max(0, target - current)
+    if not needed:
+        return 0
+
+    cursor = await _locked_cursor(db, region, feed_type)
+    offset = cursor.next_offset
+    if offset < start or offset > last or (offset - start) % lap.page_stride:
+        offset = start
+
+    assigned_offsets = set((await db.scalars(
+        select(ScanWorkTask.page_offset).where(
+            ScanWorkTask.region == region,
+            ScanWorkTask.feed_type == feed_type,
+            ScanWorkTask.status.in_(("pending", "claimed", "reported")),
+        )
+    )).all())
+    created = 0
+    attempts = 0
+    while created < needed and attempts < available_pages:
+        attempts += 1
+        if offset not in assigned_offsets:
+            db.add(ScanWorkTask(
+                region=region,
+                feed_type=feed_type,
+                page_offset=offset,
+                priority=0,
+                status="pending",
+                lap_id=lap.id,
+            ))
+            assigned_offsets.add(offset)
+            created += 1
+        offset += lap.page_stride
+        if offset > last:
+            offset = start
+    cursor.next_offset = offset
+    cursor.done = False
+    return created
+
+
+async def _cleanup_history(db: AsyncSession) -> None:
+    now = _now()
+    await db.execute(delete(ScanWorkTask).where(
+        ScanWorkTask.status.in_(("done", "failed")),
+        ScanWorkTask.completed_at < now - DONE_RETENTION,
+        or_(
+            ScanWorkTask.lap_id.is_(None),
+            ScanWorkTask.lap_id.not_in(
+                select(ScanLap.id).where(ScanLap.status == "active")
+            ),
+        ),
+    ))
+    await db.execute(delete(ScanWorker).where(
+        ScanWorker.status == "dead",
+        ScanWorker.last_heartbeat < now - DEAD_WORKER_RETENTION,
+    ))
+    await db.execute(delete(ScanIngestPayload).where(
+        ScanIngestPayload.status.in_(("done", "failed")),
+        ScanIngestPayload.completed_at < now - DONE_RETENTION,
+    ))
+
+
+async def _retry_failed_tasks(db: AsyncSession) -> int:
+    await db.execute(text("""
+        DELETE FROM scan_work_tasks t
+        WHERE t.status = 'failed'
+        AND EXISTS (
+            SELECT 1 FROM scan_work_tasks t2
+            WHERE t2.region = t.region
+              AND t2.feed_type = t.feed_type
+              AND t2.page_offset = t.page_offset
+              AND t2.status IN ('pending', 'claimed', 'reported')
+        )
+    """))
+    # Deleta failed duplicada (mantem a mais recente por offset) — dois
+    # faileds no mesmo offset viram dois pendings e violam a unique partial.
+    await db.execute(text("""
+        DELETE FROM scan_work_tasks
+        WHERE status = 'failed'
+        AND id NOT IN (
+            SELECT DISTINCT ON (region, feed_type, page_offset) id
+            FROM scan_work_tasks
+            WHERE status = 'failed'
+            ORDER BY region, feed_type, page_offset, completed_at DESC
+        )
+    """))
+    result = await db.execute(
+        update(ScanWorkTask)
+        .where(
+            ScanWorkTask.status == "failed",
+            ScanWorkTask.completed_at < _now() - FAILED_RETRY_INTERVAL,
+        )
+        .values(
+            status="pending",
+            claimed_by=None,
+            claimed_at=None,
+            claim_expires_at=None,
+            completed_at=None,
+        )
         .execution_options(synchronize_session=False)
     )
     return result.rowcount or 0
 
 
-async def _generate_feed_tasks(db: AsyncSession) -> int:
-    """Gera tasks de feed polling: battles e kills para cada região.
-
-    Para cada (region, feed_type), mantém até MAX_PENDING_PER_REGION tasks
-    pending. As tasks são páginas do feed (page_offset=0,1,2,...). A página 0
-    é alta prioridade (mais recente), páginas maiores são baixa prioridade.
-    """
-    total = 0
-    for region in SCAN_REGIONS:
-        for feed_type in ("battles", "kills"):
-            pending = await db.scalar(
-                select(func.count()).select_from(ScanWorkTask).where(
-                    ScanWorkTask.region == region,
-                    ScanWorkTask.feed_type == feed_type,
-                    ScanWorkTask.status == "pending",
-                )
-            ) or 0
-            if pending >= MAX_PENDING_PER_REGION:
-                continue
-            needed = MAX_PENDING_PER_REGION - pending
-            for page in range(needed):
-                # Verifica se já existe task pending/done para esta página
-                exists = await db.scalar(
-                    select(ScanWorkTask.id).where(
-                        ScanWorkTask.region == region,
-                        ScanWorkTask.feed_type == feed_type,
-                        ScanWorkTask.page_offset == page,
-                        ScanWorkTask.status.in_(["pending", "claimed"]),
-                    )
-                )
-                if exists is not None:
-                    continue
-                prio = 2 if page == 0 else (1 if page < 3 else 0)
-                db.add(ScanWorkTask(
-                    region=region,
-                    feed_type=feed_type,
-                    page_offset=page * FEED_PAGE_SIZE,
-                    priority=prio,
-                    status="pending",
-                ))
-                total += 1
-    if total:
-        await db.commit()
-    return total
-
-
 async def generate_tasks(db: AsyncSession) -> int:
     await _release_expired_claims(db)
-    total = await _generate_feed_tasks(db)
-    return total
-
-
-async def claim_work(db: AsyncSession, worker_id: str, region: str | None = None) -> ScanWorkTask | None:
-    await _release_expired_claims(db)
-
-    # Se worker já tem claim vivo, devolve o mesmo
-    held = await db.scalar(
-        select(ScanWorkTask)
-        .where(
-            ScanWorkTask.claimed_by == worker_id,
-            ScanWorkTask.status == "claimed",
-        )
-        .order_by(ScanWorkTask.id.asc())
-        .limit(1)
+    await _retry_failed_tasks(db)
+    active_workers = await count_active_workers(db)
+    backfill_target = max(
+        1,
+        min(MAX_BACKFILL_TASKS_PER_STREAM, active_workers * BACKFILL_TASKS_PER_WORKER),
     )
-    if held is not None:
-        now = _now()
-        held.claimed_at = now
-        held.claim_expires_at = now + WORK_CLAIM_TTL
-        await db.commit()
-        return held
+    created = 0
+    for region in SCAN_REGIONS:
+        for feed_type in ("battles", "kills"):
+            try:
+                async with db.begin_nested():
+                    state = await db.scalar(select(ScanStreamState).where(
+                        ScanStreamState.region == region,
+                        ScanStreamState.feed_type == feed_type,
+                    ))
+                    if state is not None and state.paused:
+                        continue
+                    for page in range(state.recent_pages if state is not None else RECENT_PAGES):
+                        created += await _ensure_recent_task(
+                            db,
+                            region,
+                            feed_type,
+                            page * FEED_PAGE_SIZE,
+                            2 if page == 0 else 1,
+                        )
+                    created += await _reserve_backfill_tasks(
+                        db, region, feed_type, backfill_target
+                    )
+            except IntegrityError:
+                pass
+    await _cleanup_history(db)
+    await db.commit()
+    return created
 
-    # Tenta região preferida primeiro
-    regions = [region] if region and region in SCAN_REGIONS else list(SCAN_REGIONS)
-    for r in regions:
-        task = await db.scalar(
-            select(ScanWorkTask)
-            .where(ScanWorkTask.status == "pending", ScanWorkTask.region == r)
-            .order_by(ScanWorkTask.priority.desc(), ScanWorkTask.id.asc())
-            .limit(1)
-        )
-        if task is not None:
-            now = _now()
-            task.status = "claimed"
-            task.claimed_by = worker_id
-            task.claimed_at = now
-            task.claim_expires_at = now + WORK_CLAIM_TTL
-            await db.commit()
-            await db.refresh(task)
-            return task
 
-    # Sem região pref: pega qualquer pending
-    task = await db.scalar(
-        select(ScanWorkTask)
-        .where(ScanWorkTask.status == "pending")
-        .order_by(ScanWorkTask.priority.desc(), ScanWorkTask.id.asc())
-        .limit(1)
-    )
-    if task is None:
-        await generate_tasks(db)
-        task = await db.scalar(
-            select(ScanWorkTask)
-            .where(ScanWorkTask.status == "pending")
-            .order_by(ScanWorkTask.priority.desc(), ScanWorkTask.id.asc())
-            .limit(1)
-        )
-        if task is None:
-            return None
-
+async def _claim_next(
+    db: AsyncSession,
+    worker_id: str,
+    *,
+    backfill_only: bool = False,
+    recent_only: bool = False,
+    prefer_latency: bool = False,
+) -> ScanWorkTask | None:
     now = _now()
+    query = (
+        select(ScanWorkTask, ScanStreamState)
+        .join(
+            ScanStreamState,
+            and_(
+                ScanStreamState.region == ScanWorkTask.region,
+                ScanStreamState.feed_type == ScanWorkTask.feed_type,
+            ),
+        )
+        .outerjoin(
+            ScanWorkerRegionMetric,
+            and_(
+                ScanWorkerRegionMetric.worker_id == worker_id,
+                ScanWorkerRegionMetric.region == ScanWorkTask.region,
+            ),
+        )
+        .where(
+            ScanWorkTask.status == "pending",
+            ScanStreamState.paused.is_(False),
+            or_(
+                ScanStreamState.circuit_state == "closed",
+                and_(
+                    ScanStreamState.circuit_state == "open",
+                    ScanStreamState.opened_until <= now,
+                ),
+            ),
+        )
+    )
+    if backfill_only:
+        query = query.where(ScanWorkTask.priority == 0)
+    elif recent_only:
+        query = query.where(ScanWorkTask.priority > 0)
+    order = [ScanWorkTask.priority.desc()]
+    if prefer_latency:
+        order.append(ScanWorkerRegionMetric.ewma_latency_ms.asc().nullslast())
+    order.extend((
+        ScanStreamState.last_claimed_at.asc().nullsfirst(),
+        ScanWorkTask.id.asc(),
+    ))
+    row = (await db.execute(
+        query
+        .order_by(*order)
+        .with_for_update(of=(ScanWorkTask, ScanStreamState), skip_locked=True)
+        .limit(1)
+    )).first()
+    if row is None:
+        return None
+    task, stream = row
     task.status = "claimed"
     task.claimed_by = worker_id
+    task.lease_token = uuid.uuid4().hex
+    task.attempt_count += 1
     task.claimed_at = now
     task.claim_expires_at = now + WORK_CLAIM_TTL
+    stream.last_claimed_at = now
+    if stream.circuit_state == "open":
+        stream.circuit_state = "half_open"
     await db.commit()
     await db.refresh(task)
     return task
 
 
-async def report_work(
-    db: AsyncSession, worker_id: str, task_id: int,
-    found_count: int, error_count: int,
-    data: list[dict] | None = None,
-) -> tuple[int, int]:
-    """Processa o report de uma task de feed. `data` é a lista de batalhas ou
-    kill events crus vindos da API do Albion. O backend faz upsert."""
+async def claim_work(
+    db: AsyncSession, worker_id: str, region: str | None = None
+) -> ScanWorkTask | None:
+    """Claim globally by priority; region is retained only for API compatibility."""
+    await db.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": CLAIM_LOCK_ID})
+    await _release_expired_claims(db)
+    held = await db.scalar(
+        select(ScanWorkTask)
+        .where(ScanWorkTask.claimed_by == worker_id, ScanWorkTask.status == "claimed")
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+    if held is not None:
+        if not held.lease_token:
+            held.lease_token = uuid.uuid4().hex
+            held.attempt_count += 1
+        held.claimed_at = _now()
+        held.claim_expires_at = _now() + WORK_CLAIM_TTL
+        await db.commit()
+        return held
+
+    worker = await db.scalar(select(ScanWorker).where(ScanWorker.worker_id == worker_id))
+    if worker is None or worker.status == "draining":
+        await db.commit()
+        return None
+
+    ingest_backlog = int(await db.scalar(
+        select(func.count()).select_from(ScanIngestPayload).where(
+            ScanIngestPayload.status.in_(("pending", "processing"))
+        )
+    ) or 0)
+    active_workers = await count_active_workers(db)
+    active_claims = int(await db.scalar(
+        select(func.count()).select_from(ScanWorkTask).where(
+            ScanWorkTask.status == "claimed"
+        )
+    ) or 0)
+    latency_age = max(0.0, time.monotonic() - _last_foreground_activity)
+    claim_limit, pressured = _parallelism_policy(
+        active_workers,
+        ingest_backlog,
+        backend_is_idle(),
+        _last_foreground_latency_ms,
+        latency_age,
+        async_engine.pool.checkedout(),
+    )
+    if active_claims >= claim_limit:
+        await db.commit()
+        return None
+    recent_only = ingest_backlog >= INGEST_BACKPRESSURE or pressured
+    backfill_due = _backfill_due(recent_only)
+    prefer_latency = _affinity_due()
+    task = await _claim_next(
+        db, worker_id, backfill_only=backfill_due, recent_only=recent_only,
+        prefer_latency=prefer_latency,
+    )
+    if task is None and backfill_due:
+        task = await _claim_next(
+            db, worker_id, recent_only=recent_only, prefer_latency=prefer_latency
+        )
+    if task is not None:
+        return task
+    # Sem generate_tasks aqui — o coordinator (run_forever) gera tarefas num
+    # loop singleton a cada 15s. Cham generate_tasks inline em claim_work
+    # causava UniqueViolation quando multiplos workers pediam trabalho
+    # concorrentemente e o coordinator criava a mesma tarefa ao mesmo tempo.
+    return None
+
+
+async def control_worker(db: AsyncSession, worker_id: str, action: str) -> None:
+    worker = await db.scalar(
+        select(ScanWorker).where(ScanWorker.worker_id == worker_id).with_for_update()
+    )
+    if worker is None:
+        raise LookupError("worker not found")
+    if action == "drain":
+        worker.status = "draining"
+    elif action == "quarantine":
+        streams = (await db.execute(select(
+            ScanWorkTask.region, ScanWorkTask.feed_type
+        ).where(
+            ScanWorkTask.claimed_by == worker_id,
+            ScanWorkTask.status == "claimed",
+        ).distinct())).all()
+        worker.status = "quarantined"
+        worker.credential_revoked = True
+        await db.execute(update(ScanWorkTask).where(
+            ScanWorkTask.claimed_by == worker_id,
+            ScanWorkTask.status == "claimed",
+        ).values(
+            status="pending", claimed_by=None, lease_token=None,
+            claimed_at=None, claim_expires_at=None,
+        ))
+        await _reopen_half_open(db, streams)
+    elif action == "resume":
+        worker.status = "active"
+        if worker.credential_revoked:
+            worker.credential_revoked = False
+            worker.api_token_hash = None
+    else:
+        raise ValueError("invalid worker action")
+    _incident(db, f"worker_{action}", actor="operator", worker_id=worker_id)
+    await db.commit()
+
+
+async def control_stream(db: AsyncSession, region: str, feed_type: str, action: str) -> None:
+    state = await db.scalar(select(ScanStreamState).where(
+        ScanStreamState.region == region,
+        ScanStreamState.feed_type == feed_type,
+    ).with_for_update())
+    if state is None:
+        raise LookupError("stream not found")
+    if action not in ("pause", "resume"):
+        raise ValueError("invalid stream action")
+    state.paused = action == "pause"
+    _incident(db, f"stream_{action}", actor="operator", region=region, feed_type=feed_type)
+    await db.commit()
+
+
+async def retry_task(db: AsyncSession, task_id: int) -> None:
+    task = await db.scalar(
+        select(ScanWorkTask).where(ScanWorkTask.id == task_id).with_for_update()
+    )
+    if task is None:
+        raise LookupError("task not found")
+    if task.status != "failed":
+        raise ValueError("task is not failed")
+    task.status = "pending"
+    task.attempt_count = 0
+    task.error_count = 0
+    task.completed_at = None
+    task.claimed_by = None
+    task.lease_token = None
+    task.claimed_at = None
+    task.claim_expires_at = None
+    _incident(
+        db, "task_retry", actor="operator", region=task.region,
+        feed_type=task.feed_type, task_id=task.id,
+        details={"offset": task.page_offset},
+    )
+    await db.commit()
+
+
+async def _release_task(db: AsyncSession, task_id: int) -> None:
     task = await db.get(ScanWorkTask, task_id)
+    await db.execute(
+        update(ScanWorkTask)
+        .where(ScanWorkTask.id == task_id, ScanWorkTask.status == "claimed")
+        .values(
+            status="pending",
+            claimed_by=None,
+            lease_token=None,
+            claimed_at=None,
+            claim_expires_at=None,
+        )
+    )
+    if task is not None:
+        await _reopen_half_open(db, [(task.region, task.feed_type)])
+    await db.commit()
+
+
+async def report_work(
+    db: AsyncSession,
+    worker_id: str,
+    task_id: int,
+    lease_token: str,
+    found_count: int,
+    error_count: int,
+    data: list[dict] | None = None,
+    latency_ms: int | None = None,
+) -> tuple[int, int]:
+    task = await db.scalar(
+        select(ScanWorkTask)
+        .where(ScanWorkTask.id == task_id)
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
     if task is None:
         raise LookupError("tarefa não encontrada")
-    if task.status != "claimed" or not task.claimed_by or task.claimed_by != worker_id:
-        raise PermissionError("tarefa não pertence a este worker")
+    if (
+        task.status == "reported"
+        and task.claimed_by == worker_id
+        and task.lease_token
+        and secrets.compare_digest(task.lease_token, lease_token)
+    ):
+        queued = await db.scalar(
+            select(ScanIngestPayload).where(ScanIngestPayload.task_id == task.id)
+        )
+        return (len(queued.payload), 0) if queued is not None else (0, 0)
+    if (
+        task.status != "claimed"
+        or task.claimed_by != worker_id
+        or not task.lease_token
+        or not secrets.compare_digest(task.lease_token, lease_token)
+        or not task.claim_expires_at
+        or task.claim_expires_at <= _now()
+    ):
+        raise PermissionError("stale lease")
+    if data is not None and len(data) > FEED_PAGE_SIZE:
+        raise ValueError("página maior que o limite do feed")
+    if latency_ms is not None:
+        metric = await db.scalar(select(ScanWorkerRegionMetric).where(
+            ScanWorkerRegionMetric.worker_id == worker_id,
+            ScanWorkerRegionMetric.region == task.region,
+        ).with_for_update())
+        if metric is None:
+            metric = ScanWorkerRegionMetric(
+                worker_id=worker_id, region=task.region,
+                samples=0, successes=0, errors=0,
+            )
+            db.add(metric)
+        failed = bool(error_count and not data)
+        metric.samples += 1
+        metric.successes += 0 if failed else 1
+        metric.errors += 1 if failed else 0
+        metric.ewma_latency_ms = _next_latency(metric.ewma_latency_ms, latency_ms)
+        metric.last_seen_at = _now()
+    if error_count and not data:
+        await _record_stream_result(db, task, False)
+        task.status = "failed"
+        task.claimed_by = None
+        task.lease_token = None
+        task.claimed_at = None
+        task.claim_expires_at = None
+        task.completed_at = _now()
+        task.error_count += error_count
+        if task.attempt_count == 5:
+            _incident(
+                db, "page_failed", worker_id=worker_id, region=task.region,
+                feed_type=task.feed_type, task_id=task.id,
+                details={"offset": task.page_offset, "attempts": task.attempt_count},
+            )
+        worker = await db.scalar(
+            select(ScanWorker).where(ScanWorker.worker_id == worker_id)
+        )
+        if worker is not None:
+            worker.total_errors += error_count
+            worker.last_errors = error_count
+            worker.last_found = 0
+            worker.last_task_at = _now()
+            worker.last_heartbeat = _now()
+        await db.commit()
+        return 0, error_count
+    payload = data or []
+    await _record_stream_result(db, task, True, len(payload))
+    queued = await db.scalar(
+        select(ScanIngestPayload)
+        .where(ScanIngestPayload.task_id == task.id)
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+    if queued is None:
+        db.add(ScanIngestPayload(
+            task_id=task.id,
+            worker_id=worker_id,
+            region=task.region,
+            feed_type=task.feed_type,
+            payload=payload,
+            status="pending",
+            next_attempt_at=_now(),
+        ))
+    else:
+        queued.worker_id = worker_id
+        queued.payload = payload
+        queued.status = "pending"
+        queued.attempt_count = 0
+        queued.next_attempt_at = _now()
+        queued.created_at = _now()
+        queued.started_at = None
+        queued.completed_at = None
+        queued.error = None
+    task.status = "reported"
+    task.claim_expires_at = None
+    await db.commit()
+    return len(payload), 0
 
-    region = task.region
+
+async def _apply_ingest_payload(
+    db: AsyncSession, task: ScanWorkTask, ingest: ScanIngestPayload
+) -> tuple[int, int]:
     accepted = 0
-    errors = error_count
-
-    if task.feed_type == "battles" and data:
-        for raw in data:
+    errors = 0
+    payload = ingest.payload or []
+    if task.feed_type == "battles":
+        raw_ids = {str(raw.get("id")) for raw in payload if raw.get("id") is not None}
+        existing = set((await db.scalars(
+            select(Battle.albion_id).where(
+                Battle.region == task.region,
+                Battle.albion_id.in_(raw_ids),
+            )
+        )).all()) if raw_ids else set()
+        for raw in payload:
             try:
-                battle = await upsert_battle_light(db, raw, region)
+                battle = await upsert_battle_light(db, raw, task.region)
                 if battle is not None:
                     battle.reprocess_reason = REPROCESS_REASON_SWEEPER
-                    accepted += 1
-            except Exception as e:
-                log.warning("scan_dispatcher: upsert battle falhou (%s): %s", raw.get("id"), e)
+                    if str(raw.get("id")) not in existing:
+                        accepted += 1
+            except Exception as exc:
+                log.warning("scan_dispatcher: ingest battle %s: %s", raw.get("id"), exc)
                 errors += 1
-
-    elif task.feed_type == "kills" and data:
-        for ev in data:
-            event_id = str(ev.get("EventId") or "")
-            if not event_id:
-                continue
-            if await db.scalar(
-                select(PlayerKillEvent.id).where(
-                    PlayerKillEvent.region == region,
-                    PlayerKillEvent.albion_event_id == event_id,
-                )
-            ) is not None:
+    else:
+        event_ids = {
+            str(event.get("EventId")) for event in payload if event.get("EventId") is not None
+        }
+        existing = set((await db.scalars(
+            select(PlayerKillEvent.albion_event_id).where(
+                PlayerKillEvent.region == task.region,
+                PlayerKillEvent.albion_event_id.in_(event_ids),
+            )
+        )).all()) if event_ids else set()
+        for event in payload:
+            event_id = str(event.get("EventId") or "")
+            if not event_id or event_id in existing:
                 continue
             try:
-                await _upsert_event_players(db, ev, region)
-                await _record_kill_event(db, ev, region, commit=False)
-                await db.commit()
+                async with db.begin_nested():
+                    await _upsert_event_players(db, event, task.region)
+                    await _record_kill_event(db, event, task.region, commit=False)
                 accepted += 1
-            except Exception as e:
-                await db.rollback()
-                log.debug("scan_dispatcher: skip kill event %s (%s): %s", event_id, region, e)
+            except Exception as exc:
+                log.debug("scan_dispatcher: ingest kill %s/%s: %s", task.region, event_id, exc)
                 errors += 1
+    return accepted, errors
 
-    task.status = "done"
-    task.completed_at = _now()
-    task.found_count = accepted
-    task.missing_count = 0
-    task.error_count = errors
 
-    w = await db.scalar(select(ScanWorker).where(ScanWorker.worker_id == worker_id))
-    if w is not None:
-        w.total_tasks_done += 1
-        if task.feed_type == "battles":
-            w.total_battles_found += accepted
-        else:
-            w.total_kills_found += accepted
-        w.total_errors += errors
-        w.last_found = accepted
-        w.last_missing = 0
-        w.last_errors = errors
-        w.last_task_at = _now()
-        w.last_heartbeat = _now()
-        w.status = "active"
+async def ingest_one() -> bool:
+    async with AsyncSessionLocal() as db:
+        ingest = await db.scalar(
+            select(ScanIngestPayload)
+            .where(
+                ScanIngestPayload.status == "pending",
+                ScanIngestPayload.next_attempt_at <= _now(),
+            )
+            .order_by(ScanIngestPayload.id.asc())
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if ingest is None:
+            return False
+        ingest.status = "processing"
+        ingest.started_at = _now()
+        ingest.attempt_count += 1
+        ingest_id = ingest.id
+        task_id = ingest.task_id
+        await db.commit()
 
+    try:
+        async with AsyncSessionLocal() as db:
+            ingest = await db.get(ScanIngestPayload, ingest_id)
+            task = await db.get(ScanWorkTask, task_id)
+            if ingest is None or task is None or task.status != "reported":
+                raise RuntimeError("ingest sem task reported")
+            accepted, errors = await _apply_ingest_payload(db, task, ingest)
+            if task.page_offset == 0:
+                state = await db.scalar(select(ScanStreamState).where(
+                    ScanStreamState.region == task.region,
+                    ScanStreamState.feed_type == task.feed_type,
+                ).with_for_update())
+                if state is not None:
+                    observed_at = _now()
+                    if state.last_head_at is not None:
+                        state.window_items_per_min = _next_window_rate(
+                            state.window_items_per_min,
+                            accepted,
+                            (observed_at - state.last_head_at).total_seconds(),
+                        )
+                    state.last_head_at = observed_at
+            task.status = "done"
+            task.lease_token = None
+            task.claimed_by = None
+            task.claimed_at = None
+            task.completed_at = _now()
+            task.found_count = accepted
+            task.missing_count = 0
+            task.error_count = errors
+            if task.lap_id is not None:
+                lap = await db.scalar(
+                    select(ScanLap).where(ScanLap.id == task.lap_id).with_for_update()
+                )
+                if lap is not None and lap.status == "active":
+                    lap.completed_pages += 1
+                    lap.last_progress_at = _now()
+                    if lap.completed_pages >= lap.expected_pages:
+                        lap.status = "done"
+                        lap.completed_at = _now()
+            ingest.status = "done"
+            ingest.completed_at = _now()
+            ingest.error = None
+            worker = await db.scalar(
+                select(ScanWorker).where(ScanWorker.worker_id == ingest.worker_id)
+            )
+            if worker is not None:
+                worker.total_tasks_done += 1
+                if task.feed_type == "battles":
+                    worker.total_battles_found += accepted
+                else:
+                    worker.total_kills_found += accepted
+                worker.total_errors += errors
+                worker.last_found = accepted
+                worker.last_missing = 0
+                worker.last_errors = errors
+                worker.last_task_at = _now()
+            await db.commit()
+        return True
+    except Exception as exc:
+        async with AsyncSessionLocal() as db:
+            ingest = await db.get(ScanIngestPayload, ingest_id)
+            task = await db.get(ScanWorkTask, task_id)
+            if ingest is not None:
+                ingest.error = str(exc)[:2000]
+                if ingest.attempt_count >= INGEST_MAX_ATTEMPTS:
+                    ingest.status = "failed"
+                    ingest.completed_at = _now()
+                    if task is not None:
+                        task.status = "failed"
+                        task.lease_token = None
+                        task.claimed_by = None
+                        task.claimed_at = None
+                        task.completed_at = _now()
+                else:
+                    ingest.status = "pending"
+                    ingest.next_attempt_at = _now() + timedelta(
+                        seconds=min(300, 5 * (2 ** ingest.attempt_count))
+                    )
+            await db.commit()
+        log.warning("scan_dispatcher: ingest %s failed: %s", ingest_id, exc)
+        return True
+
+
+async def renew_lease(
+    db: AsyncSession, worker_id: str, task_id: int, lease_token: str
+) -> datetime:
+    task = await db.scalar(
+        select(ScanWorkTask)
+        .where(ScanWorkTask.id == task_id)
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    )
+    if (
+        task is None
+        or task.status != "claimed"
+        or task.claimed_by != worker_id
+        or not task.lease_token
+        or not secrets.compare_digest(task.lease_token, lease_token)
+        or not task.claim_expires_at
+        or task.claim_expires_at <= _now()
+    ):
+        raise PermissionError("stale lease")
+    task.claimed_at = _now()
+    task.claim_expires_at = _now() + WORK_CLAIM_TTL
     await db.commit()
-    return (accepted, errors)
+    return task.claim_expires_at
 
 
 async def get_worker_stats(db: AsyncSession) -> dict:
     now = _now()
+    visible_since = now - DEAD_WORKER_RETENTION
     workers = (await db.scalars(
-        select(ScanWorker).order_by(ScanWorker.status.asc(), ScanWorker.id.asc())
+        select(ScanWorker)
+        .where(ScanWorker.last_heartbeat >= visible_since)
+        .order_by(ScanWorker.status.asc(), ScanWorker.name.asc())
     )).all()
-    worker_rows = []
-    for w in workers:
-        hb_age = (now - w.last_heartbeat).total_seconds() if w.last_heartbeat is not None else None
-        worker_rows.append({
-            "worker_id": w.worker_id,
-            "name": w.name,
-            "region_pref": w.region_pref,
-            "status": w.status,
-            "last_heartbeat_age_s": round(hb_age, 1) if hb_age is not None else None,
-            "total_tasks_done": w.total_tasks_done,
-            "total_battles_found": w.total_battles_found,
-            "total_kills_found": w.total_kills_found,
-            "total_errors": w.total_errors,
-            "last_found": w.last_found,
-            "last_missing": w.last_missing,
-            "last_errors": w.last_errors,
-            "last_task_at": w.last_task_at.isoformat() if w.last_task_at else None,
+    rows = []
+    for worker in workers:
+        age = (now - worker.last_heartbeat).total_seconds() if worker.last_heartbeat else None
+        rows.append({
+            "worker_id": worker.worker_id,
+            "name": worker.name,
+            "region_pref": "global",
+            "status": worker.status,
+            "last_heartbeat_age_s": round(age, 1) if age is not None else None,
+            "total_tasks_done": worker.total_tasks_done,
+            "total_battles_found": worker.total_battles_found,
+            "total_kills_found": worker.total_kills_found,
+            "total_errors": worker.total_errors,
+            "last_found": worker.last_found,
+            "last_missing": worker.last_missing,
+            "last_errors": worker.last_errors,
+            "last_task_at": worker.last_task_at.isoformat() if worker.last_task_at else None,
         })
 
-    status_counts: dict[str, int] = {"pending": 0, "claimed": 0, "done": 0, "failed": 0}
-    rows = (await db.execute(
+    status_counts = {
+        "pending": 0, "claimed": 0, "reported": 0, "done": 0, "failed": 0
+    }
+    for status, count in (await db.execute(
         select(ScanWorkTask.status, func.count()).group_by(ScanWorkTask.status)
-    )).all()
-    for status, cnt in rows:
-        status_counts[status] = cnt or 0
+    )).all():
+        status_counts[status] = count or 0
 
-    per_region: dict[str, dict] = {}
-    rr = (await db.execute(
+    per_region: dict[str, dict[str, int]] = {}
+    for region, feed_type, status, count in (await db.execute(
         select(ScanWorkTask.region, ScanWorkTask.feed_type, ScanWorkTask.status, func.count())
         .group_by(ScanWorkTask.region, ScanWorkTask.feed_type, ScanWorkTask.status)
-    )).all()
-    for region, feed_type, status, cnt in rr:
+    )).all():
         key = f"{region}/{feed_type}"
-        per_region.setdefault(key, {"pending": 0, "claimed": 0, "done": 0, "failed": 0})
-        per_region[key][status] = cnt or 0
+        per_region.setdefault(key, {
+            "pending": 0, "claimed": 0, "reported": 0, "done": 0, "failed": 0
+        })
+        per_region[key][status] = count or 0
 
-    return {"workers": worker_rows, "tasks": status_counts, "per_region": per_region}
+    active = await count_active_workers(db)
+    backfill_target = max(
+        1, min(MAX_BACKFILL_TASKS_PER_STREAM, active * BACKFILL_TASKS_PER_WORKER)
+    )
+    cursors = {}
+    for region in SCAN_REGIONS:
+        battle_cursor = await db.get(BattleSyncCursor, region)
+        kill_cursor = await db.get(KillSyncCursor, region)
+        cursors[region] = {
+            "battles": battle_cursor.next_offset if battle_cursor else RECENT_PAGES * FEED_PAGE_SIZE,
+            "kills": kill_cursor.next_offset if kill_cursor else RECENT_PAGES * FEED_PAGE_SIZE,
+        }
+    ingest_counts = {"pending": 0, "processing": 0, "done": 0, "failed": 0}
+    for status, count in (await db.execute(
+        select(ScanIngestPayload.status, func.count()).group_by(ScanIngestPayload.status)
+    )).all():
+        ingest_counts[status] = count or 0
+    oldest_ingest = await db.scalar(
+        select(func.min(ScanIngestPayload.created_at)).where(
+            ScanIngestPayload.status.in_(("pending", "processing"))
+        )
+    )
+    ingest_counts["oldest_age_s"] = (
+        round((now - oldest_ingest).total_seconds(), 1) if oldest_ingest else 0
+    )
+    latency_age = max(0.0, time.monotonic() - _last_foreground_activity)
+    claim_limit, claim_pressured = _parallelism_policy(
+        active,
+        ingest_counts["pending"] + ingest_counts["processing"],
+        backend_is_idle(),
+        _last_foreground_latency_ms,
+        latency_age,
+        async_engine.pool.checkedout(),
+    )
+    circuits = {}
+    stream_states = (await db.scalars(
+        select(ScanStreamState).order_by(ScanStreamState.region, ScanStreamState.feed_type)
+    )).all()
+    for state in stream_states:
+        circuits[f"{state.region}/{state.feed_type}"] = {
+            "state": state.circuit_state,
+            "consecutive_errors": state.consecutive_errors,
+            "opened_until": state.opened_until.isoformat() if state.opened_until else None,
+            "recent_pages": state.recent_pages,
+            "window_items_per_min": round(state.window_items_per_min, 2) if state.window_items_per_min is not None else None,
+            "last_head_at": state.last_head_at.isoformat() if state.last_head_at else None,
+            "paused": state.paused,
+        }
+    laps = {}
+    alerts = []
+    for lap in (await db.scalars(
+        select(ScanLap)
+        .order_by(ScanLap.started_at.desc())
+    )).all():
+        key = f"{lap.region}/{lap.feed_type}"
+        if key in laps:
+            continue
+        last_progress = lap.last_progress_at
+        progress_age = (now - (last_progress or lap.started_at)).total_seconds()
+        if lap.status == "active" and progress_age >= 900:
+            alerts.append({"type": "lap_stalled", "stream": key, "age_s": round(progress_age)})
+        laps[key] = {
+            "lap_id": lap.id,
+            "status": lap.status,
+            "expected_pages": lap.expected_pages,
+            "completed_pages": lap.completed_pages,
+            "page_stride": lap.page_stride,
+            "overlap_items": FEED_PAGE_SIZE - lap.page_stride,
+            "started_at": lap.started_at.isoformat(),
+            "completed_at": lap.completed_at.isoformat() if lap.completed_at else None,
+            "last_progress_at": last_progress.isoformat() if last_progress else None,
+        }
+        elapsed = max(1.0, ((lap.completed_at or now) - lap.started_at).total_seconds())
+        rate = lap.completed_pages * 60 / elapsed
+        laps[key]["pages_per_min"] = round(rate, 2)
+        laps[key]["eta_s"] = (
+            round((lap.expected_pages - lap.completed_pages) / rate * 60)
+            if rate > 0 and lap.status == "active"
+            else None
+        )
+    for task in (await db.scalars(select(ScanWorkTask).where(
+        ScanWorkTask.status == "failed",
+        ScanWorkTask.attempt_count >= 5,
+    ))).all():
+        alerts.append({
+            "type": "page_failed",
+            "stream": f"{task.region}/{task.feed_type}",
+            "offset": task.page_offset,
+            "attempts": task.attempt_count,
+        })
+    sla = {}
+    for state in stream_states:
+        key = f"{state.region}/{state.feed_type}"
+        lap = laps.get(key)
+        scan_rate = (
+            lap["pages_per_min"] * lap["page_stride"] if lap is not None else 0.0
+        )
+        window_rate = state.window_items_per_min
+        ratio = scan_rate / window_rate if window_rate and window_rate > 0 else None
+        recent_age = (
+            (now - state.last_head_at).total_seconds() if state.last_head_at else None
+        )
+        stale_after = RECENT_INTERVAL[state.feed_type].total_seconds() * 2
+        status = "unknown"
+        if state.circuit_state != "closed" or (recent_age is not None and recent_age > stale_after):
+            status = "critical"
+        elif ratio is not None:
+            status = "healthy" if ratio >= 1 else "at_risk"
+        sla[key] = {
+            "status": status,
+            "recent_age_s": round(recent_age, 1) if recent_age is not None else None,
+            "window_items_per_min": round(window_rate, 2) if window_rate is not None else None,
+            "scan_items_per_min": round(scan_rate, 2),
+            "coverage_ratio": round(ratio, 2) if ratio is not None else None,
+        }
+    incidents = [{
+        "id": incident.id,
+        "event": incident.event,
+        "actor": incident.actor,
+        "worker_id": incident.worker_id,
+        "stream": (
+            f"{incident.region}/{incident.feed_type}"
+            if incident.region and incident.feed_type else None
+        ),
+        "task_id": incident.task_id,
+        "details": incident.details,
+        "created_at": incident.created_at.isoformat(),
+    } for incident in (await db.scalars(
+        select(ScanIncident).order_by(ScanIncident.id.desc()).limit(20)
+    )).all()]
+    affinity = {}
+    for metric in (await db.scalars(select(ScanWorkerRegionMetric).order_by(
+        ScanWorkerRegionMetric.worker_id, ScanWorkerRegionMetric.region
+    ))).all():
+        affinity.setdefault(metric.worker_id, {})[metric.region] = {
+            "samples": metric.samples,
+            "successes": metric.successes,
+            "errors": metric.errors,
+            "ewma_latency_ms": round(metric.ewma_latency_ms, 1) if metric.ewma_latency_ms is not None else None,
+        }
+    return {
+        "workers": rows,
+        "tasks": status_counts,
+        "per_region": per_region,
+        "cursors": cursors,
+        "ingest": ingest_counts,
+        "circuits": circuits,
+        "laps": laps,
+        "alerts": alerts,
+        "sla": sla,
+        "incidents": incidents,
+        "affinity": affinity,
+        "strategy": {
+            "active_vps": active,
+            "mode": "fallback" if active == 0 else "assist" if backend_is_idle() else "coordinator",
+            "recent_pages": RECENT_PAGES,
+            "backfill_tasks_per_stream": backfill_target,
+            "foreground_inflight": _foreground_inflight,
+            "vps_claim_limit": claim_limit,
+            "claim_pressured": claim_pressured,
+            "db_checked_out": async_engine.pool.checkedout(),
+        },
+    }
 
 
 async def run_forever() -> None:
-    log.info("scan_dispatcher: iniciado (interval=%ds)", SCAN_DISPATCHER_INTERVAL)
+    log.info("scan_dispatcher: coordinator started")
     while True:
         async with AsyncSessionLocal() as db:
             try:
                 await mark_dead_workers(db)
-                n = await generate_tasks(db)
-                if n:
-                    log.info("scan_dispatcher: %d tasks geradas", n)
-            except Exception as e:
-                log.error("scan_dispatcher: erro: %s", e)
+                created = await generate_tasks(db)
+                if created:
+                    log.info("scan_dispatcher: %d tasks scheduled", created)
+            except Exception as exc:
+                log.error("scan_dispatcher: scheduler: %s", exc)
                 await db.rollback()
-        await asyncio_sleep(SCAN_DISPATCHER_INTERVAL)
+        await asyncio.sleep(SCAN_DISPATCHER_INTERVAL)
 
 
-async def asyncio_sleep(s: float):
-    import asyncio
-    await asyncio.sleep(s)
+async def run_ingest_forever(web_is_idle: Callable[[], Awaitable[bool]]) -> None:
+    """Bounded durable consumer; foreground traffic wins until a hard watermark."""
+    log.info("scan_dispatcher: ingest consumer started")
+    while True:
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(ScanIngestPayload)
+                .where(
+                    ScanIngestPayload.status == "processing",
+                    ScanIngestPayload.started_at < _now() - timedelta(minutes=5),
+                )
+                .values(status="pending", next_attempt_at=_now())
+            )
+            backlog = int(await db.scalar(
+                select(func.count()).select_from(ScanIngestPayload).where(
+                    ScanIngestPayload.status.in_(("pending", "processing"))
+                )
+            ) or 0)
+            await db.commit()
+        if backlog == 0:
+            await asyncio.sleep(1)
+            continue
+        if not await web_is_idle() and backlog < INGEST_FORCE_DRAIN:
+            await asyncio.sleep(1)
+            continue
+        processed = await ingest_one()
+        await asyncio.sleep(0 if processed else 1)
+
+
+async def _fetch_task(task: ScanWorkTask) -> list[dict]:
+    host = HOSTS[task.region]
+    async with make_client() as client:
+        if task.feed_type == "battles":
+            return await fetch_battles(client, host, offset=task.page_offset)
+        async with slot():
+            response = await client.get(
+                f"https://{host}/api/gameinfo/events",
+                params={"limit": FEED_PAGE_SIZE, "offset": task.page_offset},
+            )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, list) else []
+
+
+async def run_idle_worker_forever(web_is_idle: Callable[[], Awaitable[bool]]) -> None:
+    """Use spare backend capacity without competing with user-facing requests."""
+    log.info("scan_dispatcher: idle backend helper started")
+    await asyncio.sleep(15)
+    while True:
+        task = None
+        active_vps = 0
+        try:
+            async with AsyncSessionLocal() as db:
+                active_vps = await count_active_workers(db)
+                ingest_backlog = int(await db.scalar(
+                    select(func.count()).select_from(ScanIngestPayload).where(
+                        ScanIngestPayload.status.in_(("pending", "processing"))
+                    )
+                ) or 0)
+                if ingest_backlog:
+                    await asyncio.sleep(2)
+                    continue
+                if active_vps > 0 and not await web_is_idle():
+                    await asyncio.sleep(2)
+                    continue
+                task = await _claim_next(
+                    db,
+                    _BACKEND_WORKER_ID,
+                    backfill_only=active_vps > 0,
+                )
+            if task is None:
+                await asyncio.sleep(5)
+                continue
+            payload = await _fetch_task(task)
+            if active_vps > 0 and not await web_is_idle():
+                async with AsyncSessionLocal() as db:
+                    await _release_task(db, task.id)
+                await asyncio.sleep(2)
+                continue
+            async with AsyncSessionLocal() as db:
+                queued, errors = await report_work(
+                    db,
+                    _BACKEND_WORKER_ID,
+                    task.id,
+                    task.lease_token or "",
+                    len(payload),
+                    0,
+                    data=payload,
+                )
+            log.info(
+                "scan_dispatcher: backend helper %s/%s offset=%d queued=%d errors=%d vps=%d",
+                task.region,
+                task.feed_type,
+                task.page_offset,
+                queued,
+                errors,
+                active_vps,
+            )
+        except Exception as exc:
+            log.debug("scan_dispatcher: backend helper: %s", exc)
+            if task is not None:
+                async with AsyncSessionLocal() as db:
+                    await _release_task(db, task.id)
+            await asyncio.sleep(5)
+        await asyncio.sleep(3 if active_vps == 0 else 15)
