@@ -254,7 +254,8 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     if (!data || !active) return;
     const iv = setInterval(() => {
       api.escalacao(guildId, eventId).then(d => {
-        const key = d.enlisted.map(s => `${s.user_id}:${s.functions.join(",")}`).sort().join("|");
+        const key = d.enlisted.map(s => `${s.user_id}:${s.functions.join(",")}`).sort().join("|")
+          + `|comp:${d.event.comp_id ?? 0}|state:${d.event.state}`;
         if (key !== lastEnlistedKey.current) {
           lastEnlistedKey.current = key;
           setData(d);
