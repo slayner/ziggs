@@ -32,8 +32,6 @@ log = logging.getLogger(__name__)
 from app.models.catalog import GameRole
 from app.models.prices import ItemPrice, ItemPriceLatest
 
-from .awakened import awakened_value
-
 # ── mapeamento UniqueName ↔ game_name ─────────────────────────────────────────
 # O game_name é o ID canônico do sistema de preços (nome em inglês do jogo).
 # Carregado uma vez do seed. Se o arquivo não existir, as funções devolvem
@@ -85,9 +83,8 @@ def _is_unconverted(uid: str) -> bool:
     encontra (leitores buscam por game_name)."""
     return uid.startswith("T") and "_" in uid and uid[1:2].isdigit()
 
-# Teto de preço por tier — listagem acima disso é troll e descartada antes
-# da mediana. Valores em prata; item T8.3 topo de mercado ~50M, T4 ~1M.
-_TIER_CAP = {2: 2_000_000, 3: 5_000_000, 4: 10_000_000, 5: 20_000_000,
+# Teto duro por tier para descartar dados obviamente contaminados.
+_TIER_CAP = {1: 1_000_000, 2: 2_000_000, 3: 5_000_000, 4: 10_000_000, 5: 20_000_000,
              6: 30_000_000, 7: 50_000_000, 8: 100_000_000}
 
 def _tier_from_game_id(game_id: str) -> int:
@@ -96,32 +93,6 @@ def _tier_from_game_id(game_id: str) -> int:
     if s.startswith("T") and s[1:2].isdigit():
         return int(s[1])
     return 8  # fallback conservador (teto alto)
-
-def _robust_median(vals: list[int]) -> int:
-    """Mediana com corte de outliers: remove valores acima do teto do tier
-    e aplica IQR se houver >=4 amostras. Item ilíquido com 1 listagem troll
-    vira 0 (sem preço confiável) em vez de 100M."""
-    if not vals:
-        return 0
-    if len(vals) == 1:
-        # 1 listagem: confia só se for <= 500k (item barato/ilíquido OK)
-        return vals[0] if vals[0] <= 500_000 else 0
-    if len(vals) == 2:
-        # 2 listagens: usa a menor (troll tipicamente é o preço alto)
-        return min(vals)
-    # >=3: IQR cutoff
-    sorted_vals = sorted(vals)
-    n = len(sorted_vals)
-    q1 = sorted_vals[n // 4]
-    q3 = sorted_vals[3 * n // 4]
-    iqr = q3 - q1
-    if iqr > 0:
-        lo = q1 - 1.5 * iqr
-        hi = q3 + 1.5 * iqr
-        filtered = [v for v in sorted_vals if lo <= v <= hi]
-        if filtered:
-            return round(statistics.median(filtered))
-    return round(statistics.median(sorted_vals))
 
 # ── constantes ────────────────────────────────────────────────────────────────
 
@@ -407,8 +378,7 @@ def _compute_5city_avg(history_data: list[dict]) -> dict[tuple[str, int], int]:
     Calcula a média de preço por (item_id, quality) a partir do histórico das 5 cidades.
 
     Por cidade: média ponderada de avg_price pelos últimos HISTORY_DAYS dias.
-    Entre cidades: média simples sobre as cidades com dados, **após IQR-trim**
-    descartar a "cidade troll" (mercado fino com 1 listing absurdo).
+    Entre cidades: mediana sobre as cidades com dados, **após IQR-trim**.
     Cidades sem dados no período são ignoradas.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=HISTORY_DAYS)
@@ -439,11 +409,72 @@ def _compute_5city_avg(history_data: list[dict]) -> dict[tuple[str, int], int]:
         city_values.setdefault((iid, q), []).append(int(weighted_avg))
 
     return {
-        key: int(sum(trimmed) / len(trimmed))
+        key: round(statistics.median(trimmed))
         for key, vals in city_values.items()
         if vals
         for trimmed in (_iqr_trim(vals),)
     }
+
+
+def _battle_history_prices(history_data: list[dict]) -> dict[str, int]:
+    """Preco por item baseado em vendas reais, com cobertura em >=3 cidades."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=HISTORY_DAYS)
+    cities: dict[tuple[str, int], set[str]] = {}
+    caps: dict[str, int] = {}
+    for rec in history_data:
+        uid = rec.get("item_id")
+        if not uid:
+            continue
+        iid = _unique_to_game(uid)
+        if _is_unconverted(iid):
+            continue
+        recent = any(
+            d.get("avg_price") and (d.get("item_count") or 0) > 0
+            and _parse_dt(d["timestamp"]) >= cutoff
+            for d in (rec.get("data") or [])
+        )
+        location = rec.get("location") or rec.get("city")
+        if recent and location:
+            key = (iid, int(rec.get("quality", 1) or 1))
+            cities.setdefault(key, set()).add(location)
+            caps[iid] = _TIER_CAP.get(_tier_from_game_id(uid), _TIER_CAP[8])
+
+    by_item: dict[str, dict[int, int]] = {}
+    for (iid, quality), price in _compute_5city_avg(history_data).items():
+        if len(cities.get((iid, quality), ())) >= 3 and 0 < price <= caps.get(iid, _TIER_CAP[8]):
+            by_item.setdefault(iid, {})[quality] = price
+
+    return {
+        iid: qualities.get(1, min(qualities.values()))
+        for iid, qualities in by_item.items()
+    }
+
+
+def _battle_spot_prices(rows: list[dict]) -> dict[str, int]:
+    """Fallback conservador: mediana do menor preco em pelo menos 3 cidades."""
+    by_item_city: dict[str, dict[str, list[tuple[int, int]]]] = {}
+    for row in rows:
+        price = int(row.get("sell_price_min") or 0)
+        uid = row.get("item_id") or ""
+        city = row.get("city") or ""
+        quality = int(row.get("quality", 1) or 1)
+        if not uid or not city or price <= 0 or quality == 5:
+            continue
+        if price > _TIER_CAP.get(_tier_from_game_id(uid), _TIER_CAP[8]):
+            continue
+        iid = _unique_to_game(uid)
+        if not _is_unconverted(iid):
+            by_item_city.setdefault(iid, {}).setdefault(city, []).append((quality, price))
+
+    result = {}
+    for iid, cities in by_item_city.items():
+        city_prices = []
+        for values in cities.values():
+            normal = [price for quality, price in values if quality == 1]
+            city_prices.append(min(normal or [price for _, price in values]))
+        if len(city_prices) >= 3:
+            result[iid] = round(statistics.median(city_prices))
+    return result
 
 
 async def _upsert_avg(db: AsyncSession, item_id: str, quality: int, price: int, now: datetime) -> None:
@@ -539,18 +570,7 @@ async def _fetch_spot_prices(item_ids: list[str]) -> list[dict[str, Any]]:
 
 
 async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, int]:
-    """Preço de loot de batalha — cache permanente, sem TTL.
-
-    Diferente do resto desse módulo (que mantém o preço fresco pra cálculo de
-    regear/comp), aqui uma vez buscado o item NUNCA é re-consultado na API
-    externa: pedido explícito, "o preço da época" já é o suficiente e o
-    objetivo é só evitar bater na API a cada vez que alguém abre a batalha.
-
-    Usa o endpoint de preço atual (não o de histórico) porque itens de loot
-    quase sempre vêm com @enchant no id, e só o endpoint de preço atual aceita
-    isso — sentinela de cidade própria (_BATTLE_SENTINEL) pra não misturar
-    com o cache de média histórica 5 cidades usado pelo regear/comps.
-    """
+    """Preco de loot: vendas historicas; spot so como fallback conservador."""
     unique = list(dict.fromkeys(item_ids))
     if not unique:
         return {}
@@ -560,11 +580,9 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
     # Ids que não converteram (item fora do mapa) ficam como T_xxx — não
     # buscamos nem gravamos, só devolvem 0 pro caller.
     game_ids = [_unique_to_game(i) for i in unique]
-    awake = {uid: v for uid, gid in zip(unique, game_ids) if (v := awakened_value(uid))}
-    market_game_ids = [gid for uid, gid in zip(unique, game_ids)
-                       if uid not in awake and not _is_unconverted(gid)]
+    market_game_ids = [gid for gid in game_ids if not _is_unconverted(gid)]
     if not market_game_ids:
-        return awake
+        return {}
     # Lê do cache e FECHA a transação antes do HTTP — uma read transaction aberta
     # durante o fetch bloqueia o auto-checkpoint do WAL e contentiona com outros
     # writers. Copiar pra dict e commitar solta a tx antes da rede.
@@ -596,6 +614,10 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
     if missing:
         now = datetime.now(timezone.utc)
         t_fetch0 = time.monotonic()
+        # Spot (nao historico): o endpoint /stats/prices aceita @enchant direto,
+        # o /stats/history retorna vazio pra varios itens @enchant. Qualidade 5
+        # (Masterpiece) e' rarissima e inflaciona; o resto entra, inclusive q1
+        # (recursos e a maioria do loot real).
         tasks = [_fetch_spot_prices(missing[i:i + _BATCH_SIZE]) for i in range(0, len(missing), _BATCH_SIZE)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         t_fetch = time.monotonic() - t_fetch0
@@ -606,23 +628,38 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
             for row in result:
                 if not row.get("sell_price_min"):
                     continue
-                # Qualities 1 e 5 descartadas da mediana: 1 (Normal) tem preço
-                # inflacionado, 5 (Masterpiece) é raríssima. Ambas interferem.
                 q = row.get("quality", 1)
-                if q not in (2, 3, 4):
+                if q == 5:
                     continue
-                by_item.setdefault(_unique_to_game(row["item_id"]), []).append(row["sell_price_min"])
+                uid = row["item_id"]
+                if int(row["sell_price_min"]) > _TIER_CAP.get(_tier_from_game_id(uid), _TIER_CAP[8]):
+                    continue
+                by_item.setdefault(_unique_to_game(uid), []).append(int(row["sell_price_min"]))
         rows = []
         for item_id in missing:
-            # Mediana com corte IQR — remove listagens troll (preço absurdamente
-            # alto de vendedor sem concorrência) antes de calcular. Mediana pura
-            # funciona com N>=3, mas item ilíquido pode ter 1-2 listagens e a
-            # mediana de 1 valor é esse valor. IQR corta outliers mesmo com N=2.
             vals = sorted(v for v in by_item.get(item_id, []) if v > 0)
-            if vals:
-                price = _robust_median(vals)
-            else:
+            if not vals:
                 price = 0
+            elif len(vals) == 1:
+                price = vals[0] if vals[0] <= 500_000 else 0
+            elif len(vals) == 2:
+                price = min(vals)
+            else:
+                s = sorted(vals)
+                n = len(s)
+                q1 = s[n // 4]
+                q3 = s[3 * n // 4]
+                iqr = q3 - q1
+                if iqr > 0:
+                    lo = q1 - 1.5 * iqr
+                    hi = q3 + 1.5 * iqr
+                    filtered = [v for v in s if lo <= v <= hi]
+                    if filtered:
+                        price = round(statistics.median(filtered))
+                    else:
+                        price = round(statistics.median(s))
+                else:
+                    price = round(statistics.median(s))
             cached[item_id] = price
             rows.append({"item_id": item_id, "city": _BATTLE_SENTINEL, "quality": 1,
                          "sell_price_min": price, "price_date": now, "recorded_at": now})
@@ -653,7 +690,6 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
     for gid, price in cached.items():
         uid = game_to_uid.get(gid, gid)
         result[uid] = price
-    result.update(awake)
     return result
 
 
