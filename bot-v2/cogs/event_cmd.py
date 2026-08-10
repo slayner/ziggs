@@ -568,7 +568,7 @@ class EventCmd(commands.Cog):
             return []
         cur = current.lower()
         none_label = t(lang, "ev_no_comp")
-        choices = [app_commands.Choice(name=none_label, value="none")] if cur in none_label.lower() or not cur else []
+        choices = [app_commands.Choice(name=none_label, value="none")]
         choices += [
             app_commands.Choice(name=c["name"][:100], value=str(c["id"]))
             for c in comps if cur in c["name"].lower()
@@ -590,8 +590,7 @@ class EventCmd(commands.Cog):
     )
     @app_commands.autocomplete(comp=_comp_autocomplete)
     async def criar(
-        self, interaction: Interaction, horario: str, objetivo: str | None = None,
-        comp: str = "none",
+        self, interaction: Interaction, horario: str, comp: str, objetivo: str | None = None,
     ) -> None:
         if not await check_command_access(interaction, "event"):
             return
