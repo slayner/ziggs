@@ -164,31 +164,27 @@ async def update_role(
     if role is None or role.guild_id != guild.id:
         raise HTTPException(status_code=404, detail="função não encontrada")
 
-    # Detecta mudança de build (arma ou equipamento) — se a build mudou,
-    # as preferências persistentes dessa role são inválidas: o jogador
-    # disse "faço machado" com a build antiga, e a nova build pode não ser
-    # mais o que ele joga. Mudanças cosméticas (cor, obs, play_style) não
-    # invalidam — só o que afeta o que o jogador "faz".
+    # Detecta mudança de build — só os slots que exigem spec (arma, offhand,
+    # capacete, armadura, bota). Capa/food/pot/skill/spell são ajustes que não
+    # mudam o que o jogador "faz" — a preferência persistente continua válida.
     build_changed = False
-    build_fields = ("weapon_id", "offhand", "helmet", "armor", "boots", "cape",
-                    "food", "abilities", "q_spell", "w_spell", "passive_spell")
+    build_fields = ("weapon_id", "offhand", "helmet", "armor", "boots")
     for field in build_fields:
         val = getattr(payload, field)
         if val is not None and val != getattr(role, field):
             build_changed = True
             setattr(role, field, val)
-    if payload.build_items is not None:
-        if role.build_items != [bi.model_dump() for bi in payload.build_items]:
-            build_changed = True
-        role.build_items = [bi.model_dump() for bi in payload.build_items]
-    if payload.gear_spells is not None:
-        role.gear_spells = _json.dumps(payload.gear_spells)
 
-    # Campos cosméticos — não invalidam preferências.
-    for field in ("name", "play_style", "obs", "color"):
+    # Campos de ajuste (não invalidam preferências) — mas ainda são salvos.
+    for field in ("cape", "food", "abilities", "q_spell", "w_spell",
+                  "passive_spell", "play_style", "obs", "color", "name"):
         val = getattr(payload, field)
         if val is not None:
             setattr(role, field, val)
+    if payload.build_items is not None:
+        role.build_items = [bi.model_dump() for bi in payload.build_items]
+    if payload.gear_spells is not None:
+        role.gear_spells = _json.dumps(payload.gear_spells)
 
     if build_changed:
         from sqlalchemy import delete as sa_delete
