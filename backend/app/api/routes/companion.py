@@ -15,17 +15,21 @@ Rotas:
   GET  /companion/auth/poll        → companion faz polling pelo token (nonce)
   GET  /companion/lootlog/active-events → eventos em andamento onde o user está inscrito
   POST /companion/lootlog/ingest   → envia CSV do lootlog pra um evento
+  POST /companion/crash-report     → forwards a bounded diagnostic to Discord
 """
 from __future__ import annotations
 
 import json
+import ipaddress
 import logging
 import re
 import time
 from collections import defaultdict, deque
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
@@ -108,6 +112,7 @@ def _rate_ok(install: str | None, rows: int) -> bool:
 # ainda capado pra não virar flood. Baldes separados pra um não comer o outro.
 _warm_log: dict[str, deque[float]] = defaultdict(deque)
 _seen_log: dict[str, deque[float]] = defaultdict(deque)
+_crash_log: dict[str, deque[float]] = defaultdict(deque)
 
 
 def _call_ok(bucket: dict[str, deque[float]], install: str | None, window_s: float, max_calls: int) -> bool:
@@ -122,6 +127,20 @@ def _call_ok(bucket: dict[str, deque[float]], install: str | None, window_s: flo
     return True
 
 
+def _crash_rate_ok(install: str, ip: str) -> bool:
+    """At most 3 reports/hour per install AND per IP."""
+    now = time.monotonic()
+    buckets = (_crash_log[f"install:{install}"], _crash_log[f"ip:{ip}"])
+    for bucket in buckets:
+        while bucket and now - bucket[0] > 3600.0:
+            bucket.popleft()
+    if any(len(bucket) >= 3 for bucket in buckets):
+        return False
+    for bucket in buckets:
+        bucket.append(now)
+    return True
+
+
 def _client_ip(request: Request) -> str:
     # ponytail: X-Forwarded-For primeiro (proxy/reverse-proxy), senão socket direto.
     # Sem validação rigorosa — só pra log, não é decisão de segurança.
@@ -129,6 +148,94 @@ def _client_ip(request: Request) -> str:
     if xff:
         return xff.split(",")[0].strip()
     return request.client.host if request.client else "?"
+
+
+def _crash_client_ip(request: Request) -> str:
+    """Use XFF only when the connection came from a private/local reverse proxy."""
+    peer = request.client.host if request.client else "?"
+    try:
+        behind_proxy = ipaddress.ip_address(peer).is_private
+    except ValueError:
+        behind_proxy = False
+    return _client_ip(request) if behind_proxy else peer
+
+
+# ─── Crash reports ───────────────────────────────────────────────────────────
+
+_CRASH_REPORT_CHANNEL_ID = "1535988555413979156"
+
+
+class CrashReportIn(BaseModel):
+    kind: Literal["rust_panic", "frontend"]
+    version: str = Field(max_length=32, pattern=r"^[A-Za-z0-9._+-]+$")
+    os: str = Field(max_length=32, pattern=r"^[A-Za-z0-9._+-]+$")
+    arch: str = Field(max_length=32, pattern=r"^[A-Za-z0-9._+-]+$")
+    created_at: str = Field(max_length=64)
+    uptime_ms: int = Field(ge=0)
+    process_id: int = Field(ge=0)
+    thread: str = Field(max_length=128)
+    message: str = Field(max_length=4_000)
+    location: str = Field(max_length=512)
+    backtrace: str = Field(max_length=24_000)
+    logs: str = Field(max_length=24_000)
+
+
+async def _send_crash_to_discord(
+    report: CrashReportIn,
+    install: str,
+    bot_token: str,
+    client: httpx.AsyncClient | None = None,
+) -> None:
+    summary = (
+        f"Ziggs Companion crash | `{report.kind}` | v`{report.version}` | "
+        f"`{report.os}/{report.arch}` | install `{install}`"
+    )
+    attachment = json.dumps(
+        {"install_id": install, **report.model_dump()}, ensure_ascii=False, indent=2,
+    ).encode("utf-8")
+    own_client = client is None
+    client = client or httpx.AsyncClient(timeout=10)
+    try:
+        response = await client.post(
+            f"https://discord.com/api/channels/{_CRASH_REPORT_CHANNEL_ID}/messages",
+            headers={"Authorization": f"Bot {bot_token}"},
+            data={"payload_json": json.dumps({
+                "content": summary,
+                "allowed_mentions": {"parse": []},
+            })},
+            files={"files[0]": ("crash-report.json", attachment, "application/json")},
+        )
+        response.raise_for_status()
+    finally:
+        if own_client:
+            await client.aclose()
+
+
+@router.post("/companion/crash-report", status_code=204)
+async def companion_crash_report(
+    report: CrashReportIn,
+    request: Request,
+    x_ziggs_install: str | None = Header(default=None),
+) -> Response:
+    install = _install_id(x_ziggs_install)
+    if install is None:
+        raise HTTPException(400, "invalid X-Ziggs-Install")
+    ip = _crash_client_ip(request)
+    if not _crash_rate_ok(install, ip):
+        log.warning("companion/crash-report throttled ip=%s install=%s", ip, install)
+        raise HTTPException(429, "too many crash reports")
+
+    from app.config import get_settings
+    token = get_settings().discord_bot_token
+    if not token:
+        log.error("companion/crash-report without DISCORD_BOT_TOKEN configured")
+        raise HTTPException(503, "crash reporting unavailable")
+    try:
+        await _send_crash_to_discord(report, install, token)
+    except httpx.HTTPError as exc:
+        log.exception("companion/crash-report failed to reach Discord")
+        raise HTTPException(502, "Discord unavailable") from exc
+    return Response(status_code=204)
 
 
 # ─── Auto-updater manifest ──────────────────────────────────────────────────
