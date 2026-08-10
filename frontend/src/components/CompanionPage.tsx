@@ -3,6 +3,7 @@ import { useT, useLang, REGION_LABELS, type TKey } from "../i18n";
 import { Panel } from "./Panel";
 
 const DOWNLOAD_URL_WINDOWS = "https://ziggs.xyz/companion/Ziggs-Companion_0.2.0_x64-setup.exe";
+const GITHUB_URL = "https://github.com/slayner/ziggs";
 const MANIFEST_URL = "/vps-manifest.json";
 
 const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
@@ -16,11 +17,7 @@ type VpsEntry = {
   ping_url: string;
 };
 
-type VpsPing = {
-  americas: number;
-  asia: number;
-  europe: number;
-};
+type VpsPing = { americas: number; asia: number; europe: number };
 
 type VpsRow = {
   vps: VpsEntry;
@@ -32,11 +29,11 @@ type VpsRow = {
 const FEATURES: { icon: string; title: TKey; desc: TKey }[] = [
   { icon: "ti-radar-2",          title: "companionFeatScanTitle",    desc: "companionFeatScanDesc" },
   { icon: "ti-route",            title: "companionFeatTunnelTitle",  desc: "companionFeatTunnelDesc" },
-  { icon: "ti-world-bolt",       title: "companionFeatDnsTitle",     desc: "companionFeatDnsDesc" },
   { icon: "ti-swords",           title: "companionFeatDmgTitle",     desc: "companionFeatDmgDesc" },
   { icon: "ti-clipboard-text",   title: "companionFeatLootlogTitle", desc: "companionFeatLootlogDesc" },
   { icon: "ti-coins",            title: "companionFeatPricesTitle",  desc: "companionFeatPricesDesc" },
   { icon: "ti-list-details",     title: "companionFeatAutoLootTitle",desc: "companionFeatAutoLootDesc" },
+  { icon: "ti-world-bolt",       title: "companionFeatDnsTitle",     desc: "companionFeatDnsDesc" },
   { icon: "ti-layout-bottombar", title: "companionFeatTrayTitle",    desc: "companionFeatTrayDesc" },
 ];
 
@@ -57,12 +54,12 @@ function regionShort(r: string): string {
 function FeatureCard({ icon, title, desc }: { icon: string; title: TKey; desc: TKey }) {
   const t = useT();
   return (
-    <Panel className="p-4">
-      <div className="flex items-center gap-2">
-        <i className={`ti ${icon}`} style={{ fontSize: 20, color: "var(--gold)" }} />
-        <span className="font-semibold">{t(title)}</span>
+    <Panel className="cp-feat">
+      <div className="cp-feat-icon">
+        <i className={`ti ${icon}`} />
       </div>
-      <p className="mt-2 text-sm text-zinc-400">{t(desc)}</p>
+      <h3 className="cp-feat-title">{t(title)}</h3>
+      <p className="cp-feat-desc">{t(desc)}</p>
     </Panel>
   );
 }
@@ -175,40 +172,40 @@ export default function CompanionPage() {
   }, []);
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8">
-      <div className="mb-8 text-center">
-        <i className="ti ti-device-desktop" style={{ fontSize: 44, color: "var(--gold)" }} />
-        <h1 className="mt-2 text-2xl font-bold">Ziggs Companion</h1>
-        <p className="mx-auto mt-2 max-w-xl text-sm text-zinc-400">{t("companionTagline")}</p>
-        <div className="mt-5 flex justify-center">
-          {DOWNLOAD_URL_WINDOWS ? (
-            <a className="btn" href={DOWNLOAD_URL_WINDOWS}>
-              <i className="ti ti-brand-windows" /> {t("companionDownloadWin")}
-            </a>
-          ) : (
-            <button className="btn" disabled style={{ opacity: 0.6, cursor: "default" }}>
-              <i className="ti ti-brand-windows" /> {t("companionDownloadWin")} — {t("companionComingSoon").toLowerCase()}
-            </button>
-          )}
+    <div className="cp-page">
+      {/* Hero */}
+      <div className="cp-hero">
+        <div className="cp-hero-badges">
+          <a className="cp-badge" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
+            <i className="ti ti-brand-github" /> {t("companionOpenSource")}
+          </a>
+          <span className="cp-badge cp-badge-mut">
+            <i className="ti ti-license" /> MIT
+          </span>
         </div>
-        <p className="mt-3 text-xs text-zinc-500">{t("companionRequirements")}</p>
+        <h1 className="cp-hero-title">Ziggs Companion</h1>
+        <p className="cp-hero-tagline">{t("companionTagline")}</p>
+        <div className="cp-hero-cta">
+          <a className="btn btn-lg" href={DOWNLOAD_URL_WINDOWS}>
+            <i className="ti ti-brand-windows" /> {t("companionDownloadWin")}
+          </a>
+          <a className="cp-github-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
+            <i className="ti ti-brand-github" /> {t("companionViewSource")}
+          </a>
+        </div>
+        <p className="cp-hero-meta">{t("companionRequirements")}</p>
       </div>
 
-      <div className="mb-8">
-        <PingMatrix rows={vpsRows} />
-      </div>
+      {/* Ping matrix */}
+      <PingMatrix rows={vpsRows} />
 
-      <Panel className="mb-8 p-4">
-        <div className="flex items-center gap-2 font-semibold">
-          <span style={{ fontSize: 18 }}>{t("companionHelpTitle")}</span>
-        </div>
-        <p className="mt-2 text-sm text-zinc-400">{t("companionHelpText")}</p>
-      </Panel>
-
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">{t("companionFeaturesNow")}</h2>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {/* Features */}
+      <div className="cp-feat-grid">
         {FEATURES.map(f => <FeatureCard key={f.title} {...f} />)}
       </div>
+
+      {/* Privacy note */}
+      <p className="cp-privacy-note">{t("companionPrivacyShort")}</p>
     </div>
   );
 }
