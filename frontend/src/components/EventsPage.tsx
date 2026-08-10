@@ -346,7 +346,7 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
       const ev = await api.createEvent({
         title: title.trim() || null,
         scheduled_at: when.iso,
-        comp_id: compId ? Number(compId) : null,
+        comp_id: compId && compId !== "none" ? Number(compId) : null,
         message: msg.trim() || null,
         assignment_mode: "admin_assign",
       });
@@ -403,9 +403,10 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
         </label>
 
         <label className="ev-field">
-          <span className="ev-field-label">{t("evCompLabel")}</span>
+          <span className="ev-field-label">{t("evCompLabel")} *</span>
           <select className="cs-select" value={compId} onChange={(e) => setCompId(e.target.value)}>
-            <option value="">{t("evNoComp")}</option>
+            <option value="" disabled>{t("evCompSelectOne")}</option>
+            <option value="none">{t("evNoComp")}</option>
             {comps.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </label>
@@ -423,7 +424,7 @@ function CreateEventForm({ onCreated }: { onCreated: (ev: EventDetail) => void }
       </div>
 
       <div className="ev-create-foot">
-        <button className="btn primary" onClick={submit} disabled={busy || !when}>
+        <button className="btn primary" onClick={submit} disabled={busy || !when || !compId}>
           <i className="ti ti-plus" aria-hidden /> {t("createBtn")}
         </button>
         <button className="btn" onClick={() => setOpen(false)} disabled={busy}>{t("closeBtn")}</button>
