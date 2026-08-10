@@ -19,6 +19,7 @@ Rotas:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import ipaddress
 import logging
@@ -253,6 +254,42 @@ def companion_latest():
         raise HTTPException(204)
     data = json.loads(_RELEASE_FILE.read_text(encoding="utf-8"))
     return Response(content=json.dumps(data), media_type="application/json")
+
+
+_MANIFEST_FILE = Path(__file__).resolve().parents[3] / "frontend" / "public" / "vps-manifest.json"
+_vps_pings_cache: list = []  # [timestamp, payload]
+
+
+@router.get("/companion/vps-pings")
+async def companion_vps_pings():
+    """Pings das VPS até os servidores do Albion, buscados server-side.
+    O browser não pode fetchar http:// de VPS numa página https:// (mixed content),
+    então o backend faz o proxy. Cache de 30s pra não pingar a cada visitante."""
+    import time as _time
+    now = _time.monotonic()
+    if _vps_pings_cache and now - _vps_pings_cache[0] < 30:
+        return _vps_pings_cache[1]
+    if not _MANIFEST_FILE.exists():
+        return Response(content="[]", media_type="application/json")
+    manifest = json.loads(_MANIFEST_FILE.read_text(encoding="utf-8"))
+    vps_list = manifest.get("vps", [])
+
+    async def ping_one(url: str) -> dict | None:
+        try:
+            async with httpx.AsyncClient(timeout=4) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                return r.json()
+        except Exception:
+            return None
+
+    results = await asyncio.gather(*(ping_one(v["ping_url"]) for v in vps_list))
+    out = [
+        {"label": v["label"], "country": v["country"], "pings": p}
+        for v, p in zip(vps_list, results)
+    ]
+    _vps_pings_cache[:] = [now, out]
+    return out
 
 
 # ─── Discord OAuth pairing (companion login, opcional) ─────────────────────

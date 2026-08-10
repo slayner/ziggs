@@ -4,37 +4,17 @@ import { Panel } from "./Panel";
 
 const DOWNLOAD_URL_WINDOWS = "https://ziggs.xyz/companion/Ziggs-Companion_0.2.0_x64-setup.exe";
 const GITHUB_URL = "https://github.com/slayner/ziggs";
-const MANIFEST_URL = "/vps-manifest.json";
+const PINGS_URL = "/companion/vps-pings";
 
 const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
 
-type VpsEntry = {
-  id: string;
-  label: string;
-  country: string;
-  endpoint: string;
-  server_pubkey: string;
-  ping_url: string;
-};
-
 type VpsPing = { americas: number; asia: number; europe: number };
-
-type VpsRow = {
-  vps: VpsEntry;
-  pings: VpsPing | null;
-  loading: boolean;
-  error: boolean;
-};
+type VpsRow = { label: string; country: string; pings: VpsPing | null; loading: boolean; error: boolean };
 
 const FEATURES: { icon: string; title: TKey; desc: TKey }[] = [
-  { icon: "ti-radar-2",          title: "companionFeatScanTitle",    desc: "companionFeatScanDesc" },
-  { icon: "ti-route",            title: "companionFeatTunnelTitle",  desc: "companionFeatTunnelDesc" },
-  { icon: "ti-swords",           title: "companionFeatDmgTitle",     desc: "companionFeatDmgDesc" },
-  { icon: "ti-clipboard-text",   title: "companionFeatLootlogTitle", desc: "companionFeatLootlogDesc" },
-  { icon: "ti-coins",            title: "companionFeatPricesTitle",  desc: "companionFeatPricesDesc" },
-  { icon: "ti-list-details",     title: "companionFeatAutoLootTitle",desc: "companionFeatAutoLootDesc" },
-  { icon: "ti-world-bolt",       title: "companionFeatDnsTitle",     desc: "companionFeatDnsDesc" },
-  { icon: "ti-layout-bottombar", title: "companionFeatTrayTitle",    desc: "companionFeatTrayDesc" },
+  { icon: "ti-swords",         title: "companionFeatDmgTitle",     desc: "companionFeatDmgDesc" },
+  { icon: "ti-clipboard-text", title: "companionFeatLootlogTitle", desc: "companionFeatLootlogDesc" },
+  { icon: "ti-route",          title: "companionFeatTunnelTitle",  desc: "companionFeatTunnelDesc" },
 ];
 
 function pingColor(ms: number | null): string {
@@ -88,16 +68,16 @@ function PingMatrix({ rows }: { rows: VpsRow[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ vps, pings, loading, error }) => (
-              <tr key={vps.id}>
+            {rows.map(({ label, country, pings, loading, error }, i) => (
+              <tr key={i}>
                 <td className="vps-mx-row">
                   <div className="vps-mx-row-inner">
                     <span className="vps-mx-flag">
                       <i className="ti ti-route" />
                     </span>
                     <div>
-                      <span>{vps.label}</span>
-                      <small>{vps.country}</small>
+                      <span>{label}</span>
+                      <small>{country}</small>
                     </div>
                   </div>
                 </td>
@@ -139,34 +119,22 @@ export default function CompanionPage() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      let manifest: VpsEntry[];
+      let data: { label: string; country: string; pings: VpsPing | null }[];
       try {
-        const res = await fetch(MANIFEST_URL);
+        const res = await fetch(PINGS_URL, { cache: "no-store" });
         if (!res.ok) return;
-        const data = await res.json();
-        manifest = data.vps ?? [];
+        data = await res.json();
       } catch {
         return;
       }
-      if (!alive || manifest.length === 0) return;
-      setVpsRows(manifest.map(v => ({ vps: v, pings: null, loading: true, error: false })));
-      const results = await Promise.allSettled(
-        manifest.map(async v => {
-          const res = await fetch(v.ping_url, { cache: "no-store" });
-          if (!res.ok) throw new Error(`ping ${v.id}`);
-          return (await res.json()) as VpsPing;
-        }),
-      );
-      if (!alive) return;
-      setVpsRows(prev =>
-        prev.map((row, i) => {
-          const r = results[i];
-          if (r.status === "fulfilled") {
-            return { ...row, pings: r.value, loading: false, error: false };
-          }
-          return { ...row, loading: false, error: true };
-        }),
-      );
+      if (!alive || !Array.isArray(data) || data.length === 0) return;
+      setVpsRows(data.map(d => ({
+        label: d.label,
+        country: d.country,
+        pings: d.pings,
+        loading: false,
+        error: d.pings == null,
+      })));
     })();
     return () => { alive = false; };
   }, []);
