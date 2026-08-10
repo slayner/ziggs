@@ -15,19 +15,18 @@ from __future__ import annotations
 import asyncio
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import quote
 
-import httpx
+from fastapi import HTTPException
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.orm import Session
 
+from app.api.routes.render import render_item
 from app.models.players import AlbionPlayer, PlayerKillEvent
 from app.services.awakened import awakened_value, is_awakened
 from app.services.lethality import is_likely_lethal
 
 # Diretórios
 _BACKEND = Path(__file__).resolve().parents[2]
-_RENDER_CACHE = _BACKEND / "data" / "render_cache" / "items"
 _OUTPUT = _BACKEND / "data" / "juicy_kill_images"
 _LOCKS: dict[int, asyncio.Lock] = {}
 
@@ -172,43 +171,27 @@ CDN_ICON_SIZE = 128
 
 
 async def _fetch_item_icon(item_id: str, quality: int = 0) -> Image.Image | None:
-    cache_path = _RENDER_CACHE / f"{quote(item_id, safe='')}_q{quality}_s{CDN_ICON_SIZE}.png"
-    content: bytes | None = None
-    if cache_path.exists() and cache_path.stat().st_size > 300:
-        content = cache_path.read_bytes()
-    else:
-        url = f"https://render.albiononline.com/v1/item/{quote(item_id, safe='')}.png"
-        params = {"size": CDN_ICON_SIZE}
-        if quality:
-            params["quality"] = quality
-        try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-                resp = await client.get(url, params=params)
-                if resp.status_code != 200 or len(resp.content) <= 300:
-                    # Retry sem size (CDN default) — alguns itens rejeitam size=128
-                    resp = await client.get(url, params={"quality": quality} if quality else None)
-                if resp.status_code == 200 and len(resp.content) > 300:
-                    content = resp.content
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_bytes(content)
-        except httpx.HTTPError:
-            pass
-    if content is None:
+    try:
+        response = await render_item(item_id, quality, CDN_ICON_SIZE)
+    except HTTPException:
         return None
     try:
-        img = Image.open(BytesIO(content)).convert("RGBA")
+        img = Image.open(BytesIO(response.body)).convert("RGBA")
         return img.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
     except Exception:
         return None
 
 
-async def _load_icons(equipment: dict, icon_cache: dict) -> None:
-    for slot_key, item in (equipment or {}).items():
-        if item and item.get("Type"):
-            t = item["Type"]
-            key = (t, item.get("Quality", 0))
-            if key not in icon_cache:
-                icon_cache[key] = await _fetch_item_icon(*key)
+async def _load_icons(items: list[dict], icon_cache: dict) -> bool:
+    keys = list(dict.fromkeys(
+        (item["Type"], item.get("Quality", 0))
+        for item in items if item and item.get("Type")
+    ))
+    missing = [key for key in keys if key not in icon_cache]
+    if missing:
+        icons = await asyncio.gather(*(_fetch_item_icon(*key) for key in missing))
+        icon_cache.update(zip(missing, icons))
+    return all(icon_cache.get(key) is not None for key in keys)
 
 
 def _draw_equip_grid(draw, img, equipment, x0, y0, icon_cache, show_awakened=False):
@@ -243,15 +226,16 @@ def _draw_equip_grid(draw, img, equipment, x0, y0, icon_cache, show_awakened=Fal
             _draw_qty(draw, str(count), x + ICON_SIZE - int(8 * S), y + ICON_SIZE - int(20 * S), TEXT_COLOR)
 
         # Preço awakened da arma: abaixo do render
-        if show_awakened and slot_key == "MainHand" and is_awakened(t):
-            awake_val = awakened_value(t)
+        soul = item.get("LegendarySoul")
+        if show_awakened and slot_key == "MainHand" and is_awakened(t, soul):
+            awake_val = awakened_value(t, soul)
             if awake_val > 0:
                 price_str = f"+{_silver(awake_val)}"
                 _draw_centered(draw, price_str, x + ICON_SIZE // 2, y + ICON_SIZE + int(2 * S), GOLD, _FONT_ITEM_PRICE)
 
         # Killer awakened: valor sem o +
-        if not show_awakened and slot_key == "MainHand" and is_awakened(t):
-            awake_val = awakened_value(t)
+        if not show_awakened and slot_key == "MainHand" and is_awakened(t, soul):
+            awake_val = awakened_value(t, soul)
             if awake_val > 0:
                 price_str = _silver(awake_val)
                 _draw_centered(draw, price_str, x + ICON_SIZE // 2, y + ICON_SIZE + int(2 * S), GOLD, _FONT_ITEM_PRICE)
@@ -266,7 +250,8 @@ async def render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
 async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
     """Gera e cacheia o PNG de uma kill verificada."""
     _load_fonts()
-    out_path = _OUTPUT / f"{kill_id}.png"
+    # v4 ignora PNGs incompletos e formulas antigas de awakened.
+    out_path = _OUTPUT / f"{kill_id}_v4.png"
     if out_path.exists():
         return out_path
     ev = db.get(PlayerKillEvent, kill_id)
@@ -293,11 +278,6 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
         # Libera read tx antes dos HTTP (download de ícones da CDN).
         db.commit()
 
-        # Carrega ícones
-        icon_cache: dict[tuple[str, int], Image.Image | None] = {}
-        await _load_icons(killer_eq, icon_cache)
-        await _load_icons(victim_eq, icon_cache)
-
         # Food e Potion do set da vítima vão pro inventário (primeiros)
         inv_items = [i for i in victim_inv if i and i.get("Type")]
         for slot_key in ("Food", "Potion"):
@@ -308,11 +288,16 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
 
         inv_list = [(i["Type"], i.get("Quality", 0), i.get("Count", 1)) for i in inv_items]
 
-        # Garante todos os ícones do inventário carregados antes de desenhar
-        for item_id, quality, _ in inv_list:
-            key = (item_id, quality)
-            if key not in icon_cache:
-                icon_cache[key] = await _fetch_item_icon(item_id, quality)
+        # Um PNG incompleto ficaria cacheado para sempre. Falha inteira e deixa
+        # o bot tentar de novo no proximo ciclo se qualquer render nao chegou.
+        icon_cache: dict[tuple[str, int], Image.Image | None] = {}
+        icon_items = [
+            *(item for item in killer_eq.values() if item),
+            *(item for item in victim_eq.values() if item),
+            *inv_items,
+        ]
+        if not await _load_icons(icon_items, icon_cache):
+            return None
 
         # --- Layout ---
         W = int(640 * S)
@@ -321,8 +306,10 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
         PER_ROW = inv_area_w // (ICON_SIZE + SLOT_GAP)
 
         # Grid: 3 linhas + extra se arma awakened
-        killer_awake = is_awakened((killer_eq.get("MainHand") or {}).get("Type", ""))
-        victim_awake = is_awakened((victim_eq.get("MainHand") or {}).get("Type", ""))
+        killer_main = killer_eq.get("MainHand") or {}
+        victim_main = victim_eq.get("MainHand") or {}
+        killer_awake = is_awakened(killer_main.get("Type", ""), killer_main.get("LegendarySoul"))
+        victim_awake = is_awakened(victim_main.get("Type", ""), victim_main.get("LegendarySoul"))
         grid_extra = int(14 * S) if (killer_awake or victim_awake) else 0
         grid_h = 3 * (ICON_SIZE + SLOT_GAP) + grid_extra
 
@@ -434,7 +421,9 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
 
         # Salvar
         _OUTPUT.mkdir(parents=True, exist_ok=True)
-        img.save(out_path, "PNG")
+        tmp_path = out_path.with_suffix(".tmp.png")
+        img.save(tmp_path, "PNG")
+        tmp_path.replace(out_path)
         return out_path
     finally:
         pass
