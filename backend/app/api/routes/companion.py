@@ -256,7 +256,7 @@ def companion_latest():
     return Response(content=json.dumps(data), media_type="application/json")
 
 
-_MANIFEST_FILE = Path(__file__).resolve().parents[3] / "frontend" / "public" / "vps-manifest.json"
+_MANIFEST_FILE = Path(__file__).resolve().parents[4] / "frontend" / "public" / "vps-manifest.json"
 _vps_pings_cache: list = []  # [timestamp, payload]
 
 
