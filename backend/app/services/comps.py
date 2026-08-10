@@ -118,6 +118,68 @@ def _build_parties(comp: Comp, parties: list[PartyIn]) -> None:
         comp.parties.append(party)
 
 
+def _merge_parties(comp: Comp, parties: list[PartyIn]) -> None:
+    """Diff inteligente: preserva slots que não mudaram (mesma posição +
+    mesmas roles) pra não órfãar EventAssignment. Slots que mudaram de role
+    são atualizados in-place; slots que sumiram são deletados (ondelete SET NULL
+    nos assignments); slots novos são criados.
+
+    Match é por (party_position, slot_position) — o frontend sempre envia na
+    ordem visual, e position é o índice estável que não muda entre edits
+    (o CompBuilder não reordena slots arrastando, só adiciona/remove)."""
+    # Indexa parties existentes por position.
+    existing_parties: dict[int, CompParty] = {p.position: p for p in comp.parties}
+
+    for p_idx, p_in in enumerate(parties):
+        party = existing_parties.get(p_idx)
+        if party is None:
+            # Party nova — cria do zero.
+            party = CompParty(position=p_idx, name=p_in.name)
+            comp.parties.append(party)
+        else:
+            party.name = p_in.name
+
+        # Indexa slots existentes por position dentro da party.
+        existing_slots: dict[int, CompSlot] = {s.position: s for s in party.slots}
+        seen_slot_positions: set[int] = set()
+
+        for s_idx, s_in in enumerate(p_in.slots):
+            seen_slot_positions.add(s_idx)
+            slot = existing_slots.get(s_idx)
+            if slot is None:
+                # Slot novo — cria.
+                slot = CompSlot(position=s_idx, label=s_in.label, notes=s_in.notes, fn=s_in.fn)
+                party.slots.append(slot)
+            else:
+                # Slot existe — atualiza metadados.
+                slot.label = s_in.label
+                slot.notes = s_in.notes
+                slot.fn = s_in.fn
+
+            # Merge roles: dedupe input mantendo ordem.
+            new_role_ids = list(dict.fromkeys(s_in.role_ids))
+            existing_role_ids = {sr.game_role_id for sr in slot.roles}
+            # Remove roles que sumiram.
+            for sr in list(slot.roles):
+                if sr.game_role_id not in new_role_ids:
+                    slot.roles.remove(sr)
+            # Adiciona roles novas (preservando position).
+            for r_idx, role_id in enumerate(new_role_ids):
+                if role_id not in existing_role_ids:
+                    slot.roles.append(CompSlotRole(game_role_id=role_id, position=r_idx))
+
+        # Remove slots que sumiram dessa party.
+        for slot in list(party.slots):
+            if slot.position not in seen_slot_positions:
+                party.slots.remove(slot)
+
+    # Remove parties que sumiram.
+    seen_party_positions = {p_idx for p_idx in range(len(parties))}
+    for party in list(comp.parties):
+        if party.position not in seen_party_positions:
+            comp.parties.remove(party)
+
+
 def create_comp(
     db: Session, guild_id: int, payload: CompCreate, actor_id: int | None
 ) -> CompRead:
@@ -183,9 +245,8 @@ def update_comp(
             rid for p in payload.parties for s in p.slots for rid in s.role_ids
         }
         _validate_role_ids(db, guild_id, all_role_ids)
-        comp.parties.clear()      # cascade delete-orphan limpa o antigo
+        _merge_parties(comp, payload.parties)
         db.flush()
-        _build_parties(comp, payload.parties)
 
     db.add(AuditLog(
         guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
