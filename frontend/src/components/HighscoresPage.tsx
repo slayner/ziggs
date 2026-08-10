@@ -12,6 +12,11 @@ const API = import.meta.env.DEV ? "http://localhost:8000" : "";
 const PAGE_SIZE = 10;
 const SCOPE_KINDS = new Set(["pvp_fame", "most_battles", "crafting"]);
 const GUILD_DEFAULT_KINDS = new Set(["pvp_fame", "most_battles"]);
+const ALLTIME_ONLY_KINDS = new Set([
+  "gather_total", "gather_wood", "gather_hide", "gather_ore", "gather_rock", "gather_fiber",
+  "fishing", "crafting",
+]);
+type RankingWindow = "alltime" | "week" | "month" | "season" | `season:${number}`;
 
 const wBase = (id: string) => id.replace(/^T\d+_/, "").replace(/@\d+$/, "");
 
@@ -407,7 +412,7 @@ const RankingRowView = memo(function RankingRowView({ rank, row, highlight, fall
 });
 
 export default function HighscoresPage({ initialWindow = "alltime", initialKind, initialRegions, highlightPlayer, initialRank }: {
-  initialWindow?: "alltime" | "week";
+  initialWindow?: RankingWindow;
   initialKind?: RankingKind;
   initialRegions?: string;
   highlightPlayer?: string;
@@ -428,12 +433,30 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
   const [scopeView, setScopeView] = useState<"guild" | "player">(
     GUILD_DEFAULT_KINDS.has(initial.initialKind ?? "pvp_fame") ? "guild" : "player",
   );
-  const [window_, setWindow] = useState<"alltime" | "week">(initial.initialWindow);
+  const [window_, setWindow] = useState<RankingWindow>(
+    ALLTIME_ONLY_KINDS.has(initial.initialKind ?? "pvp_fame") ? "alltime" : initial.initialWindow,
+  );
+  const [currentSeason, setCurrentSeason] = useState<number | null>(null);
+  const [historicalSeasons, setHistoricalSeasons] = useState<number[]>([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState<number>(initial.initialRank != null ? Math.floor((initial.initialRank - 1) / PAGE_SIZE) : 0);
   const [rows, setRows] = useState<RankingRow[] | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API}/highscores/seasons?regions=${regions}`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => {
+        if (!alive) return;
+        const current = [...new Set(Object.values(d.current_seasons ?? {}).filter(Number.isInteger))] as number[];
+        setCurrentSeason(current.length === 1 ? current[0] : null);
+        setHistoricalSeasons(Array.isArray(d.historical_seasons) ? d.historical_seasons : []);
+      })
+      .catch(() => { if (alive) { setCurrentSeason(null); setHistoricalSeasons([]); } });
+    return () => { alive = false; };
+  }, [regions]);
 
   const filtersRef = useRef({ kind, window_, search, regions, scopeView });
   useEffect(() => {
@@ -459,8 +482,8 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
     if (apiScope !== "default") params.set("scope", apiScope);
     let alive = true;
     fetch(`${API}/highscores/rankings?${params}`)
-      .then(r => r.json())
-      .then(d => { if (alive) { setRows(d.rows); setTotal(d.total); } })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => { if (alive) { setRows(Array.isArray(d.rows) ? d.rows : []); setTotal(Number(d.total) || 0); } })
       .catch(() => { if (alive) { setRows([]); setTotal(0); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -484,7 +507,14 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
 
       {rows === null ? <FilterRowSkeleton /> : (
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <RankingTypeSelect kind={kind} onChange={setKind} weapons={weapons} />
+          <RankingTypeSelect
+            kind={kind}
+            onChange={next => {
+              setKind(next);
+              if (ALLTIME_ONLY_KINDS.has(next)) setWindow("alltime");
+            }}
+            weapons={weapons}
+          />
           {SCOPE_KINDS.has(kind) && (
             <div className="flex overflow-hidden rounded-lg border border-zinc-700">
               <button onClick={() => setScopeView("guild")} className={`px-3 py-1.5 text-xs ${scopeView === "guild" ? "bg-amber-500/10 text-amber-300" : "text-zinc-400 hover:text-zinc-200"}`}>
@@ -497,11 +527,20 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
           )}
           <select
             value={window_}
-            onChange={e => setWindow(e.target.value as "alltime" | "week")}
+            onChange={e => setWindow(e.target.value as RankingWindow)}
             className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 outline-none hover:border-zinc-500 focus:border-amber-500"
           >
+            {!ALLTIME_ONLY_KINDS.has(kind) && <option value="week">{t("highscoreDurationWeek")}</option>}
+            {!ALLTIME_ONLY_KINDS.has(kind) && <option value="month">{t("highscoreDurationMonth")}</option>}
+            {!ALLTIME_ONLY_KINDS.has(kind) && (
+              <option value="season">
+                {t("highscoreDurationSeason")}{currentSeason ? ` (${t("highscoreSeasonLabel")} ${currentSeason})` : ""}
+              </option>
+            )}
             <option value="alltime">{t("highscoreDurationAllTime")}</option>
-            <option value="week">{t("highscoreDurationWeek")}</option>
+            {!ALLTIME_ONLY_KINDS.has(kind) && historicalSeasons.map(season => (
+              <option key={season} value={`season:${season}`}>{t("highscoreSeasonLabel")} {season}</option>
+            ))}
           </select>
           <input
             value={search}
