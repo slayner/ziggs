@@ -51,6 +51,7 @@ export default function CompBuilder({ perms, onOpenChange }: {
   return (
     <CompEditor initialDraft={active.draft} initialImportCode={active.importCode}
       perms={perms} offline={offline} weapons={weapons}
-      onBack={() => setActive(null)} />
+      onBack={() => setActive(null)}
+      onDeleted={(id) => setCompList(prev => prev?.filter(c => c.id !== id) ?? prev)} />
   );
 }

@@ -612,6 +612,7 @@ def create_event(
         message=payload.message,
         scheduled_at=scheduled_at,
         comp_id=payload.comp_id,
+        functions_released=payload.comp_id is not None,
         seriousness=seriousness,
         participation_mode=participation_mode,
         caller_id=actor_id,

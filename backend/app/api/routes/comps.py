@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -122,7 +122,9 @@ def update_comp(
     except svc.ServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if comp is None:
-        raise HTTPException(status_code=404, detail="comp não encontrada")
+        # Comp foi deletada por ficar vazia depois do save — 204, não 404.
+        db.commit()
+        return Response(status_code=204)
     db.commit()
     return comp
 

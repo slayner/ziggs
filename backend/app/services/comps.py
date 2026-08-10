@@ -17,6 +17,7 @@ from app.domain.suggestions import RoleBuild, suggest_build
 from app.models.audit import AuditLog
 from app.models.catalog import GameRole, Weapon
 from app.models.comps import Comp, CompParty, CompSlot, CompSlotRole
+from app.models.events import Event
 
 
 class ServiceError(Exception):
@@ -247,6 +248,24 @@ def update_comp(
         _validate_role_ids(db, guild_id, all_role_ids)
         _merge_parties(comp, payload.parties)
         db.flush()
+        # Se a comp ficou sem nenhum slot (todas as parties vazias), deleta.
+        # O ondelete=SET NULL no Event.comp_id zera a comp dos eventos que a
+        # usavam; CompRolePreference é CASCADE e some junto. O frontend recebe
+        # None e volta pra lista de comps.
+        has_slots = any(
+            any(slot.roles for slot in party.slots)
+            for party in comp.parties
+        )
+        if not has_slots:
+            db.add(AuditLog(
+                guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
+                action="comp.delete", entity="comp", entity_id=str(comp.id),
+                before={"name": comp.name, "reason": "empty after save"},
+            ))
+            _cleanup_events_on_comp_delete(db, comp.id)
+            db.delete(comp)
+            db.flush()
+            return None
 
     db.add(AuditLog(
         guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
@@ -255,6 +274,15 @@ def update_comp(
     ))
     db.flush()
     return _comp_read(db, comp)
+
+
+def _cleanup_events_on_comp_delete(db: Session, comp_id: int) -> None:
+    """Zera functions_released dos eventos que usavam a comp deletada.
+    O ondelete=SET NULL zera comp_id no banco, mas functions_released
+    precisa ser False pra o bot aceitar signup sem roles."""
+    for ev in db.scalars(select(Event).where(Event.comp_id == comp_id)):
+        ev.functions_released = False
+        ev.signup_message_dirty = True
 
 
 def delete_comp(
@@ -270,6 +298,7 @@ def delete_comp(
         action="comp.delete", entity="comp", entity_id=str(comp.id),
         before={"name": comp.name},
     ))
+    _cleanup_events_on_comp_delete(db, comp_id)
     db.delete(comp)
     return True
 

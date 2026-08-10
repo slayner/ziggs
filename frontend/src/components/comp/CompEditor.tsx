@@ -82,7 +82,7 @@ function BigRenders({ equip, weaponIs2H }: { equip: DraftEquip; weaponIs2H?: boo
   );
 }
 
-export function CompEditor({ initialDraft, initialImportCode, perms, offline, weapons, onBack }: {
+export function CompEditor({ initialDraft, initialImportCode, perms, offline, weapons, onBack, onDeleted }: {
   initialDraft: Draft;
   initialEditing?: boolean;
   initialImportCode: CompCode | null;
@@ -90,6 +90,7 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
   offline: boolean;
   weapons: WeaponOut[];
   onBack: () => void;
+  onDeleted?: (id: number) => void;
 }) {
   const t = useT();
   const EQUIP_SLOTS = useEquipSlots();
@@ -491,6 +492,12 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
           })),
         })),
       });
+      if (!updated) {
+        // Comp foi deletada por ficar vazia — volta pra lista.
+        onDeleted?.(draft.id);
+        onBack();
+        return;
+      }
       void updated;
       setDraft(prev => {
         if (!prev) return prev;
