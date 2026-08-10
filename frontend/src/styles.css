@@ -1588,6 +1588,28 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .ad-page { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: transparent; }
 .ad-page .ad-slot { margin: 0; }
 
+/* CompanionPage — matriz de pings VPS × servidores Albion.
+   Mesma estrutura visual do routing matrix do companion app, mas só display
+   (não interativo — o roteamento acontece no app desktop). */
+.vps-matrix { width: 100%; border-collapse: collapse; font-size: 13px; }
+.vps-matrix th, .vps-matrix td { padding: 10px 12px; text-align: center; border-bottom: 1px solid var(--border); }
+.vps-mx-corner { text-align: left; font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.vps-mx-col { padding: 8px 10px; }
+.vps-mx-region { display: block; font-size: 14px; font-weight: 700; color: var(--gold); }
+.vps-mx-col small { display: block; font-size: 10px; color: var(--hint); margin-top: 2px; }
+.vps-mx-row { text-align: left; }
+.vps-mx-row-inner { display: flex; align-items: center; gap: 8px; }
+.vps-mx-flag { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--gold); font-size: 14px; flex-shrink: 0; }
+.vps-mx-row-inner > div { display: flex; flex-direction: column; }
+.vps-mx-row-inner span { font-weight: 600; font-size: 13px; }
+.vps-mx-row-inner small { font-size: 10px; color: var(--hint); }
+.vps-mx-cell { min-width: 72px; }
+.vps-mx-ping { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.vps-mx-loading { color: var(--muted); }
+.vps-mx-loading i { font-size: 12px; }
+.vps-mx-error { color: var(--muted); }
+.vps-mx-hint { padding: 10px 14px; font-size: 11px; color: var(--hint); margin: 0; border-top: 1px solid var(--border); }
+
 /* EventsPage — lista única de participantes (ver components/EventsPage.tsx).
    Nome/%/remover são cruciais e sempre aparecem; o resto (trial, % na call,
    função, prata, calculadora de regear) só quando há espaço na bracket. */
