@@ -345,14 +345,12 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .rc-card-detail {
   border-top: 1px solid var(--border);
   background: var(--surface-2);
+  padding: 12px;
 }
 .rc-card-detail-head {
   background: var(--surface); border-bottom: 1px solid var(--border);
   padding: 4px 2px 0; /* EquipStrip já traz seu próprio padding */
 }
-/* Abas de build removidas (flex removido — 1 role por slot). */
-.rc-card-detail-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
-
 /* Layout 3 colunas no topo do detail (arma+skills / consumíveis / notas). */
 .rc-detail-top-row {
   display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 4px;
@@ -364,8 +362,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 
 /* Textarea single-line que cresce pra 2ª linha só quando o texto não cabe. */
 .rc-autosize {
-  font-size: 13px; font-family: inherit; resize: none; min-height: 30px; max-height: 140px;
-  field-sizing: content; -webkit-field-sizing: content; overflow: hidden;
+  font-size: 13px; font-family: inherit; resize: vertical; min-height: 28px; max-height: 80px;
+  overflow: hidden;
 }
 
 /* Gear grid — auto-fill (expande conforme largura). 2H remove offhand e
@@ -377,10 +375,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 @media (max-width: 719px) {
   .rc-gear-grid { grid-template-columns: repeat(2, 1fr); }
 }
-
-/* Spell preview — ícones das skills selecionadas, no card expandido. */
-.rc-spell-preview { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; padding: 6px 8px; background: var(--surface); border-radius: var(--radius-sm); border: 1px solid var(--border); }
-.rc-spell-preview-icon { width: 28px; height: 28px; object-fit: contain; border-radius: 4px; }
 
 /* Wizard "Adicionar Função" — mini-setup (fn-type → weapon → suggestions). */
 .rc-wizard {
@@ -1141,11 +1135,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 /* Card expandido (accordion) — destaque dourado pra se destacar dos recolhidos. */
 .role-card.rc-open {
-  border-top-color: var(--gold);
-  border-right-color: var(--gold);
-  border-bottom-color: var(--gold);
+  border-color: var(--gold);
   box-shadow: 0 0 0 1px var(--gold-soft, rgba(212,168,50,.25));
-  background: var(--surface-2);
 }
 .role-card.rc-editing { background: var(--surface-2); }
 

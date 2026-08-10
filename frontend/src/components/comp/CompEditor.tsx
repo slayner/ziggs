@@ -527,35 +527,8 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
     }
   }
 
-  if (!draft) return <div className="container"><p className="muted">{t("loading")}</p></div>;
+if (!draft) return <div className="container"><p className="muted">{t("loading")}</p></div>;
   const d = draft;
-
-  // ── Spell preview no card expandido ──────────────────────────
-  function renderSelectedSpellIcons(pi: number, si: number) {
-    const slot = d.parties[pi]?.slots[si];
-    if (!slot) return null;
-    const role = slot.role;
-    const icons: { id: string; label: string }[] = [];
-    if (role.q_spell) icons.push({ id: role.q_spell, label: "Q" });
-    if (role.w_spell) icons.push({ id: role.w_spell, label: "W" });
-    if (role.passive_spell) icons.push({ id: role.passive_spell, label: "P" });
-    for (const gk of ["helmet","armor","boots"] as const) {
-      for (const slotName of ["Q","W","passive"]) {
-        const id = role.gear_spells[`${gk}_${slotName}`];
-        if (id) icons.push({ id, label: `${gk[0].toUpperCase()}${slotName === "passive" ? "P" : slotName}` });
-      }
-    }
-    if (!icons.length) return null;
-    return (
-      <div className="rc-spell-preview">
-        {icons.map((sp, i) => (
-          <img key={i} src={`/render/spell/${encodeURIComponent(sp.id)}`} alt={sp.label} title={sp.label}
-            className="rc-spell-preview-icon"
-            onError={imgRetry(img => { img.style.display = "none"; })} />
-        ))}
-      </div>
-    );
-  }
 
   // ── Alt spells (mesma lógica do primário, abaixo do alt picker) ──
   function renderAltSpells(pi: number, si: number, key: string, altId: string | undefined, altIdx: number) {
@@ -653,7 +626,7 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
             <h4 className="detail-section-title"><i className="ti ti-notes" aria-hidden /> {t("notesLabel")}</h4>
             <div className="equip-field">
               <label className="equip-field-label">{t("playStyleTitle")}</label>
-              <textarea className="input rc-autosize"
+              <input className="input" style={{ fontSize: 13 }}
                 placeholder={t("playStylePlaceholder")}
                 value={role.play_style ?? ""}
                 onFocus={captureHistory} onBlur={releaseFocus}
@@ -669,9 +642,6 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
             </div>
           </div>
         </div>
-
-        {/* Skills preview selecionadas */}
-        {renderSelectedSpellIcons(pi, si)}
 
         {/* Gear grid — auto-fill, offhand cell some se 2H */}
         <h4 className="detail-section-title" style={{ marginTop: 14 }}>
