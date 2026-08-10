@@ -13,7 +13,7 @@ interface Props {
   excludeIds?: string[];
 }
 
-const MAX_RESULTS = 40;
+const MAX_RESULTS = 100;
 
 export function ItemPicker({ slot, valueId, valueName, onChange, placeholder, disabled, excludeIds }: Props) {
   const { lang } = useLang();

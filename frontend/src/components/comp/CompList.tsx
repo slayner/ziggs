@@ -14,7 +14,7 @@ import type { CompCode, Draft } from "./types";
 // mostra nome + contagens (parties/roles) carregadas em paralelo, e a criação
 // vira um card próprio no grid. Busca por nome filtra em memória.
 type CompStats = { parties: number; roles: number };
-type StatsState = Record<number, CompStats | null>;
+type StatsState = Record<number, CompStats | null | undefined>;
 
 export function CompList({ perms, offline, compList, setCompList, onOpen }: {
   perms: Permissions;
@@ -54,7 +54,7 @@ export function CompList({ perms, offline, compList, setCompList, onOpen }: {
           const roles = full.parties.reduce((n, p) => n + p.slots.length, 0);
           setStats(prev => ({ ...prev, [c.id]: { parties, roles } }));
         })
-        .catch(() => setStats(prev => ({ ...prev, [c.id]: { parties: 0, roles: 0 } })));
+        .catch(() => setStats(prev => ({ ...prev, [c.id]: undefined })));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compList]);

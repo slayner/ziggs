@@ -335,8 +335,10 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
       fn: dbWeapon?.invisible_function ?? null,
       weapon_db_id: dbWeapon?.id ?? null,
       q_spell: null, w_spell: null, passive_spell: null,
-      // Auto-nome: nome da arma sem tier (só se o nome atual era vazio OU era o nome de uma arma anterior)
-      name: id ? weaponDisplayName(id) : r.name,
+      // Auto-nome: só sobrescreve se o nome atual for vazio ou igual ao nome
+      // automático da arma anterior (não sobrescreve nome custom do user).
+      name: (!r.name || r.name === weaponDisplayName(r.equip.weapon?.id ?? ""))
+        ? (id ? weaponDisplayName(id) : r.name) : r.name,
     }));
     if (base && id) loadSpells(base);
   }

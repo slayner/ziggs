@@ -2336,7 +2336,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 
 .comp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
 
-.comp-card { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); display: flex; flex-direction: column; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
+.comp-card { border: 1px solid var(--border); border-radius: 0; background: var(--surface); display: flex; flex-direction: column; overflow: hidden; transition: border-color .15s, box-shadow .15s; }
 .comp-card:hover { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(212,163,56,.15); }
 
 .comp-card-create { border-style: dashed; border-color: var(--border); align-items: center; justify-content: center; text-align: center; padding: 28px 16px; cursor: pointer; color: var(--hint); }
@@ -2353,7 +2353,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .comp-card-stat { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
 .comp-card-stat.muted { color: var(--hint); font-style: italic; }
 .comp-card-actions { display: flex; gap: 4px; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--surface-2); }
-.comp-card-actions button { background: none; border: 0; color: var(--hint); cursor: pointer; padding: 4px 8px; font-size: 13px; border-radius: 4px; }
+.comp-card-actions button { background: none; border: 0; color: var(--hint); cursor: pointer; padding: 4px 8px; font-size: 13px; border-radius: 0; }
 .comp-card-actions button:hover { color: var(--text); background: rgba(255,255,255,.05); }
 .comp-card-actions button.danger:hover { color: var(--red); }
 .comp-card-confirm { padding: 10px 12px; font-size: 12px; color: var(--red); display: flex; align-items: center; gap: 8px; }
@@ -2364,7 +2364,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .comp-list-empty p { margin: 0; font-size: 13px; }
 
 .comp-create-modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 200; }
-.comp-create-modal-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: 380px; max-width: 90vw; display: flex; flex-direction: column; gap: 14px; }
+.comp-create-modal-card { background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 20px; width: 380px; max-width: 90vw; display: flex; flex-direction: column; gap: 14px; }
 .comp-create-modal-head { display: flex; align-items: center; justify-content: space-between; }
 .comp-create-modal-title { font-size: 16px; font-weight: 700; color: var(--text); }
 .comp-create-modal-input { width: 100%; }
