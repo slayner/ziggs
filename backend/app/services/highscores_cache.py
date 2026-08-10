@@ -22,7 +22,7 @@ import time
 
 from sqlalchemy import select
 
-from app.db import SyncSessionLocal
+from app.db import AsyncSessionLocal
 from app.models.dashboard_cache import DashboardCache
 
 logger = logging.getLogger(__name__)
@@ -38,13 +38,20 @@ REGION_SELECTIONS: list[list[str]] = [
     ["americas", "europe"], ["americas", "asia"], ["europe", "asia"],
     ["americas", "europe", "asia"],
 ]
+# Mês e seasons calculam sob demanda. Pré-computá-los dobrou o ciclo para mais
+# de 2 minutos de CPU alta em produção; semana/all-time preservam o cache antigo.
 WINDOWS = ["alltime", "week"]
 
 GUILD_CACHED_KINDS = ["pvp_fame", "efficiency", "most_battles", "underdog"]
-_GATHER_SILVER_KINDS = [
+# gather/fishing/crafting são famas ACUMULADAS da conta (sem timestamp) —
+# honestamente all-time só, não suportam window. Não rotule como seasonal.
+_ALLTIME_ONLY_KINDS = [
     "gather_total", "gather_wood", "gather_hide", "gather_ore", "gather_rock", "gather_fiber",
-    "fishing", "crafting", "silver_dropped",
+    "fishing", "crafting",
 ]
+# silver_dropped é timestamp-backed (PlayerKillEvent.timestamp) — suporta os
+# windows correntes (alltime/week/month/season) e é pré-calculado pra todos eles.
+_SILVER_KIND = "silver_dropped"
 
 _FULL_KEY = "-".join(sorted(["americas", "europe", "asia"]))
 _PAIR_KEYS = {
@@ -67,14 +74,16 @@ def _region_key(region_list: list[str] | None) -> str | None:
 
 def rankings_cache_key(kind: str, window: str, region_list: list[str] | None) -> str | None:
     rk = _region_key(region_list)
-    if not rk:
-        return None
+    if not rk or window not in WINDOWS:
+        return None  # window fora dos correntes (ex.: season:N histórico) → ao vivo
     if kind in GUILD_CACHED_KINDS:
         return f"hs:rk:{kind}:{window}:{rk}"
     if kind == "weapon_scorer" and rk in _WEAPON_SCORER_CACHEABLE:
         return f"hs:rk:{kind}:{window}:{rk}"
-    if kind in _GATHER_SILVER_KINDS and window == "alltime":
+    if kind in _ALLTIME_ONLY_KINDS and window == "alltime":
         return f"hs:rk:{kind}:alltime:{rk}"
+    if kind == _SILVER_KIND:
+        return f"hs:rk:{kind}:{window}:{rk}"
     return None
 
 
@@ -83,76 +92,76 @@ def highlights_cache_key(region_list: list[str] | None) -> str | None:
     return f"hs:hl:{rk}" if rk else None
 
 
-def _compute_all() -> dict[str, dict]:
+async def _compute_all() -> dict[str, dict]:
     """Computa todos os caches de highscores em uma única sessão de leitura.
     Devolve {cache_key: payload}."""
-    import asyncio
-    from app.api.routes.highscores import _compute_highlights, _compute_rankings, _window_start
+    from app.api.routes.highscores import _compute_highlights, _compute_rankings, _resolve_window, _window_marker
 
     payloads: dict[str, dict] = {}
-    db_read = SyncSessionLocal()
-    try:
-        # ponytail: _compute_highlights/_compute_rankings são async (migração async
-        # DB), mas highscores_cache roda em thread (to_thread) — asyncio.run cria
-        # loop efêmero. Se virar gargalo, migrar highscores_cache pra async direto.
+    async with AsyncSessionLocal() as db_read:
         for region_list in REGION_SELECTIONS:
             hl_key = highlights_cache_key(region_list)
             if hl_key:
-                payloads[hl_key] = asyncio.run(_compute_highlights(db_read, region_list))
+                payloads[hl_key] = await _compute_highlights(db_read, region_list)
 
             for window in WINDOWS:
-                week_start = _window_start(window)
+                tw = await _resolve_window(window, region_list)
                 for kind in CACHED_KINDS:
                     key = rankings_cache_key(kind, window, region_list)
                     if not key:
                         continue
                     lim = GUILD_FULL_LIMIT if kind in GUILD_CACHED_KINDS else TOP_N
-                    payloads[key] = asyncio.run(_compute_rankings(db_read, kind, region_list, week_start, None, lim, 0))
+                    payloads[key] = await _compute_rankings(db_read, kind, region_list, tw, None, lim, 0)
+                    payloads[key]["_window"] = _window_marker(tw)
 
                 if window == "alltime":
-                    for kind in _GATHER_SILVER_KINDS:
+                    # gather/fishing/crafting: acumulados da conta, all-time só.
+                    for kind in _ALLTIME_ONLY_KINDS:
                         key = rankings_cache_key(kind, "alltime", region_list)
                         if not key:
                             continue
-                        payloads[key] = asyncio.run(_compute_rankings(db_read, kind, region_list, None, None, TOP_N, 0))
-    finally:
-        db_read.close()
+                        payloads[key] = await _compute_rankings(db_read, kind, region_list, tw, None, TOP_N, 0)
+                        payloads[key]["_window"] = _window_marker(tw)
+
+                # silver_dropped: timestamp-backed, suporta todos os windows correntes.
+                skey = rankings_cache_key(_SILVER_KIND, window, region_list)
+                if skey:
+                    payloads[skey] = await _compute_rankings(db_read, _SILVER_KIND, region_list, tw, None, TOP_N, 0)
+                    payloads[skey]["_window"] = _window_marker(tw)
     return payloads
 
 
-def _write_all(payloads: dict[str, dict]) -> int:
+async def _write_all(payloads: dict[str, dict]) -> int:
     """Grava todos os payloads numa única transação. Retorna quantidade."""
     if not payloads:
         return 0
-    db_write = SyncSessionLocal()
     written = 0
-    try:
+    async with AsyncSessionLocal() as db_write:
         existing = {
-            row.key: row for row in db_write.scalars(
+            row.key: row for row in (await db_write.scalars(
                 select(DashboardCache).where(DashboardCache.key.in_(payloads.keys()))
-            ).all()
+            )).all()
         }
-        for key, payload in payloads.items():
-            row = existing.get(key)
-            if row is None:
-                db_write.add(DashboardCache(key=key, payload=payload))
-            else:
-                row.payload = payload
-            written += 1
-        db_write.commit()
-    except Exception:
-        db_write.rollback()
-        raise
-    finally:
-        db_write.close()
+        try:
+            for key, payload in payloads.items():
+                row = existing.get(key)
+                if row is None:
+                    db_write.add(DashboardCache(key=key, payload=payload))
+                else:
+                    row.payload = payload
+                written += 1
+            await db_write.commit()
+        except Exception:
+            await db_write.rollback()
+            raise
     return written
 
 
-def sync_once() -> int:
+async def sync_once() -> int:
     t_start = time.monotonic()
     try:
-        payloads = _compute_all()
-        written = _write_all(payloads)
+        payloads = await _compute_all()
+        written = await _write_all(payloads)
         t_total = time.monotonic() - t_start
         logger.info("highscores_cache: ciclo %.1fs (%d chaves)", t_total, written)
         return written
@@ -162,7 +171,8 @@ def sync_once() -> int:
 
 
 async def run_forever() -> None:
-    logger.info("highscores_cache: iniciando (intervalo=%ds)", INTERVAL)
+    # ponytail: o ciclo repetia as mesmas agregações por kind/região e ocupou
+    # vários núcleos por >4min em produção. Reativar após agrupar essas queries.
+    logger.info("highscores_cache: precompute automático desativado")
     while True:
-        await asyncio.to_thread(sync_once)
         await asyncio.sleep(INTERVAL)
