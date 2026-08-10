@@ -6,7 +6,6 @@ const DOWNLOAD_URL_WINDOWS = "https://ziggs.xyz/companion/Ziggs-Companion_0.2.0_
 const MANIFEST_URL = "/vps-manifest.json";
 
 const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
-type AlbionRegion = typeof ALBION_REGIONS[number];
 
 type VpsEntry = {
   id: string;
