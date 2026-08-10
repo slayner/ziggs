@@ -5,10 +5,11 @@ pontos por função — dps/pierce/support/healer/tank — aplicado aqui em esca
 pra todos os jogadores de uma vez, em vez de um só)."""
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -20,6 +21,7 @@ from app.api.routes.battles import (
 from app.models.battles import Battle, BattleGuild, BattleParticipant, BattleSide
 from app.models.catalog import Weapon
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerWeaponStat
+from app.services import season_calendar
 from app.services.search_norm import match as search_match, norm_sql, normalize as norm_name
 
 router = APIRouter(prefix="/highscores", tags=["highscores"])
@@ -51,19 +53,131 @@ _SILVER_KIND = "silver_dropped"
 def _region_list(regions: str | None) -> list[str] | None:
     if not regions:
         return None
-    return [r.strip() for r in regions.split(",") if r.strip()]
+    out = list(dict.fromkeys(r.strip() for r in regions.split(",") if r.strip()))
+    if any(r not in season_calendar.REGIONS for r in out):
+        raise HTTPException(422, "invalid region")
+    return out or None
 
 
-def _window_start(window: str) -> datetime | None:
-    return _week_start_utc() if window == "week" else None
+@dataclass(frozen=True)
+class TimeWindow:
+    """Bounds de tempo de um ranking window.
+
+    - uniform (alltime/week/month): ``lo``/``hi`` aplicados à coluna de
+      timestamp independentemente de região; ambos None = alltime.
+    - regional (season/season:N): ``regional`` mapeia região → (lo, hi); os
+      starts diferem por região (Americas/Europe 11:00 UTC, Asia 00:00 UTC),
+      então a query emite um OR de cláusulas por região. Quando ``regional``
+      está setado, ``lo``/``hi`` são ignorados e o filtro de região é dobrado
+      nas próprias cláusulas (não há ``region.in_`` separado).
+    """
+    lo: datetime | None = None
+    hi: datetime | None = None
+    regional: dict[str, tuple[datetime | None, datetime | None]] | None = None
+
+    @property
+    def is_alltime(self) -> bool:
+        return self.lo is None and self.hi is None and not self.regional
 
 
-def _base_battle_filters(region_list: list[str] | None, week_start: datetime | None) -> list:
-    filters = [Battle.processing_tier == "deep", *lethal_with_healing_filter()]
-    if week_start:
-        filters.append(Battle.start_time >= week_start)
+async def _resolve_window(window: str, region_list: list[str] | None) -> TimeWindow:
+    """Resolve um window string (alltime/week/month/season/season:N) em
+    bounds concretos. Week = domingo 00:00 UTC, half-open; month = mês
+    calendário UTC, half-open; season = corrente por região."""
+    now = datetime.now(timezone.utc)
+    if window == "week":
+        start = _week_start_utc()
+        return TimeWindow(lo=start, hi=start + timedelta(days=7))
+    if window == "month":
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        nextm = (start + timedelta(days=32)).replace(day=1)
+        return TimeWindow(lo=start, hi=nextm)
+    if window == "season":
+        cal = await season_calendar.load_calendar()
+        regional = _season_regional(cal, region_list, now=now)
+        if len(regional) != len(region_list or season_calendar.REGIONS):
+            raise HTTPException(503, "season calendar unavailable")
+        return TimeWindow(regional=regional)
+    if window.startswith("season:"):
+        try:
+            n = int(window.split(":", 1)[1])
+        except ValueError:
+            raise HTTPException(422, "invalid highscore window")
+        cal = await season_calendar.load_calendar()
+        regional = _season_regional(cal, region_list, season_num=n)
+        if len(regional) != len(region_list or season_calendar.REGIONS):
+            raise HTTPException(422, "unknown season")
+        return TimeWindow(regional=regional)
+    if window == "alltime":
+        return TimeWindow()
+    raise HTTPException(422, "invalid highscore window")
+
+
+def _season_regional(
+    cal: dict[str, dict[int, datetime]],
+    region_list: list[str] | None,
+    *,
+    now: datetime | None = None,
+    season_num: int | None = None,
+) -> dict[str, tuple[datetime | None, datetime | None]]:
+    """{região: (lo, hi)} p/ as regiões selecionadas. ``season_num=None`` →
+    season corrente por região; senão a season histórica N. Regiões sem
+    bound definido caem fora (não contribuem com cláusula)."""
+    regions = region_list or list(season_calendar.REGIONS)
+    out: dict[str, tuple[datetime | None, datetime | None]] = {}
+    for r in regions:
+        if season_num is None:
+            n = season_calendar.current_season(cal, r, now or datetime.now(timezone.utc))
+            if n is None:
+                continue
+        else:
+            n = season_num
+        lo, hi = season_calendar.season_bounds(cal, r, n)
+        if lo is None:
+            continue
+        out[r] = (lo, hi)
+    return out
+
+
+def _time_region_clauses(
+    tw: TimeWindow, region_col, time_col, region_list: list[str] | None,
+) -> list:
+    """Clauses WHERE de tempo + região. Para windows regionais (season) o
+    filtro de região vai DENTRO do OR por região (starts diferem) — neste
+    caso o caller NÃO deve adicionar ``region.in_`` extra."""
+    if tw.regional:
+        clauses = []
+        for region, (lo, hi) in tw.regional.items():
+            parts = [region_col == region]
+            if lo is not None:
+                parts.append(time_col >= lo)
+            if hi is not None:
+                parts.append(time_col < hi)
+            clauses.append(and_(*parts))
+        return [or_(*clauses)] if clauses else []
+    out = []
+    if tw.lo is not None:
+        out.append(time_col >= tw.lo)
+    if tw.hi is not None:
+        out.append(time_col < tw.hi)
     if region_list:
-        filters.append(Battle.region.in_(region_list))
+        out.append(region_col.in_(region_list))
+    return out
+
+
+def _window_marker(tw: TimeWindow) -> str:
+    """Identifica os bounds concretos para não servir cache do período anterior."""
+    if tw.regional:
+        return "|".join(
+            f"{region}:{lo.isoformat() if lo else ''}:{hi.isoformat() if hi else ''}"
+            for region, (lo, hi) in sorted(tw.regional.items())
+        )
+    return f"{tw.lo.isoformat() if tw.lo else ''}:{tw.hi.isoformat() if tw.hi else ''}"
+
+
+def _base_battle_filters(region_list: list[str] | None, tw: TimeWindow) -> list:
+    filters = [Battle.processing_tier == "deep", *lethal_with_healing_filter()]
+    filters.extend(_time_region_clauses(tw, Battle.region, Battle.start_time, region_list))
     return filters
 
 
@@ -135,23 +249,23 @@ async def _underdog_candidates(db: AsyncSession, battle_filters: list) -> list[t
 # constantes de pontuação, importadas de battles.py) ───────────────────────
 
 async def _bulk_weapon_points(
-    db: AsyncSession, region_list: list[str] | None, week_start: datetime | None,
+    db: AsyncSession, region_list: list[str] | None, tw: TimeWindow,
     weapon_base: str | None = None,
 ) -> dict[str, dict[str, int]]:
     """albion_player_id -> {weapon_base: points}.
 
-    All-time (week_start=None) lê de PlayerWeaponStat — contadores brutos
+    All-time (``tw.is_alltime``) lê de PlayerWeaponStat — contadores brutos
     pré-calculados por app.services.weapon_stats, evita escanear toda
-    BattleParticipant/PlayerKillEvent a cada request. "Esta semana" continua
-    ao vivo (janela curta, já é rápido).
+    BattleParticipant/PlayerKillEvent a cada request. Windows com bounds
+    (week/month/season) continuam ao vivo (janela delimitada, já é rápido).
 
     `weapon_base` restringe a UMA arma: o ranking `weapon:<base>` só olha essa
     base, então filtrar no SQL (índice em weapon_base) lê alguns milhares de
     linhas em vez das ~214k da tabela inteira. `weapon_scorer` (melhor arma de
     cada jogador) precisa de TODAS, aí vem None."""
-    if week_start is None:
+    if tw.is_alltime:
         return await _bulk_weapon_points_alltime(db, region_list, weapon_base)
-    return await _bulk_weapon_points_live(db, region_list, week_start, weapon_base)
+    return await _bulk_weapon_points_live(db, region_list, tw, weapon_base)
 
 
 async def _bulk_weapon_points_alltime(
@@ -196,19 +310,16 @@ async def _bulk_weapon_points_alltime(
 
 
 async def _bulk_weapon_points_live(
-    db: AsyncSession, region_list: list[str] | None, week_start: datetime | None,
+    db: AsyncSession, region_list: list[str] | None, tw: TimeWindow,
     weapon_base: str | None = None,
 ) -> dict[str, dict[str, int]]:
     """albion_player_id -> {weapon_base: points} — escaneado ao vivo, usado
-    só pra "esta semana" (janela curta, ver _bulk_weapon_points)."""
+    pra qualquer window com bounds (week/month/season)."""
     weapon_fn = await _weapon_function_map(db)
     points: dict[str, dict[str, int]] = {}
 
     kill_filters = [PlayerKillEvent.fame > 0]
-    if region_list:
-        kill_filters.append(PlayerKillEvent.region.in_(region_list))
-    if week_start:
-        kill_filters.append(PlayerKillEvent.timestamp >= week_start)
+    kill_filters.extend(_time_region_clauses(tw, PlayerKillEvent.region, PlayerKillEvent.timestamp, region_list))
     for albion_id, equip in (await db.execute(
         select(AlbionPlayer.albion_id, PlayerKillEvent.killer_equipment)
         .join(AlbionPlayer, AlbionPlayer.id == PlayerKillEvent.killer_player_id)
@@ -228,11 +339,7 @@ async def _bulk_weapon_points_live(
     # Filtros por região/janela aplicados direto via join em Battle — NUNCA via
     # Battle.id.in_(lista enorme), que estoura o limite de parâmetros do
     # SQLite (e degrada Postgres) em bases grandes.
-    rw_filters: list = []
-    if region_list:
-        rw_filters.append(Battle.region.in_(region_list))
-    if week_start:
-        rw_filters.append(Battle.start_time >= week_start)
+    rw_filters: list = list(_time_region_clauses(tw, Battle.region, Battle.start_time, region_list))
 
     # Select de colunas só (não a entidade ORM inteira) — hidratar ~470k
     # objetos BattleParticipant pra ler 5 campos cada é o maior custo dessa
@@ -358,19 +465,22 @@ async def _gather_ranking(
 
 
 async def _silver_ranking(
-    db: AsyncSession, region_list: list[str] | None,
+    db: AsyncSession, region_list: list[str] | None, tw: TimeWindow,
     search_term: str | None, limit: int, offset: int,
 ) -> dict:
     """Ranking de prata dropada — SUM(silver_dropped) por vítima em
     player_kill_events. silver_dropped é precificado pelo worker
     silver_dropped (services/silver_dropped.py); sem ele, tudo é NULL.
     Filtra silver_dropped>0 (NULL/0 não entram) e fame>0 (mesmo critério de
-    atividade do perfil)."""
+    atividade do perfil). Suporta windows: bounds vão no timestamp do evento
+    (region-by-region pra season, já que starts diferem)."""
+    silver_where = [PlayerKillEvent.silver_dropped > 0, PlayerKillEvent.fame > 0]
+    silver_where.extend(_time_region_clauses(tw, PlayerKillEvent.region, PlayerKillEvent.timestamp, region_list))
     silver_by_player = select(
         PlayerKillEvent.victim_player_id.label("player_id"),
         func.sum(PlayerKillEvent.silver_dropped).label("silver"),
     ) \
-        .where(PlayerKillEvent.silver_dropped > 0, PlayerKillEvent.fame > 0) \
+        .where(*silver_where) \
         .group_by(PlayerKillEvent.victim_player_id) \
         .subquery()
     filters = []
@@ -423,7 +533,11 @@ async def highscore_highlights(regions: str | None = None, db: AsyncSession = De
 
 async def _compute_highlights(db: AsyncSession, region_list: list[str] | None) -> dict:
     week_start = _week_start_utc()
-    battle_filters = _base_battle_filters(region_list, week_start)
+    # Highlights continuam semanais (reseta domingo 00:00 UTC) — não mudam com
+    # o seletor de window. Upper bound = próximo domingo 00:00 UTC: como
+    # agora < próximo domingo, nenhuma batalha corrente é excluída (half-open).
+    tw = TimeWindow(lo=week_start, hi=week_start + timedelta(days=7))
+    battle_filters = _base_battle_filters(region_list, tw)
 
     guild_stats = await _guild_base_stats(db, battle_filters)
     guild_ids = [g[0] for g in guild_stats]
@@ -448,7 +562,7 @@ async def _compute_highlights(db: AsyncSession, region_list: list[str] | None) -
         underdog = {"guild": _guild_out(gid, underdog_names), "kills": kills}
 
     weapon_scorer = None
-    bulk_points = await _bulk_weapon_points(db, region_list, week_start)
+    bulk_points = await _bulk_weapon_points(db, region_list, tw)
     best: tuple[str, str, int] | None = None
     for albion_id, weapons in bulk_points.items():
         if not weapons:
@@ -591,11 +705,18 @@ async def highscore_rankings(
 
     region_list = _region_list(regions)
     search_term = search.strip().lower() if search else None
+    if kind in _GATHER_KINDS and window != "alltime":
+        raise HTTPException(422, "this ranking only supports alltime")
+    if window not in {"alltime", "week", "month", "season"} and not window.startswith("season:"):
+        raise HTTPException(422, "invalid highscore window")
+    tw = await _resolve_window(window, region_list)
     # scope não-default bypassa cache (precompute só cobre default).
+    # rankings_cache_key já retorna None p/ windows não-cacheáveis (season:N
+    # histórico computa ao vivo).
     ckey = hc.rankings_cache_key(kind, window, region_list) if scope == "default" else None
     if ckey:
         cached = await db.get(DashboardCache, ckey)
-        if cached is not None:
+        if cached is not None and cached.payload.get("_window") == _window_marker(tw):
             rows = cached.payload.get("rows", [])
             total = cached.payload.get("total", len(rows))
             if search_term is None:
@@ -620,21 +741,21 @@ async def highscore_rankings(
                 if total <= len(rows):
                     return {"total": 0, "rows": []}
 
-    return await _compute_rankings(db, kind, region_list, _window_start(window), search_term, limit, offset, scope)
+    return await _compute_rankings(db, kind, region_list, tw, search_term, limit, offset, scope)
 
 
 async def _compute_rankings(
     db: AsyncSession, kind: str, region_list: list[str] | None,
-    week_start: datetime | None, search_term: str | None, limit: int, offset: int,
+    tw: TimeWindow, search_term: str | None, limit: int, offset: int,
     scope: str = "default",
 ) -> dict:
     # scope=player em kinds de guilda de batalha: agrega por BattleParticipant.
     if scope == "player" and kind in _PLAYER_SCOPE_KINDS:
-        battle_filters = _base_battle_filters(region_list, week_start)
+        battle_filters = _base_battle_filters(region_list, tw)
         return await _player_battle_rankings(db, kind, battle_filters, search_term, limit, offset)
 
     if kind in _GUILD_KINDS:
-        battle_filters = _base_battle_filters(region_list, week_start)
+        battle_filters = _base_battle_filters(region_list, tw)
         if kind == "underdog":
             candidates = await _underdog_candidates(db, battle_filters)
         else:
@@ -664,12 +785,14 @@ async def _compute_rankings(
         return {"total": total, "rows": [{**_guild_out(gid, names), "value": v, "rank": rank} for rank, (gid, v) in page]}
 
     # ── kinds de coleta: agregação direta em albion_players ──────────────
+    # gather/fishing/crafting são famas acumulativas da conta (sem timestamp)
+    # — ignoram ``tw`` e são honestamente all-time só.
     if kind in _GATHER_KINDS:
         if scope == "guild":
             return await _guild_gather_rankings(db, kind, region_list, search_term, limit, offset)
         return await _gather_ranking(db, kind, region_list, search_term, limit, offset)
     if kind == _SILVER_KIND:
-        return await _silver_ranking(db, region_list, search_term, limit, offset)
+        return await _silver_ranking(db, region_list, tw, search_term, limit, offset)
 
     # kinds de jogador+arma: "weapon_scorer" (melhor arma de cada jogador,
     # qualquer arma) ou "weapon:<base>" (um arma específica)
@@ -692,7 +815,7 @@ async def _compute_rankings(
             return {"total": 0, "rows": []}
     # weapon_base != None restringe a query a essa arma (índice) em vez de
     # computar pontos de todas; weapon_scorer (weapon_base=None) precisa de todas.
-    bulk_points = await _bulk_weapon_points(db, region_list, week_start, weapon_base)
+    bulk_points = await _bulk_weapon_points(db, region_list, tw, weapon_base)
     candidates3: list[tuple[str, str, int]] = []
     for albion_id, weapons in bulk_points.items():
         if weapon_base is not None:
@@ -727,6 +850,38 @@ async def _compute_rankings(
             for rank, (albion_id, wb, pts) in page
         ],
     }
+
+
+@router.get("/seasons")
+async def highscore_seasons(regions: str | None = None):
+    """Metadados pro seletor de season do Highscores: season corrente POR
+    REGIÃO e seasons históricas válidas pras regiões selecionadas.
+
+    Season corrente resolve região-por-região, então na transição curta
+    (Asia virou N+1 às 00:00 UTC, Americas/Europe ainda viram às 11:00 UTC)
+    as regiões podem reportar seasons diferentes — o frontend mostra "Esta
+    season" (alias) e os bounds são resolvidos por região na rota de
+    rankings, sem atribuir bounds errados. Seasons históricas excluem
+    qualquer season corrente (não duplica no seletor)."""
+    region_list = _region_list(regions)
+    cal = await season_calendar.load_calendar()
+    now = datetime.now(timezone.utc)
+    selected = region_list or list(season_calendar.REGIONS)
+    current = {r: season_calendar.current_season(cal, r, now) for r in selected}
+    current_vals = {v for v in current.values() if v is not None}
+    # Seasons presentes em TODAS as regiões selecionadas — uma season histórica
+    # só faz sentido se todas as regiões selecionadas têm start definido.
+    common: set[int] = set(cal.get(selected[0], {})) if selected else set()
+    for r in selected[1:]:
+        common &= set(cal.get(r, {}))
+    # < min(current) exclui qualquer season que AINDA é corrente em alguma
+    # região (durante a transição), pra não duplicar "Esta season" no histórico.
+    min_current = min(current_vals) if current_vals else None
+    historical = sorted(
+        (n for n in common if min_current is not None and n < min_current),
+        reverse=True,
+    )
+    return {"current_seasons": current, "historical_seasons": historical}
 
 
 @router.get("/weapons")
