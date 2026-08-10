@@ -2,13 +2,15 @@
 // Path: <config_dir>/ziggs-companion/config.json
 // (Linux: ~/.config/ziggs-companion, macOS: ~/Library/Application Support/ziggs-companion, Windows: %APPDATA%\ziggs-companion)
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::OnceLock;
-use serde::{Deserialize, Serialize};
 
 const CONFIG_FILENAME: &str = "config.json";
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Ziggs backend base URL — hardcoded in the binary, not editable from the UI.
 /// Dev: http://localhost:8000. Prod: public HTTPS URL.
@@ -18,7 +20,9 @@ pub const API_BASE_URL: &str = "http://localhost:8000";
 #[cfg(not(debug_assertions))]
 pub const API_BASE_URL: &str = "https://ziggs.xyz";
 
-fn default_api_base() -> String { API_BASE_URL.to_string() }
+fn default_api_base() -> String {
+    API_BASE_URL.to_string()
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompanionConfig {
@@ -86,15 +90,17 @@ pub struct CompanionConfig {
     pub tunnel_routing: std::collections::HashMap<String, String>,
 }
 
-fn default_region() -> String { "americas".into() }
+fn default_region() -> String {
+    "americas".into()
+}
 
 impl Default for CompanionConfig {
     fn default() -> Self {
         Self {
             api_base_url: default_api_base(),
-            collect_damage_meter: true,   // default ON; see field comment
-            collect_auto_lootlog: true,     // default ON; see field comment
-            autostart: true,                // default launch with system
+            collect_damage_meter: true, // default ON; see field comment
+            collect_auto_lootlog: true, // default ON; see field comment
+            autostart: true,            // default launch with system
             minimize_to_tray: true,
             tunnel_enabled: false,
             tunnel_endpoint: String::new(),
@@ -106,7 +112,7 @@ impl Default for CompanionConfig {
             discord_user_id: None,
             discord_username: None,
             auto_lootlog_submit: false,
-            install_id: String::new(),      // generated on demand by install_id()
+            install_id: String::new(), // generated on demand by install_id()
             spell_index_offset: 0,
             region: default_region(),
             tunnel_routing: std::collections::HashMap::new(),
@@ -132,8 +138,7 @@ pub fn install_id() -> String {
 }
 
 fn config_path() -> PathBuf {
-    let dir = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."));
+    let dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     let dir = dir.join("ziggs-companion");
     let _ = std::fs::create_dir_all(&dir);
     dir.join(CONFIG_FILENAME)
@@ -152,17 +157,34 @@ pub fn save(cfg: &CompanionConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, bytes)?;
 
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
-        let from: Vec<u16> = tmp.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-        let to: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) } == 0 {
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+        let from: Vec<u16> = tmp
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let to: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        if unsafe {
+            MoveFileExW(
+                from.as_ptr(),
+                to.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        } == 0
+        {
             return Err(std::io::Error::last_os_error().into());
         }
     }
@@ -193,7 +215,10 @@ mod tests {
         }"#;
         let cfg: CompanionConfig = serde_json::from_str(json).expect("config válido");
         assert_eq!(cfg.api_base_url, API_BASE_URL);
-        assert!(cfg.collect_damage_meter, "os outros campos continuam vindo do JSON");
+        assert!(
+            cfg.collect_damage_meter,
+            "os outros campos continuam vindo do JSON"
+        );
     }
 
     /// It must still be serialized for get_config, otherwise the UI has no base URL.
@@ -205,7 +230,8 @@ mod tests {
 
     #[test]
     fn escrita_atomica_substitui_arquivo() {
-        let path = std::env::temp_dir().join(format!("ziggs-config-test-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("ziggs-config-test-{}.json", std::process::id()));
         std::fs::write(&path, b"old").unwrap();
         atomic_write(&path, b"new").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new");

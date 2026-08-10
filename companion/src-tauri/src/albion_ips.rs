@@ -10,9 +10,9 @@ use tokio::sync::Mutex;
 // These resolve to Cloudflare/CloudFront. Kept for albion_server_ips()
 // callers that need the gameinfo endpoints (scanner, warmer).
 const ALBION_HOSTNAMES: &[&str] = &[
-    "gameinfo.albiononline.com",        // Americas
-    "gameinfo-ams.albiononline.com",    // Europe
-    "gameinfo-sgp.albiononline.com",    // Asia
+    "gameinfo.albiononline.com",     // Americas
+    "gameinfo-ams.albiononline.com", // Europe
+    "gameinfo-sgp.albiononline.com", // Asia
 ];
 
 // Login/account/status hostnames — the game connects to these over TCP 443.
@@ -26,11 +26,7 @@ const ALBION_LOGIN_HOSTNAMES: &[&str] = &[
 ];
 
 // Photon /24 game networks (UDP game servers).
-pub const ALBION_GAME_NETWORKS: &[[u8; 3]] = &[
-    [5, 188, 125],
-    [5, 45, 187],
-    [193, 169, 238],
-];
+pub const ALBION_GAME_NETWORKS: &[[u8; 3]] = &[[5, 188, 125], [5, 45, 187], [193, 169, 238]];
 
 #[derive(Clone)]
 struct IpCache {
@@ -70,7 +66,9 @@ pub async fn albion_server_ips() -> Vec<IpAddr> {
         ips.sort();
         ips.dedup();
         ips
-    }).await.unwrap_or_default();
+    })
+    .await
+    .unwrap_or_default();
     let mut g = c.lock().await;
     *g = Some(IpCache {
         ips: ips.clone(),
@@ -98,7 +96,10 @@ pub async fn albion_route_targets_for(region: &str) -> Vec<(Ipv4Addr, Ipv4Addr)>
     let mut routes: Vec<(Ipv4Addr, Ipv4Addr)> = Vec::new();
     // Only route the selected region's game /24.
     if let Some(p) = region_network(region) {
-        routes.push((Ipv4Addr::new(p[0], p[1], p[2], 0), Ipv4Addr::new(255, 255, 255, 0)));
+        routes.push((
+            Ipv4Addr::new(p[0], p[1], p[2], 0),
+            Ipv4Addr::new(255, 255, 255, 0),
+        ));
     }
     // Resolve login/status hostnames and add /32 routes (shared across regions).
     let login_ips = tokio::task::spawn_blocking(|| {
@@ -113,7 +114,9 @@ pub async fn albion_route_targets_for(region: &str) -> Vec<(Ipv4Addr, Ipv4Addr)>
         ips.sort();
         ips.dedup();
         ips
-    }).await.unwrap_or_default();
+    })
+    .await
+    .unwrap_or_default();
     for ip in login_ips {
         if let IpAddr::V4(v4) = ip {
             routes.push((v4, Ipv4Addr::new(255, 255, 255, 255)));
@@ -127,8 +130,14 @@ pub async fn albion_route_targets_for(region: &str) -> Vec<(Ipv4Addr, Ipv4Addr)>
 /// Split-tunnel destinations: ALL game networks + login IPs.
 /// Used when the tunnel is the only routing option (no region selected yet).
 pub async fn albion_route_targets() -> Vec<(Ipv4Addr, Ipv4Addr)> {
-    let mut routes: Vec<(Ipv4Addr, Ipv4Addr)> = ALBION_GAME_NETWORKS.iter()
-        .map(|p| (Ipv4Addr::new(p[0], p[1], p[2], 0), Ipv4Addr::new(255, 255, 255, 0)))
+    let mut routes: Vec<(Ipv4Addr, Ipv4Addr)> = ALBION_GAME_NETWORKS
+        .iter()
+        .map(|p| {
+            (
+                Ipv4Addr::new(p[0], p[1], p[2], 0),
+                Ipv4Addr::new(255, 255, 255, 0),
+            )
+        })
         .collect();
     let login_ips = tokio::task::spawn_blocking(|| {
         let mut ips = Vec::new();
@@ -142,7 +151,9 @@ pub async fn albion_route_targets() -> Vec<(Ipv4Addr, Ipv4Addr)> {
         ips.sort();
         ips.dedup();
         ips
-    }).await.unwrap_or_default();
+    })
+    .await
+    .unwrap_or_default();
     for ip in login_ips {
         if let IpAddr::V4(v4) = ip {
             routes.push((v4, Ipv4Addr::new(255, 255, 255, 255)));

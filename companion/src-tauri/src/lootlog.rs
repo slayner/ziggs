@@ -93,7 +93,12 @@ pub fn resolve(index: i32) -> (String, String, String, String) {
         }
     }
     let fallback = format!("IDX_{}", index);
-    (fallback.clone(), fallback.clone(), fallback.clone(), fallback)
+    (
+        fallback.clone(),
+        fallback.clone(),
+        fallback.clone(),
+        fallback,
+    )
 }
 
 // Load from disk cache, or download from the backend on a 60s retry loop. A single
@@ -157,7 +162,10 @@ pub fn save_csv(csv_text: &str) -> std::io::Result<String> {
     std::fs::create_dir_all(&dir)?;
     let ts = {
         use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     };
     let path = dir.join(format!("lootlog-{}.csv", ts));
     std::fs::write(&path, csv_text)?;
@@ -195,8 +203,14 @@ mod tests {
 
         // These columns are required by the backend's column-name parser.
         let cols: Vec<&str> = lines[0].split(';').collect();
-        for req in ["timestamp_utc", "looted_by__guild", "looted_by__name",
-                    "item_id", "quantity", "looted_from__name"] {
+        for req in [
+            "timestamp_utc",
+            "looted_by__guild",
+            "looted_by__name",
+            "item_id",
+            "quantity",
+            "looted_from__name",
+        ] {
             assert!(cols.contains(&req), "coluna {req} sumiu do header");
         }
         // Each row must align with the header column count.
@@ -205,7 +219,10 @@ mod tests {
         }
 
         let f: Vec<&str> = lines[1].split(';').collect();
-        assert_eq!(f[cols.iter().position(|c| *c == "item_id").unwrap()], "T7_HEAD_PLATE_SET3@1");
+        assert_eq!(
+            f[cols.iter().position(|c| *c == "item_id").unwrap()],
+            "T7_HEAD_PLATE_SET3@1"
+        );
         assert_eq!(
             f[cols.iter().position(|c| *c == "item_name").unwrap()],
             "Grandmaster's Guardian Helmet",
@@ -218,11 +235,13 @@ mod tests {
 
     #[test]
     fn loot_session_roundtrip() {
-        let path = std::env::temp_dir().join(format!("ziggs-loot-session-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("ziggs-loot-session-{}.json", std::process::id()));
         let events = vec![ev(2958)];
         let bytes = serde_json::to_vec(&events).unwrap();
         crate::persist::atomic_write(&path, &bytes).unwrap();
-        let loaded: Vec<LootEvent> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let loaded: Vec<LootEvent> =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].item_index, 2958);
         let _ = std::fs::remove_file(path);

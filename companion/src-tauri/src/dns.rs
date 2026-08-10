@@ -15,11 +15,31 @@ pub struct DnsProfile {
 
 pub fn dns_profiles() -> Vec<DnsProfile> {
     vec![
-        DnsProfile { name: "Cloudflare".into(), primary: "1.1.1.1".into(), secondary: "1.0.0.1".into() },
-        DnsProfile { name: "Google".into(), primary: "8.8.8.8".into(), secondary: "8.8.4.4".into() },
-        DnsProfile { name: "Quad9".into(), primary: "9.9.9.9".into(), secondary: "149.112.112.112".into() },
-        DnsProfile { name: "OpenDNS".into(), primary: "208.67.222.222".into(), secondary: "208.67.220.220".into() },
-        DnsProfile { name: "Sistema (atual)".into(), primary: "system".into(), secondary: "system".into() },
+        DnsProfile {
+            name: "Cloudflare".into(),
+            primary: "1.1.1.1".into(),
+            secondary: "1.0.0.1".into(),
+        },
+        DnsProfile {
+            name: "Google".into(),
+            primary: "8.8.8.8".into(),
+            secondary: "8.8.4.4".into(),
+        },
+        DnsProfile {
+            name: "Quad9".into(),
+            primary: "9.9.9.9".into(),
+            secondary: "149.112.112.112".into(),
+        },
+        DnsProfile {
+            name: "OpenDNS".into(),
+            primary: "208.67.222.222".into(),
+            secondary: "208.67.220.220".into(),
+        },
+        DnsProfile {
+            name: "Sistema (atual)".into(),
+            primary: "system".into(),
+            secondary: "system".into(),
+        },
     ]
 }
 
@@ -104,7 +124,9 @@ async fn test_system_path(hostname: &str) -> DnsResult {
         match tokio::time::timeout(
             Duration::from_secs(2),
             tokio::net::TcpStream::connect(&host_port),
-        ).await {
+        )
+        .await
+        {
             Ok(Ok(_stream)) => {
                 let start = Instant::now();
                 // Measures post-connect time; ideally should measure TCP connect time instead.
@@ -156,7 +178,11 @@ pub async fn test_all(hostname: &str) -> Vec<DnsResult> {
         out.push(test_profile(p, hostname).await);
     }
     // Sort by descending score.
-    out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out
 }
 
@@ -174,11 +200,22 @@ pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
             .output()
             .map_err(|e| anyhow::anyhow!("netsh: {e}"))?;
         if !out.status.success() {
-            return Err(anyhow::anyhow!("netsh falhou: {}", String::from_utf8_lossy(&out.stderr)));
+            return Err(anyhow::anyhow!(
+                "netsh falhou: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
         }
         if !profile.secondary.is_empty() && profile.secondary != "system" {
             let _ = crate::winutil::no_window(std::process::Command::new("netsh"))
-                .args(["interface", "ip", "add", "dns", &iface, &profile.secondary, "index=2"])
+                .args([
+                    "interface",
+                    "ip",
+                    "add",
+                    "dns",
+                    &iface,
+                    &profile.secondary,
+                    "index=2",
+                ])
                 .output();
         }
         Ok(())
@@ -186,7 +223,9 @@ pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = profile;
-        Err(anyhow::anyhow!("aplicar DNS em macOS/Linux requer netctl/networksetup — não implementado"))
+        Err(anyhow::anyhow!(
+            "aplicar DNS em macOS/Linux requer netctl/networksetup — não implementado"
+        ))
     }
 }
 
@@ -201,11 +240,16 @@ fn default_interface_name() -> Result<String> {
         .output()
         .map_err(|e| anyhow::anyhow!("powershell Get-NetRoute: {e}"))?;
     if !out.status.success() {
-        return Err(anyhow::anyhow!("Get-NetRoute falhou: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(anyhow::anyhow!(
+            "Get-NetRoute falhou: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
     let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if name.is_empty() {
-        return Err(anyhow::anyhow!("nenhuma interface com default gateway encontrada"));
+        return Err(anyhow::anyhow!(
+            "nenhuma interface com default gateway encontrada"
+        ));
     }
     Ok(name)
 }

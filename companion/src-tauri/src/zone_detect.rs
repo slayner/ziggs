@@ -93,18 +93,33 @@ mod tests {
 
     #[test]
     fn test_safe_zones() {
-        assert!(matches!(classify_zone("PLAYERCITY_SAFEAREA_01"), ZoneType::Blue));
+        assert!(matches!(
+            classify_zone("PLAYERCITY_SAFEAREA_01"),
+            ZoneType::Blue
+        ));
         assert!(matches!(classify_zone("STARTINGCITY"), ZoneType::Blue));
         assert!(matches!(classify_zone("SAFEAREA"), ZoneType::Blue));
         assert!(matches!(classify_zone("GUILDISLAND"), ZoneType::Blue));
         assert!(matches!(classify_zone("DUNGEON_YELLOW"), ZoneType::Blue));
         assert!(matches!(classify_zone("OPENPVP_YELLOW"), ZoneType::Blue));
         assert!(matches!(classify_zone("ARENA_STANDARD"), ZoneType::Blue));
-        assert!(matches!(classify_zone("ARENA_CRYSTAL_NONLETHAL"), ZoneType::Blue));
-        assert!(matches!(classify_zone("DUNGEON_HELL_2V2_NON_LETHAL"), ZoneType::Blue));
+        assert!(matches!(
+            classify_zone("ARENA_CRYSTAL_NONLETHAL"),
+            ZoneType::Blue
+        ));
+        assert!(matches!(
+            classify_zone("DUNGEON_HELL_2V2_NON_LETHAL"),
+            ZoneType::Blue
+        ));
         assert!(matches!(classify_zone("TUNNEL_ROYAL"), ZoneType::Blue));
-        assert!(matches!(classify_zone("T4_EXPEDITION_STANDARD"), ZoneType::Blue));
-        assert!(matches!(classify_zone("CORRUPTED_DUNGEON_INTERMEDIATE"), ZoneType::Blue));
+        assert!(matches!(
+            classify_zone("T4_EXPEDITION_STANDARD"),
+            ZoneType::Blue
+        ));
+        assert!(matches!(
+            classify_zone("CORRUPTED_DUNGEON_INTERMEDIATE"),
+            ZoneType::Blue
+        ));
     }
 
     #[test]
@@ -113,16 +128,25 @@ mod tests {
         assert!(matches!(classify_zone("OPENPVP_RED"), ZoneType::PvP));
         assert!(matches!(classify_zone("DUNGEON_BLACK_1"), ZoneType::PvP));
         assert!(matches!(classify_zone("DUNGEON_RED"), ZoneType::PvP));
-        assert!(matches!(classify_zone("DUNGEON_HELL_2V2_LETHAL"), ZoneType::PvP));
+        assert!(matches!(
+            classify_zone("DUNGEON_HELL_2V2_LETHAL"),
+            ZoneType::PvP
+        ));
         assert!(matches!(classify_zone("PASSAGE_BLACK"), ZoneType::PvP));
-        assert!(matches!(classify_zone("PLAYERCITY_BLACK_ROYAL"), ZoneType::PvP));
+        assert!(matches!(
+            classify_zone("PLAYERCITY_BLACK_ROYAL"),
+            ZoneType::PvP
+        ));
         assert!(matches!(classify_zone("PLAYERCITY_HELLDEN"), ZoneType::PvP));
         assert!(matches!(classify_zone("TUNNEL_ROYAL_RED"), ZoneType::PvP));
         assert!(matches!(classify_zone("TUNNEL_DEEP"), ZoneType::PvP));
         assert!(matches!(classify_zone("TUNNEL_DEEP_RAID"), ZoneType::PvP));
         assert!(matches!(classify_zone("HIDEOUT"), ZoneType::PvP));
         assert!(matches!(classify_zone("ARENA_CRYSTAL"), ZoneType::PvP));
-        assert!(matches!(classify_zone("ARENA_CRYSTAL_20VS20"), ZoneType::PvP));
+        assert!(matches!(
+            classify_zone("ARENA_CRYSTAL_20VS20"),
+            ZoneType::PvP
+        ));
     }
 
     #[test]

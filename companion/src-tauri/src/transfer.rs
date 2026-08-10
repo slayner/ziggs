@@ -1,11 +1,11 @@
 // Disk-persisted transfer queue. Buffers outbound data in PvP zones and flushes
 // in blue zones. Phase 1 uses a manual toggle; phase 2.5 will use map detection.
 
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
-use anyhow::Result;
 
 use crate::api::{ApiClient, ScanReportIn};
 
@@ -18,9 +18,9 @@ pub enum ZoneType {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueuedItem {
-    pub kind: String,       // "scan_report" | "prices"
+    pub kind: String, // "scan_report" | "prices"
     pub payload: serde_json::Value,
-    pub queued_at: String,  // ISO timestamp
+    pub queued_at: String, // ISO timestamp
     #[serde(default)]
     pub retries: u32,
 }
@@ -41,7 +41,12 @@ impl TransferQueue {
         let path = queue_path();
         let items = match load_queue(&path) {
             Ok(items) => items,
-            Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => Vec::new(),
+            Err(e)
+                if e.downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Vec::new()
+            }
             Err(e) => {
                 tracing::error!("fila persistida inválida em {}: {e:#}", path.display());
                 let corrupt = path.with_extension(format!("corrupt-{}", iso_now()));
@@ -139,7 +144,8 @@ impl TransferQueue {
                     if updated.retries >= MAX_RETRIES {
                         tracing::warn!(
                             "descartando item após {} tentativas: kind={}",
-                            updated.retries, updated.kind
+                            updated.retries,
+                            updated.kind
                         );
                     } else {
                         items.push(updated); // move to the back so other items get a chance first
@@ -161,13 +167,21 @@ impl TransferQueue {
                 Err(_) => false,
             },
             "prices" => {
-                let rows = item.payload.get("rows")
-                    .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let rows = item
+                    .payload
+                    .get("rows")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 api.submit_prices(&rows).await.is_ok()
             }
             "market_history" => {
-                let rows = item.payload.get("rows")
-                    .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let rows = item
+                    .payload
+                    .get("rows")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 api.submit_market_history(&rows).await.is_ok()
             }
             _ => false,
@@ -194,7 +208,9 @@ fn load_queue(path: &PathBuf) -> Result<Vec<QueuedItem>> {
 }
 
 fn save_queue(path: &PathBuf, items: &[QueuedItem]) -> Result<()> {
-    let file = QueueFile { items: items.to_vec() };
+    let file = QueueFile {
+        items: items.to_vec(),
+    };
     let bytes = serde_json::to_vec_pretty(&file)?;
     crate::persist::atomic_write(path, &bytes)?;
     Ok(())
@@ -202,7 +218,10 @@ fn save_queue(path: &PathBuf, items: &[QueuedItem]) -> Result<()> {
 
 fn iso_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     format!("{}", secs)
 }
 
@@ -212,7 +231,12 @@ mod tests {
 
     #[test]
     fn persisted_item_is_only_removed_by_ack_path() {
-        let item = QueuedItem { kind: "prices".into(), payload: serde_json::json!({}), queued_at: "1".into(), retries: 0 };
+        let item = QueuedItem {
+            kind: "prices".into(),
+            payload: serde_json::json!({}),
+            queued_at: "1".into(),
+            retries: 0,
+        };
         let mut items = vec![item.clone()];
         let pending = items[0].clone();
         assert_eq!(items, vec![item.clone()]); // cloning must not drain

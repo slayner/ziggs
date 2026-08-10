@@ -6,15 +6,15 @@
 //
 // Requires admin (virtual adapter + route manipulation).
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 use boringtun::noise::{Tunn, TunnResult};
-use boringtun::x25519::{StaticSecret, PublicKey};
+use boringtun::x25519::{PublicKey, StaticSecret};
+use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
 use wintun::Adapter;
@@ -149,7 +149,9 @@ impl Tunnel {
             self.status.lock().await.tunnel_latency_ms = lat;
         }
         #[cfg(not(target_os = "windows"))]
-        { let _ = cfg; }
+        {
+            let _ = cfg;
+        }
         Ok(())
     }
 
@@ -198,7 +200,9 @@ impl Tunnel {
     /// Main tunnel loop. Runs in a separate task.
     pub async fn run(&self, cfg: TunnelConfig) {
         let _operation = self.operation.lock().await;
-        if self.shutdown.load(AtomicOrdering::Relaxed) { return; }
+        if self.shutdown.load(AtomicOrdering::Relaxed) {
+            return;
+        }
         {
             let mut s = self.status.lock().await;
             s.running = true;
@@ -258,7 +262,16 @@ impl Tunnel {
                     .args(["interface", "ipv4", "delete", "route", &prefix, iface, &gw])
                     .output();
                 let output = crate::winutil::no_window(std::process::Command::new("netsh"))
-                    .args(["interface", "ipv4", "add", "route", &prefix, iface, &format!("nexthop={}", gw), "metric=1"])
+                    .args([
+                        "interface",
+                        "ipv4",
+                        "add",
+                        "route",
+                        &prefix,
+                        iface,
+                        &format!("nexthop={}", gw),
+                        "metric=1",
+                    ])
                     .output()?;
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -266,9 +279,12 @@ impl Tunnel {
                     for added in &installed {
                         let p = format!("{}/{}", added.network, mask_to_cidr(&added.mask));
                         let _ = crate::winutil::no_window(std::process::Command::new("netsh"))
-                            .args(["interface", "ipv4", "delete", "route", &p, iface, &gw]).output();
+                            .args(["interface", "ipv4", "delete", "route", &p, iface, &gw])
+                            .output();
                     }
-                    return Err(anyhow!("netsh refused game route for {network}: {stderr}{stdout}"));
+                    return Err(anyhow!(
+                        "netsh refused game route for {network}: {stderr}{stdout}"
+                    ));
                 }
                 installed.push(InstalledRoute { network, mask });
             }
@@ -294,7 +310,10 @@ impl Tunnel {
             Some(p) => p,
             None => return,
         };
-        let ranges = format!("{}.{}.{}.0-{}.{}.{}.255", p[0], p[1], p[2], p[0], p[1], p[2]);
+        let ranges = format!(
+            "{}.{}.{}.0-{}.{}.{}.255",
+            p[0], p[1], p[2], p[0], p[1], p[2]
+        );
         let _ = crate::firewall::add_block_rule("ZIGGS_KICK", &ranges);
         tokio::time::sleep(Duration::from_secs(15)).await;
         let _ = crate::firewall::remove_rule("ZIGGS_KICK");
@@ -303,18 +322,19 @@ impl Tunnel {
     async fn packet_loop(&self, cfg: TunnelConfig) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
-            let privkey = parse_key(&cfg.client_privkey)
-                .ok_or_else(|| anyhow!("invalid private key"))?;
-            let server_pub = parse_key(&cfg.server_pubkey)
-                .ok_or_else(|| anyhow!("invalid public key"))?;
+            let privkey =
+                parse_key(&cfg.client_privkey).ok_or_else(|| anyhow!("invalid private key"))?;
+            let server_pub =
+                parse_key(&cfg.server_pubkey).ok_or_else(|| anyhow!("invalid public key"))?;
             let endpoint = resolve_endpoint(&cfg.endpoint)?;
             // Store the region so stop()/kick can use it.
             *self.region.lock().await = cfg.albion_region.clone();
 
-            let wintun = load_wintun()
-                .map_err(|e| anyhow!("wintun.dll: {}", e))?;
+            let wintun = load_wintun().map_err(|e| anyhow!("wintun.dll: {}", e))?;
             let adapter = Adapter::open(&wintun, TUNNEL_ADAPTER_NAME)
-                .or_else(|_| Adapter::create(&wintun, TUNNEL_ADAPTER_NAME, TUNNEL_ADAPTER_TYPE, None))
+                .or_else(|_| {
+                    Adapter::create(&wintun, TUNNEL_ADAPTER_NAME, TUNNEL_ADAPTER_TYPE, None)
+                })
                 .map_err(|e| anyhow!("adapter: {}", e))?;
             adapter.set_address(TUNNEL_IPV4_ADDR).ok();
             adapter.set_netmask(TUNNEL_NETMASK).ok();
@@ -330,8 +350,8 @@ impl Tunnel {
 
             // Simple single-path UDP connection to the VPS endpoint.
             // No multi-internet path ranking — just connect directly.
-            let udp = std::net::UdpSocket::bind("0.0.0.0:0")
-                .map_err(|e| anyhow!("bind UDP: {e}"))?;
+            let udp =
+                std::net::UdpSocket::bind("0.0.0.0:0").map_err(|e| anyhow!("bind UDP: {e}"))?;
             udp.set_nonblocking(true)?;
             udp.connect(endpoint)
                 .map_err(|e| anyhow!("connect to VPS {endpoint}: {e}"))?;
@@ -345,9 +365,13 @@ impl Tunnel {
             let handshake_start = Instant::now();
             let mut handshake_ok = false;
             while handshake_start.elapsed() < Duration::from_secs(10) {
-                if self.shutdown.load(AtomicOrdering::Relaxed) { return Ok(()); }
+                if self.shutdown.load(AtomicOrdering::Relaxed) {
+                    return Ok(());
+                }
                 // Send handshake initiation
-                if let TunnResult::WriteToNetwork(packet) = tunn.format_handshake_initiation(&mut send_buf, true) {
+                if let TunnResult::WriteToNetwork(packet) =
+                    tunn.format_handshake_initiation(&mut send_buf, true)
+                {
                     let _ = udp.send(packet);
                 }
                 // Check for response
@@ -367,7 +391,9 @@ impl Tunnel {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
             if !handshake_ok {
-                return Err(anyhow!("WireGuard handshake timeout — VPS may be offline or key mismatch"));
+                return Err(anyhow!(
+                    "WireGuard handshake timeout — VPS may be offline or key mismatch"
+                ));
             }
 
             // Measure latency via handshake
@@ -457,7 +483,9 @@ impl Tunnel {
                 }
 
                 if health_deadline.is_none() && now >= next_health {
-                    if let TunnResult::WriteToNetwork(packet) = tunn.format_handshake_initiation(&mut send_buf, true) {
+                    if let TunnResult::WriteToNetwork(packet) =
+                        tunn.format_handshake_initiation(&mut send_buf, true)
+                    {
                         let _ = udp.send(packet);
                         health_deadline = Some(now + PATH_PROBE_TIMEOUT);
                     }
@@ -466,7 +494,8 @@ impl Tunnel {
 
                 if health_deadline.is_some_and(|deadline| now >= deadline) {
                     self.status.lock().await.connected = false;
-                    self.status.lock().await.last_error = Some("VPS unreachable; tunnel stopped".into());
+                    self.status.lock().await.last_error =
+                        Some("VPS unreachable; tunnel stopped".into());
                     break;
                 }
 
@@ -501,7 +530,12 @@ pub fn scrub_stale_routes_now() -> Result<()> {
     // NextHop. CREATE_NO_WINDOW is applied; PowerShell may flash briefly
     // but this only runs on tunnel stop/start, not in a loop.
     let output = crate::winutil::no_window(std::process::Command::new("powershell"))
-        .args(["-NoProfile", "-NonInteractive", "-Command", stale_route_cleanup_script()])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            stale_route_cleanup_script(),
+        ])
         .output()?;
     if !output.status.success() && !output.stderr.is_empty() {
         let err = String::from_utf8_lossy(&output.stderr);
@@ -513,7 +547,9 @@ pub fn scrub_stale_routes_now() -> Result<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn scrub_stale_routes_now() -> Result<()> { Ok(()) }
+pub fn scrub_stale_routes_now() -> Result<()> {
+    Ok(())
+}
 
 #[cfg(target_os = "windows")]
 #[derive(Clone, Debug)]
@@ -551,10 +587,17 @@ fn enumerate_internet_paths() -> Result<Vec<PathCandidate>> {
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let mut cols = line.trim().split('\t');
         let (Some(idx), Some(name), Some(ip), Some(metric)) =
-            (cols.next(), cols.next(), cols.next(), cols.next()) else { continue };
-        let (Ok(if_index), Ok(local_ip), Ok(metric)) =
-            (idx.parse(), ip.parse(), metric.parse()) else { continue };
-        if paths.iter().any(|p: &PathCandidate| p.if_index == if_index) { continue; }
+            (cols.next(), cols.next(), cols.next(), cols.next())
+        else {
+            continue;
+        };
+        let (Ok(if_index), Ok(local_ip), Ok(metric)) = (idx.parse(), ip.parse(), metric.parse())
+        else {
+            continue;
+        };
+        if paths.iter().any(|p: &PathCandidate| p.if_index == if_index) {
+            continue;
+        }
         paths.push(PathCandidate {
             if_index,
             name: name.to_string(),
@@ -571,7 +614,9 @@ fn enumerate_internet_paths() -> Result<Vec<PathCandidate>> {
 #[cfg(target_os = "windows")]
 fn open_path_socket(path: &PathCandidate, endpoint: SocketAddr) -> Result<UdpSocket> {
     use std::os::windows::io::AsRawSocket;
-    use windows_sys::Win32::Networking::WinSock::{setsockopt, IPPROTO_IP, IP_UNICAST_IF, SOCKET_ERROR};
+    use windows_sys::Win32::Networking::WinSock::{
+        setsockopt, IPPROTO_IP, IP_UNICAST_IF, SOCKET_ERROR,
+    };
 
     let udp = UdpSocket::bind(SocketAddr::new(IpAddr::V4(path.local_ip), 0))?;
     let index = path.if_index.to_be(); // IP_UNICAST_IF expects DWORD in network byte order.
@@ -599,27 +644,47 @@ fn probe_path(tunn: &mut Tunn, udp: &UdpSocket, shutdown: &AtomicBool) -> Option
     let mut recv_buf = vec![0u8; WG_BUFFER_SIZE];
     let mut out_buf = vec![0u8; WG_BUFFER_SIZE];
     udp.set_nonblocking(false).ok()?;
-    udp.set_read_timeout(Some(Duration::from_millis(200))).ok()?;
+    udp.set_read_timeout(Some(Duration::from_millis(200)))
+        .ok()?;
     let start = Instant::now();
-    let TunnResult::WriteToNetwork(init) = tunn.format_handshake_initiation(&mut send_buf, true) else {
+    let TunnResult::WriteToNetwork(init) = tunn.format_handshake_initiation(&mut send_buf, true)
+    else {
         return None;
     };
     udp.send(init).ok()?;
     while start.elapsed() < PATH_PROBE_TIMEOUT {
-        if shutdown.load(AtomicOrdering::Relaxed) { return None; }
+        if shutdown.load(AtomicOrdering::Relaxed) {
+            return None;
+        }
         let n = match udp.recv(&mut recv_buf) {
             Ok(n) => n,
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => continue,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue
+            }
             Err(_) => return None,
         };
-        let kind = recv_buf.get(..4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+        let kind = recv_buf
+            .get(..4)
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_le_bytes);
         let result = tunn.decapsulate(None, &recv_buf[..n], &mut out_buf);
-        if matches!(result, TunnResult::Err(_)) { continue; }
-        if let TunnResult::WriteToNetwork(response) = result { let _ = udp.send(response); }
+        if matches!(result, TunnResult::Err(_)) {
+            continue;
+        }
+        if let TunnResult::WriteToNetwork(response) = result {
+            let _ = udp.send(response);
+        }
         match kind {
             Some(2 | 4) => return Some(start.elapsed().as_secs_f64() * 1000.0),
             Some(3) => {
-                if let TunnResult::WriteToNetwork(init) = tunn.format_handshake_initiation(&mut send_buf, true) {
+                if let TunnResult::WriteToNetwork(init) =
+                    tunn.format_handshake_initiation(&mut send_buf, true)
+                {
                     let _ = udp.send(init);
                 }
             }
@@ -630,7 +695,11 @@ fn probe_path(tunn: &mut Tunn, udp: &UdpSocket, shutdown: &AtomicBool) -> Option
 }
 
 #[cfg(target_os = "windows")]
-fn rank_internet_paths(tunn: &mut Tunn, endpoint: SocketAddr, shutdown: &AtomicBool) -> Result<Vec<PathCandidate>> {
+fn rank_internet_paths(
+    tunn: &mut Tunn,
+    endpoint: SocketAddr,
+    shutdown: &AtomicBool,
+) -> Result<Vec<PathCandidate>> {
     let mut paths = enumerate_internet_paths()?;
     for path in &mut paths {
         if let Ok(socket) = open_path_socket(path, endpoint) {
@@ -639,23 +708,36 @@ fn rank_internet_paths(tunn: &mut Tunn, endpoint: SocketAddr, shutdown: &AtomicB
         }
     }
     paths.sort_by(|a, b| {
-        b.available.cmp(&a.available)
-            .then_with(|| a.latency_ms.partial_cmp(&b.latency_ms).unwrap_or(std::cmp::Ordering::Equal))
+        b.available
+            .cmp(&a.available)
+            .then_with(|| {
+                a.latency_ms
+                    .partial_cmp(&b.latency_ms)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then_with(|| a.metric.cmp(&b.metric))
     });
     Ok(paths)
 }
 
 #[cfg(target_os = "windows")]
-fn merge_path_priority(previous: &[PathCandidate], mut current: Vec<PathCandidate>) -> Vec<PathCandidate> {
+fn merge_path_priority(
+    previous: &[PathCandidate],
+    mut current: Vec<PathCandidate>,
+) -> Vec<PathCandidate> {
     for path in &mut current {
-        if let Some(old) = previous.iter().find(|old| old.if_index == path.if_index && old.local_ip == path.local_ip) {
+        if let Some(old) = previous
+            .iter()
+            .find(|old| old.if_index == path.if_index && old.local_ip == path.local_ip)
+        {
             path.latency_ms = old.latency_ms;
             path.available = old.available;
         }
     }
     current.sort_by_key(|path| {
-        previous.iter().position(|old| old.if_index == path.if_index && old.local_ip == path.local_ip)
+        previous
+            .iter()
+            .position(|old| old.if_index == path.if_index && old.local_ip == path.local_ip)
             .unwrap_or(previous.len() + path.metric as usize)
     });
     current
@@ -676,9 +758,15 @@ fn connect_ranked_path(
         paths.sort_by_key(|path| path.if_index == active);
     }
     for mut path in paths {
-        if shutdown.load(AtomicOrdering::Relaxed) { return Ok(None); }
-        let Ok(socket) = open_path_socket(&path, endpoint) else { continue };
-        let Some(latency) = probe_path(tunn, &socket, shutdown) else { continue };
+        if shutdown.load(AtomicOrdering::Relaxed) {
+            return Ok(None);
+        }
+        let Ok(socket) = open_path_socket(&path, endpoint) else {
+            continue;
+        };
+        let Some(latency) = probe_path(tunn, &socket, shutdown) else {
+            continue;
+        };
         path.available = true;
         path.latency_ms = Some(latency);
         return Ok(Some((socket, path, latency)));
@@ -688,14 +776,18 @@ fn connect_ranked_path(
 
 #[cfg(target_os = "windows")]
 fn path_statuses(paths: &[PathCandidate], active_if: u32) -> Vec<InternetPathStatus> {
-    paths.iter().enumerate().map(|(index, path)| InternetPathStatus {
-        name: path.name.clone(),
-        local_ip: path.local_ip.to_string(),
-        priority: index as u32 + 1,
-        latency_ms: path.latency_ms,
-        available: path.available,
-        active: path.if_index == active_if,
-    }).collect()
+    paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| InternetPathStatus {
+            name: path.name.clone(),
+            local_ip: path.local_ip.to_string(),
+            priority: index as u32 + 1,
+            latency_ms: path.latency_ms,
+            available: path.available,
+            active: path.if_index == active_if,
+        })
+        .collect()
 }
 
 /// Load wintun.dll from several candidate paths:
@@ -722,8 +814,12 @@ fn load_wintun() -> Result<wintun::Wintun> {
         }
     }
     // 2. fallback: let the crate search PATH
-    unsafe { wintun::load() }
-        .map_err(|e| anyhow!("wintun::load (PATH): {}. Place wintun.dll next to the .exe", e))
+    unsafe { wintun::load() }.map_err(|e| {
+        anyhow!(
+            "wintun::load (PATH): {}. Place wintun.dll next to the .exe",
+            e
+        )
+    })
 }
 
 /// Measure direct latency (no tunnel) to Albion server — TCP connect ×10.
@@ -731,12 +827,13 @@ async fn measure_albion_latency_direct(shutdown: &AtomicBool) -> Option<f64> {
     let host = "gameinfo.albiononline.com:443";
     let mut samples = Vec::new();
     for _ in 0..10 {
-        if shutdown.load(AtomicOrdering::Relaxed) { return None; }
+        if shutdown.load(AtomicOrdering::Relaxed) {
+            return None;
+        }
         let start = Instant::now();
-        match tokio::time::timeout(
-            Duration::from_secs(2),
-            tokio::net::TcpStream::connect(host),
-        ).await {
+        match tokio::time::timeout(Duration::from_secs(2), tokio::net::TcpStream::connect(host))
+            .await
+        {
             Ok(Ok(_stream)) => {
                 samples.push(start.elapsed().as_secs_f64() * 1000.0);
             }
@@ -757,7 +854,7 @@ fn parse_key(s: &str) -> Option<[u8; 32]> {
         // hex
         let mut out = [0u8; 32];
         for i in 0..32 {
-            out[i] = u8::from_str_radix(&s[i*2..i*2+2], 16).ok()?;
+            out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
         }
         Some(out)
     } else if s.len() == 44 {
@@ -777,8 +874,8 @@ fn parse_key(s: &str) -> Option<[u8; 32]> {
 
 /// Generate a WireGuard keypair (private + public) for client configuration.
 pub fn generate_keypair() -> (String, String) {
-    use boringtun::x25519::{StaticSecret, PublicKey};
     use base64::Engine;
+    use boringtun::x25519::{PublicKey, StaticSecret};
     use rand_core::OsRng;
     let secret = StaticSecret::random_from_rng(OsRng);
     let public = PublicKey::from(&secret);
@@ -807,7 +904,10 @@ mod tests {
         let previous = vec![path(2, 20), path(1, 10)];
         let current = vec![path(1, 10), path(3, 5), path(2, 20)];
         let merged = merge_path_priority(&previous, current);
-        assert_eq!(merged.iter().map(|p| p.if_index).collect::<Vec<_>>(), vec![2, 1, 3]);
+        assert_eq!(
+            merged.iter().map(|p| p.if_index).collect::<Vec<_>>(),
+            vec![2, 1, 3]
+        );
     }
 
     #[test]

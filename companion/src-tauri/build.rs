@@ -9,8 +9,10 @@
 
 fn which_rc() -> Option<String> {
     // Procura rc.exe nos Windows Kits instalados (10.0.22621, etc.)
-    let kits = ["C:\\Program Files (x86)\\Windows Kits\\10\\bin",
-                "C:\\Program Files\\Windows Kits\\10\\bin"];
+    let kits = [
+        "C:\\Program Files (x86)\\Windows Kits\\10\\bin",
+        "C:\\Program Files\\Windows Kits\\10\\bin",
+    ];
     for kit in &kits {
         if let Ok(entries) = std::fs::read_dir(kit) {
             for entry in entries.flatten() {
@@ -63,14 +65,20 @@ fn main() {
         if our_manifest.exists() {
             let rc_candidates = [
                 std::env::var("RC").ok(),
-                std::env::var("WindowsSdkVerBinPath").ok().map(|p| format!("{}\\x64\\rc.exe", p)),
+                std::env::var("WindowsSdkVerBinPath")
+                    .ok()
+                    .map(|p| format!("{}\\x64\\rc.exe", p)),
                 which_rc(),
             ];
             if let Some(rc) = rc_candidates.into_iter().flatten().next() {
                 let manifest_copy = std::path::Path::new(&out_dir).join("app.manifest");
                 std::fs::copy(our_manifest, &manifest_copy).ok();
                 let manifest_rc = std::path::Path::new(&out_dir).join("manifest.rc");
-                std::fs::write(&manifest_rc, "#pragma code_page(65001)\n1 24 \"app.manifest\"\n").ok();
+                std::fs::write(
+                    &manifest_rc,
+                    "#pragma code_page(65001)\n1 24 \"app.manifest\"\n",
+                )
+                .ok();
 
                 let res = std::path::Path::new(&out_dir).join("manifest.res");
                 let status = std::process::Command::new(&rc)
@@ -89,7 +97,13 @@ fn main() {
         }
 
         let candidates = [
-            std::env::var("NPCAP_SDK_DIR").ok().map(|d| std::path::Path::new(&d).join("Lib").join("x64").to_string_lossy().into_owned()),
+            std::env::var("NPCAP_SDK_DIR").ok().map(|d| {
+                std::path::Path::new(&d)
+                    .join("Lib")
+                    .join("x64")
+                    .to_string_lossy()
+                    .into_owned()
+            }),
             Some("C:\\npcap-sdk\\Lib\\x64".into()),
             Some("C:\\Program Files\\Npcap SDK\\Lib\\x64".into()),
         ];

@@ -165,7 +165,18 @@ impl ApiClient {
     }
 
     fn auth_header(&self) -> Option<(&str, String)> {
-        self.discord_token.as_ref().map(|t| ("Authorization", format!("Bearer {}", t)))
+        self.discord_token
+            .as_ref()
+            .map(|t| ("Authorization", format!("Bearer {}", t)))
+    }
+
+    pub async fn report_crash(&self, payload: &crate::crash_report::CrashReport) -> Result<()> {
+        let url = format!("{}/companion/crash-report", self.base_url);
+        let resp = self.client.post(&url).json(payload).send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("crash report falhou: HTTP {}", resp.status()));
+        }
+        Ok(())
     }
 
     pub async fn claim_scan(&self) -> Result<ScanClaim> {
@@ -289,7 +300,10 @@ impl ApiClient {
         let body = serde_json::json!({ "rows": rows });
         let resp = self.client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("market-history submit falhou: HTTP {}", resp.status()));
+            return Err(anyhow!(
+                "market-history submit falhou: HTTP {}",
+                resp.status()
+            ));
         }
         Ok(())
     }
@@ -314,7 +328,10 @@ impl ApiClient {
                 return Err(anyhow!("silver-estimate falhou: HTTP {}", resp.status()));
             }
             let out: serde_json::Value = resp.json().await?;
-            total += out.get("silver_total").and_then(|v| v.as_i64()).unwrap_or(0);
+            total += out
+                .get("silver_total")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
         }
         Ok(total)
     }
@@ -353,9 +370,7 @@ impl ApiClient {
 
     /// Guild is not sent in the body; the backend derives it from the user's
     /// event signup and rejects if there is none.
-    pub async fn submit_lootlog(
-        &self, event_id: i64, csv_text: &str,
-    ) -> Result<LootlogIngestOut> {
+    pub async fn submit_lootlog(&self, event_id: i64, csv_text: &str) -> Result<LootlogIngestOut> {
         let (key, val) = self.auth_header().ok_or_else(|| anyhow!("não logado"))?;
         let url = format!("{}/companion/lootlog/ingest", self.base_url);
         let body = serde_json::json!({
@@ -363,7 +378,13 @@ impl ApiClient {
             "csv_text": csv_text,
             "file_name": "companion-lootlog.csv",
         });
-        let resp = self.client.post(&url).header(key, &val).json(&body).send().await?;
+        let resp = self
+            .client
+            .post(&url)
+            .header(key, &val)
+            .json(&body)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();

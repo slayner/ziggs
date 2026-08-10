@@ -7,24 +7,31 @@
 // per probe (floor 150ms). Same philosophy as backend albion_gate, but on
 // the client since we talk to Albion directly.
 
-use std::time::Duration;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
 
-use crate::api::{ApiClient, ScanClaim, ScanReportIn, KillScanClaim, KillScanReportIn};
-use crate::transfer::TransferQueue;
+use crate::api::{ApiClient, KillScanClaim, KillScanReportIn, ScanClaim, ScanReportIn};
 use crate::sniffer::DebugLine;
+use crate::transfer::TransferQueue;
 
 /// Push a line to the debug buffer (UI terminal), capped at 500 lines.
 async fn emit_debug(debug: &Option<Arc<Mutex<Vec<DebugLine>>>>, level: &str, msg: String) {
     if let Some(d) = debug {
-        let line = DebugLine { ts: crate::photon_parser::now_iso_utc(), level: level.into(), msg };
+        let line = DebugLine {
+            ts: crate::photon_parser::now_iso_utc(),
+            level: level.into(),
+            msg,
+        };
         let mut g = d.lock().await;
         g.push(line);
-        if g.len() > 500 { let ex = g.len() - 500; g.drain(..ex); }
+        if g.len() > 500 {
+            let ex = g.len() - 500;
+            g.drain(..ex);
+        }
     }
 }
 
@@ -34,11 +41,11 @@ async fn emit_debug(debug: &Option<Arc<Mutex<Vec<DebugLine>>>>, level: &str, msg
 const THROTTLE_MIN_MS: u64 = 150;
 const THROTTLE_MAX_MS: u64 = 5_000;
 const THROTTLE_START_MS: u64 = 150;
-const THROTTLE_RECOVER_MS: u64 = 50;  // -50ms per sustained 200
+const THROTTLE_RECOVER_MS: u64 = 50; // -50ms per sustained 200
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScanStats {
-    pub status: String,             // "idle" | "running" | "error" | "disabled"
+    pub status: String, // "idle" | "running" | "error" | "disabled"
     pub last_cycle_at: Option<String>,
     pub battles_found: u64,
     pub battles_missing: u64,
@@ -46,8 +53,8 @@ pub struct ScanStats {
     pub cycles: u64,
     pub last_error: Option<String>,
     pub queued_reports: usize,
-    pub zone: String,               // "blue" | "pvp" | "unknown"
-    pub throttle_ms: u64,           // adaptive inter-probe delay (transparency)
+    pub zone: String,     // "blue" | "pvp" | "unknown"
+    pub throttle_ms: u64, // adaptive inter-probe delay (transparency)
     // Kill scan — runs in parallel with battle scan, shared throttle/zone.
     pub kill_cycles: u64,
     pub kill_events_found: u64,
@@ -144,7 +151,10 @@ impl Scanner {
 
     /// Set current zone. Flushes queue on PvP→Blue transition.
     pub async fn set_zone(&self, zone: crate::transfer::ZoneType, _api: &ApiClient) {
-        let was_pvp = matches!(self.zone.lock().await.clone(), crate::transfer::ZoneType::PvP);
+        let was_pvp = matches!(
+            self.zone.lock().await.clone(),
+            crate::transfer::ZoneType::PvP
+        );
         *self.zone.lock().await = zone.clone();
         let zone_str = match zone {
             crate::transfer::ZoneType::Blue => "blue",
@@ -183,10 +193,11 @@ impl Scanner {
             }
             // In PvP with pause on: don't claim new tasks, just accumulate locally.
             // Sleep 30s (saves CPU/network during combat). Resumes on blue zone.
-            let in_pvp = *self.pvp_pause.lock().await && matches!(
-                self.zone.lock().await.clone(),
-                crate::transfer::ZoneType::PvP
-            );
+            let in_pvp = *self.pvp_pause.lock().await
+                && matches!(
+                    self.zone.lock().await.clone(),
+                    crate::transfer::ZoneType::PvP
+                );
             if in_pvp {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 continue;
@@ -242,10 +253,8 @@ impl Scanner {
                     // Sustained 200 → recover throttle (-50ms, floor 150ms).
                     let cur = self.throttle_ms.load(Ordering::Relaxed);
                     if cur > THROTTLE_MIN_MS {
-                        self.throttle_ms.store(
-                            cur.saturating_sub(THROTTLE_RECOVER_MS),
-                            Ordering::Relaxed,
-                        );
+                        self.throttle_ms
+                            .store(cur.saturating_sub(THROTTLE_RECOVER_MS), Ordering::Relaxed);
                     }
                 }
                 Ok(resp) if resp.status().as_u16() == 404 => missing.push(id),
@@ -281,10 +290,11 @@ impl Scanner {
         };
 
         // Zone-aware: blue → send directly (+ flush queue). PvP → enqueue.
-        let in_pvp = *self.pvp_pause.lock().await && matches!(
-            self.zone.lock().await.clone(),
-            crate::transfer::ZoneType::PvP
-        );
+        let in_pvp = *self.pvp_pause.lock().await
+            && matches!(
+                self.zone.lock().await.clone(),
+                crate::transfer::ZoneType::PvP
+            );
 
         if in_pvp {
             let n_found = report.found.len();
@@ -297,10 +307,15 @@ impl Scanner {
             let mut s = self.stats.lock().await;
             s.cycles += 1;
             s.last_cycle_at = Some(chrono_now());
-            emit_debug(&self.debug, "info", format!(
-                "scan: range {}-{} {} em PvP → {} encontradas enfileiradas",
-                claim.battle_id_start, claim.battle_id_end, claim.server, n_found,
-            )).await;
+            emit_debug(
+                &self.debug,
+                "info",
+                format!(
+                    "scan: range {}-{} {} em PvP → {} encontradas enfileiradas",
+                    claim.battle_id_start, claim.battle_id_end, claim.server, n_found,
+                ),
+            )
+            .await;
             return Ok(true);
         }
 
@@ -316,11 +331,20 @@ impl Scanner {
                 s.queued_reports = q.pending_count().await;
             }
         }
-        emit_debug(&self.debug, "info", format!(
-            "scan: range {}-{} {} → {} encontradas, {} 404, {} erros",
-            claim.battle_id_start, claim.battle_id_end, claim.server,
-            out.accepted, report.missing.len(), report.errors.len(),
-        )).await;
+        emit_debug(
+            &self.debug,
+            "info",
+            format!(
+                "scan: range {}-{} {} → {} encontradas, {} 404, {} erros",
+                claim.battle_id_start,
+                claim.battle_id_end,
+                claim.server,
+                out.accepted,
+                report.missing.len(),
+                report.errors.len(),
+            ),
+        )
+        .await;
         Ok(true)
     }
 }
@@ -337,7 +361,10 @@ fn host_for(region: &str) -> &'static str {
 
 fn chrono_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     format!("{}", secs)
 }
 
@@ -410,10 +437,11 @@ impl KillScanner {
             if self.shutdown.load(Ordering::Relaxed) {
                 break;
             }
-            let in_pvp = *self.pvp_pause.lock().await && matches!(
-                self.zone.lock().await.clone(),
-                crate::transfer::ZoneType::PvP
-            );
+            let in_pvp = *self.pvp_pause.lock().await
+                && matches!(
+                    self.zone.lock().await.clone(),
+                    crate::transfer::ZoneType::PvP
+                );
             if in_pvp {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 continue;
@@ -462,10 +490,8 @@ impl KillScanner {
                     }
                     let cur = self.throttle_ms.load(Ordering::Relaxed);
                     if cur > THROTTLE_MIN_MS {
-                        self.throttle_ms.store(
-                            cur.saturating_sub(THROTTLE_RECOVER_MS),
-                            Ordering::Relaxed,
-                        );
+                        self.throttle_ms
+                            .store(cur.saturating_sub(THROTTLE_RECOVER_MS), Ordering::Relaxed);
                     }
                 }
                 Ok(resp) if resp.status().as_u16() == 404 => missing.push(id),
@@ -511,11 +537,20 @@ impl KillScanner {
                 tracing::warn!("kill-scan report falhou: {:#}", e);
             }
         }
-        emit_debug(&self.debug, "info", format!(
-            "kill-scan: {}-{} {} → {} encontrados, {} 404, {} erros",
-            claim.event_id_start, claim.event_id_end, claim.region,
-            report.found.len(), report.missing.len(), report.errors.len(),
-        )).await;
+        emit_debug(
+            &self.debug,
+            "info",
+            format!(
+                "kill-scan: {}-{} {} → {} encontrados, {} 404, {} erros",
+                claim.event_id_start,
+                claim.event_id_end,
+                claim.region,
+                report.found.len(),
+                report.missing.len(),
+                report.errors.len(),
+            ),
+        )
+        .await;
         Ok(true)
     }
 }
@@ -531,7 +566,6 @@ mod tests {
         clone.stop().await;
         assert!(scanner.shutdown.load(Ordering::Relaxed));
     }
-
 
     #[test]
     fn resposta_200_malformada_nao_e_batalha() {

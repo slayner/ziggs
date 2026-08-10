@@ -11,32 +11,40 @@
 //
 // Requires Npcap on Windows. Needs admin.
 
-use std::collections::{HashMap, HashSet};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
-use std::sync::mpsc;
-use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::Mutex;
 
-use crate::photon_parser::{
-    PhotonParser, PhotonValue, extract_player_state, extract_party, extract_loot,
-    extract_new_character, extract_health, extract_market, extract_gold,
-    extract_history_request, extract_history_response, LootEvent, DamageAcc, HistoryReq,
-    extract_new_loot_owner, extract_new_loot_item, extract_attach_container,
-    extract_detach_container, extract_inventory_move, self_loot_event,
-};
 use crate::aodp::{self, AodpBatch, AodpServer};
+use crate::photon_parser::{
+    extract_attach_container, extract_detach_container, extract_gold, extract_health,
+    extract_history_request, extract_history_response, extract_inventory_move, extract_loot,
+    extract_market, extract_new_character, extract_new_loot_item, extract_new_loot_owner,
+    extract_party, extract_player_state, self_loot_event, DamageAcc, HistoryReq, LootEvent,
+    PhotonParser, PhotonValue,
+};
 
 /// Cities with real marketplaces — we only report prices when the player is
 /// in one of these. Includes the 3 Rests (Arthur's/Merlyn's/Morgana's) which
 /// have their own crafting stations and share the Smuggler's Network.
 const MARKET_CITIES: [&str; 12] = [
-    "Martlock", "Bridgewatch", "Lymhurst", "Fort Sterling",
-    "Thetford", "Caerleon", "Brecilien", "Black Market",
-    "Arthur's Rest", "Merlyn's Rest", "Morgana's Rest",
+    "Martlock",
+    "Bridgewatch",
+    "Lymhurst",
+    "Fort Sterling",
+    "Thetford",
+    "Caerleon",
+    "Brecilien",
+    "Black Market",
+    "Arthur's Rest",
+    "Merlyn's Rest",
+    "Morgana's Rest",
     "Smuggler's Den",
 ];
 
@@ -60,7 +68,9 @@ fn packet_is_dup(
     now: Instant,
     window: std::time::Duration,
 ) -> bool {
-    let dup = recent.get(&h).is_some_and(|&t| now.duration_since(t) < window);
+    let dup = recent
+        .get(&h)
+        .is_some_and(|&t| now.duration_since(t) < window);
     recent.insert(h, now);
     dup
 }
@@ -148,7 +158,7 @@ impl Default for SniffStats {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DebugLine {
     pub ts: String,
-    pub level: String,   // "info" | "warn" | "err"
+    pub level: String, // "info" | "warn" | "err"
     pub msg: String,
 }
 
@@ -286,7 +296,11 @@ impl Sniffer {
             if opened.contains(&dev.name) {
                 continue;
             }
-            if !dev.addresses.iter().any(|a| matches!(a.addr, std::net::IpAddr::V4(_))) {
+            if !dev
+                .addresses
+                .iter()
+                .any(|a| matches!(a.addr, std::net::IpAddr::V4(_)))
+            {
                 continue;
             }
             let desc = dev.name.clone();
@@ -295,10 +309,16 @@ impl Sniffer {
                     opened_count += 1;
                     opened.insert(dev.name.clone());
                     let l2 = l2_len_for(cap.get_datalink());
-                    self.debug_log("info", &format!(
-                        "Listening on interface: {} (L2={}b — {})",
-                        desc, l2, if l2 == 0 { "raw IP / VPN" } else { "ethernet" }
-                    )).await;
+                    self.debug_log(
+                        "info",
+                        &format!(
+                            "Listening on interface: {} (L2={}b — {})",
+                            desc,
+                            l2,
+                            if l2 == 0 { "raw IP / VPN" } else { "ethernet" }
+                        ),
+                    )
+                    .await;
                     // Spawns a dedicated thread per capture (blocking).
                     let tx_clone = tx.clone();
                     let liveness = Arc::clone(&self.generation);
@@ -307,7 +327,8 @@ impl Sniffer {
                         while liveness.load(Ordering::Acquire) == generation {
                             match cap.next_packet() {
                                 Ok(packet) => {
-                                    let _ = tx_clone.send(CaptureMsg::Packet(l2, packet.data.to_vec()));
+                                    let _ =
+                                        tx_clone.send(CaptureMsg::Packet(l2, packet.data.to_vec()));
                                 }
                                 Err(pcap::Error::TimeoutExpired) => { /* no packet */ }
                                 Err(e) => {
@@ -323,14 +344,17 @@ impl Sniffer {
                     // Don't mark as `opened` — the failure may be transient
                     // (driver still starting, interface not yet up) and
                     // that's exactly what the re-scan exists to cover.
-                    self.debug_log("warn", &format!("Could not open {}: {}", desc, e)).await;
+                    self.debug_log("warn", &format!("Could not open {}: {}", desc, e))
+                        .await;
                 }
             }
         }
         if opened_count > 0 {
-            self.debug_log("info", &format!(
-                "{} new interface(s) active.", opened_count
-            )).await;
+            self.debug_log(
+                "info",
+                &format!("{} new interface(s) active.", opened_count),
+            )
+            .await;
         }
         opened_count
     }
@@ -354,10 +378,19 @@ impl Sniffer {
         }
         // Zero the log file each session for readability.
         if let Some(p) = debug_log_path() {
-            if let Some(parent) = p.parent() { let _ = std::fs::create_dir_all(parent); }
-            let _ = std::fs::write(&p, format!("=== session {} ===\n", crate::photon_parser::now_iso_utc()));
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(
+                &p,
+                format!("=== session {} ===\n", crate::photon_parser::now_iso_utc()),
+            );
         }
-        self.debug_log("info", "Sniffer starting — scanning for network interfaces…").await;
+        self.debug_log(
+            "info",
+            "Sniffer starting — scanning for network interfaces…",
+        )
+        .await;
 
         // The channel lives for the entire session: `open_all` is called
         // periodically (see `last_iface_scan` below) to pick up interfaces
@@ -382,12 +415,15 @@ impl Sniffer {
                     continue;
                 }
             };
-            let n = self.open_all(&devices, &tx, &mut opened_ifaces, generation).await;
+            let n = self
+                .open_all(&devices, &tx, &mut opened_ifaces, generation)
+                .await;
             if n > 0 {
                 break;
             }
             let msg = "No network interface could be opened. Needs admin/Npcap?".to_string();
-            self.debug_log("err", &format!("{} Retrying in 15s…", msg)).await;
+            self.debug_log("err", &format!("{} Retrying in 15s…", msg))
+                .await;
             self.stats.lock().await.error = Some(msg);
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
         }
@@ -418,7 +454,7 @@ impl Sniffer {
 
         loop {
             if self.generation.load(Ordering::Acquire) != generation {
-                    self.debug_log("info", "Sniffer stopped.").await;
+                self.debug_log("info", "Sniffer stopped.").await;
                 break;
             }
 
@@ -426,7 +462,11 @@ impl Sniffer {
             match rx.recv_timeout(std::time::Duration::from_millis(50)) {
                 Ok(CaptureMsg::Dead(name)) => {
                     opened_ifaces.remove(&name);
-                    self.debug_log("warn", &format!("Capture closed on {name}; interface will be reopened.")).await;
+                    self.debug_log(
+                        "warn",
+                        &format!("Capture closed on {name}; interface will be reopened."),
+                    )
+                    .await;
                     last_iface_scan = Instant::now() - std::time::Duration::from_secs(60);
                 }
                 Ok(CaptureMsg::Packet(l2_hint, data)) => {
@@ -471,17 +511,25 @@ impl Sniffer {
                         was_online = true;
                         let mut s = self.stats.lock().await;
                         s.online = true;
-                        self.debug_log("info", "Albion detected — packets received. Capturing loot…").await;
+                        self.debug_log(
+                            "info",
+                            "Albion detected — packets received. Capturing loot…",
+                        )
+                        .await;
                     }
 
                     // Safety net: a malformed packet must never crash capture.
                     // If the parser panics, log, reset fragment state, continue.
-                    let ops = match std::panic::catch_unwind(
-                        std::panic::AssertUnwindSafe(|| parser.parse(photon_data))
-                    ) {
+                    let ops = match crate::crash_report::catch_unwind_silent(|| {
+                        parser.parse(photon_data)
+                    }) {
                         Ok(ops) => ops,
                         Err(_) => {
-                            self.debug_log("err", "parser panicked on a packet — skipping and resetting").await;
+                            self.debug_log(
+                                "err",
+                                "parser panicked on a packet — skipping and resetting",
+                            )
+                            .await;
                             parser = PhotonParser::new();
                             continue;
                         }
@@ -498,19 +546,36 @@ impl Sniffer {
                         // (41=ChangeCluster resp, 17=JoinCluster, 294=ChangeCluster req)
                         // to see what fires on EACH map change.
                         if matches!(op.albion_code, 41 | 17 | 294) {
-                            self.debug_log("info", &format!(
-                                "ZONE op={} type={} :: {}", op.albion_code, op.message_type, dump_params(op)
-                            )).await;
+                            self.debug_log(
+                                "info",
+                                &format!(
+                                    "ZONE op={} type={} :: {}",
+                                    op.albion_code,
+                                    op.message_type,
+                                    dump_params(op)
+                                ),
+                            )
+                            .await;
                         }
 
                         // Protocol discovery: log each new albion_code once with its
                         // params. Opcodes 2/41 may be wrong in this game version —
                         // this reveals which opcode carries name/map/guild, and also
                         // any self-loot opcode that extract_loot doesn't cover.
-                        if op.albion_code >= 0 && seen_codes.insert(op.albion_code) && seen_codes.len() <= 200 {
-                            self.debug_log("info", &format!(
-                                "op code={} type={} :: {}", op.albion_code, op.message_type, dump_params(op)
-                            )).await;
+                        if op.albion_code >= 0
+                            && seen_codes.insert(op.albion_code)
+                            && seen_codes.len() <= 200
+                        {
+                            self.debug_log(
+                                "info",
+                                &format!(
+                                    "op code={} type={} :: {}",
+                                    op.albion_code,
+                                    op.message_type,
+                                    dump_params(op)
+                                ),
+                            )
+                            .await;
                         }
 
                         // op 103 = guild/alliance info for local player (param 15/16).
@@ -519,37 +584,60 @@ impl Sniffer {
                         if op.albion_code == 103 {
                             let mut s = self.stats.lock().await;
                             if let Some(PhotonValue::String(g)) = op.parameters.get(&15) {
-                                if !g.is_empty() { s.guild_name = g.clone(); }
+                                if !g.is_empty() {
+                                    s.guild_name = g.clone();
+                                }
                             }
                             if let Some(PhotonValue::String(a)) = op.parameters.get(&16) {
-                                if !a.is_empty() { s.alliance_name = a.clone(); }
+                                if !a.is_empty() {
+                                    s.alliance_name = a.clone();
+                                }
                             }
                         }
 
                         if let Some(state) = extract_player_state(op) {
                             let mut s = self.stats.lock().await;
-                            let name_changed = !state.player_name.is_empty() && s.player_name != state.player_name;
-                            let map_changed = !state.map_index.is_empty() && s.last_map != state.map_index;
+                            let name_changed =
+                                !state.player_name.is_empty() && s.player_name != state.player_name;
+                            let map_changed =
+                                !state.map_index.is_empty() && s.last_map != state.map_index;
                             if !state.player_name.is_empty() {
                                 s.player_name = state.player_name.clone();
                                 local_player_name = state.player_name.clone();
                             }
-                            if !state.guild_name.is_empty() { s.guild_name = state.guild_name.clone(); }
-                            if !state.alliance_name.is_empty() { s.alliance_name = state.alliance_name.clone(); }
+                            if !state.guild_name.is_empty() {
+                                s.guild_name = state.guild_name.clone();
+                            }
+                            if !state.alliance_name.is_empty() {
+                                s.alliance_name = state.alliance_name.clone();
+                            }
                             // Register the local player (id→name) for the damage meter —
                             // they don't come in NewCharacter events, only in Join response.
-                            if let (Some(id), false) = (state.local_object_id, state.player_name.is_empty()) {
-                                self.entities.lock().await.insert(id, state.player_name.clone());
+                            if let (Some(id), false) =
+                                (state.local_object_id, state.player_name.is_empty())
+                            {
+                                self.entities
+                                    .lock()
+                                    .await
+                                    .insert(id, state.player_name.clone());
                             }
                             if !state.map_index.is_empty() {
                                 s.last_map = state.map_index.clone();
                                 s.last_map_name = crate::maps::resolve(&state.map_index);
                             }
                             if name_changed {
-                                self.debug_log("info", &format!("Character detected: {}", s.player_name)).await;
+                                self.debug_log(
+                                    "info",
+                                    &format!("Character detected: {}", s.player_name),
+                                )
+                                .await;
                             }
                             if map_changed {
-                                self.debug_log("info", &format!("Map change: {} ({})", s.last_map_name, s.last_map)).await;
+                                self.debug_log(
+                                    "info",
+                                    &format!("Map change: {} ({})", s.last_map_name, s.last_map),
+                                )
+                                .await;
                             }
                         }
 
@@ -567,26 +655,52 @@ impl Sniffer {
                             // arrives with different param ordering.
                             // Same motivation as the [CALIB] dump for the damage meter:
                             // without real packet evidence, any fix is a guess.
-                            let l_from = op.parameters.get(&1).and_then(|v| v.as_string()).unwrap_or("").to_string();
-                            let l_by = op.parameters.get(&2).and_then(|v| v.as_string()).unwrap_or("").to_string();
+                            let l_from = op
+                                .parameters
+                                .get(&1)
+                                .and_then(|v| v.as_string())
+                                .unwrap_or("")
+                                .to_string();
+                            let l_by = op
+                                .parameters
+                                .get(&2)
+                                .and_then(|v| v.as_string())
+                                .unwrap_or("")
+                                .to_string();
                             let i4 = op.parameters.get(&4).and_then(|v| v.as_i64()).is_some();
                             let i5 = op.parameters.get(&5).and_then(|v| v.as_i64()).is_some();
                             // GVG_SEASON_xx crest events (op 388) have the same
                             // structure (2 strings + int) and fire dozens of times
                             // per minute — without excluding them they alone fill the
                             // 20-event cap before any real loot appears.
-                            let is_gvg_noise = l_from.starts_with("SCHEMA_") || l_by.starts_with("GUILDSYMBOL_");
-                            let looks_like_loot = op.message_type == 4 && !l_from.is_empty() && !l_by.is_empty()
-                                && (i4 || i5) && !is_gvg_noise;
+                            let is_gvg_noise =
+                                l_from.starts_with("SCHEMA_") || l_by.starts_with("GUILDSYMBOL_");
+                            let looks_like_loot = op.message_type == 4
+                                && !l_from.is_empty()
+                                && !l_by.is_empty()
+                                && (i4 || i5)
+                                && !is_gvg_noise;
                             if looks_like_loot && logged_loot < 20 {
                                 logged_loot += 1;
                                 let params = dump_params(op);
-                                let item_idx = op.parameters.get(&4).and_then(|v| v.as_i64()).unwrap_or(0);
-                                let qty = op.parameters.get(&5).and_then(|v| v.as_i64()).unwrap_or(0);
-                                self.debug_log("info", &format!(
-                                    "[LOOT {:02}] op={} from={:?} by={:?} item={} qty={} | {}",
-                                    logged_loot, op.albion_code, l_from, l_by, item_idx, qty, params
-                                )).await;
+                                let item_idx =
+                                    op.parameters.get(&4).and_then(|v| v.as_i64()).unwrap_or(0);
+                                let qty =
+                                    op.parameters.get(&5).and_then(|v| v.as_i64()).unwrap_or(0);
+                                self.debug_log(
+                                    "info",
+                                    &format!(
+                                        "[LOOT {:02}] op={} from={:?} by={:?} item={} qty={} | {}",
+                                        logged_loot,
+                                        op.albion_code,
+                                        l_from,
+                                        l_by,
+                                        item_idx,
+                                        qty,
+                                        params
+                                    ),
+                                )
+                                .await;
                             }
                             if let Some(loot) = extract_loot(op) {
                                 self.push_loot(loot).await;
@@ -601,7 +715,9 @@ impl Sniffer {
                             if let Some((id, owner)) = extract_new_loot_owner(op) {
                                 loot_container_owner.insert(id, owner);
                             }
-                            if let Some((object_id, item_index, quantity)) = extract_new_loot_item(op) {
+                            if let Some((object_id, item_index, quantity)) =
+                                extract_new_loot_item(op)
+                            {
                                 loot_objects.insert(object_id, (item_index, quantity));
                             }
                             if let Some((id, uuid, slots)) = extract_attach_container(op) {
@@ -617,12 +733,23 @@ impl Sniffer {
                             }
                             if let Some(mv) = extract_inventory_move(op) {
                                 if !local_player_name.is_empty() {
-                                    if let Some(&container_id) = loot_container_uuid.get(&mv.from_uuid) {
-                                        if let Some(object_id) = loot_container_slots.remove(&(container_id, mv.from_slot)) {
-                                            if let Some((item_index, quantity)) = loot_objects.remove(&object_id) {
-                                                if let Some(owner) = loot_container_owner.get(&container_id) {
+                                    if let Some(&container_id) =
+                                        loot_container_uuid.get(&mv.from_uuid)
+                                    {
+                                        if let Some(object_id) = loot_container_slots
+                                            .remove(&(container_id, mv.from_slot))
+                                        {
+                                            if let Some((item_index, quantity)) =
+                                                loot_objects.remove(&object_id)
+                                            {
+                                                if let Some(owner) =
+                                                    loot_container_owner.get(&container_id)
+                                                {
                                                     let loot = self_loot_event(
-                                                        local_player_name.clone(), owner.clone(), item_index, quantity,
+                                                        local_player_name.clone(),
+                                                        owner.clone(),
+                                                        item_index,
+                                                        quantity,
                                                     );
                                                     self.push_loot(loot).await;
                                                 }
@@ -644,15 +771,19 @@ impl Sniffer {
                             // in the ranking.
                             if logged_char < 3 {
                                 logged_char += 1;
-                                let mut ps: Vec<(u8, String)> = op.parameters
-                                    .iter().map(|(k, v)| (*k, deep(v))).collect();
+                                let mut ps: Vec<(u8, String)> =
+                                    op.parameters.iter().map(|(k, v)| (*k, deep(v))).collect();
                                 ps.sort_by_key(|(k, _)| *k);
-                                let params = ps.iter()
+                                let params = ps
+                                    .iter()
                                     .map(|(k, v)| format!("{k}={v}"))
-                                    .collect::<Vec<_>>().join("  ");
-                                self.debug_log("info", &format!(
-                                    "[CHAR {}] {} | {}", logged_char, name, params
-                                )).await;
+                                    .collect::<Vec<_>>()
+                                    .join("  ");
+                                self.debug_log(
+                                    "info",
+                                    &format!("[CHAR {}] {} | {}", logged_char, name, params),
+                                )
+                                .await;
                             }
                             self.entities.lock().await.insert(id, name);
                         }
@@ -664,19 +795,29 @@ impl Sniffer {
                                 // the spell param moved in a patch.
                                 if h.change < 0.0 && logged_health < 15 {
                                     logged_health += 1;
-                                    let mut ps: Vec<(u8, String)> = op.parameters
-                                        .iter().map(|(k, v)| (*k, brief(v))).collect();
+                                    let mut ps: Vec<(u8, String)> =
+                                        op.parameters.iter().map(|(k, v)| (*k, brief(v))).collect();
                                     ps.sort_by_key(|(k, _)| *k);
-                                    let params = ps.iter()
+                                    let params = ps
+                                        .iter()
                                         .map(|(k, v)| format!("{k}={v}"))
-                                        .collect::<Vec<_>>().join("  ");
-                                    let who = self.entities.lock().await
-                                        .get(&h.causer_id).cloned()
+                                        .collect::<Vec<_>>()
+                                        .join("  ");
+                                    let who = self
+                                        .entities
+                                        .lock()
+                                        .await
+                                        .get(&h.causer_id)
+                                        .cloned()
                                         .unwrap_or_else(|| format!("id{}", h.causer_id));
-                                    self.debug_log("info", &format!(
-                                        "[CALIB {:02}] {} dano={:.0} spell={} | {}",
-                                        logged_health, who, -h.change, h.spell_id, params
-                                    )).await;
+                                    self.debug_log(
+                                        "info",
+                                        &format!(
+                                            "[CALIB {:02}] {} dano={:.0} spell={} | {}",
+                                            logged_health, who, -h.change, h.spell_id, params
+                                        ),
+                                    )
+                                    .await;
                                 }
                                 // Only damage (change < 0). Healing is discarded on
                                 // purpose — this is the damage panel.
@@ -700,12 +841,16 @@ impl Sniffer {
                                     let target_is_player =
                                         self.entities.lock().await.contains_key(&h.target_id);
                                     let mut dmg = self.damage.lock().await;
-                                    dmg.entry(h.causer_id).or_default()
+                                    dmg.entry(h.causer_id)
+                                        .or_default()
                                         .record(h.spell_id, -h.change, now);
                                     drop(dmg);
                                     if target_is_player {
-                                        self.damage_vs_players.lock().await
-                                            .entry(h.causer_id).or_default()
+                                        self.damage_vs_players
+                                            .lock()
+                                            .await
+                                            .entry(h.causer_id)
+                                            .or_default()
                                             .record(h.spell_id, -h.change, now);
                                     }
                                 }
@@ -714,12 +859,15 @@ impl Sniffer {
 
                         // Market: marketplace responses while the player browses.
                         // Feeds OUR database (by city) and forwards to AODP (verbatim).
-                        if self.capture_prices.load(Ordering::Relaxed) || self.feed_aodp.load(Ordering::Relaxed) {
+                        if self.capture_prices.load(Ordering::Relaxed)
+                            || self.feed_aodp.load(Ordering::Relaxed)
+                        {
                             let cap = extract_market(op);
                             if !cap.raw_orders.is_empty() {
                                 let (city, raw_map, map_name) = {
                                     let s = self.stats.lock().await;
-                                    let city = MARKET_CITIES.iter()
+                                    let city = MARKET_CITIES
+                                        .iter()
                                         .find(|c| s.last_map_name.contains(*c))
                                         .map(|c| c.to_string());
                                     (city, s.last_map.clone(), s.last_map_name.clone())
@@ -744,7 +892,9 @@ impl Sniffer {
                                             }));
                                         }
                                         let len = buf.len();
-                                        if len > 5000 { buf.drain(..len - 5000); }
+                                        if len > 5000 {
+                                            buf.drain(..len - 5000);
+                                        }
                                     }
                                 }
 
@@ -757,23 +907,30 @@ impl Sniffer {
                                     // Accept numeric clusters (real cities, Rests)
                                     // AND BLACKBANK-* (Smuggler's Den) — the
                                     // official AODP client accepts both.
-                                    let is_valid_loc = !numeric_loc.is_empty() && (
-                                        numeric_loc.chars().all(|c| c.is_ascii_digit()) ||
-                                        numeric_loc.starts_with("BLACKBANK-")
-                                    );
+                                    let is_valid_loc = !numeric_loc.is_empty()
+                                        && (numeric_loc.chars().all(|c| c.is_ascii_digit())
+                                            || numeric_loc.starts_with("BLACKBANK-"));
                                     if let Some(server) = server {
                                         if is_valid_loc {
-                                            let orders: Vec<serde_json::Value> = cap.raw_orders.iter().map(|o| {
-                                                let mut o = o.clone();
-                                                let empty = o.get("LocationId")
-                                                    .and_then(|l| l.as_str())
-                                                    .map_or(true, |l| l.is_empty());
-                                                if empty {
-                                                    o["LocationId"] = serde_json::Value::String(numeric_loc.to_string());
-                                                }
-                                                o
-                                            }).collect();
-                                            let natsmsg = serde_json::json!({ "Orders": orders }).to_string();
+                                            let orders: Vec<serde_json::Value> = cap
+                                                .raw_orders
+                                                .iter()
+                                                .map(|o| {
+                                                    let mut o = o.clone();
+                                                    let empty = o
+                                                        .get("LocationId")
+                                                        .and_then(|l| l.as_str())
+                                                        .map_or(true, |l| l.is_empty());
+                                                    if empty {
+                                                        o["LocationId"] = serde_json::Value::String(
+                                                            numeric_loc.to_string(),
+                                                        );
+                                                    }
+                                                    o
+                                                })
+                                                .collect();
+                                            let natsmsg =
+                                                serde_json::json!({ "Orders": orders }).to_string();
                                             let mut buf = self.aodp_out.lock().await;
                                             buf.push(AodpBatch {
                                                 server_id: server.id,
@@ -783,11 +940,18 @@ impl Sniffer {
                                             });
                                             // Cap: max 50 pending batches.
                                             let len = buf.len();
-                                            if len > 50 { buf.drain(..len - 50); }
+                                            if len > 50 {
+                                                buf.drain(..len - 50);
+                                            }
                                         } else {
-                                            self.debug_log("warn", &format!(
-                                                "AODP: invalid location ({}), skipping send", map_name
-                                            )).await;
+                                            self.debug_log(
+                                                "warn",
+                                                &format!(
+                                                    "AODP: invalid location ({}), skipping send",
+                                                    map_name
+                                                ),
+                                            )
+                                            .await;
                                         }
                                     }
                                 }
@@ -804,8 +968,11 @@ impl Sniffer {
                                 pend.insert(mid, info);
                                 // Cap: discard old orphan requests (response never came).
                                 if pend.len() > 256 {
-                                    let drop: Vec<u64> = pend.keys().take(pend.len() - 256).copied().collect();
-                                    for k in drop { pend.remove(&k); }
+                                    let drop: Vec<u64> =
+                                        pend.keys().take(pend.len() - 256).copied().collect();
+                                    for k in drop {
+                                        pend.remove(&k);
+                                    }
                                 }
                             }
                             if let Some((mid, buckets)) = extract_history_response(op) {
@@ -817,8 +984,13 @@ impl Sniffer {
                                     };
                                     // Albion server region (detected from packet IPs) —
                                     // markets are separated by server.
-                                    let region = self.aodp_server.lock().await
-                                        .as_ref().map(|s| s.region()).unwrap_or("west");
+                                    let region = self
+                                        .aodp_server
+                                        .lock()
+                                        .await
+                                        .as_ref()
+                                        .map(|s| s.region())
+                                        .unwrap_or("west");
                                     let mut buf = self.market_history.lock().await;
                                     for b in buckets {
                                         buf.push(serde_json::json!({
@@ -833,7 +1005,9 @@ impl Sniffer {
                                         }));
                                     }
                                     let len = buf.len();
-                                    if len > 10000 { buf.drain(..len - 10000); }
+                                    if len > 10000 {
+                                        buf.drain(..len - 10000);
+                                    }
                                 }
                             }
                         }
@@ -846,7 +1020,8 @@ impl Sniffer {
                                     let natsmsg = serde_json::json!({
                                         "Prices": g.prices,
                                         "Timestamps": g.timestamps,
-                                    }).to_string();
+                                    })
+                                    .to_string();
                                     let mut buf = self.aodp_out.lock().await;
                                     buf.push(AodpBatch {
                                         server_id: server.id,
@@ -855,7 +1030,9 @@ impl Sniffer {
                                         natsmsg,
                                     });
                                     let len = buf.len();
-                                    if len > 50 { buf.drain(..len - 50); }
+                                    if len > 50 {
+                                        buf.drain(..len - 50);
+                                    }
                                 }
                             }
                         }
@@ -863,7 +1040,11 @@ impl Sniffer {
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => { /* no packets — continue loop */ }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.debug_log("err", "All capture interfaces closed. Restart the companion.").await;
+                    self.debug_log(
+                        "err",
+                        "All capture interfaces closed. Restart the companion.",
+                    )
+                    .await;
                     let mut s = self.stats.lock().await;
                     s.running = false;
                     break;
@@ -877,11 +1058,20 @@ impl Sniffer {
             if last_heartbeat.elapsed().as_secs() >= 10 {
                 last_heartbeat = Instant::now();
                 let s = self.stats.lock().await;
-                self.debug_log_file("info", &format!(
-                    "stats: raw={} pkts={} parsed={} ops={} loot={} online={} codes={}",
-                    raw_pkts, s.packets_captured, s.packets_parsed, s.operations_extracted,
-                    s.loot_count, s.online, seen_codes.len()
-                )).await;
+                self.debug_log_file(
+                    "info",
+                    &format!(
+                        "stats: raw={} pkts={} parsed={} ops={} loot={} online={} codes={}",
+                        raw_pkts,
+                        s.packets_captured,
+                        s.packets_parsed,
+                        s.operations_extracted,
+                        s.loot_count,
+                        s.online,
+                        seen_codes.len()
+                    ),
+                )
+                .await;
             }
 
             // Offline detection: 5s without packets.
@@ -889,7 +1079,11 @@ impl Sniffer {
                 was_online = false;
                 let mut s = self.stats.lock().await;
                 s.online = false;
-                self.debug_log("warn", "No Albion packets for 5s — game closed or VPN changed route?").await;
+                self.debug_log(
+                    "warn",
+                    "No Albion packets for 5s — game closed or VPN changed route?",
+                )
+                .await;
             }
 
             // Re-scan interfaces: picks up adapters that came up AFTER boot
@@ -909,7 +1103,8 @@ impl Sniffer {
             if last_iface_scan.elapsed().as_secs() >= rescan_secs {
                 last_iface_scan = Instant::now();
                 if let Ok(devices) = pcap::Device::list() {
-                    self.open_all(&devices, &tx, &mut opened_ifaces, generation).await;
+                    self.open_all(&devices, &tx, &mut opened_ifaces, generation)
+                        .await;
                 }
             }
         }
@@ -926,7 +1121,8 @@ impl Sniffer {
         };
         self.stats.lock().await.loot_count = len as u64;
         if let Some(e) = save_error {
-            self.debug_log("err", &format!("Failed to persist session loot: {e}")).await;
+            self.debug_log("err", &format!("Failed to persist session loot: {e}"))
+                .await;
         }
     }
 
@@ -945,7 +1141,11 @@ impl Sniffer {
         let ts = crate::photon_parser::now_iso_utc();
         if let Some(p) = debug_log_path() {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&p)
+            {
                 let _ = writeln!(f, "{} [{}] {}", ts, level.to_uppercase(), msg);
             }
         }
@@ -1005,12 +1205,14 @@ fn debug_log_path() -> Option<std::path::PathBuf> {
 
 /// Opens a capture on a specific device with BPF filter for Albion's 3 ports.
 fn open_device_capture(dev: &pcap::Device) -> Result<pcap::Capture<pcap::Active>, String> {
-    let builder = pcap::Capture::from_device(dev.clone())
-        .map_err(|e| format!("from_device: {}", e))?;
+    let builder =
+        pcap::Capture::from_device(dev.clone()).map_err(|e| format!("from_device: {}", e))?;
     let builder = builder.promisc(true).immediate_mode(true).timeout(500);
-    let mut opened = builder.open()
+    let mut opened = builder
+        .open()
         .map_err(|e| format!("open: {}. Needs admin/Npcap?", e))?;
-    opened.filter("udp and (port 5056 or port 5055 or port 4535)", true)
+    opened
+        .filter("udp and (port 5056 or port 5055 or port 4535)", true)
         .map_err(|e| format!("BPF filter: {}", e))?;
     Ok(opened)
 }
@@ -1020,23 +1222,26 @@ fn dump_params(op: &crate::photon_parser::ParsedOperation) -> String {
     use crate::photon_parser::PhotonValue;
     let mut keys: Vec<u8> = op.parameters.keys().copied().collect();
     keys.sort();
-    keys.iter().map(|k| {
-        let r = match &op.parameters[k] {
-            PhotonValue::String(s) => format!("\"{}\"", s),
-            PhotonValue::Byte(n) => n.to_string(),
-            PhotonValue::Short(n) => n.to_string(),
-            PhotonValue::Int(n) => n.to_string(),
-            PhotonValue::Long(n) => n.to_string(),
-            PhotonValue::Float(n) => n.to_string(),
-            PhotonValue::Double(n) => n.to_string(),
-            PhotonValue::Bool(b) => b.to_string(),
-            PhotonValue::Array(a) => format!("arr[{}]", a.len()),
-            PhotonValue::Bytes(b) => format!("bytes[{}]", b.len()),
-            PhotonValue::Dictionary(_) => "dict".into(),
-            PhotonValue::Null => "null".into(),
-        };
-        format!("{}={}", k, r)
-    }).collect::<Vec<_>>().join(" ")
+    keys.iter()
+        .map(|k| {
+            let r = match &op.parameters[k] {
+                PhotonValue::String(s) => format!("\"{}\"", s),
+                PhotonValue::Byte(n) => n.to_string(),
+                PhotonValue::Short(n) => n.to_string(),
+                PhotonValue::Int(n) => n.to_string(),
+                PhotonValue::Long(n) => n.to_string(),
+                PhotonValue::Float(n) => n.to_string(),
+                PhotonValue::Double(n) => n.to_string(),
+                PhotonValue::Bool(b) => b.to_string(),
+                PhotonValue::Array(a) => format!("arr[{}]", a.len()),
+                PhotonValue::Bytes(b) => format!("bytes[{}]", b.len()),
+                PhotonValue::Dictionary(_) => "dict".into(),
+                PhotonValue::Null => "null".into(),
+            };
+            format!("{}={}", k, r)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// L2 header size from the interface's datalink type.
@@ -1055,15 +1260,25 @@ fn l2_len_for(dl: pcap::Linktype) -> usize {
 /// loopback without hardcoding.
 fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
     for &l2 in &[l2_hint, 0, 14, 4] {
-        if data.len() < l2 + 28 { continue; } // 20 min IP + 8 UDP
+        if data.len() < l2 + 28 {
+            continue;
+        } // 20 min IP + 8 UDP
         let vihl = data[l2];
-        if vihl >> 4 != 4 { continue; }        // IPv4 only (Albion is IPv4)
+        if vihl >> 4 != 4 {
+            continue;
+        } // IPv4 only (Albion is IPv4)
         let ihl = (vihl & 0x0F) as usize * 4;
-        if ihl < 20 { continue; }
+        if ihl < 20 {
+            continue;
+        }
         // Confirm UDP protocol (byte 9 of IPv4 header = 17).
-        if data[l2 + 9] != 17 { continue; }
+        if data[l2 + 9] != 17 {
+            continue;
+        }
         let off = l2 + ihl + 8;
-        if data.len() >= off { return Some(off); }
+        if data.len() >= off {
+            return Some(off);
+        }
     }
     None
 }
@@ -1072,10 +1287,16 @@ fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
 /// Src IP (bytes 12-15) and dst IP (16-19) — one of them is the Albion server.
 fn albion_server_from_frame(data: &[u8], l2_hint: usize) -> Option<AodpServer> {
     for &l2 in &[l2_hint, 0, 14, 4] {
-        if data.len() < l2 + 20 { continue; }
+        if data.len() < l2 + 20 {
+            continue;
+        }
         let vihl = data[l2];
-        if vihl >> 4 != 4 { continue; }
-        if data[l2 + 9] != 17 { continue; } // UDP
+        if vihl >> 4 != 4 {
+            continue;
+        }
+        if data[l2 + 9] != 17 {
+            continue;
+        } // UDP
         let src = [data[l2 + 12], data[l2 + 13], data[l2 + 14], data[l2 + 15]];
         let dst = [data[l2 + 16], data[l2 + 17], data[l2 + 18], data[l2 + 19]];
         if let Some(s) = aodp::server_for_ip(src).or_else(|| aodp::server_for_ip(dst)) {
@@ -1112,7 +1333,16 @@ pub fn ensure_npcap_dll_path() {
     for subkey in ["SOFTWARE\\WOW6432Node\\Npcap", "SOFTWARE\\Npcap"] {
         let mut hkey = 0isize;
         let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-        if unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey_w.as_ptr(), 0, KEY_READ, &mut hkey) } != 0 {
+        if unsafe {
+            RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                subkey_w.as_ptr(),
+                0,
+                KEY_READ,
+                &mut hkey,
+            )
+        } != 0
+        {
             continue;
         }
         // InstallDir
@@ -1120,23 +1350,53 @@ pub fn ensure_npcap_dll_path() {
         let mut buf = vec![0u16; (len as usize / 2) + 1];
         let valname: Vec<u16> = "InstallDir\0".encode_utf16().collect();
         let mut ty = 0u32;
-        if unsafe { RegQueryValueExW(hkey, valname.as_ptr(), std::ptr::null_mut(), &mut ty, buf.as_mut_ptr() as *mut u8, &mut len) } == 0 && ty == 1 {
+        if unsafe {
+            RegQueryValueExW(
+                hkey,
+                valname.as_ptr(),
+                std::ptr::null_mut(),
+                &mut ty,
+                buf.as_mut_ptr() as *mut u8,
+                &mut len,
+            )
+        } == 0
+            && ty == 1
+        {
             let nul = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
             let s = String::from_utf16_lossy(&buf[..nul]);
-            if !s.is_empty() { dir = Some(std::path::PathBuf::from(s)); }
+            if !s.is_empty() {
+                dir = Some(std::path::PathBuf::from(s));
+            }
         }
         // Version (optional — informational only for now)
         let mut len = 64u32;
         let mut buf = vec![0u16; (len as usize / 2) + 1];
         let valname: Vec<u16> = "Version\0".encode_utf16().collect();
         let mut ty = 0u32;
-        if unsafe { RegQueryValueExW(hkey, valname.as_ptr(), std::ptr::null_mut(), &mut ty, buf.as_mut_ptr() as *mut u8, &mut len) } == 0 && ty == 1 {
+        if unsafe {
+            RegQueryValueExW(
+                hkey,
+                valname.as_ptr(),
+                std::ptr::null_mut(),
+                &mut ty,
+                buf.as_mut_ptr() as *mut u8,
+                &mut len,
+            )
+        } == 0
+            && ty == 1
+        {
             let nul = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
             let s = String::from_utf16_lossy(&buf[..nul]);
-            if !s.is_empty() { version = Some(s); }
+            if !s.is_empty() {
+                version = Some(s);
+            }
         }
-        unsafe { RegCloseKey(hkey); }
-        if dir.is_some() { break; }
+        unsafe {
+            RegCloseKey(hkey);
+        }
+        if dir.is_some() {
+            break;
+        }
     }
     let _ = version; // reserved for future use (alert on old version, etc.)
 
@@ -1150,7 +1410,9 @@ pub fn ensure_npcap_dll_path() {
     let sys32 = std::env::var_os("SystemRoot")
         .map(|r| std::path::PathBuf::from(r).join("System32"))
         .unwrap_or_default();
-    if dir == sys32 { return; }
+    if dir == sys32 {
+        return;
+    }
 
     // Add to process PATH (affects LoadLibrary search order).
     if let Some(cur) = std::env::var_os("PATH") {
@@ -1165,8 +1427,14 @@ pub fn ensure_npcap_dll_path() {
     // SetDllDirectoryW: supplemental to PATH for the loader to find
     // wpcap.dll even without being in the system PATH. Harmless if already
     // in System32.
-    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    unsafe { SetDllDirectoryW(wide.as_ptr()); }
+    let wide: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        SetDllDirectoryW(wide.as_ptr());
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1184,8 +1452,19 @@ pub fn npcap_installed() -> bool {
     for subkey in ["SOFTWARE\\WOW6432Node\\Npcap", "SOFTWARE\\Npcap"] {
         let mut hkey = 0isize;
         let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-        if unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey_w.as_ptr(), 0, KEY_READ, &mut hkey) } == 0 {
-            unsafe { RegCloseKey(hkey); }
+        if unsafe {
+            RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                subkey_w.as_ptr(),
+                0,
+                KEY_READ,
+                &mut hkey,
+            )
+        } == 0
+        {
+            unsafe {
+                RegCloseKey(hkey);
+            }
             return true;
         }
     }
@@ -1193,7 +1472,9 @@ pub fn npcap_installed() -> bool {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn npcap_installed() -> bool { true }
+pub fn npcap_installed() -> bool {
+    true
+}
 
 #[cfg(test)]
 mod tests {
@@ -1203,8 +1484,8 @@ mod tests {
     // Minimum UDP/IPv4: [ip header 20][udp 8][payload]. version=4, ihl=5, proto=17.
     fn ipv4_udp(payload: &[u8]) -> Vec<u8> {
         let mut p = vec![0u8; 28];
-        p[0] = 0x45;   // version 4, IHL 5
-        p[9] = 17;     // protocol UDP
+        p[0] = 0x45; // version 4, IHL 5
+        p[9] = 17; // protocol UDP
         p.extend_from_slice(payload);
         p
     }
@@ -1230,7 +1511,7 @@ mod tests {
     fn ip_options_offset() {
         // IHL=6 (24 bytes IP header, 4 bytes options)
         let mut p = vec![0u8; 32];
-        p[0] = 0x46;   // version 4, IHL 6
+        p[0] = 0x46; // version 4, IHL 6
         p[9] = 17;
         p.extend_from_slice(b"PHOTON");
         assert_eq!(photon_offset(&p, 0), Some(24 + 8));
@@ -1247,19 +1528,37 @@ mod tests {
         // First time: not a dup.
         assert!(!packet_is_dup(&mut recent, 42, t0, win));
         // Same hash shortly after (copy from another interface): is dup.
-        assert!(packet_is_dup(&mut recent, 42, t0 + Duration::from_millis(5), win));
+        assert!(packet_is_dup(
+            &mut recent,
+            42,
+            t0 + Duration::from_millis(5),
+            win
+        ));
         // Different hash (two identical loots come with different sequences): not dup.
-        assert!(!packet_is_dup(&mut recent, 99, t0 + Duration::from_millis(6), win));
+        assert!(!packet_is_dup(
+            &mut recent,
+            99,
+            t0 + Duration::from_millis(6),
+            win
+        ));
         // Same hash outside window: not a copy (legitimate packet reuses hash
         // only after reconnect/sequence reset, much later) → not dup.
-        assert!(!packet_is_dup(&mut recent, 42, t0 + Duration::from_secs(3), win));
+        assert!(!packet_is_dup(
+            &mut recent,
+            42,
+            t0 + Duration::from_secs(3),
+            win
+        ));
     }
 
     fn loot_ev(by: &str, from: &str, idx: i32, qty: i32) -> LootEvent {
         LootEvent {
             ts: "2026-07-23T12:00:00Z".into(),
-            looted_by: by.into(), looted_from: from.into(),
-            item_index: idx, quantity: qty, is_silver: false,
+            looted_by: by.into(),
+            looted_from: from.into(),
+            item_index: idx,
+            quantity: qty,
+            is_silver: false,
         }
     }
 
@@ -1267,15 +1566,27 @@ mod tests {
     fn loot_dedup_pega_evento_identico_vindo_de_2_interfaces() {
         let mut buf = vec![loot_ev("Zezinho", "Fulano", 2958, 3)];
         // Same identity (same copy arriving from the other interface) → dup.
-        assert!(is_duplicate_loot(&buf, &loot_ev("Zezinho", "Fulano", 2958, 3)));
+        assert!(is_duplicate_loot(
+            &buf,
+            &loot_ev("Zezinho", "Fulano", 2958, 3)
+        ));
         buf.push(loot_ev("Zezinho", "Fulano", 2958, 3));
 
         // Different item from same body, same second → not dup.
-        assert!(!is_duplicate_loot(&buf, &loot_ev("Zezinho", "Fulano", 1001, 3)));
+        assert!(!is_duplicate_loot(
+            &buf,
+            &loot_ev("Zezinho", "Fulano", 1001, 3)
+        ));
         // Different quantity → not dup.
-        assert!(!is_duplicate_loot(&buf, &loot_ev("Zezinho", "Fulano", 2958, 5)));
+        assert!(!is_duplicate_loot(
+            &buf,
+            &loot_ev("Zezinho", "Fulano", 2958, 5)
+        ));
         // Different looter → not dup.
-        assert!(!is_duplicate_loot(&buf, &loot_ev("Outro", "Fulano", 2958, 3)));
+        assert!(!is_duplicate_loot(
+            &buf,
+            &loot_ev("Outro", "Fulano", 2958, 3)
+        ));
     }
 
     #[test]
