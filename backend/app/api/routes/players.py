@@ -19,6 +19,7 @@ from app.models.battles import Battle, BattleParticipant
 from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, PlayerSnapshot, PlayerWeaponStat, SearchEntry
 from app.services import battle_groups, prices, user_profile
 from app.services.albion_gate import PROFILE, albion_scope, queue_depth, slot
+from app.services.awakened import awakened_value
 from app.services.player_tracker import HOSTS, make_client, sync_player_kills, upsert_player
 from app.services.profile_warmer import request_refresh
 from app.services.search_norm import normalize as norm_name, prefix_range
@@ -402,7 +403,20 @@ async def _silver_dropped(db: AsyncSession, death_rows: list[PlayerKillEvent]) -
         return 0
     item_ids = list({iid for iid, _ in pairs})
     price_by_id = await prices.get_battle_prices(db, item_ids)
-    return sum(price_by_id.get(iid, 0) * qty for iid, qty in pairs)
+    total = 0
+    for ev in death_rows:
+        for item in (ev.victim_equipment or {}).values():
+            if item and item.get("Type"):
+                total += price_by_id.get(item["Type"], 0) + awakened_value(
+                    item["Type"], item.get("LegendarySoul"),
+                )
+        for item in (ev.victim_inventory or []):
+            if item and item.get("Type"):
+                total += (
+                    price_by_id.get(item["Type"], 0)
+                    + awakened_value(item["Type"], item.get("LegendarySoul"))
+                ) * (item.get("Count") or 1)
+    return total
 
 
 # Rank do jogador num kind de coleta (gather_*/fishing/crafting) — quantos têm

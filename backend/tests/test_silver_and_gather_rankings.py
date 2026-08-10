@@ -1,21 +1,29 @@
-"""Sanity checks do silver_dropped worker e dos rankings de coleta/prata.
+"""Sanity checks for the silver_dropped worker and the gather/silver rankings.
 
-Usa SQLite em memória apenas para conferir a agregação SQL do ranking.
+Uses an in-memory SQLite only to verify the ranking SQL aggregation.
 """
+import asyncio
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 
-from app.api.routes.highscores import _GATHER_KINDS, _SILVER_KIND, _silver_ranking
+from app.api.routes.highscores import TimeWindow, _GATHER_KINDS, _SILVER_KIND, _silver_ranking
 from app.models.base import Base
 from app.models.players import AlbionPlayer, PlayerKillEvent
 from app.services.silver_dropped import _has_gear
 
 
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_for_test(_type, _compiler, **_kw):
+    return "JSON"
+
+
 def _fake_ev(eq=None, inv=None):
-    """PlayerKillEvent mockado só com victim_equipment/inventory — o que
-    _has_gear lê. silver_dropped não entra no filtro (NULL no banco)."""
+    """PlayerKillEvent mock with only victim_equipment/inventory — what
+    _has_gear reads. silver_dropped is NULL here (not in the filter)."""
     class _Ev:
         def __init__(self, eq, inv):
             self.victim_equipment = eq
@@ -29,31 +37,31 @@ def test_has_gear_equipped():
 
 
 def test_has_gear_inventory_only():
-    """Sem nada equipado mas com item carregado conta como gear (vai ser
-    dropado na morte igual)."""
+    """Nothing equipped but a loaded item counts as gear (it's dropped on
+    death the same way)."""
     eq = {"MainHand": None}
     inv = [{"Type": "T4_BAG", "Count": 1}]
     assert _has_gear(_fake_ev(eq=eq, inv=inv)) is True
 
 
 def test_no_gear_naked_victim():
-    """Vítima pelada (sem equipar, sem carregar) — não é candidata a
-    precificação. Fica NULL pra sempre no banco, nunca reprocessada."""
+    """Naked victim (no equip, no inventory) — not a pricing candidate.
+    Stays NULL in the DB forever, never reprocessed."""
     eq = {"MainHand": None, "OffHand": None}
     assert _has_gear(_fake_ev(eq=eq, inv=None)) is False
 
 
 def test_empty_inventory_list_is_no_gear():
-    """[] é diferente de None — mas ambos sem gear."""
+    """[] is different from None — but both have no gear."""
     assert _has_gear(_fake_ev(eq=None, inv=[])) is False
 
 
 def test_gather_kinds_cover_all_resources():
-    """Os 8 kinds (total + 5 recursos + fishing + crafting) precisam existir —
-    dropdown de coleta depende disso. Se faltar um, o ranking daquele recurso
-    404. crafting_fame e gathering_fame já eram escalares em AlbionPlayer
-    (preenchidos pelo upsert_player há muito tempo), então não precisaram de
-    migration — só o kind no highscore."""
+    """The 8 kinds (total + 5 resources + fishing + crafting) must exist —
+    the gather dropdown depends on this. If one is missing, that resource's
+    ranking 404s. crafting_fame and gathering_fame were already scalars on
+    AlbionPlayer (populated by upsert_player long ago), so they needed no
+    migration — only the kind in the highscore."""
     assert set(_GATHER_KINDS) == {
         "gather_total", "gather_wood", "gather_hide",
         "gather_ore", "gather_rock", "gather_fiber",
@@ -62,11 +70,12 @@ def test_gather_kinds_cover_all_resources():
 
 
 def test_silver_kind_is_player_kind():
-    """silver_dropped é ranking de jogador (não de guilda) — precisa estar no
-    PLAYER_KINDS do frontend, e a rota precisa ter o ramo dele."""
+    """silver_dropped is a player ranking (not a guild one) — it must be in
+    the frontend PLAYER_KINDS, and the route needs its branch."""
     assert _SILVER_KIND == "silver_dropped"
-    # O ramo _silver_ranking existe no _compute_rankings (ver código); aqui
-    # só guarda que o kind é o esperado, pra não renomear e quebrar a rota.
+    # The _silver_ranking branch exists in _compute_rankings (see code); here
+    # we just guard that the kind is the expected one, so renaming doesn't
+    # break the route.
 
 
 def test_silver_ranking_aggregates_filters_and_paginates_in_sql():
@@ -74,9 +83,9 @@ def test_silver_ranking_aggregates_filters_and_paginates_in_sql():
     Base.metadata.create_all(engine, tables=[AlbionPlayer.__table__, PlayerKillEvent.__table__])
     db = sessionmaker(bind=engine)()
     players = [
-        AlbionPlayer(albion_id="a", name="Alpha", region="americas"),
-        AlbionPlayer(albion_id="b", name="Beta", region="europe"),
-        AlbionPlayer(albion_id="c", name="Gamma", region="americas"),
+        AlbionPlayer(id=1, albion_id="a", name="Alpha", region="americas"),
+        AlbionPlayer(id=2, albion_id="b", name="Beta", region="europe"),
+        AlbionPlayer(id=3, albion_id="c", name="Gamma", region="americas"),
     ]
     db.add_all(players)
     db.flush()
@@ -87,12 +96,19 @@ def test_silver_ranking_aggregates_filters_and_paginates_in_sql():
         (players[2], 9999, 0),
     ]):
         db.add(PlayerKillEvent(
-            region=player.region, albion_event_id=str(i), timestamp=now,
+            id=i + 1, region=player.region, albion_event_id=str(i), timestamp=now,
             fame=fame, victim_player_id=player.id, silver_dropped=silver,
         ))
     db.commit()
 
-    result = _silver_ranking(db, ["americas"], "a", 1, 1)
+    class AsyncAdapter:
+        async def scalar(self, query):
+            return db.scalar(query)
+
+        async def execute(self, query):
+            return db.execute(query)
+
+    result = asyncio.run(_silver_ranking(AsyncAdapter(), ["americas"], TimeWindow(), "a", 1, 1))
     assert result["total"] == 2
     assert result["rows"] == [{
         "albion_id": "c", "name": "Gamma", "region": "americas",
@@ -102,7 +118,7 @@ def test_silver_ranking_aggregates_filters_and_paginates_in_sql():
 
 
 def _price_silver(price_by_id, eq, inv):
-    """Mesma lógica de _price_events (soma equipment + inventory*count)."""
+    """Same logic as _price_events (sum equipment + inventory*count)."""
     total = 0
     for item in (eq or {}).values():
         if item and item.get("Type"):
@@ -120,14 +136,14 @@ def test_price_silver_equipment_only():
 
 
 def test_price_silver_inventory_multiplies_by_count():
-    """Itens carregados vêm com Count — o preço é unitário * quantidade."""
+    """Loaded items come with Count — the price is unit * quantity."""
     prices = {"T4_ORE": 120}
     inv = [{"Type": "T4_ORE", "Count": 50}]
     assert _price_silver(prices, None, inv) == 120 * 50
 
 
 def test_price_silver_missing_price_is_zero():
-    """Item sem cotação no cache de preço contribui 0, não quebra a soma."""
+    """An item with no cached price contributes 0, doesn't break the sum."""
     prices = {}
     eq = {"MainHand": {"Type": "T8_2H_BOW@3"}}
     assert _price_silver(prices, eq, None) == 0
