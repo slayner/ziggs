@@ -23,6 +23,14 @@
       "endpoint": "95.179.145.72:51820",
       "server_pubkey": "T5ejpIQN/P23+TUtkXG7gCv3WKDdiy+tIxvGOA54ujs=",
       "ping_url": "http://95.179.145.72:8080/vps-ping.json"
+    },
+    {
+      "id": "sin1",
+      "label": "Singapore",
+      "country": "Singapore",
+      "endpoint": "45.32.110.2:51820",
+      "server_pubkey": "Vm+pbyTut8lnYR5oD46oOJw1SExWrtZ7lqACXdT3PgI=",
+      "ping_url": "http://45.32.110.2:8080/vps-ping.json"
     }
   ]
 }
