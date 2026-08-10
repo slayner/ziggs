@@ -1,6 +1,6 @@
 """Precifica player_kill_events.silver_dropped em background — mesmo cálculo
 de routes/players._silver_dropped (preço dos itens equipados + carregados da
-vítima via services.prices.get_battle_prices, cache permanente), mas aplicado
+vítima via services.prices.get_battle_prices, cache de 8h), mas aplicado
 no processamento em vez de só on-demand ao abrir o perfil.
 
 Sem isso, o ranking de highscore "mais prata dropada" precisaria precificar
@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
 from app.models.players import PlayerKillEvent
+from app.services.awakened import awakened_value
 from app.services.lethality import is_likely_lethal
 from app.services.prices import get_battle_prices
 
@@ -78,10 +79,15 @@ async def _price_events(db: AsyncSession, events: list[PlayerKillEvent]) -> int:
         total = 0
         for item in (ev.victim_equipment or {}).values():
             if item and item.get("Type"):
-                total += price_by_id.get(item["Type"], 0)
+                total += price_by_id.get(item["Type"], 0) + awakened_value(
+                    item["Type"], item.get("LegendarySoul"),
+                )
         for inv in (ev.victim_inventory or []):
             if inv and inv.get("Type"):
-                total += price_by_id.get(inv["Type"], 0) * (inv.get("Count") or 1)
+                total += (
+                    price_by_id.get(inv["Type"], 0)
+                    + awakened_value(inv["Type"], inv.get("LegendarySoul"))
+                ) * (inv.get("Count") or 1)
         ev.silver_dropped = total
         updated += 1
     t1 = time.monotonic()
