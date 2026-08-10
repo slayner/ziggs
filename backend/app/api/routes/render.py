@@ -1,9 +1,8 @@
-"""Cache local dos renders de item da Albion.
+"""Local render cache for Albion item icons.
 
-Pedido original do projeto: evitar bater na CDN da Albion a cada
-carregamento de ícone e manter o site funcionando mesmo se a API/CDN da
-Albion cair — uma vez baixado, o PNG fica salvo pra sempre em disco e
-nunca mais é buscado de novo pra essa mesma combinação id+quality+size.
+Avoids hitting the Albion CDN on every icon load and keeps the site working
+even if the Albion API/CDN goes down — once downloaded, the PNG is saved to
+disk forever and never fetched again for the same id+quality+size combination.
 """
 from __future__ import annotations
 
@@ -25,74 +24,87 @@ _RENDER_DIR = Path(__file__).resolve().parents[3] / "data" / "render_cache"
 _CACHE_DIR = _RENDER_DIR / "items"
 _SPELL_DIR = _RENDER_DIR / "spells"
 
-# ponytail: fila simples — limita quantos fetches concorrentes batem na CDN da
-# Albion de uma vez (uma página com cache frio pode pedir 100+ ícones juntos).
-# O resto espera a vez em vez de disparar tudo em paralelo. Sobe pra Redis/worker
-# dedicado só se isso virar múltiplos processos.
+# ponytail: simple queue — limits how many concurrent fetches hit the Albion
+# CDN at once (a cold-cache page can request 100+ icons together). Others wait
+# their turn instead of all firing in parallel. Move to Redis/dedicated worker
+# only if this ever runs across multiple processes.
 _FETCH_SEM = asyncio.Semaphore(8)
+# Requests for the same icon share the first fetch; different keys still use
+# the eight slots above. Striped locks avoid a per-URL dict that grows forever.
+_KEY_LOCKS = tuple(asyncio.Lock() for _ in range(64))
 
-# IDs da Albion (T5_HEAD_PLATE_SET1@2) + nomes em inglês usados pras crystal
-# weapons (Elder's Astral Staff@3) — único formato que esse endpoint precisa aceitar.
+# Albion IDs (T5_HEAD_PLATE_SET1@2) plus English names used for crystal weapons
+# (Elder's Astral Staff@3) — the only formats this endpoint needs to accept.
 _SAFE_KEY = re.compile(r"^[\w@.\-' ]+$")
 
 _CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
 
-# Cache em memória dos ícones QUENTES. O browser cacheia cada ícone 1× (immutable),
-# mas usuários diferentes repetem os mesmos ícones comuns (gear de meta, armas) —
-# e cada serve fazia stat() + leitura de disco. Aqui os bytes ficam em RAM: hit
-# quente serve sem tocar o disco. LRU por ORÇAMENTO DE BYTES (ícones variam de
-# ~2KB a ~120KB). asyncio single-thread: get/put não têm await no meio, então são
-# atômicos no event loop — sem lock (mesma lógica dos pools do albion_gate).
+# In-memory cache for HOT icons. The browser caches each icon once (immutable),
+# but different users repeat the same common icons (meta gear, weapons) — and
+# each serve used to do stat() + disk read. Here the bytes live in RAM: a hot
+# hit serves without touching disk. LRU by BYTE BUDGET (icons range from ~2KB
+# to ~120KB). asyncio single-thread: get/put have no await in the middle, so
+# they're atomic in the event loop — no lock (same logic as albion_gate pools).
 _MEM_CACHE: "OrderedDict[str, bytes]" = OrderedDict()
 _MEM_CACHE_BYTES = 0
-_MEM_CACHE_MAX_BYTES = 64 * 1024 * 1024  # 64 MB — cabe folgado o conjunto quente
+_MEM_CACHE_MAX_BYTES = 64 * 1024 * 1024  # 64 MB — fits the hot set comfortably
 
 
 def _mem_get(k: str) -> bytes | None:
     v = _MEM_CACHE.get(k)
     if v is not None:
-        _MEM_CACHE.move_to_end(k)  # recém-usado vai pro fim (LRU)
+        _MEM_CACHE.move_to_end(k)  # recently used goes to the end (LRU)
     return v
 
 
 def _mem_put(k: str, content: bytes) -> None:
     global _MEM_CACHE_BYTES
     if len(content) > _MEM_CACHE_MAX_BYTES:
-        return  # maior que o cache inteiro — não guarda
+        return  # larger than the whole cache — don't store
     if k in _MEM_CACHE:
         _MEM_CACHE_BYTES -= len(_MEM_CACHE[k])
     _MEM_CACHE[k] = content
     _MEM_CACHE.move_to_end(k)
     _MEM_CACHE_BYTES += len(content)
     while _MEM_CACHE_BYTES > _MEM_CACHE_MAX_BYTES:
-        _, evicted = _MEM_CACHE.popitem(last=False)  # remove o menos-usado
+        _, evicted = _MEM_CACHE.popitem(last=False)  # remove least recently used
         _MEM_CACHE_BYTES -= len(evicted)
 
-# A CDN de spell NUNCA dá 404. Pra id sem arte ela devolve 200 com uma destas:
-#   - ~281 bytes: PNG vazio;
-#   - 26178 bytes, sempre este sha1: um placeholder branco compartilhado —
-#     é o "render totalmente branco" que aparecia no damage meter.
-# Cachear qualquer um dos dois gravaria lixo pra sempre, então tratamos como
-# não-encontrado e tentamos o fallback por nome.
+# The spell CDN never returns 404. For an id with no art it returns 200 with
+# one of:
+#   - ~281 bytes: empty PNG;
+#   - 26178 bytes, always this sha1: a shared white placeholder —
+#     the "totally white render" that showed up in the damage meter.
+# Caching either would write junk forever, so we treat them as not-found and
+# try the by-name fallback.
 _PLACEHOLDER_SHA1 = "7b910616c1bf680bc6de514a37e21724976b75ad"
-_PLACEHOLDER_BYTES = 26178  # tamanho do mesmo arquivo — checagem barata no cache
+_PLACEHOLDER_BYTES = 26178  # size of that file — cheap cache check
 _MIN_RENDER_BYTES = 1024
 
 
 def _cache_usable(path: Path) -> bool:
-    """Cache válido? Placeholder gravado por versão ANTIGA do proxy é apagado.
+    """Is the cache valid? Placeholders written by an OLDER proxy version are
+    deleted.
 
-    Antes daqui só o PNG vazio (~281 B) era rejeitado, então a moldura branca de
-    26178 B foi parar em disco e continuaria sendo servida pra sempre. Comparar
-    o TAMANHO evita ler e hashear o arquivo a cada request.
+    Previously only the empty PNG (~281 B) was rejected, so the 26178 B white
+    frame ended up on disk and would be served forever. We only read and hash
+    files of that suspicious size; size alone does not identify the placeholder.
     """
     try:
         size = path.stat().st_size
     except OSError:
         return False
-    if size < _MIN_RENDER_BYTES or size == _PLACEHOLDER_BYTES:
+    if size < _MIN_RENDER_BYTES:
         path.unlink(missing_ok=True)
         return False
+    if size == _PLACEHOLDER_BYTES:
+        try:
+            placeholder = hashlib.sha1(path.read_bytes()).hexdigest() == _PLACEHOLDER_SHA1
+        except OSError:
+            return False
+        if placeholder:
+            path.unlink(missing_ok=True)
+            return False
     return True
 
 _SPELLS_FILE = Path(__file__).resolve().parents[3] / "data" / "spell_names.json"
@@ -100,12 +112,12 @@ _SPELLS_FILE = Path(__file__).resolve().parents[3] / "data" / "spell_names.json"
 
 @lru_cache(maxsize=1)
 def _spell_display_names() -> dict[str, str]:
-    """uniquename → nome em inglês.
+    """uniquename → English name.
 
-    Em algum momento a Albion passou a chavear a arte de skill nova/reworkada
-    pelo NOME (`/spell/Powerful%20Swing.png`) em vez do uniquename. Sub-feitiço
-    como HAMMER_SHOVE_SWING_EFFECT cai no placeholder branco pelo id, mas o
-    nome resolve na arte certa — daí o fallback.
+    At some point Albion started keying new/reworked skill art by NAME
+    (`/spell/Powerful%20Swing.png`) instead of uniquename. A sub-spell like
+    HAMMER_SHOVE_SWING_EFFECT falls back to the white placeholder by id, but
+    the name resolves to the correct art — hence the fallback.
     """
     try:
         data = json.loads(_SPELLS_FILE.read_text(encoding="utf-8"))
@@ -128,20 +140,20 @@ async def render_item(key: str, quality: int = 0, size: int = 0) -> Response:
         params["quality"] = quality
     if size:
         params["size"] = size
-    # Nome do arquivo mantido como sempre foi — mudar invalidaria o cache já
-    # baixado em disco.
+    # File name kept as it always was — changing it would invalidate the cache
+    # already downloaded to disk.
     return await _cached_render(
         "item", key, _CACHE_DIR / f"{quote(key, safe='')}_q{quality}_s{size}.png", params
     )
 
 
-# Ícone de feitiço, pro damage meter do companion. Sem quality/size: o CDN de
-# spell não aceita esses params.
+# Spell icon, for the companion damage meter. No quality/size: the spell CDN
+# does not accept those params.
 @router.get("/spell/{key}")
 async def render_spell(key: str) -> Response:
-    # `fallback` = nome em inglês da skill. Skill nova/reworkada tem a arte
-    # chaveada pelo NOME, não pelo uniquename; sub-feitiço então volta
-    # placeholder branco pelo id e resolve pelo nome.
+    # `fallback` = English name of the skill. New/reworked skills key art by
+    # NAME, not uniquename; a sub-spell then returns the white placeholder by
+    # id and resolves through the name.
     return await _cached_render(
         "spell", key, _SPELL_DIR / f"{quote(key, safe='')}.png", {},
         fallback=_spell_display_names().get(key),
@@ -156,20 +168,21 @@ async def _cached_render(
     fallback: str | None = None,
 ) -> Response:
     if not key or len(key) > 200 or not _SAFE_KEY.match(key):
-        raise HTTPException(400, "chave inválida")
+        raise HTTPException(400, "invalid key")
 
     mkey = str(cache_path)
+    key_lock = _KEY_LOCKS[hash(mkey) % len(_KEY_LOCKS)]
     hot = _mem_get(mkey)
-    if hot is not None:  # ícone quente: serve da RAM, sem stat nem disco
+    if hot is not None:  # hot icon: served from RAM, no stat or disk
         return Response(content=hot, media_type="image/png", headers=_CACHE_HEADERS)
 
     if _cache_usable(cache_path):
         content = cache_path.read_bytes()
-        _mem_put(mkey, content)  # esquenta pra próxima
+        _mem_put(mkey, content)  # warm it for next time
         return Response(content=content, media_type="image/png", headers=_CACHE_HEADERS)
 
     async def fetch(k: str) -> bytes | None:
-        """Bytes do render, ou None se a Albion não tem arte pra essa chave."""
+        """Render bytes, or None if Albion has no art for this key."""
         url = f"https://render.albiononline.com/v1/{kind}/{quote(k, safe='')}.png"
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(url, params=params)
@@ -178,9 +191,9 @@ async def _cached_render(
         return resp.content
 
     try:
-        async with _FETCH_SEM:
-            # outra request pode ter preenchido o cache (RAM ou disco) enquanto
-            # esperava a vez
+        async with key_lock:
+            # another request may have filled the cache (RAM or disk) while we
+            # were waiting our turn
             hot = _mem_get(mkey)
             if hot is not None:
                 return Response(content=hot, media_type="image/png", headers=_CACHE_HEADERS)
@@ -188,19 +201,20 @@ async def _cached_render(
                 content = cache_path.read_bytes()
                 _mem_put(mkey, content)
                 return Response(content=content, media_type="image/png", headers=_CACHE_HEADERS)
-            content = await fetch(key)
-            if content is None and fallback and fallback != key:
-                content = await fetch(fallback)
+            async with _FETCH_SEM:
+                content = await fetch(key)
+                if content is None and fallback and fallback != key:
+                    content = await fetch(fallback)
     except httpx.HTTPError:
-        raise HTTPException(502, "render da Albion indisponível")
+        raise HTTPException(502, "Albion render unavailable")
 
     if content is None:
-        # Nada de cachear: sem arte hoje pode ter arte no próximo patch, e o
-        # `onError` do cliente já esconde a imagem.
-        raise HTTPException(404, "render não encontrado")
+        # Don't cache: no art today may have art in the next patch, and the
+        # client `onError` already hides the image.
+        raise HTTPException(404, "render not found")
 
-    # Gravado sob a chave ORIGINAL mesmo quando veio pelo fallback — quem pede
-    # é sempre pelo uniquename.
+    # Written under the ORIGINAL key even when it came from the fallback —
+    # requesters always ask by uniquename.
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(content)
     _mem_put(mkey, content)

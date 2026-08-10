@@ -82,10 +82,8 @@ function localName(bi: { item_id: string; name: string }, lang: Lang): string {
 }
 
 // --- Skills (expansão da bracket de jogador escalado) ---
-// Sprites vêm direto do CDN do Albion pelo spell_id (sem fetch de nomes — preguiça
-// consciente: o ícone é o que o jogador reconhece; tooltip mostra o spell_id).
 function spellUrl(id: string): string {
-  return `https://render.albiononline.com/v1/spell/${id}.png`;
+  return `/render/spell/${encodeURIComponent(id)}`;
 }
 
 const GEAR_GROUP_ORDER = ["helmet", "armor", "boots", "cape", "offhand", "food"];

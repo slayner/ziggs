@@ -19,7 +19,7 @@ export function SpellPicker({
       <span className="rc-spell-label">{slot === "passive" ? "P" : slot === "active" ? "A" : slot}</span>
       {options.map(spell => {
         const sel = selected === spell.spell_id;
-        const spriteSrc = `https://render.albiononline.com/v1/spell/${spell.uisprite ?? spell.spell_id}.png`;
+        const spriteSrc = `/render/spell/${encodeURIComponent(spell.uisprite ?? spell.spell_id)}`;
         return (
           <button key={spell.spell_id} title={spell.name}
             disabled={readonly}

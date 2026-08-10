@@ -17,7 +17,7 @@ export function SpellOverlay({ ids, centered, row }: { ids: (string | null)[]; c
     <div className={"rc-equip-spell-overlay" + (centered ? " rc-equip-spell-overlay-center" : "") + (row ? " rc-equip-spell-overlay-row" : "")}>
       {present.map(id => (
         <div key={id} className="rc-equip-spell-dot">
-          <img src={`https://render.albiononline.com/v1/spell/${id}.png`} alt=""
+          <img src={`/render/spell/${encodeURIComponent(id!)}`} alt=""
             onError={imgRetry(img => { img.style.opacity = "0.2"; })} />
         </div>
       ))}

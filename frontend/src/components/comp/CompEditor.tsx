@@ -540,7 +540,7 @@ export function CompEditor({ initialDraft, initialImportCode, perms, offline, we
     return (
       <div className="rc-spell-preview">
         {icons.map((sp, i) => (
-          <img key={i} src={`https://render.albiononline.com/v1/spell/${sp.id}.png`} alt={sp.label} title={sp.label}
+          <img key={i} src={`/render/spell/${encodeURIComponent(sp.id)}`} alt={sp.label} title={sp.label}
             className="rc-spell-preview-icon"
             onError={imgRetry(img => { img.style.display = "none"; })} />
         ))}
