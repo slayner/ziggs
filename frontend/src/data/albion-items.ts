@@ -489,6 +489,7 @@ export const RENDER_URL_EN = (nameEn: string, itemId: string, quality = 0, size 
 
 // Escolhe o melhor render URL para um item
 export function itemRenderUrl(item: AlbionItem | string, quality = 0, size = 128): string {
+  if (typeof item === "string") item = ITEM_BY_ID.get(item) ?? item;
   if (typeof item === "string") return RENDER_URL(item, quality, size);
   if (item.useEnRender && item.nameEn) return RENDER_URL_EN(item.nameEn, item.id, quality, size);
   return RENDER_URL(item.id, quality, size);
