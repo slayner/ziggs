@@ -1,13 +1,9 @@
-"""Scan dashboard — painel ao vivo da frota de scan distribuído.
+"""Scan dashboard — painel compacto da frota de scan distribuído.
 
-Polla o backend em `GET /scan/stats` a cada 30s e mantém um ÚNICO embed
-atualizado num canal fixo do Discord — envia na 1ª vez, EDITA nas seguintes
-(em vez de inundar o canal). Se a mensagem sumir ou o bot reiniciar, rebusca
-o ID nas últimas 20 mensagens do canal pra reusar, evitando dashboards
-duplicados.
-
-Mesma estrutura de cogs/battle_feed.py: @tasks.loop, _cog_ref global,
-before_loop espera wait_until_ready, .error auto-reinicia via call_soon.
+Um ÚNICO embed que se edita a cada 30s. Em transição grave (stream → critical,
+todos workers mortos), o bot DELETA o embed atual e re-envia com @everyone no
+content — Discord só pinga em mensagem nova, não em edit. Na recuperação,
+deleta e re-envia limpo pra remover o alerta.
 """
 import asyncio
 from datetime import datetime, timezone
@@ -18,112 +14,108 @@ from discord.ext import commands, tasks
 
 import http_client
 
-# Canal fixo do dashboard de scan. Sem config por-guilda: é um painel global
-# do backend, a guilda onde ele vive é decisão do dono, não do usuário.
 DASH_CHANNEL_ID = 1535135345874567279
 REFRESH_SECS = 30
-EMBED_TITLE = "🛡️ Ziggs Scan Fleet"
+EMBED_TITLE = "🛡️ Scan Fleet"
 
-# Limiares de heartbeat (em segundos). <30 saudável, 30-90 staleness, >90 (ou
-# status != active) = morto.
-STALE_AFTER_S = 30
-DEAD_AFTER_S = 90
+COLOR_OK = 0x2ecc71
+COLOR_WARN = 0xf1c40f
+COLOR_BAD = 0xe74c3c
 
-COLOR_OK = 0x2ecc71      # green
-COLOR_WARN = 0xf1c40f    # yellow (stale)
-COLOR_BAD = 0xe74c3c     # red (dead / no workers)
+PING_COOLDOWN_S = 300
 
 _cog_ref: "ScanDashboard | None" = None
 
 
-def _fmt_age(age: Optional[float]) -> str:
-    if not isinstance(age, (int, float)):
+def _fmt_age(s: Optional[float]) -> str:
+    if not isinstance(s, (int, float)):
         return "—"
-    return f"{age:.1f}s ago"
+    if s < 60:
+        return f"{s:.0f}s"
+    if s < 3600:
+        return f"{s / 60:.0f}m"
+    return f"{s / 3600:.1f}h"
 
 
-def _worker_line(w: dict) -> tuple[str, str]:
-    """Devolve (ícone de saúde, linha formatada) pra um worker."""
-    name = w.get("name") or "?"
-    region = w.get("region_pref") or "?"
-    age = w.get("last_heartbeat_age_s")
-    status = (w.get("status") or "").lower()
+def _sla_icon(status: str) -> str:
+    return {"healthy": "🟢", "at_risk": "🟡", "critical": "🔴"}.get(status, "⚪")
 
-    # Regra da task: 🔴 pra dead (status != active OU heartbeat >90s),
-    # 🟡 pra staleness 30-90s, 🟢 pra fresco. Status não-active implica DEAD
-    # mesmo sem age (backend pode enviar chave vazia num worker novo).
-    if status != "active" or not isinstance(age, (int, float)) or age > DEAD_AFTER_S:
-        return "🔴", f"🔴 {name} ({region}) — DEAD ({_fmt_age(age)})"
 
-    tasks_done = w.get("total_tasks_done") or 0
-    found = w.get("total_battles_found") or 0
-    body = f" — {tasks_done} tasks, {found} found, {age:.1f}s ago"
-    if age > STALE_AFTER_S:
-        return "🟡", f"🟡 {name} ({region})" + body
-    return "🟢", f"🟢 {name} ({region})" + body
+def _stream_line(s: dict, ckt: dict) -> str:
+    """Uma linha compacta de stream pro grid."""
+    st = s.get("status", "?")
+    icon = _sla_icon(st)
+    if ckt.get("state") == "open":
+        return f"{icon} **OPEN**"
+    if st == "critical":
+        return f"{icon} {_fmt_age(s.get('recent_age_s'))}"
+    rate = s.get("scan_items_per_min") or 0
+    return f"{icon} {rate:.0f}/m"
 
 
 def _build_embed(data: dict) -> discord.Embed:
+    sla = data.get("sla") or {}
+    circuits = data.get("circuits") or {}
     workers = data.get("workers") or []
     tasks_d = data.get("tasks") or {}
-    per_region = data.get("per_region") or {}
+    alerts = data.get("alerts") or []
 
-    any_stale = False
-    any_dead = False
-    lines: list[str] = []
-    for w in workers:
-        icon, line = _worker_line(w)
-        if icon == "🔴":
-            any_dead = True
-        elif icon == "🟡":
-            any_stale = True
-        lines.append(line)
+    any_critical = any(v.get("status") == "critical" for v in sla.values())
+    any_warn = any(v.get("status") == "at_risk" for v in sla.values())
+    active = sum(1 for w in workers if (w.get("status") or "").lower() == "active")
+    all_dead = bool(workers) and active == 0
 
-    if any_dead or not workers:
-        color = COLOR_BAD
-    elif any_stale:
-        color = COLOR_WARN
-    else:
-        color = COLOR_OK
-
-    workers_text = "\n".join(lines) if lines else "⚠️ Nenhum worker registrado"
-
-    embed = discord.Embed(title=EMBED_TITLE, color=color)
-    embed.add_field(name="Workers", value=workers_text, inline=False)
+    color = COLOR_BAD if (any_critical or all_dead) else COLOR_WARN if any_warn else COLOR_OK
 
     pending = tasks_d.get("pending") or 0
-    claimed = tasks_d.get("claimed") or 0
     done = tasks_d.get("done") or 0
-    # Backlog (>100) em negrito, igual à task.
-    pending_str = f"**{pending}**" if isinstance(pending, int) and pending > 100 else str(pending)
-    embed.add_field(
-        name="Queue",
-        value=f"pending: {pending_str} | claimed: {claimed} | done: {done}",
-        inline=False,
+    failed = tasks_d.get("failed") or 0
+
+    embed = discord.Embed(title=EMBED_TITLE, color=color)
+    embed.description = f"`{active}` workers · `{pending}` pendente · `{done}` done" + (
+        f" · `{failed}` falhou" if failed else ""
     )
 
-    region_parts = []
-    for region in sorted(per_region):
-        r = per_region[region] or {}
-        region_parts.append(
-            f"{region}: {r.get('pending', 0)}P {r.get('claimed', 0)}C {r.get('done', 0)}D"
-        )
-    embed.add_field(
-        name="Per-Region",
-        value=" | ".join(region_parts) or "—",
-        inline=False,
-    )
+    # ── Grid 3 colunas: Americas, Europe, Asia ──
+    for region, flag in (("americas", "🌎"), ("europe", "🌍"), ("asia", "🌏")):
+        lines = []
+        for feed, label in (("battles", "Btl"), ("kills", "Kls")):
+            key = f"{region}/{feed}"
+            s = sla.get(key) or {}
+            ckt = circuits.get(key) or {}
+            lines.append(f"**{label}** {_stream_line(s, ckt)}")
+        embed.add_field(name=f"{flag} {region.title()}", value="\n".join(lines), inline=True)
 
-    total_found = sum((w.get("total_battles_found") or 0) for w in workers)
-    last_found = sum((w.get("last_found") or 0) for w in workers)
+    # ── Incidentes ──
+    incident_lines: list[str] = []
+    for stream in sorted(sla):
+        ckt = circuits.get(stream) or {}
+        if ckt.get("state") == "open":
+            errs = ckt.get("consecutive_errors") or 0
+            incident_lines.append(f"🔴 `{stream}` circuit open ({errs} errs)")
+        if ckt.get("paused"):
+            incident_lines.append(f"⏸ `{stream}` paused")
+
+    for a in alerts:
+        t = a.get("type")
+        stream = a.get("stream", "?")
+        if t == "lap_stalled":
+            incident_lines.append(f"⚠ `{stream}` lap stalled {_fmt_age(a.get('age_s'))}")
+        elif t == "page_failed":
+            incident_lines.append(f"⚠ `{stream}` pg {a.get('offset', '?')} ({a.get('attempts', '?')}x)")
+
+    shown = incident_lines[:6]
+    if len(incident_lines) > 6:
+        shown.append(f"*... +{len(incident_lines) - 6} mais*")
+
     embed.add_field(
-        name="Throughput",
-        value=f"Total found: {total_found} | Last batch: {last_found}",
+        name="⚠️ Incidentes" if incident_lines else "✅ Tudo operacional",
+        value="\n".join(shown) if shown else "Nenhum incidente ativo",
         inline=False,
     )
 
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    embed.set_footer(text=f"Updated {ts} · {REFRESH_SECS}s · /scan/stats")
+    embed.set_footer(text=f"{ts} · atualiza em {REFRESH_SECS}s")
     return embed
 
 
@@ -131,60 +123,110 @@ class ScanDashboard(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._dashboard_msg_id: Optional[int] = None
+        self._msg_is_ping = False  # a msg atual foi enviada com @everyone?
+        self._last_status: dict[str, str] = {}
+        self._pinged_at: dict[str, float] = {}
 
     async def cog_load(self) -> None:
         global _cog_ref
         _cog_ref = self
-        print("[scan_dashboard] cog carregada — loop de dashboard ativo")
+        print("[scan_dashboard] cog carregada")
         if not scan_dashboard_loop.is_running():
             scan_dashboard_loop.start(self)
 
     async def cog_unload(self) -> None:
         scan_dashboard_loop.cancel()
 
+    def _detect_grave(self, data: dict) -> Optional[str]:
+        """Retorna texto de ping se houve transição grave, senão None."""
+        sla = data.get("sla") or {}
+        workers = data.get("workers") or []
+        circuits = data.get("circuits") or {}
+        now_ts = datetime.now(timezone.utc).timestamp()
+        reasons: list[str] = []
+
+        for stream, s in sla.items():
+            st = s.get("status", "unknown")
+            prev = self._last_status.get(stream)
+            if st == "critical" and prev != "critical":
+                if now_ts - self._pinged_at.get(stream, 0) > PING_COOLDOWN_S:
+                    ckt = circuits.get(stream) or {}
+                    reason = "circuit open" if ckt.get("state") == "open" else "data stale"
+                    reasons.append(f"🔴 **{stream}** — {reason}")
+                    self._pinged_at[stream] = now_ts
+            self._last_status[stream] = st
+
+        all_dead = bool(workers) and all(
+            (w.get("status") or "").lower() != "active" for w in workers
+        )
+        if all_dead and self._last_status.get("__all_dead__") != "True":
+            reasons.append("💀 **Todos os workers estão mortos**")
+        self._last_status["__all_dead__"] = str(all_dead)
+
+        return ("@everyone\n" + "\n".join(reasons)) if reasons else None
+
+    def _any_critical(self, data: dict) -> bool:
+        sla = data.get("sla") or {}
+        workers = data.get("workers") or []
+        active = sum(1 for w in workers if (w.get("status") or "").lower() == "active")
+        return any(v.get("status") == "critical" for v in sla.values()) or (bool(workers) and active == 0)
+
+    async def _find_dashboard(self, channel: discord.TextChannel) -> Optional[discord.Message]:
+        if self._dashboard_msg_id is not None:
+            try:
+                return await channel.fetch_message(self._dashboard_msg_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+        try:
+            async for m in channel.history(limit=20):
+                if m.author.id == self.bot.user.id and m.embeds and m.embeds[0].title == EMBED_TITLE:
+                    return m
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        return None
+
+    async def _send_fresh(self, channel: discord.TextChannel, embed: discord.Embed, content: str = "") -> None:
+        """Deleta a msg atual e envia nova (necessário pra @everyone pingar)."""
+        old = await self._find_dashboard(channel)
+        if old is not None:
+            try:
+                await old.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+        msg = await channel.send(content=content, embed=embed)
+        self._dashboard_msg_id = msg.id
+        self._msg_is_ping = bool(content)
+
     async def _update(self) -> None:
         channel = self.bot.get_channel(DASH_CHANNEL_ID)
         if channel is None:
-            # Sem fetch — canal fora do cache só rola se o bot não tá na guilda,
-            # e aí não tem permissão pra falar de qualquer forma.
             return
 
         data = await http_client.get_json("/scan/stats", tag="scan_dashboard")
         if data is None:
-            return  # backend fora do ar — skip este tick, mantém o último embed
-
-        embed = _build_embed(data)
-
-        msg: Optional[discord.Message] = None
-        if self._dashboard_msg_id is not None:
-            try:
-                msg = await channel.fetch_message(self._dashboard_msg_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                msg = None
-
-        if msg is None:
-            # Startup / restart: rebusca o dashboard nas últimas 20 mensagens
-            # pra não duplicar. Mesma pegadinha do restart do bot — o ID em
-            # memória se perdeu mas o painel antigo segue vivo no canal.
-            try:
-                async for m in channel.history(limit=20):
-                    if m.author.id == self.bot.user.id and m.embeds and m.embeds[0].title == EMBED_TITLE:
-                        msg = m
-                        break
-            except (discord.Forbidden, discord.HTTPException):
-                msg = None
-
-        try:
-            if msg is None:
-                msg = await channel.send(embed=embed)
-            else:
-                await msg.edit(embed=embed)
-        except (discord.Forbidden, discord.HTTPException) as e:
-            print(f"[scan_dashboard] erro ao postar/editar: {type(e).__name__}: {e}")
             return
 
-        if msg is not None:
-            self._dashboard_msg_id = msg.id
+        ping_text = self._detect_grave(data)
+        embed = _build_embed(data)
+
+        try:
+            if ping_text:
+                # Transição grave: re-envia com @everyone (ping só funciona em msg nova)
+                await self._send_fresh(channel, embed, content=ping_text)
+            elif self._msg_is_ping and not self._any_critical(data):
+                # Recuperou: re-envia limpo pra remover o alerta
+                await self._send_fresh(channel, embed)
+            else:
+                # Normal: edita in-place
+                msg = await self._find_dashboard(channel)
+                if msg is None:
+                    msg = await channel.send(embed=embed)
+                    self._dashboard_msg_id = msg.id
+                    self._msg_is_ping = False
+                else:
+                    await msg.edit(embed=embed)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            print(f"[scan_dashboard] erro: {e}")
 
 
 @tasks.loop(seconds=REFRESH_SECS)
@@ -192,8 +234,6 @@ async def scan_dashboard_loop(cog: ScanDashboard) -> None:
     try:
         await cog._update()
     except Exception as e:
-        # Erro inesperado não mata o loop de verdade (o .error cuida disso),
-        # mas loga e segue — próximo tick reedita. Mesma aba do battle_feed.
         print(f"[scan_dashboard] tick falhou: {type(e).__name__}: {e}")
 
 
