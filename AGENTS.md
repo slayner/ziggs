@@ -151,6 +151,12 @@ HOSTS = {
 - `POST /companion/warm` — nomeia um personagem (o próprio do usuário) pra manter o perfil quente (ver "Warm de perfil" abaixo)
 - `POST /companion/warm/seen` — fase 2: nomeia players vistos em jogo (refresh-only, ver "Warm de perfil")
 
+**Crash reports do companion (ago/2026):** automáticos e silenciosos, sem token/webhook no binário. `crash_report.rs` instala o panic hook antes do resto do startup, grava um único `%APPDATA%/ziggs-companion/pending-crash-report.json` com versão, SO/arch, uptime, thread, mensagem, source location, backtrace e o final de `companion.log` + `companion-debug.log`. Erro global/unhandled rejection do WebView entra pelo command `report_frontend_crash`. O arquivo só é removido depois que `POST /companion/crash-report` confirma o envio; o worker tenta no startup e a cada 60s, então panic de task Tokio que não derruba o processo também chega. O parser Photon usa `catch_unwind_silent`: panic de pacote malformado é recuperado e NÃO vira falso crash report.
+- Backend publica pelo `DISCORD_BOT_TOKEN` no canal fixo `1535988555413979156`, como resumo + `crash-report.json`; `allowed_mentions` vazio impede ping por payload malicioso. O bot precisa estar no servidor e ter `View Channel`, `Send Messages` e `Attach Files` nessa sala.
+- A rota exige `X-Ziggs-Install` válido, limita 3 reports/h tanto por instalação quanto por IP e limita cada campo/tamanho. Isso corta crash-loop e flood barato; não transforma o `install_id` em auth.
+- O que NÃO captura: encerramento forçado, queda de energia e falha nativa que mata o processo antes do panic hook (access violation em DLL/driver). Minidump automático foi evitado porque pode carregar memória com token Discord/chave WireGuard e seria intrusivo; só adicionar dump mínimo+armazenamento privado se um crash nativo real aparecer.
+- Triagem futura: baixar o anexo, começar por `kind/version/message/location`; usar `backtrace` pra achar o caminho e os dois tails em `logs` pra reconstruir estado. Testes: `cargo test crash_report --lib`, `npm run build` e `PYTHONPATH=. python tests/test_companion_crash_report.py`.
+
 **Login Discord opcional no companion:**
 - Companion não tem auth nativa — scan/DNS/prices são APIs públicas.
 - Login Discord é OPCIONAL — só pra auto-submit de lootlog. Sem login, tudo funciona igual.
