@@ -783,29 +783,19 @@ async def add_albion_link(
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
-    region = body.region if body.region in HOSTS else (g.settings or {}).get("albion_guild_region")
-    # Libera read tx antes do HTTP (_lookup_albion_guild chama a API do Albion).
-    await db.commit()
-    found = await _lookup_albion_guild(body.name.strip(), region)
-    if not found:
-        raise HTTPException(404, "guilda de Albion não encontrada")
-    agid = str(found["Id"])
-    gname = found.get("Name") or body.name.strip()
-    alliance_id = str(found.get("AllianceId") or "") or None
-    alliance_name = found.get("AllianceName")
-    # If no primary yet, set it as the primary instead of a link.
+    region = body.region if body.region in HOSTS else (g.settings or {}).get("albion_guild_region") or "americas"
+    gname = body.name.strip()
+    agid = f"manual:{gname.lower()}"
     if not g.albion_guild_id:
         g.albion_guild_id = agid
         g.albion_guild_name = gname
-        g.albion_alliance_id = alliance_id
-        g.albion_alliance_name = alliance_name
+        g.albion_alliance_id = None
+        g.albion_alliance_name = None
         if g.settings is None:
             g.settings = {}
-        if region:
-            g.settings["albion_guild_region"] = region
+        g.settings["albion_guild_region"] = region
         await db.commit()
         return {"ok": True, "albion_guild_id": agid, "primary": True}
-    # Already the primary — no-op update.
     if agid == str(g.albion_guild_id):
         raise HTTPException(409, "essa já é a guilda primária")
     existing = await db.scalar(select(GuildAlbionLink).where(
@@ -814,17 +804,15 @@ async def add_albion_link(
     ))
     if existing:
         existing.albion_guild_name = gname
-        existing.alliance_id = alliance_id
-        existing.alliance_name = alliance_name
         await db.commit()
         return {"ok": True, "albion_guild_id": agid}
     link = GuildAlbionLink(
         guild_id=guild_id,
         albion_guild_id=agid,
         albion_guild_name=gname,
-        region=region or "americas",
-        alliance_id=alliance_id,
-        alliance_name=alliance_name,
+        region=region,
+        alliance_id=None,
+        alliance_name=None,
     )
     db.add(link)
     await db.commit()
