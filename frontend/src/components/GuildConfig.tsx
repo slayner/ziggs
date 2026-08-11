@@ -496,6 +496,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
 
   async function saveAlbion() {
     if (!guild) return;
+    if (albionName && !albionRegion) return; // region required when name present
     setAlbionNotFound(false);
     const res = await api.updateGuildSettings(guildId, {
       albion_guild_name: albionName || null,
@@ -1128,7 +1129,7 @@ async function saveJuicyKillMinSilver() {
               onChange={e => { setAlbionRegion(e.target.value); void saveAlbion(); }}
               className="w-28 shrink-0 rounded-md border border-zinc-700 bg-zinc-800 px-1 py-1 text-xs text-zinc-200"
             >
-              <option value="">{t("albionRegionAuto")}</option>
+              <option value="">{t("albionRegionPlaceholder")}</option>
               {ALBION_REGIONS.map(r => (
                 <option key={r} value={r}>{REGION_LABELS[lang][r]}</option>
               ))}
@@ -1177,12 +1178,12 @@ async function saveJuicyKillMinSilver() {
               onChange={e => setNewLinkRegion(e.target.value)}
               className="w-28 shrink-0 rounded-md border border-zinc-700 bg-zinc-800 px-1 py-1 text-xs text-zinc-200"
             >
-              <option value="">{t("albionRegionAuto")}</option>
+              <option value="">{t("albionRegionPlaceholder")}</option>
               {ALBION_REGIONS.map(r => (
                 <option key={r} value={r}>{REGION_LABELS[lang][r]}</option>
               ))}
             </select>
-            <button type="button" onClick={addAlbionLink} disabled={!newLinkName.trim()} className="btn btn-primary text-xs px-3 disabled:opacity-40">
+            <button type="button" onClick={addAlbionLink} disabled={!newLinkName.trim() || !newLinkRegion} className="btn btn-primary text-xs px-3 disabled:opacity-40">
               <i className="ti ti-plus" aria-hidden="true" />
             </button>
           </div>
@@ -1446,33 +1447,6 @@ async function saveJuicyKillMinSilver() {
                     <p className="text-[11px] text-zinc-600 mb-1.5">{t("registerOthersTitle")}</p>
                     <p className="text-[11px] text-zinc-600 mb-2">{t("registerOthersDesc")}</p>
                     {roleChipsFor(registerOthersRoles, toggleRegisterOthersRole)}
-                  </div>
-
-                  <div className="mt-3 pt-3 border-t border-zinc-800/60">
-                    <p className="text-[11px] text-zinc-600 mb-1.5">{t("albionGuildTitle")}</p>
-                    <p className="text-[11px] text-zinc-600 mb-2">{t("albionGuildDesc")}</p>
-                    <div className="flex gap-2">
-                      <input
-                        value={albionName}
-                        onChange={e => { setAlbionName(e.target.value); setAlbionNotFound(false); }}
-                        onBlur={() => void saveAlbion()}
-                        disabled={!registerCmd.enabled}
-                        placeholder={t("guildNamePlaceholder")}
-                        className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500 placeholder:text-zinc-600"
-                      />
-                      <select
-                        value={albionRegion}
-                        onChange={e => { setAlbionRegion(e.target.value); setAlbionNotFound(false); void saveAlbion(); }}
-                        disabled={!registerCmd.enabled}
-                        className="w-32 shrink-0 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500"
-                      >
-                        <option value="">{t("albionRegionAuto")}</option>
-                        {ALBION_REGIONS.map(r => (
-                          <option key={r} value={r}>{REGION_LABELS[lang][r]}</option>
-                        ))}
-                      </select>
-                    </div>
-                    {albionNotFound && <p className="text-xs text-red-400 mt-1.5">{t("albionGuildNotFound")}</p>}
                   </div>
 
                   <div className="mt-3 pt-3 border-t border-zinc-800/60">
