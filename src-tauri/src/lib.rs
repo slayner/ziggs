@@ -1,40 +1,41 @@
-﻿// companion_lib: library entry point. main.rs calls companion_lib::run().
+// companion_lib: library entry point. main.rs calls companion_lib::run().
 
-pub mod aodp;
-pub mod api;
 pub mod albion_detect;
 pub mod albion_ips;
+pub mod aodp;
+pub mod api;
 pub mod config;
+pub mod crash_report;
 pub mod dns;
 pub mod firewall;
 pub mod lootlog;
 pub mod maps;
-pub mod photon_parser;
 pub mod persist;
+pub mod photon_parser;
 pub mod scanner;
 pub mod sniffer;
 pub mod transfer;
 pub mod tunnel;
 pub mod tunnel_presets;
-pub mod zone_detect;
 pub mod winutil;
+pub mod zone_detect;
 
 pub use config::CompanionConfig;
 pub use lootlog::LootlogStatus;
-pub use scanner::{ScanStats, Scanner, KillScanner};
-pub use sniffer::{SniffStats, Sniffer, DebugLine};
+pub use scanner::{KillScanner, ScanStats, Scanner};
+pub use sniffer::{DebugLine, SniffStats, Sniffer};
 pub use transfer::TransferQueue;
 pub use tunnel::{Tunnel, TunnelStatus};
 
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager, Emitter,
+    Emitter, Manager,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
+use tokio::sync::Mutex;
 
 /// Pushes a line to the sniffer debug buffer (shown in the UI terminal).
 /// Cap at 500 lines.
@@ -46,7 +47,10 @@ fn push_debug(debug: &Arc<Mutex<Vec<DebugLine>>>, level: &str, msg: &str) {
     };
     let mut d = debug.blocking_lock();
     d.push(line);
-    if d.len() > 500 { let ex = d.len() - 500; d.drain(..ex); }
+    if d.len() > 500 {
+        let ex = d.len() - 500;
+        d.drain(..ex);
+    }
 }
 
 /// Safe to spend CPU/network? True when game is closed or player is outside PvP zone.
@@ -96,11 +100,17 @@ async fn set_config(
         ("minimize_to_tray", serde_json::Value::Bool(b)) => cfg.minimize_to_tray = b,
         ("collect_damage_meter", serde_json::Value::Bool(b)) => {
             cfg.collect_damage_meter = b;
-            state.sniffer.capture_damage.store(b, std::sync::atomic::Ordering::Relaxed);
+            state
+                .sniffer
+                .capture_damage
+                .store(b, std::sync::atomic::Ordering::Relaxed);
         }
         ("collect_auto_lootlog", serde_json::Value::Bool(b)) => {
             cfg.collect_auto_lootlog = b;
-            state.sniffer.capture_loot.store(b, std::sync::atomic::Ordering::Relaxed);
+            state
+                .sniffer
+                .capture_loot
+                .store(b, std::sync::atomic::Ordering::Relaxed);
         }
         ("tunnel_enabled", serde_json::Value::Bool(b)) => cfg.tunnel_enabled = b,
         ("tunnel_endpoint", serde_json::Value::String(s)) => cfg.tunnel_endpoint = s,
@@ -112,7 +122,10 @@ async fn set_config(
         }
         ("feed_aodp", serde_json::Value::Bool(b)) => {
             cfg.feed_aodp = b;
-            state.sniffer.feed_aodp.store(b, std::sync::atomic::Ordering::Relaxed);
+            state
+                .sniffer
+                .feed_aodp
+                .store(b, std::sync::atomic::Ordering::Relaxed);
         }
         ("auto_lootlog_submit", serde_json::Value::Bool(b)) => cfg.auto_lootlog_submit = b,
         // Damage meter spell index calibration — see spell_index_offset in config.
@@ -122,7 +135,7 @@ async fn set_config(
         _ => return Err(format!("unknown field: {}", key)),
     }
     if let Err(e) = config::save(&cfg) {
-        return Err(format!("falha ao salvar config: {e}"));
+        return Err(format!("failed to save config: {e}"));
     }
     if changed_autostart {
         #[cfg(target_os = "windows")]
@@ -135,7 +148,11 @@ async fn set_config(
         #[cfg(not(target_os = "windows"))]
         {
             let autostart = app.autolaunch();
-            let _ = if cfg.autostart { autostart.enable() } else { autostart.disable() };
+            let _ = if cfg.autostart {
+                autostart.enable()
+            } else {
+                autostart.disable()
+            };
         }
     }
     Ok(())
@@ -144,7 +161,10 @@ async fn set_config(
 #[tauri::command]
 async fn get_scan_stats(state: tauri::State<'_, AppState>) -> Result<ScanStats, String> {
     let mut s = state.scanner.stats.lock().await.clone();
-    s.throttle_ms = state.scanner.throttle_ms.load(std::sync::atomic::Ordering::Relaxed);
+    s.throttle_ms = state
+        .scanner
+        .throttle_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
     Ok(s)
 }
 
@@ -181,13 +201,17 @@ async fn test_dns(_server_hostname: String) -> Result<Vec<dns::DnsResult>, Strin
 
 #[tauri::command]
 async fn apply_dns(profile_name: String) -> Result<(), String> {
-    let profile = dns::dns_profiles().into_iter().find(|p| p.name == profile_name)
+    let profile = dns::dns_profiles()
+        .into_iter()
+        .find(|p| p.name == profile_name)
         .ok_or_else(|| format!("profile '{}' not found", profile_name))?;
     dns::apply_dns(&profile).map_err(|e| format!("{:#}", e))
 }
 
 #[tauri::command]
-async fn get_dns_targets(_state: tauri::State<'_, AppState>) -> Result<Vec<api::DnsTarget>, String> {
+async fn get_dns_targets(
+    _state: tauri::State<'_, AppState>,
+) -> Result<Vec<api::DnsTarget>, String> {
     let api = api::ApiClient::new(config::API_BASE_URL);
     match api.dns_targets().await {
         Ok(out) => Ok(out.servers),
@@ -198,10 +222,7 @@ async fn get_dns_targets(_state: tauri::State<'_, AppState>) -> Result<Vec<api::
 // ─── Zone commands (PvP pause / Blue flush) ──────────────────────────────────
 
 #[tauri::command]
-async fn set_zone(
-    zone: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+async fn set_zone(zone: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let z = match zone.as_str() {
         "blue" => transfer::ZoneType::Blue,
         "pvp" => transfer::ZoneType::PvP,
@@ -232,10 +253,11 @@ fn classify_zone(cluster_type: String) -> String {
         crate::transfer::ZoneType::Blue => "blue",
         crate::transfer::ZoneType::PvP => "pvp",
         crate::transfer::ZoneType::Unknown => "unknown",
-    }.to_string()
+    }
+    .to_string()
 }
 
-    // ─── Sniffer commands (packet capture) ──────────────────────────────────────
+// ─── Sniffer commands (packet capture) ──────────────────────────────────────
 
 #[tauri::command]
 async fn start_sniffer(state: tauri::State<'_, AppState>) -> Result<(), String> {
@@ -275,21 +297,26 @@ async fn get_sniff_stats(state: tauri::State<'_, AppState>) -> Result<SniffStats
     // resolve by name via the entities map. Sequential locks, never nested.
     if !s.player_name.is_empty() {
         let ents = state.sniffer.entities.lock().await;
-        let my_ids: std::collections::HashSet<i64> = ents.iter()
+        let my_ids: std::collections::HashSet<i64> = ents
+            .iter()
             .filter(|(_, name)| *name == &s.player_name)
             .map(|(id, _)| *id)
             .collect();
         drop(ents);
-        s.my_damage = damage_map.iter()
+        s.my_damage = damage_map
+            .iter()
             .filter(|(id, _)| my_ids.contains(id))
-            .map(|(_, a)| a.damage).sum::<f64>() as u64;
+            .map(|(_, a)| a.damage)
+            .sum::<f64>() as u64;
     }
     drop(damage_map);
     Ok(s)
 }
 
 #[tauri::command]
-async fn get_sniffer_debug(state: tauri::State<'_, AppState>) -> Result<Vec<sniffer::DebugLine>, String> {
+async fn get_sniffer_debug(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<sniffer::DebugLine>, String> {
     Ok(state.sniffer.debug.lock().await.clone())
 }
 
@@ -308,23 +335,28 @@ async fn get_albion_pid() -> Option<u32> {
 
 /// Returns captured loot events for the current session.
 #[tauri::command]
-async fn get_captured_loot(state: tauri::State<'_, AppState>) -> Result<Vec<lootlog::LootRow>, String> {
+async fn get_captured_loot(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<lootlog::LootRow>, String> {
     let buf = state.sniffer.loot.lock().await;
-    Ok(buf.iter().map(|l| {
-        // UI shows name in the user's language; item_id kept for reference.
-        let (item_id, en, pt, es) = lootlog::resolve(l.item_index);
-        lootlog::LootRow {
-            ts: Some(l.ts.clone()),
-            item_id,
-            item_name: en,
-            item_name_pt: pt,
-            item_name_es: es,
-            quantity: l.quantity as i64,
-            looted_by: l.looted_by.clone(),
-            looted_by_guild: String::new(),
-            looted_from: l.looted_from.clone(),
-        }
-    }).collect())
+    Ok(buf
+        .iter()
+        .map(|l| {
+            // UI shows name in the user's language; item_id kept for reference.
+            let (item_id, en, pt, es) = lootlog::resolve(l.item_index);
+            lootlog::LootRow {
+                ts: Some(l.ts.clone()),
+                item_id,
+                item_name: en,
+                item_name_pt: pt,
+                item_name_es: es,
+                quantity: l.quantity as i64,
+                looted_by: l.looted_by.clone(),
+                looted_by_guild: String::new(),
+                looted_from: l.looted_from.clone(),
+            }
+        })
+        .collect())
 }
 
 /// Clears the captured loot buffer.
@@ -351,7 +383,8 @@ fn spell_table() -> &'static Mutex<Vec<api::SpellName>> {
     SPELL_TABLE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-static ITEM_NAMES_MAP: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+static ITEM_NAMES_MAP: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::OnceLock::new();
 
 fn item_names_map() -> &'static Mutex<std::collections::HashMap<String, String>> {
     ITEM_NAMES_MAP.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
@@ -401,7 +434,9 @@ async fn load_item_names_map() {
 /// UniqueName as fallback when the key is missing.
 pub async fn to_game_name(unique_name: &str) -> String {
     let map = item_names_map().lock().await;
-    map.get(unique_name).cloned().unwrap_or_else(|| unique_name.to_string())
+    map.get(unique_name)
+        .cloned()
+        .unwrap_or_else(|| unique_name.to_string())
 }
 
 fn spell_cache_path() -> std::path::PathBuf {
@@ -538,54 +573,67 @@ async fn get_damage_meter(
 
     // ── Phase 2: formatting, no sniffer locks ───────────────────────────
     let spells = spell_table().lock().await;
-    let mut rows: Vec<DamageRow> = merged.iter().map(|(name, acc)| {
-        {
-            let total_dmg = acc.damage.max(1.0);
-            let mut skills: Vec<SkillRow> = acc.spells.iter().map(|(sid, sp)| {
-                // Negative index = auto-attack/unknown; never indexes the table.
-                let entry = sid.checked_add(offset)
-                    .filter(|i| *i >= 0)
-                    .and_then(|i| spells.get(i as usize));
-                SkillRow {
-                id: *sid,
-                name: entry.map(|e| e.name.clone()),
-                name_pt: entry.and_then(|e| e.pt.clone()),
-                name_es: entry.and_then(|e| e.es.clone()),
-                unique_name: entry.map(|e| e.id.clone()),
-                icon: entry.map(|e| e.icon.clone().unwrap_or_else(|| e.id.clone())),
-                hits: sp.hits,
-                total: sp.total as i64,
-                avg: if sp.hits > 0 { (sp.total / sp.hits as f64) as i64 } else { 0 },
-                max_hit: sp.max_hit as i64,
-                pct: (sp.total / total_dmg) * 100.0,
-                fam: entry.and_then(|e| e.fam.clone()),
-            }}).collect();
-            skills.sort_by(|a, b| b.total.cmp(&a.total));
+    let mut rows: Vec<DamageRow> = merged
+        .iter()
+        .map(|(name, acc)| {
+            {
+                let total_dmg = acc.damage.max(1.0);
+                let mut skills: Vec<SkillRow> = acc
+                    .spells
+                    .iter()
+                    .map(|(sid, sp)| {
+                        // Negative index = auto-attack/unknown; never indexes the table.
+                        let entry = sid
+                            .checked_add(offset)
+                            .filter(|i| *i >= 0)
+                            .and_then(|i| spells.get(i as usize));
+                        SkillRow {
+                            id: *sid,
+                            name: entry.map(|e| e.name.clone()),
+                            name_pt: entry.and_then(|e| e.pt.clone()),
+                            name_es: entry.and_then(|e| e.es.clone()),
+                            unique_name: entry.map(|e| e.id.clone()),
+                            icon: entry.map(|e| e.icon.clone().unwrap_or_else(|| e.id.clone())),
+                            hits: sp.hits,
+                            total: sp.total as i64,
+                            avg: if sp.hits > 0 {
+                                (sp.total / sp.hits as f64) as i64
+                            } else {
+                                0
+                            },
+                            max_hit: sp.max_hit as i64,
+                            pct: (sp.total / total_dmg) * 100.0,
+                            fam: entry.and_then(|e| e.fam.clone()),
+                        }
+                    })
+                    .collect();
+                skills.sort_by(|a, b| b.total.cmp(&a.total));
 
-            // Player's weapon = family of the highest-damage skill.
-            // We can't read equipment (NewCharacter only has id + name), so we
-            // infer from usage. skills is already sorted by damage, so the
-            // first with a known family wins — shared passives won't decide.
-            let weapon = skills.iter().find_map(|s| s.fam.clone());
+                // Player's weapon = family of the highest-damage skill.
+                // We can't read equipment (NewCharacter only has id + name), so we
+                // infer from usage. skills is already sorted by damage, so the
+                // first with a known family wins — shared passives won't decide.
+                let weapon = skills.iter().find_map(|s| s.fam.clone());
 
-            // Sparse buckets → dense array aligned to `now` for the chart.
-            let mut timeline = vec![0i64; window as usize];
-            let oldest = now.saturating_sub(window - 1);
-            for (sec, d) in &acc.timeline {
-                if *sec >= oldest && *sec <= now {
-                    timeline[(*sec - oldest) as usize] = *d as i64;
+                // Sparse buckets → dense array aligned to `now` for the chart.
+                let mut timeline = vec![0i64; window as usize];
+                let oldest = now.saturating_sub(window - 1);
+                for (sec, d) in &acc.timeline {
+                    if *sec >= oldest && *sec <= now {
+                        timeline[(*sec - oldest) as usize] = *d as i64;
+                    }
+                }
+                DamageRow {
+                    name: (*name).clone(),
+                    weapon,
+                    damage: acc.damage as i64,
+                    dps: acc.dps() as i64,
+                    skills,
+                    timeline,
                 }
             }
-            DamageRow {
-                name: (*name).clone(),
-                weapon,
-                damage: acc.damage as i64,
-                dps: acc.dps() as i64,
-                skills,
-                timeline,
-            }
-        }
-    }).collect();
+        })
+        .collect();
     rows.sort_by(|a, b| b.damage.cmp(&a.damage));
     Ok(rows)
 }
@@ -624,7 +672,8 @@ async fn save_lootlog_csv(
 /// options, the sniffer's 15s retry loop picks it up without restarting the app.
 #[tauri::command]
 async fn open_npcap_download(app: tauri::AppHandle) -> Result<(), String> {
-    app.opener().open_url("https://npcap.com/#download", None::<&str>)
+    app.opener()
+        .open_url("https://npcap.com/#download", None::<&str>)
         .map_err(|e| format!("failed to open browser: {e}"))
 }
 
@@ -632,7 +681,8 @@ async fn open_npcap_download(app: tauri::AppHandle) -> Result<(), String> {
 /// "Privacy") in the Config About screen.
 #[tauri::command]
 async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    app.opener().open_url(&url, None::<&str>)
+    app.opener()
+        .open_url(&url, None::<&str>)
         .map_err(|e| format!("failed to open browser: {e}"))
 }
 
@@ -644,12 +694,15 @@ async fn companion_login(
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let api = api::ApiClient::new(config::API_BASE_URL);
-    let nonce: String = (0..16).map(|_| {
-        let c = rand::Rng::gen_range(&mut rand::thread_rng(), 0..=255u8);
-        format!("{:02x}", c)
-    }).collect();
+    let nonce: String = (0..16)
+        .map(|_| {
+            let c = rand::Rng::gen_range(&mut rand::thread_rng(), 0..=255u8);
+            format!("{:02x}", c)
+        })
+        .collect();
     let url = api.auth_start_url(&nonce);
-    app.opener().open_url(&url, None::<&str>)
+    app.opener()
+        .open_url(&url, None::<&str>)
         .map_err(|e| format!("failed to open browser: {e}"))?;
     Ok(nonce)
 }
@@ -667,7 +720,7 @@ async fn companion_poll_auth(
             cfg.discord_user_id = Some(result.user_id.clone());
             cfg.discord_username = Some(result.username.clone());
             if let Err(e) = config::save(&cfg) {
-        return Err(format!("failed to save config: {e}"));
+                return Err(format!("failed to save config: {e}"));
             }
             Ok(result)
         }
@@ -772,7 +825,7 @@ async fn warm_self_worker(
                 Ok(out) => {
                     let cur = (name.clone(), region.to_string());
                     if last_logged.as_ref() != Some(&cur) {
-                        tracing::info!("warm: nomeando {} ({}) — {}", name, region, out.status);
+                        tracing::info!("warm: naming {} ({}) — {}", name, region, out.status);
                         last_logged = Some(cur);
                     }
                 }
@@ -798,7 +851,9 @@ async fn loot_silver_worker(
             let buf = loot.lock().await;
             for ev in buf.iter() {
                 let (item_id, _, _, _) = lootlog::resolve(ev.item_index);
-                if item_id.is_empty() { continue; }
+                if item_id.is_empty() {
+                    continue;
+                }
                 *agg.entry(item_id).or_insert(0) += ev.quantity as i64;
             }
         }
@@ -839,7 +894,9 @@ async fn auto_lootlog_worker(
                 continue;
             }
         };
-        let Some(ev) = single_review_event(&events) else { continue };
+        let Some(ev) = single_review_event(&events) else {
+            continue;
+        };
         if !submitted.contains(&ev.event_id) {
             let csv = {
                 let buf = loot.lock().await;
@@ -854,7 +911,9 @@ async fn auto_lootlog_worker(
                 Ok(out) => {
                     submitted.insert(ev.event_id);
                     tracing::info!(
-                        "auto-lootlog: evento {} enviado ({} linhas)", ev.event_id, out.row_count
+                        "auto-lootlog: event {} submitted ({} lines)",
+                        ev.event_id,
+                        out.row_count
                     );
                 }
                 Err(e) => tracing::warn!("auto-lootlog: event {} failed: {e:#}", ev.event_id),
@@ -914,15 +973,21 @@ fn set_autostart(enable: bool) -> Result<(), String> {
             std::fs::write(&tmp, &xml).map_err(|e| format!("write xml: {e}"))?;
             let out = crate::winutil::no_window(std::process::Command::new("schtasks"))
                 .args([
-                    "/Create", "/TN", "ZiggsCompanion",
-                    "/XML", tmp.to_str().unwrap_or(""),
+                    "/Create",
+                    "/TN",
+                    "ZiggsCompanion",
+                    "/XML",
+                    tmp.to_str().unwrap_or(""),
                     "/F",
                 ])
                 .output()
                 .map_err(|e| format!("schtasks: {e}"))?;
             let _ = std::fs::remove_file(&tmp);
             if !out.status.success() {
-                return Err(format!("schtasks: {}", String::from_utf8_lossy(&out.stderr)));
+                return Err(format!(
+                    "schtasks: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
             }
         } else {
             let _ = crate::winutil::no_window(std::process::Command::new("schtasks"))
@@ -951,7 +1016,10 @@ fn tunnel_generate_keypair() -> serde_json::Value {
 }
 
 #[tauri::command]
-async fn tunnel_start(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+async fn tunnel_start(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let mut running = state.tunnel_running.lock().await;
     if *running {
         return Ok(());
@@ -963,7 +1031,9 @@ async fn tunnel_start(state: tauri::State<'_, AppState>, app: tauri::AppHandle) 
     // 3. Preset for current region
     let albion_region = current_region(&state).await;
     let cfg = state.config.lock().await.clone();
-    let vps_id = cfg.tunnel_routing.get(&albion_region)
+    let vps_id = cfg
+        .tunnel_routing
+        .get(&albion_region)
         .cloned()
         .or_else(|| cfg.tunnel_routing.values().next().cloned())
         .unwrap_or_default();
@@ -975,7 +1045,10 @@ async fn tunnel_start(state: tauri::State<'_, AppState>, app: tauri::AppHandle) 
     }
     if cfg.tunnel_endpoint.is_empty() {
         *running = false;
-        return Err(format!("No VPS assigned for region '{}'. Assign one in the server selection table.", albion_region));
+        return Err(format!(
+            "No VPS assigned for region '{}'. Assign one in the server selection table.",
+            albion_region
+        ));
     }
     if cfg.tunnel_client_privkey.is_empty() {
         let (priv_b64, _pub_b64) = tunnel::generate_keypair();
@@ -1004,7 +1077,14 @@ async fn tunnel_start(state: tauri::State<'_, AppState>, app: tauri::AppHandle) 
 /// (from the running game); falls back to the persisted config region so
 /// the tunnel works without Albion open.
 async fn current_region(state: &tauri::State<'_, AppState>) -> String {
-    match state.sniffer.aodp_server.lock().await.as_ref().map(|s| s.region()) {
+    match state
+        .sniffer
+        .aodp_server
+        .lock()
+        .await
+        .as_ref()
+        .map(|s| s.region())
+    {
         Some("east") => "asia".into(),
         Some("europe") => "europe".into(),
         Some("west") => "americas".into(),
@@ -1018,7 +1098,9 @@ async fn tunnel_stop(state: tauri::State<'_, AppState>) -> Result<(), String> {
     // Don't allow a new start while the old task still holds Wintun, socket
     // and routes. Prevents two concurrent tunnels after a fast stop/start.
     for _ in 0..100 {
-        if !*state.tunnel_running.lock().await { return Ok(()); }
+        if !*state.tunnel_running.lock().await {
+            return Ok(());
+        }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     return Err("timeout stopping tunnel".into());
@@ -1059,7 +1141,10 @@ struct RoutingMatrix {
 
 #[tauri::command]
 async fn tunnel_regions(state: tauri::State<'_, AppState>) -> Result<RoutingMatrix, String> {
-    let albion_regions: Vec<String> = tunnel_presets::ALBION_GAME_IPS.iter().map(|(r, _)| r.to_string()).collect();
+    let albion_regions: Vec<String> = tunnel_presets::ALBION_GAME_IPS
+        .iter()
+        .map(|(r, _)| r.to_string())
+        .collect();
 
     // "Direct" row: ICMP ping to each Albion game server IP.
     // Americas (5.188.125.x) blocks ICMP — will show null.
@@ -1093,7 +1178,10 @@ async fn tunnel_regions(state: tauri::State<'_, AppState>) -> Result<RoutingMatr
         // Fetch VPS→Albion pings from this VPS's ping server.
         let vps_to_albion: std::collections::HashMap<String, Option<f64>> =
             match reqwest::get(&vps.ping_url).await {
-                Ok(resp) => match resp.json::<std::collections::HashMap<String, Option<f64>>>().await {
+                Ok(resp) => match resp
+                    .json::<std::collections::HashMap<String, Option<f64>>>()
+                    .await
+                {
                     Ok(map) => map,
                     Err(_) => std::collections::HashMap::new(),
                 },
@@ -1104,7 +1192,11 @@ async fn tunnel_regions(state: tauri::State<'_, AppState>) -> Result<RoutingMatr
         for r in &albion_regions {
             // ponytail: Americas game server blocks ICMP from VPS too; estimate ~5ms (same DC).
             let vps_to_srv = vps_to_albion.get(r).copied().flatten().or_else(|| {
-                if r == "americas" { Some(5.0) } else { None }
+                if r == "americas" {
+                    Some(5.0)
+                } else {
+                    None
+                }
             });
             let total = vps_to_srv.map(|v| pc_to_vps + v);
             cell_pings.insert(r.clone(), total);
@@ -1121,12 +1213,17 @@ async fn tunnel_regions(state: tauri::State<'_, AppState>) -> Result<RoutingMatr
         });
     }
 
-    let albion: Vec<AlbionServerInfo> = albion_regions.iter()
+    let albion: Vec<AlbionServerInfo> = albion_regions
+        .iter()
         .map(|r| AlbionServerInfo { region: r.clone() })
         .collect();
     let routing = state.config.lock().await.tunnel_routing.clone();
 
-    Ok(RoutingMatrix { vps: vps_rows, albion, routing })
+    Ok(RoutingMatrix {
+        vps: vps_rows,
+        albion,
+        routing,
+    })
 }
 
 /// Set which VPS to use for an Albion region. Empty vps_region = none (direct).
@@ -1155,13 +1252,17 @@ async fn set_tunnel_route(
         tunnel.stop().await;
         // Wait for the old tunnel task to finish.
         for _ in 0..100 {
-            if !*state.tunnel_running.lock().await { break; }
+            if !*state.tunnel_running.lock().await {
+                break;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         // Re-resolve VPS endpoint from routing config.
         let albion_region = current_region(&state).await;
         let cfg = state.config.lock().await.clone();
-        let vps_id = cfg.tunnel_routing.get(&albion_region)
+        let vps_id = cfg
+            .tunnel_routing
+            .get(&albion_region)
             .cloned()
             .or_else(|| cfg.tunnel_routing.values().next().cloned())
             .unwrap_or_default();
@@ -1221,33 +1322,49 @@ pub async fn ping_host(host: &str) -> Option<f64> {
         {
             // Windows: "Minimum = 127ms, Maximum = 128ms, M�dia = 127ms"
             // Find the stats line (last line with "=" and "ms")
-            let stats_line = text.lines().rev()
+            let stats_line = text
+                .lines()
+                .rev()
                 .find(|l| l.contains('=') && l.contains("ms"))?;
             // Parse the SECOND number (avg) from the three values
-            let nums: Vec<f64> = stats_line.split(',')
+            let nums: Vec<f64> = stats_line
+                .split(',')
                 .filter_map(|part| {
                     let part = part.trim();
                     // Find "= " followed by digits then "ms"
                     if let Some(eq_pos) = part.find('=') {
-                        let rest = part[eq_pos+1..].trim();
+                        let rest = part[eq_pos + 1..].trim();
                         let end = rest.find("ms")?;
                         rest[..end].trim().parse::<f64>().ok()
-                    } else { None }
+                    } else {
+                        None
+                    }
                 })
                 .collect();
             // Windows gives [min, max, avg] — take the last one (avg)
-            if nums.is_empty() { return None; }
+            if nums.is_empty() {
+                return None;
+            }
             return Some(nums[nums.len() - 1]);
         }
         #[cfg(not(target_os = "windows"))]
         {
             // Linux: "rtt min/avg/max/mdev = 128.123/129.456/130.789/1.234 ms"
-            let stats_line = text.lines().rev()
+            let stats_line = text
+                .lines()
+                .rev()
                 .find(|l| l.contains("rtt") && l.contains('='))?;
             let parts: Vec<&str> = stats_line.split('=').nth(1)?.trim().split('/').collect();
-            if parts.len() >= 2 { parts[1].trim().parse::<f64>().ok() } else { None }
+            if parts.len() >= 2 {
+                parts[1].trim().parse::<f64>().ok()
+            } else {
+                None
+            }
         }
-    }).await.ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// TCP "ping": resolve once, then measure pure connect RTT 3 times.
@@ -1261,12 +1378,16 @@ pub async fn ping_port(host: &str, port: u16) -> Option<f64> {
         Ok(a) => a.collect::<Vec<_>>(),
         Err(_) => return None,
     };
-    if addrs.is_empty() { return None; }
+    if addrs.is_empty() {
+        return None;
+    }
 
     let mut total = 0.0_f64;
     let mut count = 0_u32;
     for addr in &addrs {
-        if count >= 3 { break; }
+        if count >= 3 {
+            break;
+        }
         let start = std::time::Instant::now();
         let conn = timeout(std::time::Duration::from_secs(2), TcpStream::connect(addr)).await;
         if let Ok(Ok(_)) = conn {
@@ -1274,7 +1395,9 @@ pub async fn ping_port(host: &str, port: u16) -> Option<f64> {
             count += 1;
         }
     }
-    if count == 0 { return None; }
+    if count == 0 {
+        return None;
+    }
     Some(total / count as f64)
 }
 
@@ -1296,10 +1419,12 @@ async fn tunnel_is_admin() -> bool {
 
 #[cfg(target_os = "windows")]
 fn is_windows_admin() -> bool {
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Security::{TOKEN_ELEVATION, GetTokenInformation, TokenElevation, TOKEN_INFORMATION_CLASS};
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_INFORMATION_CLASS,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     // TOKEN_QUERY (0x0008) is the minimum access for GetTokenInformation;
     // we previously used PROCESS_QUERY_INFORMATION (0x0400), which some
@@ -1352,9 +1477,9 @@ fn present_window(w: &tauri::WebviewWindow) {
 }
 
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
-    let show = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
-    let pause = MenuItem::with_id(app, "pause", "Pausar scanner", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Open", true, None::<&str>)?;
+    let pause = MenuItem::with_id(app, "pause", "Pause scanner", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &pause, &quit])?;
     TrayIconBuilder::with_id("main-tray")
         .icon(app.default_window_icon().unwrap().clone())
@@ -1388,7 +1513,9 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 async fn stop_tunnel_and_wait(tunnel: &Tunnel) {
     tunnel.stop_quick().await;
     for _ in 0..100 {
-        if !tunnel.status.lock().await.running { break; }
+        if !tunnel.status.lock().await.running {
+            break;
+        }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
@@ -1407,7 +1534,11 @@ async fn auto_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
         Ok(None) => return Ok(()),
         Err(e) => return Err(e.into()),
     };
-    tracing::info!("auto-update: {} -> {} (waiting for user)", update.current_version, update.version);
+    tracing::info!(
+        "auto-update: {} -> {} (waiting for user)",
+        update.current_version,
+        update.version
+    );
     let _ = app.emit("update-status", "available");
     Ok(())
 }
@@ -1422,10 +1553,16 @@ async fn apply_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
         Err(e) => return Err(e.into()),
     };
     let _ = app.emit("update-status", "downloading");
-    update.download_and_install(
-        |chunk, total| { tracing::debug!("auto-update: {chunk} / {total:?} bytes"); },
-        || { tracing::info!("auto-update: download complete, installing"); },
-    ).await?;
+    update
+        .download_and_install(
+            |chunk, total| {
+                tracing::debug!("auto-update: {chunk} / {total:?} bytes");
+            },
+            || {
+                tracing::info!("auto-update: download complete, installing");
+            },
+        )
+        .await?;
     let _ = app.emit("update-status", "installed");
     stop_tunnel_and_wait(&app.state::<AppState>().tunnel).await;
     // app.restart() relaunches WITHOUT admin — the companion needs admin for
@@ -1442,7 +1579,14 @@ async fn apply_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
                 let verb: Vec<u16> = "runas\0".encode_utf16().collect();
                 let file: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
                 unsafe {
-                    ShellExecuteW(0 as HWND, verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+                    ShellExecuteW(
+                        0 as HWND,
+                        verb.as_ptr(),
+                        file.as_ptr(),
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        SW_SHOWNORMAL,
+                    );
                 }
             }
         }
@@ -1459,17 +1603,18 @@ async fn check_and_apply_update(app: tauri::AppHandle) -> Result<(), String> {
     apply_update(&app).await.map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn report_frontend_crash(message: String, stack: String) -> Result<(), String> {
+    crash_report::save_frontend(message, stack).map_err(|e| e.to_string())?;
+    crash_report::send_pending_once()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn run() {
-    // In release (windows_subsystem = "windows") there is no console — tracing
-    // to stderr goes nowhere and some Windows setups allocate a hidden console.
-    // Only active in debug builds.
-    #[cfg(debug_assertions)]
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tauri=info".into()),
-        )
-        .init();
+    crash_report::install_hook();
+    crash_report::init_logging();
 
     // Modern Npcap (without WinPcap mode) puts wpcap.dll in a subdir that the
     // Windows loader can't find without PATH/SetDllDirectory. Must run BEFORE
@@ -1495,15 +1640,18 @@ pub fn run() {
         let already_tried = std::env::args().any(|a| a == "--ziggs-elev");
         if !is_windows_admin() {
             if already_tried {
-                use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONERROR};
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    MessageBoxW, MB_ICONERROR, MB_OK,
+                };
                 let title: Vec<u16> = "Ziggs Companion\0".encode_utf16().collect();
                 let msg: Vec<u16> =
-                    "O companion precisa de privilégios de administrador para capturar pacotes \
-                     (Npcap) e gerenciar o túnel (wintun).\n\n\
-                     Se você negou o prompt UAC, tente novamente aceitando. \
-                     Se o problema persiste, execute o companion diretamente como administrador \
-                     (botão direito → Executar como administrador).\0"
-                        .encode_utf16().collect();
+                    "Ziggs Companion requires administrator privileges to capture packets \
+                     (Npcap) and manage the tunnel (wintun).\n\n\
+                     If you declined the UAC prompt, try again and accept it. \
+                     If the problem persists, run the companion directly as administrator \
+                     (right-click → Run as administrator).\0"
+                        .encode_utf16()
+                        .collect();
                 unsafe {
                     MessageBoxW(
                         0 as windows_sys::Win32::Foundation::HWND,
@@ -1522,7 +1670,9 @@ pub fn run() {
                 // Preserve args (--minimized) on elevated re-launch and mark
                 // that we already tried elevation (--ziggs-elev read by child).
                 let mut args = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
-                if !args.is_empty() { args.insert_str(0, " "); }
+                if !args.is_empty() {
+                    args.insert_str(0, " ");
+                }
                 args = format!("--ziggs-elev{args}");
                 let verb: Vec<u16> = "runas\0".encode_utf16().collect();
                 let file: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
@@ -1587,11 +1737,22 @@ pub fn run() {
         ))
         .manage(state)
         .setup(move |app| {
+            crash_report::set_version(app.package_info().version.to_string());
+            tauri::async_runtime::spawn(async {
+                loop {
+                    if let Err(e) = crash_report::send_pending_once().await {
+                        tracing::debug!("crash report pending: {e:#}");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                }
+            });
             // Auto-update: silent check on startup — downloads and installs without
             // confirmation. Passive install (small progress bar), then relaunch.
             #[cfg(desktop)]
             {
-                let _ = app.handle().plugin(tauri_plugin_updater::Builder::new().build());
+                let _ = app
+                    .handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build());
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = auto_update(&handle).await {
@@ -1674,10 +1835,19 @@ pub fn run() {
             // for emergency manual pause.
             {
                 use std::sync::atomic::Ordering;
-                state.sniffer.capture_loot.store(cfg.collect_auto_lootlog, Ordering::Relaxed);
-                state.sniffer.capture_damage.store(cfg.collect_damage_meter, Ordering::Relaxed);
+                state
+                    .sniffer
+                    .capture_loot
+                    .store(cfg.collect_auto_lootlog, Ordering::Relaxed);
+                state
+                    .sniffer
+                    .capture_damage
+                    .store(cfg.collect_damage_meter, Ordering::Relaxed);
                 state.sniffer.capture_prices.store(true, Ordering::Relaxed);
-                state.sniffer.feed_aodp.store(cfg.feed_aodp, Ordering::Relaxed);
+                state
+                    .sniffer
+                    .feed_aodp
+                    .store(cfg.feed_aodp, Ordering::Relaxed);
             }
             // Pre-loads local exits and their handshakes before the user opens
             // the game. If the tunnel toggle is on, connects afterward using
@@ -1759,7 +1929,9 @@ pub fn run() {
                     let api = api::ApiClient::new(config::API_BASE_URL);
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(TICK_SECS)).await;
-                        if q.pending_count().await == 0 { continue; }
+                        if q.pending_count().await == 0 {
+                            continue;
+                        }
                         if !heavy_work_ok(&up_sniffer, &up_zone, &up_pause).await {
                             continue; // risky zone: wait, don't lose data
                         }
@@ -1800,11 +1972,14 @@ pub fn run() {
                         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                         let raw: Vec<serde_json::Value> = {
                             let mut b = prices_buf.lock().await;
-                            if b.is_empty() { continue; }
+                            if b.is_empty() {
+                                continue;
+                            }
                             b.drain(..).collect()
                         };
                         // Lowest sell_price_min per (item_id, quality, city).
-                        let mut best: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+                        let mut best: std::collections::HashMap<String, serde_json::Value> =
+                            std::collections::HashMap::new();
                         for row in raw {
                             let key = format!(
                                 "{}|{}|{}",
@@ -1812,9 +1987,17 @@ pub fn run() {
                                 row.get("quality").and_then(|v| v.as_i64()).unwrap_or(1),
                                 row.get("city").and_then(|v| v.as_str()).unwrap_or(""),
                             );
-                            let price = row.get("sell_price_min").and_then(|v| v.as_i64()).unwrap_or(i64::MAX);
-                            let cur = best.get(&key).and_then(|r| r.get("sell_price_min")).and_then(|v| v.as_i64());
-                            if cur.map_or(true, |c| price < c) { best.insert(key, row); }
+                            let price = row
+                                .get("sell_price_min")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(i64::MAX);
+                            let cur = best
+                                .get(&key)
+                                .and_then(|r| r.get("sell_price_min"))
+                                .and_then(|v| v.as_i64());
+                            if cur.map_or(true, |c| price < c) {
+                                best.insert(key, row);
+                            }
                         }
                         let n_rows = best.len();
                         // Chunk at 1900 (backend limits 2000 per request) — large
@@ -1824,8 +2007,14 @@ pub fn run() {
                         for chunk in aggregated.chunks(1900) {
                             q.enqueue_prices(chunk.to_vec()).await;
                         }
-                        push_debug(&debug, "info",
-                            &format!("prices: enqueued {n_rows} rows ({} chunks)", (n_rows + 1899) / 1900));
+                        push_debug(
+                            &debug,
+                            "info",
+                            &format!(
+                                "prices: enqueued {n_rows} rows ({} chunks)",
+                                (n_rows + 1899) / 1900
+                            ),
+                        );
                         // Enqueue only — the single uploader handles pacing.
                     }
                 });
@@ -1841,7 +2030,9 @@ pub fn run() {
                         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                         let rows: Vec<serde_json::Value> = {
                             let mut b = hist_buf.lock().await;
-                            if b.is_empty() { continue; }
+                            if b.is_empty() {
+                                continue;
+                            }
                             b.drain(..).collect()
                         };
                         let n_rows = rows.len();
@@ -1849,8 +2040,11 @@ pub fn run() {
                         for chunk in rows.chunks(1900) {
                             q.enqueue_market_history(chunk.to_vec()).await;
                         }
-                        push_debug(&debug, "info",
-                            &format!("market_history: enqueued {n_rows} buckets"));
+                        push_debug(
+                            &debug,
+                            "info",
+                            &format!("market_history: enqueued {n_rows} buckets"),
+                        );
                         // Enqueue only — see single uploader comment above.
                     }
                 });
@@ -1877,7 +2071,9 @@ pub fn run() {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         // Peek at queue before checking zone: no batch = no work.
-                        if aodp_out.lock().await.is_empty() { continue; }
+                        if aodp_out.lock().await.is_empty() {
+                            continue;
+                        }
                         if !heavy_work_ok(&aodp_sniffer, &aodp_zone, &aodp_pause).await {
                             continue; // in PvP: batch waits, not lost
                         }
@@ -1891,7 +2087,10 @@ pub fn run() {
                             };
                             let mut d = debug.lock().await;
                             d.push(line);
-                            if d.len() > 500 { let ex = d.len() - 500; d.drain(..ex); }
+                            if d.len() > 500 {
+                                let ex = d.len() - 500;
+                                d.drain(..ex);
+                            }
                         }
                     }
                 });
@@ -1959,6 +2158,7 @@ pub fn run() {
             companion_logout,
             get_active_events,
             submit_captured_loot,
+            report_frontend_crash,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start companion");
@@ -1977,25 +2177,34 @@ mod policy_tests {
     #[tokio::test]
     async fn heavy_work_ok_all_cases() {
         let sniffer = Sniffer::new();
-        let pausa_on = Arc::new(Mutex::new(true));
-        let pausa_off = Arc::new(Mutex::new(false));
+        let pause_on = Arc::new(Mutex::new(true));
+        let pause_off = Arc::new(Mutex::new(false));
 
         // Game closed (online=false, the default): allows work in any zone.
-        assert!(heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pausa_on).await,
-                "game closed is the best time to work");
+        assert!(
+            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pause_on).await,
+            "game closed is the best time to work"
+        );
 
         sniffer.stats.lock().await.online = true;
 
-        assert!(!heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pausa_on).await,
-                "in PvP zone: don't touch the CPU");
-        assert!(heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Blue), &pausa_on).await,
-                "blue zone: safe to upload");
-        assert!(heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Unknown), &pausa_on).await,
-                "unknown zone does not block — only confirmed PvP blocks");
-        assert!(heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pausa_off).await,
-                "user disabled pause: respect their choice");
+        assert!(
+            !heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pause_on).await,
+            "in PvP zone: don't touch the CPU"
+        );
+        assert!(
+            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Blue), &pause_on).await,
+            "blue zone: safe to upload"
+        );
+        assert!(
+            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Unknown), &pause_on).await,
+            "unknown zone does not block — only confirmed PvP blocks"
+        );
+        assert!(
+            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pause_off).await,
+            "user disabled pause: respect their choice"
+        );
     }
-
 
     fn event(id: i64, state: &str) -> api::ActiveEvent {
         api::ActiveEvent {
@@ -2010,7 +2219,10 @@ mod policy_tests {
 
     #[test]
     fn auto_lootlog_requires_single_review_event() {
-        assert_eq!(single_review_event(&[event(1, "review")]).map(|e| e.event_id), Some(1));
+        assert_eq!(
+            single_review_event(&[event(1, "review")]).map(|e| e.event_id),
+            Some(1)
+        );
         assert!(single_review_event(&[event(1, "review"), event(2, "review")]).is_none());
         assert!(single_review_event(&[event(1, "in_progress")]).is_none());
     }

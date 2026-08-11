@@ -1,6 +1,6 @@
 [package]
 name = "ziggs-companion"
-version = "0.1.0"
+version = "0.2.0"
 description = "Ziggs Companion — battle scanner, DNS optimizer, lootlog helper"
 authors = ["Ziggs"]
 edition = "2021"
@@ -36,7 +36,7 @@ rand = "0.8"
 hickory-resolver = "0.24"
 ping = "0.5"
 chrono = "0.4"
-# WireGuard tunnel (Fase 1.5 — rota tipo ExitLag)
+# WireGuard tunnel (Phase 1.5 — ExitLag-style routing)
 boringtun = { version = "0.7", default-features = false }
 wintun = "0.5"
 socket2 = "0.5"
@@ -67,7 +67,7 @@ windows-sys = { version = "0.48", features = [
 libc = "0.2"
 
 [features]
-# Por padrão, custom protocol (tela cheia de produção). Com `devserver` o
-# frontend aponta pro Vite dev server em http://localhost:1420.
+# Default: custom protocol (production full-screen). With `devserver` the
+# frontend points to the Vite dev server at http://localhost:1420.
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

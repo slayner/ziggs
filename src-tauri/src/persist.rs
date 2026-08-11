@@ -27,7 +27,14 @@ fn replace(from: &Path, to: &Path) -> std::io::Result<()> {
 
     let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
     let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) } == 0 {
+    if unsafe {
+        MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())

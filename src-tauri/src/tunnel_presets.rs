@@ -23,7 +23,8 @@ struct Manifest {
     vps: Vec<VpsEntry>,
 }
 
-static CACHE: std::sync::OnceLock<Arc<RwLock<Option<(Manifest, std::time::Instant)>>>> = std::sync::OnceLock::new();
+static CACHE: std::sync::OnceLock<Arc<RwLock<Option<(Manifest, std::time::Instant)>>>> =
+    std::sync::OnceLock::new();
 
 fn cache() -> &'static Arc<RwLock<Option<(Manifest, std::time::Instant)>>> {
     CACHE.get_or_init(|| Arc::new(RwLock::new(None)))
@@ -50,12 +51,22 @@ pub async fn fetch_manifest() -> Vec<VpsEntry> {
             }
             Err(e) => {
                 tracing::warn!("VPS manifest parse error: {e}");
-                cache().read().await.as_ref().map(|(m, _)| m.vps.clone()).unwrap_or_default()
+                cache()
+                    .read()
+                    .await
+                    .as_ref()
+                    .map(|(m, _)| m.vps.clone())
+                    .unwrap_or_default()
             }
         },
         Err(e) => {
             tracing::warn!("VPS manifest fetch failed: {e}");
-            cache().read().await.as_ref().map(|(m, _)| m.vps.clone()).unwrap_or_default()
+            cache()
+                .read()
+                .await
+                .as_ref()
+                .map(|(m, _)| m.vps.clone())
+                .unwrap_or_default()
         }
     }
 }
@@ -74,5 +85,8 @@ pub const ALBION_GAME_IPS: &[(&str, &str)] = &[
 ];
 
 pub fn albion_game_ip(region: &str) -> Option<&'static str> {
-    ALBION_GAME_IPS.iter().find(|(r, _)| *r == region).map(|(_, ip)| *ip)
+    ALBION_GAME_IPS
+        .iter()
+        .find(|(r, _)| *r == region)
+        .map(|(_, ip)| *ip)
 }

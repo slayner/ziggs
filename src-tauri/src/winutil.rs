@@ -8,4 +8,6 @@ pub fn no_window(mut cmd: std::process::Command) -> std::process::Command {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn no_window(cmd: std::process::Command) -> std::process::Command { cmd }
+pub fn no_window(cmd: std::process::Command) -> std::process::Command {
+    cmd
+}

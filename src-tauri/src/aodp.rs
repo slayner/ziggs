@@ -33,9 +33,18 @@ impl AodpServer {
 /// Class-C ranges mirror the albiondata-client.
 pub fn server_for_ip(ip: [u8; 4]) -> Option<AodpServer> {
     match [ip[0], ip[1], ip[2]] {
-        [5, 188, 125] => Some(AodpServer { id: 1, base_url: "https://pow.west.albion-online-data.com".into() }),
-        [5, 45, 187] => Some(AodpServer { id: 2, base_url: "https://pow.east.albion-online-data.com".into() }),
-        [193, 169, 238] => Some(AodpServer { id: 3, base_url: "https://pow.europe.albion-online-data.com".into() }),
+        [5, 188, 125] => Some(AodpServer {
+            id: 1,
+            base_url: "https://pow.west.albion-online-data.com".into(),
+        }),
+        [5, 45, 187] => Some(AodpServer {
+            id: 2,
+            base_url: "https://pow.east.albion-online-data.com".into(),
+        }),
+        [193, 169, 238] => Some(AodpServer {
+            id: 3,
+            base_url: "https://pow.europe.albion-online-data.com".into(),
+        }),
         _ => None,
     }
 }
@@ -95,9 +104,14 @@ fn solve_pow(key: &str, wanted: &str) -> Option<String> {
         'chars: for &c in hexdigest.as_bytes() {
             for j in (0..8).rev() {
                 let bit = if (c >> j) & 1 == 1 { b'1' } else { b'0' };
-                if bit != want[idx] { ok = false; break 'chars; }
+                if bit != want[idx] {
+                    ok = false;
+                    break 'chars;
+                }
                 idx += 1;
-                if idx >= want_len { break 'chars; }
+                if idx >= want_len {
+                    break 'chars;
+                }
             }
         }
         if ok {
@@ -114,16 +128,25 @@ fn random_identifier() -> String {
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h = hex::encode(b);
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 /// Upload a batch: fetch PoW, solve it, then POST the payload.
 pub async fn upload(client: &reqwest::Client, batch: &AodpBatch) -> Result<()> {
     let pow: PowChallenge = client
         .get(format!("{}/pow", batch.base_url))
-        .send().await?
+        .send()
+        .await?
         .error_for_status()?
-        .json().await?;
+        .json()
+        .await?;
 
     // CPU-bound PoW solving runs off the async executor.
     let key = pow.key.clone();
@@ -131,7 +154,7 @@ pub async fn upload(client: &reqwest::Client, batch: &AodpBatch) -> Result<()> {
     let solution = tokio::task::spawn_blocking(move || solve_pow(&key, &wanted))
         .await
         .map_err(|e| anyhow!("solve join: {e}"))?
-        .ok_or_else(|| anyhow!("PoW não resolvido (desafio muito difícil)"))?;
+        .ok_or_else(|| anyhow!("PoW not solved (challenge too hard)"))?;
 
     let resp = client
         .post(format!("{}/pow/{}", batch.base_url, batch.topic))
@@ -142,7 +165,8 @@ pub async fn upload(client: &reqwest::Client, batch: &AodpBatch) -> Result<()> {
             ("natsmsg", batch.natsmsg.as_str()),
             ("identifier", &random_identifier()),
         ])
-        .send().await?;
+        .send()
+        .await?;
     if !resp.status().is_success() {
         return Err(anyhow!("AODP ingest HTTP {}", resp.status()));
     }
@@ -162,10 +186,12 @@ mod tests {
 
     // The real server sends 41-char `wanted`; old cutoff `> 40` silently broke the feed.
     #[test]
-    fn dificuldade_real_do_servidor_nao_pode_ser_rejeitada() {
+    fn real_server_difficulty_cannot_be_rejected() {
         for wanted_len in [41usize, 41, 41] {
-            assert!(!too_hard(wanted_len),
-                    "want_len={wanted_len} is the real server challenge");
+            assert!(
+                !too_hard(wanted_len),
+                "want_len={wanted_len} is the real server challenge"
+            );
         }
         assert!(!too_hard(48), "48 chars = 24 bits, still seconds");
         assert!(too_hard(80), "80 chars = 40 bits: abort");
@@ -177,7 +203,10 @@ mod tests {
         let key = "abc123";
         let sol = solve_pow(key, "0").expect("must find prefix '0'");
         let mut h = Sha256::new();
-        h.update(b"aod^"); h.update(sol.as_bytes()); h.update(b"^"); h.update(key.as_bytes());
+        h.update(b"aod^");
+        h.update(sol.as_bytes());
+        h.update(b"^");
+        h.update(key.as_bytes());
         let hd = hex::encode(h.finalize());
         let first_bit = (hd.as_bytes()[0] >> 7) & 1;
         assert_eq!(first_bit, 0);

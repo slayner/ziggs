@@ -10,9 +10,13 @@ use std::process::Command;
 pub fn add_block_rule(name: &str, ranges: &str) -> Result<(), String> {
     let output = crate::winutil::no_window(Command::new("netsh"))
         .args([
-            "advfirewall", "firewall", "add", "rule",
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
             &format!("name={name}"),
-            "dir=out", "action=block",
+            "dir=out",
+            "action=block",
             &format!("remoteip={ranges}"),
         ])
         .output()
@@ -26,7 +30,13 @@ pub fn add_block_rule(name: &str, ranges: &str) -> Result<(), String> {
 /// Remove a firewall rule by name.
 pub fn remove_rule(name: &str) -> Result<(), String> {
     let _ = crate::winutil::no_window(Command::new("netsh"))
-        .args(["advfirewall", "firewall", "delete", "rule", &format!("name={name}")])
+        .args([
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
+            &format!("name={name}"),
+        ])
         .output();
     Ok(())
 }

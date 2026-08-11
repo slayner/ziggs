@@ -93,7 +93,12 @@ pub fn resolve(index: i32) -> (String, String, String, String) {
         }
     }
     let fallback = format!("IDX_{}", index);
-    (fallback.clone(), fallback.clone(), fallback.clone(), fallback)
+    (
+        fallback.clone(),
+        fallback.clone(),
+        fallback.clone(),
+        fallback,
+    )
 }
 
 // Load from disk cache, or download from the backend on a 60s retry loop. A single
@@ -118,10 +123,10 @@ pub async fn load_item_names() {
                 return;
             }
             Ok(_) => {
-                tracing::info!("catálogo de itens vazio no backend");
+                tracing::info!("item catalog empty on backend");
                 return;
             }
-            Err(e) => tracing::warn!("catálogo de itens falhou, de novo em 60s: {e:#}"),
+            Err(e) => tracing::warn!("item catalog fetch failed, retrying in 60s: {e:#}"),
         }
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
     }
@@ -157,7 +162,10 @@ pub fn save_csv(csv_text: &str) -> std::io::Result<String> {
     std::fs::create_dir_all(&dir)?;
     let ts = {
         use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     };
     let path = dir.join(format!("lootlog-{}.csv", ts));
     std::fs::write(&path, csv_text)?;
@@ -181,7 +189,7 @@ mod tests {
 
     // Single test because the global item table would flake under parallel access.
     #[test]
-    fn csv_traz_id_e_nome_e_bate_com_o_parser_do_backend() {
+    fn csv_carries_id_and_name_and_matches_backend_parser() {
         store(vec![crate::api::ItemName {
             i: 2958,
             id: "T7_HEAD_PLATE_SET3@1".into(),
@@ -195,17 +203,26 @@ mod tests {
 
         // These columns are required by the backend's column-name parser.
         let cols: Vec<&str> = lines[0].split(';').collect();
-        for req in ["timestamp_utc", "looted_by__guild", "looted_by__name",
-                    "item_id", "quantity", "looted_from__name"] {
-            assert!(cols.contains(&req), "coluna {req} sumiu do header");
+        for req in [
+            "timestamp_utc",
+            "looted_by__guild",
+            "looted_by__name",
+            "item_id",
+            "quantity",
+            "looted_from__name",
+        ] {
+            assert!(cols.contains(&req), "column {req} missing from header");
         }
         // Each row must align with the header column count.
         for l in &lines[1..] {
-            assert_eq!(l.split(';').count(), cols.len(), "linha desalinhada: {l}");
+            assert_eq!(l.split(';').count(), cols.len(), "misaligned line: {l}");
         }
 
         let f: Vec<&str> = lines[1].split(';').collect();
-        assert_eq!(f[cols.iter().position(|c| *c == "item_id").unwrap()], "T7_HEAD_PLATE_SET3@1");
+        assert_eq!(
+            f[cols.iter().position(|c| *c == "item_id").unwrap()],
+            "T7_HEAD_PLATE_SET3@1"
+        );
         assert_eq!(
             f[cols.iter().position(|c| *c == "item_name").unwrap()],
             "Grandmaster's Guardian Helmet",
@@ -218,11 +235,13 @@ mod tests {
 
     #[test]
     fn loot_session_roundtrip() {
-        let path = std::env::temp_dir().join(format!("ziggs-loot-session-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("ziggs-loot-session-{}.json", std::process::id()));
         let events = vec![ev(2958)];
         let bytes = serde_json::to_vec(&events).unwrap();
         crate::persist::atomic_write(&path, &bytes).unwrap();
-        let loaded: Vec<LootEvent> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let loaded: Vec<LootEvent> =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].item_index, 2958);
         let _ = std::fs::remove_file(path);

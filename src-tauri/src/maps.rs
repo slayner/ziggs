@@ -7,16 +7,18 @@ use std::sync::OnceLock;
 static MAP_NAMES: OnceLock<HashMap<String, String>> = OnceLock::new();
 
 fn table() -> &'static HashMap<String, String> {
-    MAP_NAMES.get_or_init(|| {
-        serde_json::from_str(include_str!("map_names.json")).unwrap_or_default()
-    })
+    MAP_NAMES
+        .get_or_init(|| serde_json::from_str(include_str!("map_names.json")).unwrap_or_default())
 }
 
 /// Resolve a raw cluster index to a readable map name.
 /// Strip any "@..." suffix (hideouts/instances) before lookup; fall back to the raw index.
 pub fn resolve(raw_index: &str) -> String {
     let key = raw_index.split('@').next().unwrap_or(raw_index);
-    table().get(key).cloned().unwrap_or_else(|| raw_index.to_string())
+    table()
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| raw_index.to_string())
 }
 
 #[cfg(test)]

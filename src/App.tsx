@@ -102,7 +102,7 @@ type AuthPollResult = {
   global_name: string | null;
 };
 
-// Status do Albion para o card da sidebar.
+// Albion status for the sidebar card.
 type AlbionStatus =
   | { kind: "ok" }
   | { kind: "closed" }
@@ -354,7 +354,7 @@ export default function App() {
   }, 5000);
 
   usePoll(async () => {
-    try { setPending(await invoke<number>("pending_count")); } catch { /* sem fila */ }
+    try { setPending(await invoke<number>("pending_count")); } catch { /* no queue */ }
   }, 15000);
 
   usePoll(async () => {
@@ -387,6 +387,10 @@ export default function App() {
   // disabled).
   if (tab === "damage" && !config.collect_damage_meter) setTab("route");
   if (tab === "loot" && !config.collect_auto_lootlog) setTab("route");
+
+  // Npcap missing: Damage/Loot tabs are click-disabled but show tutorial on click.
+  const damageLocked = npcapMissing;
+  const lootLocked = npcapMissing;
 
   return (
     <div className="ck-root">
@@ -442,7 +446,7 @@ export default function App() {
               selected={tab === "route"}
               onSelect={() => setTab("route")}
               expandedContent={
-                sideMatrix && tab === "route" ? (
+                sideMatrix ? (
                   <div className="ck-side-route-mini">
                     {sideMatrix.albion.map(s => {
                       const assigned = sideMatrix.routing[s.region];
@@ -463,23 +467,25 @@ export default function App() {
             />
             <SideTab
               label={t("navDamage")}
-              value={fmtFull(sniffStats?.damage_total ?? 0)}
+              value={damageLocked ? "🔒" : fmtFull(sniffStats?.damage_total ?? 0)}
               valueTone="ok"
               selected={tab === "damage"}
-              onSelect={() => setTab("damage")}
+              onSelect={() => damageLocked ? setNpcapTutorialDismissed(false) : setTab("damage")}
               onToggle={config.collect_damage_meter ? () => updateConfig("collect_damage_meter", false) : () => updateConfig("collect_damage_meter", true)}
               toggleOn={config.collect_damage_meter}
-              inspectable={config.collect_damage_meter}
+              inspectable={config.collect_damage_meter && !damageLocked}
+              locked={damageLocked}
             />
             <SideTab
               label="Lootlog"
-              value={String(sniffStats?.loot_count ?? 0)}
+              value={lootLocked ? "🔒" : String(sniffStats?.loot_count ?? 0)}
               valueTone="ok"
               selected={tab === "loot"}
-              onSelect={() => setTab("loot")}
+              onSelect={() => lootLocked ? setNpcapTutorialDismissed(false) : setTab("loot")}
               onToggle={config.collect_auto_lootlog ? () => updateConfig("collect_auto_lootlog", false) : () => updateConfig("collect_auto_lootlog", true)}
               toggleOn={config.collect_auto_lootlog}
-              inspectable={config.collect_auto_lootlog}
+              inspectable={config.collect_auto_lootlog && !lootLocked}
+              locked={lootLocked}
             />
           </nav>
 
@@ -528,14 +534,14 @@ export default function App() {
         </aside>
 
         <main className="ck-main">
-          {tab === "route" && (
-            <div className="ck-route-col">
-              <div className="ck-route-scroll">
-                <TunnelHero config={config} tunnelStatus={tunnelStatus} hist={hist} />
-              </div>
-              <AdSlot />
+          {/* TunnelHero always mounted — hidden via CSS when not active tab.
+              Desmontar perde o poll interno da matrix de roteamento e os ms somem. */}
+          <div className="ck-route-col" style={{ display: tab === "route" ? "flex" : "none" }}>
+            <div className="ck-route-scroll">
+              <TunnelHero config={config} tunnelStatus={tunnelStatus} hist={hist} />
             </div>
-          )}
+            <AdSlot />
+          </div>
 
           {tab === "damage" && (
             <div className="ck-full">
@@ -616,7 +622,7 @@ export default function App() {
 /// `expandedContent` regardless of selected tab. The badge value updates live
 //  from App state, not from this component.
 function SideTab({
-  label, value, valueTone, selected, onSelect, onToggle, toggleOn, expandedContent, inspectable = true,
+  label, value, valueTone, selected, onSelect, onToggle, toggleOn, expandedContent, inspectable = true, locked = false,
 }: {
   label: string;
   value: string;
@@ -627,14 +633,14 @@ function SideTab({
   toggleOn?: boolean;
   expandedContent?: ReactNode;
   inspectable?: boolean;
+  locked?: boolean;
 }) {
   const expanded = !!expandedContent && inspectable;
+  const clickable = inspectable || locked;
   return (
     <button
-      className={`ck-side-tab${selected ? " selected" : ""}${expanded ? " expanded" : ""}${!inspectable ? " disabled" : ""}`}
-      // Don't use <button disabled>: disabled buttons don't propagate clicks
-      // to children, but the toggle must remain clickable while off.
-      onClick={inspectable ? onSelect : undefined}
+      className={`ck-side-tab${selected ? " selected" : ""}${expanded ? " expanded" : ""}${locked ? " locked" : ""}${!inspectable && !locked ? " disabled" : ""}`}
+      onClick={clickable ? onSelect : undefined}
     >
       <span className="ck-side-tab-head">
         <span className="ck-side-tab-label">{label}</span>
@@ -931,7 +937,7 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
 
   const loggedIn = !!config.discord_token;
 
-  // Poll: loot capturado + debug do sniffer (a cada 2s).
+  // Poll: captured loot + sniffer debug (every 2s).
   usePoll(async () => {
     try {
       const [rows, lines] = await Promise.all([
@@ -1196,15 +1202,6 @@ function TunnelHero({ config, tunnelStatus, hist }: {
   usePoll(async () => {
     try {
       const m = await invoke<RoutingMatrix>("tunnel_regions");
-      // When tunnel is active, replace VPS cell pings with real end-to-end latency
-      if (tunnelStatus?.tunnel_latency_ms != null && m.vps.length > 1) {
-        const real = tunnelStatus.tunnel_latency_ms;
-        for (let i = 1; i < m.vps.length; i++) {
-          for (const s of m.albion) {
-            m.vps[i].cell_pings[s.region] = real;
-          }
-        }
-      }
       setMatrix(m);
       setOptimisticRouting(null);
     } catch {}
@@ -1420,9 +1417,9 @@ function DiscordButton({ config, onChange }: {
           await invoke<AuthPollResult>("companion_poll_auth", { nonce });
           await onChange();
           break;
-        } catch { /* 408 = ainda aguardando */ }
+        } catch { /* 408 = still waiting */ }
       }
-    } catch { /* falhou ao abrir o browser */ }
+    } catch { /* failed to open browser */ }
     setState("idle");
   };
 
