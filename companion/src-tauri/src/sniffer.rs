@@ -208,7 +208,7 @@ impl Sniffer {
         let loot = match crate::lootlog::load_session() {
             Ok(events) => events,
             Err(e) => {
-                tracing::warn!("loot session não pôde ser carregada: {e:#}");
+                tracing::warn!("loot session could not be loaded: {e:#}");
                 Vec::new()
             }
         };
@@ -333,7 +333,7 @@ impl Sniffer {
                                 Err(pcap::Error::TimeoutExpired) => { /* no packet */ }
                                 Err(e) => {
                                     let _ = tx_clone.send(CaptureMsg::Dead(desc.clone()));
-                                    tracing::warn!("pcap erro em {}: {}", desc, e);
+                                    tracing::warn!("pcap error on {}: {}", desc, e);
                                     break;
                                 }
                             }
@@ -1192,8 +1192,8 @@ fn deep(v: &PhotonValue) -> String {
     match v {
         PhotonValue::Array(a) => {
             let head: Vec<String> = a.iter().take(16).map(brief).collect();
-            let reticencias = if a.len() > 16 { ", …" } else { "" };
-            format!("[{}{}]", head.join(", "), reticencias)
+            let ellipsis = if a.len() > 16 { ", ..." } else { "" };
+            format!("[{}{}]", head.join(", "), ellipsis)
         }
         other => brief(other),
     }
@@ -1563,34 +1563,34 @@ mod tests {
     }
 
     #[test]
-    fn loot_dedup_pega_evento_identico_vindo_de_2_interfaces() {
-        let mut buf = vec![loot_ev("Zezinho", "Fulano", 2958, 3)];
+    fn loot_dedup_catches_identical_event_from_two_interfaces() {
+        let mut buf = vec![loot_ev("Alice", "Bob", 2958, 3)];
         // Same identity (same copy arriving from the other interface) → dup.
         assert!(is_duplicate_loot(
             &buf,
-            &loot_ev("Zezinho", "Fulano", 2958, 3)
+            &loot_ev("Alice", "Bob", 2958, 3)
         ));
-        buf.push(loot_ev("Zezinho", "Fulano", 2958, 3));
+        buf.push(loot_ev("Alice", "Bob", 2958, 3));
 
         // Different item from same body, same second → not dup.
         assert!(!is_duplicate_loot(
             &buf,
-            &loot_ev("Zezinho", "Fulano", 1001, 3)
+            &loot_ev("Alice", "Bob", 1001, 3)
         ));
         // Different quantity → not dup.
         assert!(!is_duplicate_loot(
             &buf,
-            &loot_ev("Zezinho", "Fulano", 2958, 5)
+            &loot_ev("Alice", "Bob", 2958, 5)
         ));
         // Different looter → not dup.
         assert!(!is_duplicate_loot(
             &buf,
-            &loot_ev("Outro", "Fulano", 2958, 3)
+            &loot_ev("Carol", "Bob", 2958, 3)
         ));
     }
 
     #[test]
-    fn loot_dedup_nao_enxerga_alem_do_lookback() {
+    fn loot_dedup_does_not_see_beyond_lookback() {
         // Event beyond the lookback window (more than LOOT_DEDUP_LOOKBACK
         // distinct events in between) is not considered a dup — avoids false
         // positive when the same drop happens again much later.

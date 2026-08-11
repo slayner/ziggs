@@ -48,10 +48,10 @@ impl TransferQueue {
                 Vec::new()
             }
             Err(e) => {
-                tracing::error!("fila persistida inválida em {}: {e:#}", path.display());
+                tracing::error!("invalid persisted queue at {}: {e:#}", path.display());
                 let corrupt = path.with_extension(format!("corrupt-{}", iso_now()));
                 if let Err(rename_err) = std::fs::rename(&path, &corrupt) {
-                    tracing::error!("não foi possível preservar fila inválida: {rename_err}");
+                    tracing::error!("could not preserve invalid queue: {rename_err}");
                 }
                 Vec::new()
             }
@@ -77,7 +77,7 @@ impl TransferQueue {
         let mut items = self.items.lock().await;
         items.push(item);
         if let Err(e) = save_queue(&self.path, &items) {
-            tracing::error!("falha ao persistir scan_report: {e:#}");
+            tracing::error!("failed to persist scan_report: {e:#}");
         }
     }
 
@@ -91,7 +91,7 @@ impl TransferQueue {
         let mut items = self.items.lock().await;
         items.push(item);
         if let Err(e) = save_queue(&self.path, &items) {
-            tracing::error!("falha ao persistir prices: {e:#}");
+            tracing::error!("failed to persist prices: {e:#}");
         }
     }
 
@@ -105,7 +105,7 @@ impl TransferQueue {
         let mut items = self.items.lock().await;
         items.push(item);
         if let Err(e) = save_queue(&self.path, &items) {
-            tracing::error!("falha ao persistir market_history: {e:#}");
+            tracing::error!("failed to persist market_history: {e:#}");
         }
     }
 
@@ -132,7 +132,7 @@ impl TransferQueue {
                 if let Some(pos) = items.iter().position(|queued| queued == item) {
                     items.remove(pos); // only after ACK
                     if let Err(e) = save_queue(&self.path, &items) {
-                        tracing::error!("ACK recebido, mas falhou salvar remoção da fila: {e:#}");
+                        tracing::error!("ACK received but failed to save queue removal: {e:#}");
                     }
                 }
             } else {
@@ -143,7 +143,7 @@ impl TransferQueue {
                     updated.retries += 1;
                     if updated.retries >= MAX_RETRIES {
                         tracing::warn!(
-                            "descartando item após {} tentativas: kind={}",
+                            "discarding item after {} retries: kind={}",
                             updated.retries,
                             updated.kind
                         );
@@ -151,7 +151,7 @@ impl TransferQueue {
                         items.push(updated); // move to the back so other items get a chance first
                     }
                     if let Err(e) = save_queue(&self.path, &items) {
-                        tracing::error!("falha ao salvar fila após mover item falhado: {e:#}");
+                        tracing::error!("failed to save queue after moving failed item: {e:#}");
                     }
                 }
             }

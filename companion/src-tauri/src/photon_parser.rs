@@ -1604,7 +1604,7 @@ mod tests {
     /// A player gets a new entity ID when re-entering visibility, causing
     /// split damage lines and React key collisions that duplicated the list.
     #[test]
-    fn test_merge_junta_ids_do_mesmo_jogador() {
+    fn test_merge_combines_ids_of_the_same_player() {
         let mut a = DamageAcc::default();
         a.record(10, 100.0, 1000);
         a.record(10, 50.0, 1000); // same second, same skill
@@ -1617,13 +1617,13 @@ mod tests {
         a.merge(&b);
 
         assert_eq!(a.damage as i64, 387);
-        assert_eq!(a.spells[&10].hits, 3, "golpes das duas somam");
+        assert_eq!(a.spells[&10].hits, 3, "hits from both sum together");
         assert_eq!(a.spells[&10].total as i64, 350);
         assert_eq!(
             a.spells[&10].max_hit as i64, 200,
-            "maior golpe é o do outro id"
+            "biggest hit comes from the other id"
         );
-        assert_eq!(a.spells[&30].hits, 1, "skill que só o outro tinha entra");
+        assert_eq!(a.spells[&30].hits, 1, "skill only the other id had enters");
 
         // Same second must become ONE bucket — otherwise the chart draws two
         // points on the same x.
@@ -1631,7 +1631,7 @@ mod tests {
         assert_eq!(
             secs,
             vec![1000, 1001, 1005],
-            "ordenado e sem segundo repetido"
+            "sorted and without repeated second"
         );
         assert_eq!(
             a.timeline.iter().find(|(s, _)| *s == 1001).unwrap().1 as i64,
@@ -1647,27 +1647,27 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_com_acumulador_vazio_nao_inventa_tempo() {
-        let mut vazio = DamageAcc::default();
-        let mut cheio = DamageAcc::default();
-        cheio.record(1, 10.0, 500);
+    fn test_merge_with_empty_acc_does_not_invent_time() {
+        let mut empty = DamageAcc::default();
+        let mut full = DamageAcc::default();
+        full.record(1, 10.0, 500);
 
-        vazio.merge(&cheio);
-        assert_eq!(vazio.first_hit, Some(500));
+        empty.merge(&full);
+        assert_eq!(empty.first_hit, Some(500));
 
-        let mut outro = DamageAcc::default();
-        outro.record(1, 10.0, 500);
-        outro.merge(&DamageAcc::default());
+        let mut other = DamageAcc::default();
+        other.record(1, 10.0, 500);
+        other.merge(&DamageAcc::default());
         assert_eq!(
-            outro.first_hit,
+            other.first_hit,
             Some(500),
             "empty must not zero out first_hit"
         );
-        assert_eq!(outro.damage as i64, 10);
+        assert_eq!(other.damage as i64, 10);
     }
 
     #[test]
-    fn test_damage_acc_agrega_por_skill() {
+    fn test_damage_acc_aggregates_by_skill() {
         let mut acc = DamageAcc::default();
         acc.record(10, 100.0, 1000);
         acc.record(10, 300.0, 1000);
@@ -1680,10 +1680,10 @@ mod tests {
     }
 
     #[test]
-    fn test_timeline_agrupa_o_mesmo_segundo() {
+    fn test_timeline_groups_same_second() {
         let mut acc = DamageAcc::default();
         acc.record(1, 10.0, 500);
-        acc.record(1, 15.0, 500); // mesmo segundo → soma no bucket
+        acc.record(1, 15.0, 500); // same second → sums into one bucket
         acc.record(1, 7.0, 501);
         assert_eq!(acc.timeline.len(), 2);
         assert_eq!(acc.timeline[0], (500, 25.0));
@@ -1711,7 +1711,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dps_de_um_golpe_so_nao_divide_por_zero() {
+    fn test_dps_with_single_hit_does_not_divide_by_zero() {
         let mut acc = DamageAcc::default();
         acc.record(1, 500.0, 100);
         assert_eq!(acc.dps(), 500.0, "minimum 1s window");

@@ -122,7 +122,7 @@ pub struct DnsTargetsOut {
 /// only fail at parse time with a confusing deserialization error.
 fn ensure_json(resp: &reqwest::Response, what: &str) -> Result<()> {
     if !resp.status().is_success() {
-        return Err(anyhow!("{what} falhou: HTTP {}", resp.status()));
+        return Err(anyhow!("{what} failed: HTTP {}", resp.status()));
     }
     let ct = resp
         .headers()
@@ -131,8 +131,8 @@ fn ensure_json(resp: &reqwest::Response, what: &str) -> Result<()> {
         .unwrap_or("");
     if !ct.contains("json") {
         return Err(anyhow!(
-            "{what}: backend devolveu {ct:?} em vez de JSON — rota não registrada? \
-             (backend desatualizado precisa reiniciar)"
+            "{what}: backend returned {ct:?} instead of JSON — route not registered? \
+             (backend out of date, needs restart)"
         ));
     }
     Ok(())
@@ -174,7 +174,7 @@ impl ApiClient {
         let url = format!("{}/companion/crash-report", self.base_url);
         let resp = self.client.post(&url).json(payload).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("crash report falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("crash report failed: HTTP {}", resp.status()));
         }
         Ok(())
     }
@@ -183,10 +183,10 @@ impl ApiClient {
         let url = format!("{}/companion/scan/claim", self.base_url);
         let resp = self.client.post(&url).send().await?;
         if resp.status() == reqwest::StatusCode::NO_CONTENT {
-            return Err(anyhow!("sem trabalho"));
+            return Err(anyhow!("no work available"));
         }
         if !resp.status().is_success() {
-            return Err(anyhow!("claim falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("claim failed: HTTP {}", resp.status()));
         }
         let out: ScanClaim = resp.json().await?;
         Ok(out)
@@ -196,7 +196,7 @@ impl ApiClient {
         let url = format!("{}/companion/scan/report", self.base_url);
         let resp = self.client.post(&url).json(payload).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("report falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("report failed: HTTP {}", resp.status()));
         }
         let out: ScanReportOut = resp.json().await?;
         Ok(out)
@@ -206,10 +206,10 @@ impl ApiClient {
         let url = format!("{}/companion/kill-scan/claim", self.base_url);
         let resp = self.client.post(&url).send().await?;
         if resp.status() == reqwest::StatusCode::NO_CONTENT {
-            return Err(anyhow!("sem trabalho"));
+            return Err(anyhow!("no work available"));
         }
         if !resp.status().is_success() {
-            return Err(anyhow!("kill-scan claim falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("kill-scan claim failed: HTTP {}", resp.status()));
         }
         Ok(resp.json().await?)
     }
@@ -218,7 +218,7 @@ impl ApiClient {
         let url = format!("{}/companion/kill-scan/report", self.base_url);
         let resp = self.client.post(&url).json(payload).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("kill-scan report falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("kill-scan report failed: HTTP {}", resp.status()));
         }
         Ok(resp.json().await?)
     }
@@ -230,7 +230,7 @@ impl ApiClient {
         let body = serde_json::json!({ "name": name, "region": region });
         let resp = self.client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("warm falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("warm failed: HTTP {}", resp.status()));
         }
         Ok(resp.json().await?)
     }
@@ -243,7 +243,7 @@ impl ApiClient {
         let body = serde_json::json!({ "region": region, "names": names });
         let resp = self.client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("warm/seen falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("warm/seen failed: HTTP {}", resp.status()));
         }
         Ok(())
     }
@@ -252,7 +252,7 @@ impl ApiClient {
         let url = format!("{}/companion/dns/targets", self.base_url);
         let resp = self.client.get(&url).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("dns targets falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("dns targets failed: HTTP {}", resp.status()));
         }
         let out: DnsTargetsOut = resp.json().await?;
         Ok(out)
@@ -290,7 +290,7 @@ impl ApiClient {
         let body = serde_json::json!({ "rows": rows });
         let resp = self.client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("prices submit falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("prices submit failed: HTTP {}", resp.status()));
         }
         Ok(())
     }
@@ -301,7 +301,7 @@ impl ApiClient {
         let resp = self.client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
             return Err(anyhow!(
-                "market-history submit falhou: HTTP {}",
+                "market-history submit failed: HTTP {}",
                 resp.status()
             ));
         }
@@ -325,7 +325,7 @@ impl ApiClient {
             });
             let resp = self.client.post(&url).json(&body).send().await?;
             if !resp.status().is_success() {
-                return Err(anyhow!("silver-estimate falhou: HTTP {}", resp.status()));
+                return Err(anyhow!("silver-estimate failed: HTTP {}", resp.status()));
             }
             let out: serde_json::Value = resp.json().await?;
             total += out
@@ -346,10 +346,10 @@ impl ApiClient {
         let url = format!("{}/companion/auth/poll?nonce={}", self.base_url, nonce);
         let resp = self.client.get(&url).send().await?;
         if resp.status() == reqwest::StatusCode::REQUEST_TIMEOUT {
-            return Err(anyhow!("aguardando login"));
+            return Err(anyhow!("waiting for login"));
         }
         if !resp.status().is_success() {
-            return Err(anyhow!("auth poll falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("auth poll failed: HTTP {}", resp.status()));
         }
         Ok(resp.json().await?)
     }
@@ -359,11 +359,11 @@ impl ApiClient {
     /// Logged-in user's active events across all guilds (in progress or review).
     /// No guild_id is sent; the backend derives it from event signups.
     pub async fn active_events(&self) -> Result<Vec<ActiveEvent>> {
-        let (key, val) = self.auth_header().ok_or_else(|| anyhow!("não logado"))?;
+        let (key, val) = self.auth_header().ok_or_else(|| anyhow!("not logged in"))?;
         let url = format!("{}/companion/lootlog/active-events", self.base_url);
         let resp = self.client.get(&url).header(key, &val).send().await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("active-events falhou: HTTP {}", resp.status()));
+            return Err(anyhow!("active-events failed: HTTP {}", resp.status()));
         }
         Ok(resp.json().await?)
     }
@@ -371,7 +371,7 @@ impl ApiClient {
     /// Guild is not sent in the body; the backend derives it from the user's
     /// event signup and rejects if there is none.
     pub async fn submit_lootlog(&self, event_id: i64, csv_text: &str) -> Result<LootlogIngestOut> {
-        let (key, val) = self.auth_header().ok_or_else(|| anyhow!("não logado"))?;
+        let (key, val) = self.auth_header().ok_or_else(|| anyhow!("not logged in"))?;
         let url = format!("{}/companion/lootlog/ingest", self.base_url);
         let body = serde_json::json!({
             "event_id": event_id,
@@ -388,7 +388,7 @@ impl ApiClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("lootlog ingest falhou: HTTP {} {}", status, text));
+                return Err(anyhow!("lootlog ingest failed: HTTP {} {}", status, text));
         }
         Ok(resp.json().await?)
     }
@@ -422,7 +422,7 @@ pub struct LootlogIngestOut {
     pub is_update: bool,
 }
 
-/// Resposta de POST /companion/warm.
+/// Response from POST /companion/warm.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WarmProfileOut {
     pub status: String,

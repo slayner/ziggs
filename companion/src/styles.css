@@ -240,7 +240,7 @@ input, textarea, select { font-family: inherit; }
   padding: 8px 6px;
   gap: 4px;
 }
-/* Vertical ad below tabs: centralizado, não estoura a largura da sidebar. */
+/* Vertical ad below tabs: centered, does not overflow sidebar width. */
 .ck-side-ads {
   flex-shrink: 0;
   padding: 0;

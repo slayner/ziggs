@@ -1,14 +1,14 @@
-// build.rs — encontra o Npcap SDK (wpcap.lib) automaticamente.
+// build.rs — finds the Npcap SDK (wpcap.lib) automatically.
 //
-// Procura em:
+// Search in:
 //   1. NPCAP_SDK_DIR env var
 //   2. C:\npcap-sdk\Lib\x64
 //   3. C:\Program Files\Npcap SDK\Lib\x64
 //
-// Se encontrar, adiciona ao LIB path pra o linker achar wpcap.lib.
+// If found, add it to the LIB path so the linker finds wpcap.lib.
 
 fn which_rc() -> Option<String> {
-    // Procura rc.exe nos Windows Kits instalados (10.0.22621, etc.)
+    // Look for rc.exe in installed Windows Kits (10.0.22621, etc.)
     let kits = [
         "C:\\Program Files (x86)\\Windows Kits\\10\\bin",
         "C:\\Program Files\\Windows Kits\\10\\bin",
@@ -27,39 +27,39 @@ fn which_rc() -> Option<String> {
 }
 
 fn main() {
-    // Gera o ACL de permissões (capabilities/*.json → gen/schemas/) e o resto
-    // do codegen que `tauri::generate_context!()` espera encontrar. SEM isso
-    // o ACL fica CONGELADO no último build em que rodou: qualquer permissão
-    // nova em capabilities/default.json (ex: allow-start-dragging,
-    // allow-maximize) nunca chega ao binário — o comando é negado em runtime,
-    // calado, mesmo com decorations:false tirando a barra de título nativa
-    // (sem chrome nativo E sem drag por JS = janela impossível de mover).
-    // Mordida real em 20-21/07/2026: build.rs foi reescrito pro auto-detect
-    // do Npcap SDK e essa chamada sumiu junto.
+    // Generates the ACL permissions (capabilities/*.json → gen/schemas/) and the rest
+    // of the codegen that `tauri::generate_context!()` expects to find. WITHOUT this
+    // the ACL stays FROZEN at the last build that ran: any new permission
+    // in capabilities/default.json (e.g. allow-start-dragging,
+    // allow-maximize) never reaches the binary — the command is denied at runtime,
+    // silently, even with decorations:false removing the native title bar
+    // (no native chrome AND no JS drag = window impossible to move).
+    // Real incident on 20-21/07/2026: build.rs was rewritten for auto-detect
+    // of the Npcap SDK and this call disappeared along with it.
     //
-    // new_without_app_manifest(): o tauri_build padrão embute UM manifest
-    // Windows próprio (windows-app-manifest.xml). Este arquivo JÁ embute o
-    // NOSSO manifest via resource.res (compilado com rc.exe, ver abaixo —
-    // precisa do Common Controls v6 pro TaskDialogIndirect). Os dois manifests
-    // juntos = "CVT1100: duplicate resource type:MANIFEST" no link — o
-    // linker recusa dois RT_MANIFEST no mesmo binário.
+    // new_without_app_manifest(): the default tauri_build embeds ONE Windows
+    // manifest of its own (windows-app-manifest.xml). This file ALREADY embeds OUR
+    // manifest via resource.res (compiled with rc.exe, see below —
+    // needs Common Controls v6 for TaskDialogIndirect). Both manifests together
+    // = "CVT1100: duplicate resource type:MANIFEST" on link — the
+    // linker refuses two RT_MANIFEST in the same binary.
     let attrs = tauri_build::Attributes::new()
         .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
     if let Err(e) = tauri_build::try_build(attrs) {
-        panic!("tauri_build::try_build falhou: {e:#}");
+        panic!("tauri_build::try_build failed: {e:#}");
     }
 
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
         // Common Controls v6 — TaskDialogIndirect precisa de comctl32.lib
         println!("cargo:rustc-link-lib=dylib=comctl32");
 
-        // O Tauri já compila resource.rc em resource.lib e linka no binário
-        // (VERSIONINFO + ícone). Mas o manifest do Common Controls v6 não
-        // está lá — new_without_app_manifest() desligou o manifest automático
-        // do Tauri pra evitar duplicação com o nosso Companion.exe.manifest.
-        // Sem manifest, comctl32 v5 é carregada e TaskDialogIndirect falta.
-        // Solução: compilar SÓ o manifest como RT_MANIFEST num .res separado
-        // e linkar, sem tocar no resource.lib do Tauri.
+        // Tauri already compiles resource.rc into resource.lib and links it in the binary
+        // (VERSIONINFO + icon). But the Common Controls v6 manifest is
+        // not there — new_without_app_manifest() turned off Tauri's automatic manifest
+        // to avoid duplication with our Companion.exe.manifest.
+        // Without manifest, comctl32 v5 is loaded and TaskDialogIndirect is missing.
+        // Solution: compile ONLY the manifest as RT_MANIFEST in a separate .res
+        // and link it, without touching Tauri's resource.lib.
         let out_dir = std::env::var("OUT_DIR").unwrap();
         let our_manifest = std::path::Path::new("Companion.exe.manifest");
         if our_manifest.exists() {
@@ -130,7 +130,7 @@ fn main() {
                 return;
             }
         }
-        println!("cargo:warning=Npcap SDK nao encontrado. Baixe de https://npcap.com/dist/ e extraia em C:\\npcap-sdk");
-        println!("cargo:warning=Ou set NPCAP_SDK_DIR=<caminho> apontando pra a pasta do SDK");
+        println!("cargo:warning=Npcap SDK not found. Download from https://npcap.com/dist/ and extract to C:\\npcap-sdk");
+        println!("cargo:warning=Or set NPCAP_SDK_DIR=<path> pointing to the SDK folder");
     }
 }

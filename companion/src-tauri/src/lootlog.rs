@@ -123,10 +123,10 @@ pub async fn load_item_names() {
                 return;
             }
             Ok(_) => {
-                tracing::info!("catálogo de itens vazio no backend");
+                tracing::info!("item catalog empty on backend");
                 return;
             }
-            Err(e) => tracing::warn!("catálogo de itens falhou, de novo em 60s: {e:#}"),
+            Err(e) => tracing::warn!("item catalog fetch failed, retrying in 60s: {e:#}"),
         }
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
     }
@@ -189,7 +189,7 @@ mod tests {
 
     // Single test because the global item table would flake under parallel access.
     #[test]
-    fn csv_traz_id_e_nome_e_bate_com_o_parser_do_backend() {
+    fn csv_carries_id_and_name_and_matches_backend_parser() {
         store(vec![crate::api::ItemName {
             i: 2958,
             id: "T7_HEAD_PLATE_SET3@1".into(),
@@ -211,11 +211,11 @@ mod tests {
             "quantity",
             "looted_from__name",
         ] {
-            assert!(cols.contains(&req), "coluna {req} sumiu do header");
+            assert!(cols.contains(&req), "column {req} missing from header");
         }
         // Each row must align with the header column count.
         for l in &lines[1..] {
-            assert_eq!(l.split(';').count(), cols.len(), "linha desalinhada: {l}");
+            assert_eq!(l.split(';').count(), cols.len(), "misaligned line: {l}");
         }
 
         let f: Vec<&str> = lines[1].split(';').collect();

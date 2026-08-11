@@ -154,7 +154,7 @@ pub async fn upload(client: &reqwest::Client, batch: &AodpBatch) -> Result<()> {
     let solution = tokio::task::spawn_blocking(move || solve_pow(&key, &wanted))
         .await
         .map_err(|e| anyhow!("solve join: {e}"))?
-        .ok_or_else(|| anyhow!("PoW não resolvido (desafio muito difícil)"))?;
+        .ok_or_else(|| anyhow!("PoW not solved (challenge too hard)"))?;
 
     let resp = client
         .post(format!("{}/pow/{}", batch.base_url, batch.topic))
@@ -186,7 +186,7 @@ mod tests {
 
     // The real server sends 41-char `wanted`; old cutoff `> 40` silently broke the feed.
     #[test]
-    fn dificuldade_real_do_servidor_nao_pode_ser_rejeitada() {
+    fn real_server_difficulty_cannot_be_rejected() {
         for wanted_len in [41usize, 41, 41] {
             assert!(
                 !too_hard(wanted_len),

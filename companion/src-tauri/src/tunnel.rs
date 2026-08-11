@@ -27,7 +27,7 @@ const TUNNEL_IPV4_ADDR: Ipv4Addr = Ipv4Addr::new(10, 99, 0, 2);
 const TUNNEL_IPV4_GW: Ipv4Addr = Ipv4Addr::new(10, 99, 0, 1);
 const TUNNEL_NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
 const TUNNEL_MTU: usize = 1280; // WireGuard overhead friendly
-const KEEPALIVE: Option<u16> = Some(25); // segundos
+const KEEPALIVE: Option<u16> = Some(25); // seconds
 const PATH_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
 const PATH_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 

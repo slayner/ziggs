@@ -228,7 +228,7 @@ impl Scanner {
     async fn cycle(&self, api: &ApiClient) -> Result<bool> {
         let claim: ScanClaim = match api.claim_scan().await {
             Ok(c) => c,
-            Err(e) if e.to_string().contains("sem trabalho") => return Ok(false),
+            Err(e) if e.to_string().contains("no work available") => return Ok(false),
             Err(e) => return Err(e),
         };
 
@@ -311,7 +311,7 @@ impl Scanner {
                 &self.debug,
                 "info",
                 format!(
-                    "scan: range {}-{} {} em PvP → {} encontradas enfileiradas",
+                    "scan: range {}-{} {} in PvP → {} found queued",
                     claim.battle_id_start, claim.battle_id_end, claim.server, n_found,
                 ),
             )
@@ -334,8 +334,8 @@ impl Scanner {
         emit_debug(
             &self.debug,
             "info",
-            format!(
-                "scan: range {}-{} {} → {} encontradas, {} 404, {} erros",
+                format!(
+                    "scan: range {}-{} {} → {} found, {} 404, {} errors",
                 claim.battle_id_start,
                 claim.battle_id_end,
                 claim.server,
@@ -466,7 +466,7 @@ impl KillScanner {
     async fn cycle(&self, api: &ApiClient) -> Result<bool> {
         let claim: KillScanClaim = match api.claim_kill_scan().await {
             Ok(c) => c,
-            Err(e) if e.to_string().contains("sem trabalho") => return Ok(false),
+            Err(e) if e.to_string().contains("no work available") => return Ok(false),
             Err(e) => return Err(e),
         };
 
@@ -534,14 +534,14 @@ impl KillScanner {
                 s.kill_events_errors += report.errors.len() as u64;
             }
             Err(e) => {
-                tracing::warn!("kill-scan report falhou: {:#}", e);
+                tracing::warn!("kill-scan report failed: {:#}", e);
             }
         }
         emit_debug(
             &self.debug,
             "info",
-            format!(
-                "kill-scan: {}-{} {} → {} encontrados, {} 404, {} erros",
+                format!(
+                    "kill-scan: {}-{} {} → {} found, {} 404, {} errors",
                 claim.event_id_start,
                 claim.event_id_end,
                 claim.region,
@@ -560,7 +560,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn clone_compartilha_shutdown() {
+    async fn clone_shares_shutdown() {
         let scanner = Scanner::new();
         let clone = scanner.clone_for_spawn();
         clone.stop().await;
@@ -568,13 +568,13 @@ mod tests {
     }
 
     #[test]
-    fn resposta_200_malformada_nao_e_batalha() {
+    fn malformed_200_response_is_not_a_battle() {
         assert!(!valid_battle_payload(&serde_json::json!({"players": []})));
         assert!(valid_battle_payload(&serde_json::json!({"id": 42})));
     }
 
     #[test]
-    fn report_envia_somente_ids_de_batalha() {
+    fn report_sends_only_battle_ids() {
         let report = ScanReportIn {
             task_id: 1,
             region: "americas".into(),

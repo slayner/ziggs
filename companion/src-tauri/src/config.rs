@@ -201,9 +201,9 @@ mod tests {
     /// come from the binary. Removing `skip_deserializing` would let an old
     /// config.json silently point a new companion build at the wrong backend.
     #[test]
-    fn api_base_url_ignora_o_que_esta_no_json() {
+    fn api_base_url_ignores_json_value() {
         let json = r#"{
-            "api_base_url": "http://backend-que-nao-existe-mais:9999",
+            "api_base_url": "http://backend-that-no-longer-exists:9999",
             "collect_damage_meter": true,
             "collect_auto_lootlog": false,
             "autostart": true,
@@ -213,23 +213,23 @@ mod tests {
             "discord_username": null,
             "auto_lootlog_submit": false
         }"#;
-        let cfg: CompanionConfig = serde_json::from_str(json).expect("config válido");
+        let cfg: CompanionConfig = serde_json::from_str(json).expect("valid config");
         assert_eq!(cfg.api_base_url, API_BASE_URL);
         assert!(
             cfg.collect_damage_meter,
-            "os outros campos continuam vindo do JSON"
+            "other fields still come from JSON"
         );
     }
 
     /// It must still be serialized for get_config, otherwise the UI has no base URL.
     #[test]
-    fn api_base_url_e_serializado_pra_ui() {
+    fn api_base_url_is_serialized_for_ui() {
         let s = serde_json::to_string(&CompanionConfig::default()).unwrap();
-        assert!(s.contains(API_BASE_URL), "UI lê config.api_base_url");
+        assert!(s.contains(API_BASE_URL), "UI reads config.api_base_url");
     }
 
     #[test]
-    fn escrita_atomica_substitui_arquivo() {
+    fn atomic_write_replaces_file() {
         let path =
             std::env::temp_dir().join(format!("ziggs-config-test-{}.json", std::process::id()));
         std::fs::write(&path, b"old").unwrap();

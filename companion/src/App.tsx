@@ -102,7 +102,7 @@ type AuthPollResult = {
   global_name: string | null;
 };
 
-// Status do Albion para o card da sidebar.
+// Albion status for the sidebar card.
 type AlbionStatus =
   | { kind: "ok" }
   | { kind: "closed" }
@@ -354,7 +354,7 @@ export default function App() {
   }, 5000);
 
   usePoll(async () => {
-    try { setPending(await invoke<number>("pending_count")); } catch { /* sem fila */ }
+    try { setPending(await invoke<number>("pending_count")); } catch { /* no queue */ }
   }, 15000);
 
   usePoll(async () => {
@@ -937,7 +937,7 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
 
   const loggedIn = !!config.discord_token;
 
-  // Poll: loot capturado + debug do sniffer (a cada 2s).
+  // Poll: captured loot + sniffer debug (every 2s).
   usePoll(async () => {
     try {
       const [rows, lines] = await Promise.all([
@@ -1417,9 +1417,9 @@ function DiscordButton({ config, onChange }: {
           await invoke<AuthPollResult>("companion_poll_auth", { nonce });
           await onChange();
           break;
-        } catch { /* 408 = ainda aguardando */ }
+        } catch { /* 408 = still waiting */ }
       }
-    } catch { /* falhou ao abrir o browser */ }
+    } catch { /* failed to open browser */ }
     setState("idle");
   };
 

@@ -135,7 +135,7 @@ async fn set_config(
         _ => return Err(format!("unknown field: {}", key)),
     }
     if let Err(e) = config::save(&cfg) {
-        return Err(format!("falha ao salvar config: {e}"));
+        return Err(format!("failed to save config: {e}"));
     }
     if changed_autostart {
         #[cfg(target_os = "windows")]
@@ -825,7 +825,7 @@ async fn warm_self_worker(
                 Ok(out) => {
                     let cur = (name.clone(), region.to_string());
                     if last_logged.as_ref() != Some(&cur) {
-                        tracing::info!("warm: nomeando {} ({}) — {}", name, region, out.status);
+                        tracing::info!("warm: naming {} ({}) — {}", name, region, out.status);
                         last_logged = Some(cur);
                     }
                 }
@@ -911,7 +911,7 @@ async fn auto_lootlog_worker(
                 Ok(out) => {
                     submitted.insert(ev.event_id);
                     tracing::info!(
-                        "auto-lootlog: evento {} enviado ({} linhas)",
+                        "auto-lootlog: event {} submitted ({} lines)",
                         ev.event_id,
                         out.row_count
                     );
@@ -1477,9 +1477,9 @@ fn present_window(w: &tauri::WebviewWindow) {
 }
 
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
-    let show = MenuItem::with_id(app, "show", "Abrir", true, None::<&str>)?;
-    let pause = MenuItem::with_id(app, "pause", "Pausar scanner", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Open", true, None::<&str>)?;
+    let pause = MenuItem::with_id(app, "pause", "Pause scanner", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &pause, &quit])?;
     TrayIconBuilder::with_id("main-tray")
         .icon(app.default_window_icon().unwrap().clone())
@@ -1645,11 +1645,11 @@ pub fn run() {
                 };
                 let title: Vec<u16> = "Ziggs Companion\0".encode_utf16().collect();
                 let msg: Vec<u16> =
-                    "O companion precisa de privilégios de administrador para capturar pacotes \
-                     (Npcap) e gerenciar o túnel (wintun).\n\n\
-                     Se você negou o prompt UAC, tente novamente aceitando. \
-                     Se o problema persiste, execute o companion diretamente como administrador \
-                     (botão direito → Executar como administrador).\0"
+                    "Ziggs Companion requires administrator privileges to capture packets \
+                     (Npcap) and manage the tunnel (wintun).\n\n\
+                     If you declined the UAC prompt, try again and accept it. \
+                     If the problem persists, run the companion directly as administrator \
+                     (right-click → Run as administrator).\0"
                         .encode_utf16()
                         .collect();
                 unsafe {
@@ -1741,7 +1741,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async {
                 loop {
                     if let Err(e) = crash_report::send_pending_once().await {
-                        tracing::debug!("crash report pendente: {e:#}");
+                        tracing::debug!("crash report pending: {e:#}");
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 }
@@ -2177,31 +2177,31 @@ mod policy_tests {
     #[tokio::test]
     async fn heavy_work_ok_all_cases() {
         let sniffer = Sniffer::new();
-        let pausa_on = Arc::new(Mutex::new(true));
-        let pausa_off = Arc::new(Mutex::new(false));
+        let pause_on = Arc::new(Mutex::new(true));
+        let pause_off = Arc::new(Mutex::new(false));
 
         // Game closed (online=false, the default): allows work in any zone.
         assert!(
-            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pausa_on).await,
+            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pause_on).await,
             "game closed is the best time to work"
         );
 
         sniffer.stats.lock().await.online = true;
 
         assert!(
-            !heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pausa_on).await,
+            !heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pause_on).await,
             "in PvP zone: don't touch the CPU"
         );
         assert!(
-            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Blue), &pausa_on).await,
+            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Blue), &pause_on).await,
             "blue zone: safe to upload"
         );
         assert!(
-            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Unknown), &pausa_on).await,
+            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::Unknown), &pause_on).await,
             "unknown zone does not block — only confirmed PvP blocks"
         );
         assert!(
-            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pausa_off).await,
+            heavy_work_ok(&sniffer, &zona(transfer::ZoneType::PvP), &pause_off).await,
             "user disabled pause: respect their choice"
         );
     }

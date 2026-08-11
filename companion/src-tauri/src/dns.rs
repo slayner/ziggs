@@ -36,7 +36,7 @@ pub fn dns_profiles() -> Vec<DnsProfile> {
             secondary: "208.67.220.220".into(),
         },
         DnsProfile {
-            name: "Sistema (atual)".into(),
+            name: "System (current)".into(),
             primary: "system".into(),
             secondary: "system".into(),
         },
@@ -96,7 +96,7 @@ pub async fn test_profile(profile: &DnsProfile, hostname: &str) -> DnsResult {
     }
 
     if samples.is_empty() {
-        result.error = Some(format!("resolvedor {} inalcançável", profile.primary));
+        result.error = Some(format!("resolver {} unreachable", profile.primary));
         return result;
     }
 
@@ -138,7 +138,7 @@ async fn test_system_path(hostname: &str) -> DnsResult {
     }
 
     let mut result = DnsResult {
-        profile: "Sistema (atual)".into(),
+        profile: "System (current)".into(),
         primary: "system".into(),
         resolved: !samples.is_empty(),
         latency_ms: None,
@@ -148,7 +148,7 @@ async fn test_system_path(hostname: &str) -> DnsResult {
         error: None,
     };
     if samples.is_empty() {
-        result.error = Some("sem rota para o servidor".into());
+        result.error = Some("no route to server".into());
         return result;
     }
     let mean = samples.iter().sum::<f64>() / samples.len() as f64;
@@ -191,7 +191,7 @@ pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         if profile.primary == "system" {
-            return Err(anyhow::anyhow!("perfil 'Sistema' não aplica — é o atual"));
+            return Err(anyhow::anyhow!("'System' profile doesn't apply — it's the current one"));
         }
         let iface = default_interface_name()?;
         let primary = &profile.primary;
@@ -201,7 +201,7 @@ pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
             .map_err(|e| anyhow::anyhow!("netsh: {e}"))?;
         if !out.status.success() {
             return Err(anyhow::anyhow!(
-                "netsh falhou: {}",
+                "netsh failed: {}",
                 String::from_utf8_lossy(&out.stderr)
             ));
         }
@@ -224,7 +224,7 @@ pub fn apply_dns(profile: &DnsProfile) -> Result<()> {
     {
         let _ = profile;
         Err(anyhow::anyhow!(
-            "aplicar DNS em macOS/Linux requer netctl/networksetup — não implementado"
+            "applying DNS on macOS/Linux requires netctl/networksetup — not implemented"
         ))
     }
 }
@@ -241,14 +241,14 @@ fn default_interface_name() -> Result<String> {
         .map_err(|e| anyhow::anyhow!("powershell Get-NetRoute: {e}"))?;
     if !out.status.success() {
         return Err(anyhow::anyhow!(
-            "Get-NetRoute falhou: {}",
+            "Get-NetRoute failed: {}",
             String::from_utf8_lossy(&out.stderr)
         ));
     }
     let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if name.is_empty() {
         return Err(anyhow::anyhow!(
-            "nenhuma interface com default gateway encontrada"
+            "no interface with default gateway found"
         ));
     }
     Ok(name)
