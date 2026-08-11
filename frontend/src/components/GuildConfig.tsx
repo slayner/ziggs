@@ -144,6 +144,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const PERM_COLS = usePermCols();
   const [guild, setGuild] = useState<(SiteGuild & { albion_alliance_id: string | null; albion_alliance_name: string | null; settings: Record<string, unknown> }) | null>(null);
   const [albionLinks, setAlbionLinks] = useState<{ albion_guild_id: string; albion_guild_name: string; region: string; alliance_name: string | null; is_primary?: boolean }[]>([]);
+  const hasGuild = albionLinks.length > 0;
   const [newLinkName, setNewLinkName] = useState("");
   const [newLinkRegion, setNewLinkRegion] = useState("");
   const [linkErr, setLinkErr] = useState<string | null>(null);
@@ -1185,7 +1186,8 @@ async function saveJuicyKillMinSilver() {
               title={t("events")} desc={t("featEventsDesc")}
               on={eventsEnabled}
               onToggle={toggleEventsFeature}
-              statusHint={eventsEnabled && eventsChannelId ? chName(eventsChannelId) : (featOpen.has("events") ? undefined : t("featNeedsSetup"))}
+              disabled={!hasGuild}
+              statusHint={!hasGuild ? t("needsGuildFirst") : (eventsEnabled && eventsChannelId ? chName(eventsChannelId) : (featOpen.has("events") ? undefined : t("featNeedsSetup")))}
               open={featOpen.has("events")} onOpen={() => toggleFeat("events")}
             >
               <label className="block text-xs text-zinc-400 mb-1">{t("eventsPostingChannelLabel")}</label>
@@ -1389,7 +1391,8 @@ async function saveJuicyKillMinSilver() {
               title={t("featRegisterTitle")} desc={t("featRegisterDesc")}
               on={registerCmd?.enabled ?? false}
               onToggle={v => { if (registerCmd) toggleCommand("register", v); }}
-              statusHint={registerCmd ? rolePreviewLabel(registerCmd) : undefined}
+              disabled={!hasGuild}
+              statusHint={hasGuild ? (registerCmd ? rolePreviewLabel(registerCmd) : undefined) : t("needsGuildFirst")}
               open={featOpen.has("register")} onOpen={() => toggleFeat("register")}
             >
               {!registerCmd ? (
@@ -1544,6 +1547,7 @@ async function saveJuicyKillMinSilver() {
               title={t("regcfgTitle")} desc={t("featRegearDesc")}
               on={regearEnabled}
               onToggle={v => { void toggleRegearFeature(v); }}
+              disabled={!hasGuild}
               statusHint={regearEnabled && regear?.channels.length
                 ? `${regear.channels.length} ${regear.channels.length === 1 ? t("regcfgChannelSingular") : t("regcfgChannelPlural")}`
                 : (featOpen.has("regear") ? undefined : t("featNeedsSetup"))}
@@ -1671,6 +1675,7 @@ async function saveJuicyKillMinSilver() {
               icon="ti-clipboard-list" iconColor="text-amber-400"
               title={t("ll")} desc={t("featLootlogDesc")}
               on={lootlogEnabled} onToggle={v => void toggleLootlogFeature(v)}
+              disabled={!hasGuild}
               statusHint={`${llPct}%`}
               open={featOpen.has("lootlog")} onOpen={() => toggleFeat("lootlog")}
             >
@@ -1720,6 +1725,7 @@ async function saveJuicyKillMinSilver() {
               title={t("nodes")} desc={t("featNodesDesc")}
               on={nodesEnabled}
               onToggle={toggleNodesFeature}
+              disabled={!hasGuild}
               statusHint={nodesEnabled && nodesCalendarChannelId ? chName(nodesCalendarChannelId) : (featOpen.has("nodes") ? undefined : t("featNeedsSetup"))}
               open={featOpen.has("nodes")} onOpen={() => toggleFeat("nodes")}
             >
@@ -1898,6 +1904,7 @@ async function saveJuicyKillMinSilver() {
               title={t("battleFeedTitle")} desc={t("featBattleFeedDesc")}
               on={battleFeedEnabled}
               onToggle={toggleBattleFeedFeature}
+              disabled={!hasGuild}
               statusHint={battleFeedEnabled && battleFeedChannelId ? chName(battleFeedChannelId) : (featOpen.has("battlefeed") ? undefined : t("featNeedsSetup"))}
               open={featOpen.has("battlefeed")} onOpen={() => toggleFeat("battlefeed")}
             >
@@ -1920,6 +1927,7 @@ async function saveJuicyKillMinSilver() {
               title={t("juicyKillsTitle")} desc={t("featJuicyKillsDesc")}
               on={juicyKillEnabled}
               onToggle={toggleJuicyKillFeature}
+              disabled={!hasGuild}
               statusHint={juicyKillEnabled && juicyKillChannelId ? chName(juicyKillChannelId) : (featOpen.has("juicykills") ? undefined : t("featNeedsSetup"))}
               open={featOpen.has("juicykills")} onOpen={() => toggleFeat("juicykills")}
             >
@@ -2077,13 +2085,14 @@ async function saveJuicyKillMinSilver() {
 }
 
 // ── Switch — o mesmo toggle visual da lista de comandos, deduplicado ────────
-function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Switch({ checked, onChange, disabled }: { checked: boolean; onChange?: (v: boolean) => void; disabled?: boolean }) {
   return (
-    <label className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer" onClick={e => e.stopPropagation()}>
+    <label className={`relative inline-flex h-5 w-9 shrink-0 ${disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`} onClick={e => e.stopPropagation()}>
       <input
         type="checkbox"
         checked={checked}
-        onChange={e => onChange(e.target.checked)}
+        onChange={e => onChange?.(e.target.checked)}
+        disabled={disabled}
         className="peer sr-only"
       />
       <span className="
@@ -2100,7 +2109,7 @@ function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 // ── FeatureRow — linha de funcionalidade na mesma linguagem visual das linhas
 // de comando: toggle mestre + ícone + nome + descrição + hint de status +
 // chevron. Sem `onToggle` a feature é sempre-disponível (só configuração).
-function FeatureRow({ icon, iconColor, title, desc, on, onToggle, statusHint, open, onOpen, children }: {
+function FeatureRow({ icon, iconColor, title, desc, on, onToggle, statusHint, open, onOpen, disabled, children }: {
   icon: string;
   iconColor: string;
   title: string;
@@ -2110,13 +2119,14 @@ function FeatureRow({ icon, iconColor, title, desc, on, onToggle, statusHint, op
   statusHint?: string;
   open: boolean;
   onOpen: () => void;
+  disabled?: boolean;
   children: ReactNode;
 }) {
   return (
     <div className="border-b border-zinc-800/60 last:border-0">
       <div className="flex items-center gap-3 py-3">
         {onToggle
-          ? <Switch checked={!!on} onChange={onToggle} />
+          ? <Switch checked={!!on} onChange={disabled ? undefined : onToggle} disabled={disabled} />
           : <span className="w-9 shrink-0" aria-hidden="true" />}
         <button
           type="button"
