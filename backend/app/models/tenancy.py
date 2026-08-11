@@ -122,6 +122,28 @@ class GuildMember(Base, TimestampMixin):
     is_guild_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
+class GuildAlbionLink(Base, TimestampMixin):
+    """Vínculo adicional entre um servidor Discord e uma guilda de Albion.
+
+    O `Guild.albion_guild_id` continua sendo a guilda PRIMÁRIA (backward
+    compat); esta tabela adiciona as guildas secundárias — alianças com 300+
+    membros costumam operar em várias guildas sob o mesmo Discord."""
+    __tablename__ = "guild_albion_links"
+    __table_args__ = (
+        UniqueConstraint("guild_id", "albion_guild_id"),
+    )
+
+    id: Mapped[int] = pk()
+    guild_id: Mapped[int] = mapped_column(
+        ForeignKey("guilds.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    albion_guild_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    albion_guild_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    region: Mapped[str] = mapped_column(String(16), nullable=False)
+    alliance_id: Mapped[str | None] = mapped_column(String(64))
+    alliance_name: Mapped[str | None] = mapped_column(String(255))
+
+
 class GuildRolePermission(Base, TimestampMixin):
     """Mapeia um cargo Discord → permissões no site."""
     __tablename__ = "guild_role_permissions"

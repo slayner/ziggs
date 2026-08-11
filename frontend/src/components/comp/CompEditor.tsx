@@ -82,12 +82,11 @@ function BigRenders({ equip, weaponIs2H }: { equip: DraftEquip; weaponIs2H?: boo
   );
 }
 
-export function CompEditor({ initialDraft, initialImportCode, perms, offline, weapons, onBack, onDeleted }: {
+export function CompEditor({ initialDraft, initialImportCode, perms, weapons, onBack, onDeleted }: {
   initialDraft: Draft;
   initialEditing?: boolean;
   initialImportCode: CompCode | null;
   perms: Permissions;
-  offline: boolean;
   weapons: WeaponOut[];
   onBack: () => void;
   onDeleted?: (id: number) => void;
@@ -778,7 +777,6 @@ if (!draft) return <div className="container"><p className="muted">{t("loading")
             <input className="comp-name-input" value={draft.name}
               onFocus={captureHistory} onBlur={releaseFocus}
               onChange={e => updQuiet(d => ({ ...d, name: e.target.value }))} />
-            {offline && <span className="badge">{t("demoBadge")}</span>}
             {error && <span className="comp-header-error">{error}</span>}
           </div>
 

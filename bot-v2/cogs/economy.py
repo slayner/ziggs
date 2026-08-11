@@ -341,6 +341,63 @@ class Economy(commands.Cog):
         embed.add_field(name=t(lang, "stats_total_field"), value=f"`{format_silver(stats['balances_sum'])}`", inline=False)
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="bank", description=loc("Manage the guild bank balance (view / add / remove)", "cmd_desc_bank"))
+    @app_commands.guild_only()
+    @app_commands.describe(
+        acao=loc("Operation: view (default), add, or remove", "opt_desc_bank_acao"),
+        quantia=loc("Amount (e.g.: 100k, 1.5m). Ignored for 'view'.", "opt_desc_bank_quantia"),
+        motivo=loc("Short reason for the adjustment (optional)", "opt_desc_bank_motivo"),
+    )
+    @app_commands.rename(acao=loc("action", "opt_name_acao"), quantia=loc("amount", "opt_name_quantia"), motivo=loc("reason", "opt_name_motivo"))
+    async def bank(
+        self, interaction: Interaction,
+        acao: Optional[str] = None, quantia: Optional[str] = None, motivo: Optional[str] = None,
+    ) -> None:
+        if not await check_command_access(interaction, "bank"):
+            return
+        lang = await guild_lang(interaction)
+        # Sem `acao` ou "view" = só mostra o saldo (qualquer um com permissão de
+        # /bank pode ver; add/remove exige admin do servidor, mas check_command_access
+        # já garante que o cargo liberado pode usar — o default é admin-only).
+        op = (acao or "view").strip().lower()
+        if op not in ("view", "add", "remove"):
+            await interaction.response.send_message(t(lang, "bank_invalid_action"), ephemeral=True)
+            return
+
+        if op == "view":
+            data = await _get(f"/bot/guilds/{interaction.guild_id}/bank")
+            if data is None:
+                await interaction.response.send_message(t(lang, "bank_fetch_fail"), ephemeral=True)
+                return
+            embed = discord.Embed(
+                color=discord.Color.blurple(), title=t(lang, "bank_title"),
+                description=t(lang, "bank_balance_display", balance=format_silver(data["balance"])),
+            )
+            await interaction.response.send_message(embed=embed)
+            return
+
+        amount = parse_silver(quantia)
+        if amount is None or amount <= 0:
+            await interaction.response.send_message(t(lang, "invalid_amount"), ephemeral=True)
+            return
+        signed = amount if op == "add" else -amount
+        result = await _post(f"/bot/guilds/{interaction.guild_id}/bank/adjust", {
+            "amount": signed, "reason": (motivo or None),
+            "actor_discord_id": interaction.user.id,
+            "request_id": str(interaction.id),
+        })
+        if result is None:
+            await interaction.response.send_message(t(lang, "bank_fail"), ephemeral=True)
+            return
+        verb = "add" if op == "add" else "remove"
+        embed = discord.Embed(
+            color=discord.Color.green() if op == "add" else discord.Color.red(),
+            description=t(lang, f"bank_{verb}_success", actor=interaction.user.mention,
+                          amount=format_silver(amount), balance=format_silver(result["balance"])),
+        )
+        _set_tx_footer(embed, lang, [result.get("transaction_id")])
+        await interaction.response.send_message(embed=embed)
+
     @app_commands.command(name="leaderboard", description=loc("Ranking of users by current silver balance", "cmd_desc_leaderboard"))
     @app_commands.guild_only()
     async def leaderboard(self, interaction: Interaction) -> None:

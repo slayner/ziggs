@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type Permissions } from "../../api";
-import { useLang, useT } from "../../i18n";
-import { mockApiComp } from "../../mock";
+import { useT } from "../../i18n";
 import { compToDraft, decodeCompCode, encodeCompCode } from "./helpers";
 import type { CompCode, Draft } from "./types";
 
@@ -16,15 +15,14 @@ import type { CompCode, Draft } from "./types";
 type CompStats = { parties: number; roles: number };
 type StatsState = Record<number, CompStats | null | undefined>;
 
-export function CompList({ perms, offline, compList, setCompList, onOpen }: {
+export function CompList({ perms, compList, loadError, setCompList, onOpen }: {
   perms: Permissions;
-  offline: boolean;
   compList: { id: number; name: string }[] | null;
+  loadError: boolean;
   setCompList: React.Dispatch<React.SetStateAction<{ id: number; name: string }[] | null>>;
   onOpen: (id: number, draft: Draft, startEditing: boolean, importCode?: CompCode | null) => void;
 }) {
   const t = useT();
-  const { lang } = useLang();
   const [creatingComp, setCreatingComp] = useState(false);
   const [importMode, setImportMode] = useState(false);
   const [newCompName, setNewCompName] = useState("");
@@ -107,11 +105,7 @@ export function CompList({ perms, offline, compList, setCompList, onOpen }: {
       const c = await api.getComp(id);
       onOpen(id, compToDraft(c), startEditing);
     } catch {
-      if (offline) {
-        onOpen(id, compToDraft(mockApiComp(lang)), startEditing);
-      } else {
-        setError(t("loadCompError"));
-      }
+      setError(t("loadCompError"));
     }
   }
 
@@ -160,7 +154,7 @@ export function CompList({ perms, offline, compList, setCompList, onOpen }: {
               value={query}
               onChange={e => setQuery(e.target.value)} />
           </div>
-          {offline && <span className="badge">{t("demoBadge")}</span>}
+          {loadError && <span className="badge" style={{ color: "#e07a7a" }}>{t("loadCompError")}</span>}
         </div>
       </div>
 

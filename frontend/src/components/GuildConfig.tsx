@@ -14,18 +14,40 @@ function itemBaseId(id: string): string {
   return id.replace(/^T\d+_/, "").replace(/@\d+$/, "");
 }
 // ── Catálogo default de tipos de node (localizado por idioma do bot).
-// `key` = nome guardado no banco (canônico, sempre PT); `name.*` é a tradução
-// exibida conforme o idioma do bot. node_events.node_type guarda o `key`.
-// ponytail: vazio — os nodes do usuário são resource-tier específicos
-// ("Couro 8.4") que não dá pra adivinhar; preencher com a lista exata dele.
+// `key` = nome guardado no banco (canônico); `name.*` é a tradução exibida
+// conforme o idioma do bot. node_events.node_type guarda o `key`.
+// Lista completa dos 20 nodes do jogo: 4 recursos (wood/ore/fiber/hide) × 3
+// tiers (6.4/7.4/8.4) + 4 vortex por cor + 4 orbes por cor.
 const DEFAULT_NODE_DEFS: {
   key: string; name: { pt: string; en: string; es: string };
   emoji: string | null; weight: number;
 }[] = [
-  { key: "8.4", name: { pt: "Nó 8.4", en: "Node 8.4", es: "Nodo 8.4" }, emoji: "🟣", weight: 1.0 },
-  { key: "7.4", name: { pt: "Nó 7.4", en: "Node 7.4", es: "Nodo 7.4" }, emoji: "🔴", weight: 0.2 },
-  { key: "6.4", name: { pt: "Nó 6.4", en: "Node 6.4", es: "Nodo 6.4" }, emoji: "🟠", weight: 0.04 },
-  { key: "vortex", name: { pt: "Vortex/Orbes", en: "Vortex/Orbs", es: "Vórtice/Orbes" }, emoji: "⚪", weight: 0 },
+  // Wood (Madeira)
+  { key: "wood_6.4", name: { pt: "Madeira 6.4", en: "Wood 6.4", es: "Madera 6.4" }, emoji: "🪵", weight: 0.04 },
+  { key: "wood_7.4", name: { pt: "Madeira 7.4", en: "Wood 7.4", es: "Madera 7.4" }, emoji: "🪵", weight: 0.2 },
+  { key: "wood_8.4", name: { pt: "Madeira 8.4", en: "Wood 8.4", es: "Madera 8.4" }, emoji: "🪵", weight: 1.0 },
+  // Ore (Minério)
+  { key: "ore_6.4", name: { pt: "Minério 6.4", en: "Ore 6.4", es: "Mineral 6.4" }, emoji: "🪨", weight: 0.04 },
+  { key: "ore_7.4", name: { pt: "Minério 7.4", en: "Ore 7.4", es: "Mineral 7.4" }, emoji: "🪨", weight: 0.2 },
+  { key: "ore_8.4", name: { pt: "Minério 8.4", en: "Ore 8.4", es: "Mineral 8.4" }, emoji: "🪨", weight: 1.0 },
+  // Fiber (Fibra)
+  { key: "fiber_6.4", name: { pt: "Fibra 6.4", en: "Fiber 6.4", es: "Fibra 6.4" }, emoji: "🌿", weight: 0.04 },
+  { key: "fiber_7.4", name: { pt: "Fibra 7.4", en: "Fiber 7.4", es: "Fibra 7.4" }, emoji: "🌿", weight: 0.2 },
+  { key: "fiber_8.4", name: { pt: "Fibra 8.4", en: "Fiber 8.4", es: "Fibra 8.4" }, emoji: "🌿", weight: 1.0 },
+  // Hide (Couro)
+  { key: "hide_6.4", name: { pt: "Couro 6.4", en: "Hide 6.4", es: "Cuero 6.4" }, emoji: "🐗", weight: 0.04 },
+  { key: "hide_7.4", name: { pt: "Couro 7.4", en: "Hide 7.4", es: "Cuero 7.4" }, emoji: "🐗", weight: 0.2 },
+  { key: "hide_8.4", name: { pt: "Couro 8.4", en: "Hide 8.4", es: "Cuero 8.4" }, emoji: "🐗", weight: 1.0 },
+  // Vortex (by color)
+  { key: "vortex_green", name: { pt: "Vortex Verde", en: "Green Vortex", es: "Vortex Verde" }, emoji: "🟩", weight: 0.2 },
+  { key: "vortex_blue", name: { pt: "Vortex Azul", en: "Blue Vortex", es: "Vortex Azul" }, emoji: "🟦", weight: 0.2 },
+  { key: "vortex_purple", name: { pt: "Vortex Roxo", en: "Purple Vortex", es: "Vortex Morado" }, emoji: "🟪", weight: 0.2 },
+  { key: "vortex_gold", name: { pt: "Vortex Dourado", en: "Gold Vortex", es: "Vortex Dorado" }, emoji: "🟨", weight: 0.2 },
+  // Orbs (Orbes)
+  { key: "orb_green", name: { pt: "Orbe Verde", en: "Green Orb", es: "Orbe Verde" }, emoji: "🟢", weight: 0.04 },
+  { key: "orb_blue", name: { pt: "Orbe Azul", en: "Blue Orb", es: "Orbe Azul" }, emoji: "🔵", weight: 0.04 },
+  { key: "orb_purple", name: { pt: "Orbe Roxa", en: "Purple Orb", es: "Orbe Morada" }, emoji: "🟣", weight: 0.04 },
+  { key: "orb_gold", name: { pt: "Orbe Dourada", en: "Gold Orb", es: "Orbe Dorada" }, emoji: "🟡", weight: 0.04 },
 ];
 
 // Nome exibido de um def: se bater com uma key do catálogo default, mostra o
@@ -124,8 +146,16 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [albionName, setAlbionName] = useState("");
   const [albionRegion, setAlbionRegion] = useState("");
   const [albionNotFound, setAlbionNotFound] = useState(false);
+  const [albionLinks, setAlbionLinks] = useState<{ albion_guild_id: string; albion_guild_name: string; region: string; alliance_name: string | null }[]>([]);
+  const [primaryAlbionId, setPrimaryAlbionId] = useState<string | null>(null);
+  const [newLinkName, setNewLinkName] = useState("");
+  const [newLinkRegion, setNewLinkRegion] = useState("");
+  const [linkErr, setLinkErr] = useState<string | null>(null);
   const [roles, setRoles] = useState<DiscordRole[] | null>(null);
   const [rolesErr, setRolesErr] = useState<string | null>(null);
+  // Roles pinned in the permissions quadrant — initialized from any role that
+  // already has a permission enabled, then managed manually by the user.
+  const [permVisibleRoles, setPermVisibleRoles] = useState<Set<string>>(new Set());
   const [commands, setCommands] = useState<BotCommand[] | null>(null);
   const [registerRoleId, setRegisterRoleId] = useState<string>("");
   const [savingRole, setSavingRole] = useState(false);
@@ -209,6 +239,13 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   // Lootsplit mode: regear é sempre calculado; isto só decide como a tab do
   // evento vira split. Guild.settings.lootsplit_mode (ver events.get_lootsplit_mode).
   const [lootsplitMode, setLootsplitMode] = useState<string>("full");
+  // Taxa da guilda: % da tab debitada pro banco ANTES do pool de participantes
+  // (0-100, default 0). Só em modos com split. Ver events.get_guild_tax_percent.
+  const [guildTaxPct, setGuildTaxPct] = useState<string>("0");
+  // Scout bonus source: de onde vem o bônus do scout (NodeDef.weight). "node"
+  // (default) = peso × sold_value, pool separado. "tab" = peso × tab_value,
+  // deduzido da participant pool. Ver events.get_scout_bonus_source.
+  const [scoutBonusSource, setScoutBonusSource] = useState<string>("node");
   // Pings de @everyone do mass-info: momentos em que o bot deleta a embed e
   // reenvia com @everyone. Subconjunto de PING_TRIGGERS; default = os 3 primeiros
   // (review off). [] = tudo off (status triggers ainda bumpam silenciosamente).
@@ -232,6 +269,14 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     { mode: "leftover", labelKey: "lootsplitModeLeftover", descKey: "lootsplitModeLeftoverDesc" },
     { mode: "full", labelKey: "lootsplitModeFull", descKey: "lootsplitModeFullDesc" },
     { mode: "guild_backed", labelKey: "lootsplitModeGuildBacked", descKey: "lootsplitModeGuildBackedDesc" },
+  ];
+
+  // Scout bonus source — de onde vem o bônus do scout (NodeDef.weight). "node"
+  // (default) = peso × sold_value (pool separado). "tab" = peso × tab_value,
+  // deduzido da participant pool. Ver events.get_scout_bonus_source no backend.
+  const SCOUT_BONUS_SOURCES: { src: string; labelKey: TKey; descKey: TKey }[] = [
+    { src: "node", labelKey: "scoutBonusSourceNode", descKey: "scoutBonusSourceNodeDesc" },
+    { src: "tab", labelKey: "scoutBonusSourceTab", descKey: "scoutBonusSourceTabDesc" },
   ];
 
   // Momentos configuráveis de ping @everyone do mass-info (ver event_signups.py
@@ -280,6 +325,8 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setTrialPercent(String(g.settings.trial_percent ?? 20));
       setTrialRoleId((g.settings.trial_role_id as string | undefined) ?? "");
       setLootsplitMode((g.settings.lootsplit_mode as string | undefined) ?? "full");
+      setGuildTaxPct(String(g.settings.guild_tax_percent ?? 0));
+      setScoutBonusSource((g.settings.scout_bonus_source as string | undefined) ?? "node");
       const pt = g.settings.events_ping_triggers as string[] | undefined;
       setPingTriggers(Array.isArray(pt) ? pt : ["created", "t10min", "in_progress"]);
       const nodesCh = (g.settings.nodes_calendar_channel_id as string | undefined) ?? "";
@@ -305,6 +352,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setRegisterOthersRoles(commandRoles?.register_others ?? [ADMIN]);
     });
     api.guildAllies(guildId).then(setAllyGuilds).catch(() => setAllyGuilds([]));
+    refreshAlbionLinks();
     api.guildDiscordChannels(guildId)
       .then(r => { setChannels(r); setChannelsErr(null); })
       .catch(e => setChannelsErr(e.message));
@@ -397,7 +445,46 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     });
   }
 
+  // Whether a role has at least one permission toggled on.
+  function roleHasAnyPerm(roleId: string): boolean {
+    const role = roles?.find(r => r.id === roleId);
+    if (!role?.permissions) return false;
+    return PERM_COLS.some(c => !!role.permissions[c.key]);
+  }
+
+  // Roles currently pinned in the quadrant (including any with perms that
+  // haven't been explicitly removed).
+  const permQuadrantIds = useMemo(() => {
+    if (!roles) return permVisibleRoles;
+    // Merge explicit pins with roles that currently have perms
+    const ids = new Set(permVisibleRoles);
+    for (const r of roles) {
+      if (roleHasAnyPerm(r.id)) ids.add(r.id);
+    }
+    return ids;
+  }, [roles, permVisibleRoles]);
+
+  // Roles available in the dropdown (not yet in quadrant)
+  const permDropdownRoles = useMemo(() => {
+    if (!roles) return [];
+    return roles.filter(r => !permQuadrantIds.has(r.id));
+  }, [roles, permQuadrantIds]);
+
+  function addRoleToPermQuadrant(roleId: string) {
+    setPermVisibleRoles(prev => new Set(prev).add(roleId));
+  }
+
+  function removeRoleFromPermQuadrant(roleId: string) {
+    setPermVisibleRoles(prev => {
+      const next = new Set(prev);
+      next.delete(roleId);
+      return next;
+    });
+  }
+
+  // Auto-pin roles that gain their first permission via toggle.
   async function togglePerm(roleId: string, permKey: keyof Permissions, value: boolean) {
+    if (value) addRoleToPermQuadrant(roleId);
     const role = roles?.find(r => r.id === roleId);
     if (!role) return;
     const newPerms: Partial<Permissions> = { ...role.permissions, [permKey]: value };
@@ -423,6 +510,38 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     const [g, allies] = await Promise.all([api.guildInfo(guildId), api.guildAllies(guildId)]);
     setGuild(g);
     setAllyGuilds(allies);
+    refreshAlbionLinks();
+  }
+
+  function refreshAlbionLinks() {
+    api.listAlbionLinks(guildId).then(r => {
+      setPrimaryAlbionId(r.primary);
+      setAlbionLinks(r.links);
+    }).catch(() => {});
+  }
+
+  async function addAlbionLink() {
+    const name = newLinkName.trim();
+    if (!name) return;
+    setLinkErr(null);
+    try {
+      await api.addAlbionLink(guildId, name, newLinkRegion);
+      setNewLinkName("");
+      refreshAlbionLinks();
+    } catch (e: any) {
+      const msg = String((e as Error)?.message ?? e);
+      setLinkErr(msg.includes("404") ? t("albionGuildNotFound") : msg);
+    }
+  }
+
+  async function removeAlbionLink(albionGid: string) {
+    setLinkErr(null);
+    try {
+      await api.removeAlbionLink(guildId, albionGid);
+      refreshAlbionLinks();
+    } catch (e: any) {
+      setLinkErr(String((e as Error)?.message ?? e));
+    }
   }
 
   async function saveRegisterRole(value: string) {
@@ -657,6 +776,20 @@ async function saveJuicyKillMinSilver() {
   async function saveLootsplitMode(value: string) {
     setLootsplitMode(value);
     await api.updateGuildSettings(guildId, { lootsplit_mode: value });
+  }
+
+  // Auto-save no blur: clamp 0-100. 0 = remove a chave (default = sem taxa).
+  async function saveGuildTax() {
+    const n = Math.max(0, Math.min(100, parseInt(guildTaxPct, 10) || 0));
+    setGuildTaxPct(String(n));
+    await api.updateGuildSettings(guildId, { guild_tax_percent: n > 0 ? n : null });
+  }
+
+  // Auto-save do scout bonus source ("node" | "tab"). Ver
+  // events.get_scout_bonus_source no backend.
+  async function saveScoutBonusSource(value: string) {
+    setScoutBonusSource(value);
+    await api.updateGuildSettings(guildId, { scout_bonus_source: value });
   }
 
   // Toggle de um gatilho de ping @everyone. Salva a lista inteira (a chave no
@@ -1003,6 +1136,58 @@ async function saveJuicyKillMinSilver() {
           </div>
           {albionNotFound && <p className="text-xs text-red-400 mb-2">{t("albionGuildNotFound")}</p>}
 
+          {/* Guildas adicionais — alianças com 300+ membros operam em várias
+              guildas sob o mesmo Discord. A primária fica acima (input); estas
+              são as secundárias. */}
+          <div className="mt-3 mb-2">
+            <label className="block text-xs text-zinc-500 mb-1">{t("albionLinkedGuilds")}</label>
+            {albionLinks.length === 0 ? (
+              <p className="text-[11px] text-zinc-600">{t("albionLinkedEmpty")}</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {albionLinks.map(l => (
+                  <li key={l.albion_guild_id} className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5">
+                    <span className="text-xs text-zinc-200 flex-1 truncate">{l.albion_guild_name}</span>
+                    <span className="text-[10px] uppercase tracking-wide text-zinc-500">{REGION_LABELS[lang][l.region as keyof typeof REGION_LABELS[typeof lang]] ?? l.region}</span>
+                    {l.alliance_name && <span className="text-[10px] text-zinc-600 truncate max-w-[80px]">{l.alliance_name}</span>}
+                    <button
+                      type="button"
+                      onClick={() => removeAlbionLink(l.albion_guild_id)}
+                      disabled={l.albion_guild_id === primaryAlbionId}
+                      className="text-xs text-zinc-500 hover:text-red-400 disabled:opacity-30 disabled:cursor-not-allowed"
+                      title={l.albion_guild_id === primaryAlbionId ? t("albionPrimaryLock") : t("remove")}
+                    >
+                      <i className="ti ti-x" aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="flex gap-2 mb-1">
+            <input
+              value={newLinkName}
+              onChange={e => { setNewLinkName(e.target.value); setLinkErr(null); }}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addAlbionLink(); } }}
+              placeholder={t("guildNamePlaceholder")}
+              className="flex-1 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-amber-500 placeholder:text-zinc-600"
+            />
+            <select
+              value={newLinkRegion}
+              onChange={e => setNewLinkRegion(e.target.value)}
+              className="w-28 shrink-0 rounded-md border border-zinc-700 bg-zinc-800 px-1 py-1 text-xs text-zinc-200"
+            >
+              <option value="">{t("albionRegionAuto")}</option>
+              {ALBION_REGIONS.map(r => (
+                <option key={r} value={r}>{REGION_LABELS[lang][r]}</option>
+              ))}
+            </select>
+            <button type="button" onClick={addAlbionLink} disabled={!newLinkName.trim()} className="btn btn-primary text-xs px-3 disabled:opacity-40">
+              <i className="ti ti-plus" aria-hidden="true" />
+            </button>
+          </div>
+          {linkErr && <p className="text-xs text-red-400 mb-2">{linkErr}</p>}
+
           {guild.bot_present ? (
             <p className="text-xs text-zinc-500">
               {t("botPresentDesc")}
@@ -1186,6 +1371,22 @@ async function saveJuicyKillMinSilver() {
                       <span className="block text-[11px] opacity-80 mt-0.5">{t(descKey)}</span>
                     </button>
                   ))}
+                </div>
+
+                {/* Taxa da guilda — % da tab debitada pro banco antes do pool de
+                    participantes. Só vale em modos com split; "none" ignora. */}
+                <div className={`mt-3 ${lootsplitMode === "none" ? "opacity-40 pointer-events-none" : ""}`}>
+                  <label className="block text-xs text-zinc-400 mb-1">{t("guildTaxLabel")}</label>
+                  <p className="text-[11px] text-zinc-600 mb-2">{t("guildTaxHint")}</p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number" min={0} max={100} value={guildTaxPct}
+                      onChange={e => setGuildTaxPct(e.target.value)}
+                      onBlur={() => void saveGuildTax()}
+                      className="w-24 bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200"
+                    />
+                    <span className="text-xs text-zinc-500">%</span>
+                  </div>
                 </div>
               </div>
 
@@ -1596,6 +1797,33 @@ async function saveJuicyKillMinSilver() {
               <p className="text-[11px] text-zinc-600 mb-2">{t("nodesCalendarDesc")}</p>
               {channelSelect(nodesCalendarChannelId, saveNodesCalendar)}
 
+              {/* Scout bonus source — de onde vem o bônus do scout. "node" =
+                  pool separado do valor vendido; "tab" = deduzido da tab do
+                  evento. Ver events.get_scout_bonus_source no backend. */}
+              <div className="mt-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <i className="ti ti-compass text-emerald-400 text-sm" aria-hidden="true" />
+                  <label className="text-xs text-zinc-400">{t("scoutBonusSourceTitle")}</label>
+                </div>
+                <p className="text-[11px] text-zinc-600 mb-2">{t("scoutBonusSourceDesc")}</p>
+                <div className="flex flex-col gap-2">
+                  {SCOUT_BONUS_SOURCES.map(({ src, labelKey, descKey }) => (
+                    <button
+                      key={src} type="button"
+                      onClick={() => { void saveScoutBonusSource(src); }}
+                      className={`text-left text-xs px-3 py-2 rounded-md border transition-colors ${
+                        scoutBonusSource === src
+                          ? "border-emerald-500 bg-emerald-500/15 text-emerald-300"
+                          : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+                      }`}
+                    >
+                      <span className="block font-semibold">{t(labelKey)}</span>
+                      <span className="block text-[11px] opacity-80 mt-0.5">{t(descKey)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Tipos de node — adicionar node em si é pelo Discord. */}
               <div className="mt-4 border-t border-zinc-800 pt-3">
                 <h4 className="text-xs font-semibold text-zinc-200 mb-1">{t("nodesDefsTitle")}</h4>
@@ -1647,7 +1875,9 @@ async function saveJuicyKillMinSilver() {
                           <td className="py-1.5 px-2 text-xs text-zinc-200">{d.emoji ?? "—"}</td>
                           <td className="py-1.5 px-2 text-xs text-zinc-200">
                             {Math.round(d.weight * 100)}%
-                            <div className="text-[10px] text-zinc-600" style={{ lineHeight: 1.3 }}>{t("nodesDefWeightHint")}</div>
+                            <div className="text-[10px] text-zinc-600" style={{ lineHeight: 1.3 }}>
+                              {t(scoutBonusSource === "tab" ? "nodesDefWeightHintTab" : "nodesDefWeightHint")}
+                            </div>
                           </td>
                           <td className="py-1.5 px-2 text-right whitespace-nowrap">
                             <button className="btn" style={{ padding: "2px 8px" }} onClick={() => startEditNodeDef(d)}>{t("nodesDefEdit")}</button>{" "}
@@ -1825,40 +2055,75 @@ async function saveJuicyKillMinSilver() {
           {roles === null && !rolesErr && <p className="text-xs text-zinc-500">{t("loadingRoles")}</p>}
           {roles !== null && roles.length === 0 && <p className="text-xs text-zinc-500">{t("noRolesFound")}</p>}
           {roles !== null && roles.length > 0 && (
-            <div className="flex flex-col">
-              {roles.map(role => (
-                <div key={role.id} className="py-3 border-b border-zinc-800/60 last:border-0">
-                  <div className="flex items-center gap-2 mb-2">
-                    {role.color !== 0 && (
-                      <span
-                        className="inline-block w-2 h-2 rounded-full shrink-0"
-                        style={{ background: `#${role.color.toString(16).padStart(6, "0")}` }}
-                      />
-                    )}
-                    <span className="text-sm text-zinc-200 font-medium">{role.name}</span>
+            <>
+              {/* Dropdown: pick a role to add to the quadrant */}
+              {permDropdownRoles.length > 0 && (
+                <select
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200 mb-4"
+                  value=""
+                  onChange={e => { if (e.target.value) addRoleToPermQuadrant(e.target.value); }}
+                >
+                  <option value="" disabled>{t("rolePermsAddRole")}</option>
+                  {permDropdownRoles.map(r => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+              )}
+              {/* Quadrant: only roles with perms or explicitly pinned */}
+              {[...permQuadrantIds].map(roleId => {
+                const role = roles?.find(r => r.id === roleId);
+                if (!role) return null;
+                return (
+                  <div key={role.id} className="py-3 border-b border-zinc-800/60 last:border-0">
+                    <div className="flex items-center gap-2 mb-2">
+                      {role.color !== 0 && (
+                        <span
+                          className="inline-block w-2 h-2 rounded-full shrink-0"
+                          style={{ background: `#${role.color.toString(16).padStart(6, "0")}` }}
+                        />
+                      )}
+                      <span className="text-sm text-zinc-200 font-medium flex-1">{role.name}</span>
+                      <button
+                        type="button"
+                        className="text-[11px] text-zinc-500 hover:text-red-400 transition-colors px-1"
+                        onClick={() => {
+                          // Clear all perms for this role and remove from quadrant
+                          for (const col of PERM_COLS) {
+                            if (role.permissions?.[col.key]) togglePerm(role.id, col.key, false);
+                          }
+                          removeRoleFromPermQuadrant(role.id);
+                        }}
+                        title={t("rolePermsRemove")}
+                      >
+                        <i className="ti ti-x" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {PERM_COLS.map(col => {
+                        const active = !!role.permissions[col.key];
+                        return (
+                          <button
+                            key={col.key}
+                            type="button"
+                            onClick={() => togglePerm(role.id, col.key, !active)}
+                            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                              active
+                                ? "border-violet-500 bg-violet-500/15 text-violet-300"
+                                : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+                            }`}
+                          >
+                            {col.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {PERM_COLS.map(col => {
-                      const active = !!role.permissions[col.key];
-                      return (
-                        <button
-                          key={col.key}
-                          type="button"
-                          onClick={() => togglePerm(role.id, col.key, !active)}
-                          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                            active
-                              ? "border-violet-500 bg-violet-500/15 text-violet-300"
-                              : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
-                          }`}
-                        >
-                          {col.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
+                );
+              })}
+              {permQuadrantIds.size === 0 && (
+                <p className="text-xs text-zinc-500">{t("rolePermsEmpty")}</p>
+              )}
+            </>
           )}
         </Panel>
 

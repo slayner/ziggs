@@ -124,6 +124,10 @@ class PayoutPreview(BaseModel):
     logger_pool: int = 0
     logger_payouts: list[PayoutRow] = Field(default_factory=list)
     scout_payouts: list[PayoutRow] = Field(default_factory=list)
+    # Taxa da guilda: guild_tax_percent da tab debitada pro banco ANTES do
+    # pool de participantes ser calculado (ver events._calc_payout). 0 quando
+    # lootsplit_mode="none" (sem split, sem taxa) ou taxa não configurada.
+    guild_tax: int = 0
     # Só preenchido em modo "guild_backed" quando o regear come mais que a tab.
     # guild_deficit_total = rombo a descontar; guild_deficit_member_count =
     # quantos membros da guilda (GuildMember) dividem essa conta em partes

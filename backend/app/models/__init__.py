@@ -3,7 +3,7 @@ Importa todos os modelos para que `Base.metadata` enxergue tudo (Alembic
 autogenerate e create_all dependem disso).
 """
 from app.models.base import Base  # noqa: F401
-from app.models.tenancy import Guild, User, GuildMember, GuildRolePermission, PremiumTier  # noqa: F401
+from app.models.tenancy import Guild, User, GuildMember, GuildAlbionLink, GuildRolePermission, PremiumTier  # noqa: F401
 from app.models.catalog import Weapon, GameRole, WeaponSpell  # noqa: F401
 from app.models.comps import (  # noqa: F401
     Comp, CompParty, CompSlot, CompSlotRole,
@@ -42,7 +42,7 @@ from app.models.profile_media import ProfileMediaSubmission  # noqa: F401
 
 __all__ = [
     "Base",
-    "Guild", "User", "GuildMember", "PremiumTier",
+    "Guild", "User", "GuildMember", "GuildAlbionLink", "PremiumTier",
     "Weapon", "GameRole", "WeaponSpell",
     "Comp", "CompParty", "CompSlot", "CompSlotRole",
     "CompRolePreference",

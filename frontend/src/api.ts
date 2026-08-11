@@ -802,6 +802,13 @@ export const api = {
     // calculado; isto só decide como a tab vira lootsplit (ver
     // events.get_lootsplit_mode no backend).
     lootsplit_mode?: string | null;
+    // % da tab debitada pro banco da guilda ANTES do pool de participantes
+    // (0-100, default 0). Só vale em modos com split. Ver events.get_guild_tax_percent.
+    guild_tax_percent?: number | null;
+    // "node" (default) | "tab" — de onde vem o bônus do scout (NodeDef.weight).
+    // "node" = peso × sold_value (pool separado). "tab" = peso × tab_value,
+    // deduzido da participant pool. Ver events.get_scout_bonus_source no backend.
+    scout_bonus_source?: string | null;
     // Subconjunto de ["created","t10min","in_progress","review"] — momentos em
     // que o mass-info do bot deleta a embed e reenvia com @everyone. Default
     // (chave ausente) = os 3 primeiros; [] = tudo off. Ver event_signups.py.
@@ -852,6 +859,19 @@ export const api = {
       `/auth/guild-discord-channels/${guild_id}${voice ? "?voice=true" : ""}`,
     ),
   guildAllies: (guild_id: string) => req<{ id: string; name: string }[]>(`/auth/guild-allies/${guild_id}`),
+  listAlbionLinks: (guild_id: string) =>
+    req<{
+      primary: string | null;
+      primary_name: string | null;
+      links: { albion_guild_id: string; albion_guild_name: string; region: string; alliance_id: string | null; alliance_name: string | null }[];
+    }>(`/auth/guilds/${guild_id}/albion-links`),
+  addAlbionLink: (guild_id: string, name: string, region: string) =>
+    req<{ ok: boolean; albion_guild_id: string }>(`/auth/guilds/${guild_id}/albion-links`, {
+      method: "POST",
+      body: JSON.stringify({ name, region }),
+    }),
+  removeAlbionLink: (guild_id: string, albion_guild_id: string) =>
+    req<{ ok: boolean }>(`/auth/guilds/${guild_id}/albion-links/${albion_guild_id}`, { method: "DELETE" }),
   updateRolePermissions: (guild_id: string, role_id: string, role_name: string, permissions: Partial<Permissions>) =>
     req<{ ok: boolean }>(`/auth/guild-discord-roles/${guild_id}/${role_id}`, {
       method: "PATCH",

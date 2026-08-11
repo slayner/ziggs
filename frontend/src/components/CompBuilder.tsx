@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { api, type Permissions, type WeaponOut } from "../api";
-import { useT } from "../i18n";
 
 import { CompEditor } from "./comp/CompEditor";
 import { CompList } from "./comp/CompList";
@@ -12,9 +11,9 @@ export type { DraftEquip };
 export { EquipGrid, PriceHistoryChart };
 
 // Container fino: decide entre a lista de comps e o editor de uma comp
-// específica. Todo o estado de edição (draft, undo, fn-types, etc.) vive em
+// específico. Todo o estado de edição (draft, undo, fn-types, etc.) vive em
 // CompEditor — aqui só o que precisa sobreviver à troca lista↔editor
-// (compList, offline, weapons, cache de armas por sessão).
+// (compList, weapons, cache de armas por sessão).
 export default function CompBuilder({ perms, onOpenChange }: {
   perms: Permissions;
   // Avisa o pai (ManagementPage) se uma comp está aberta pra edição/visualização
@@ -22,16 +21,15 @@ export default function CompBuilder({ perms, onOpenChange }: {
   // pro editor (o master-detail já é largo, não cabe espremido).
   onOpenChange?: (open: boolean) => void;
 }) {
-  const t = useT();
   const [compList, setCompList] = useState<{ id: number; name: string }[] | null>(null);
-  const [offline, setOffline] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [weapons, setWeapons] = useState<WeaponOut[]>([]);
   const [active, setActive] = useState<{ id: number; draft: Draft; importCode: CompCode | null } | null>(null);
 
   useEffect(() => {
     api.listComps()
       .then(list => setCompList(list))
-      .catch(() => { setCompList([{ id: 1, name: t("demoCompName") }]); setOffline(true); });
+      .catch(() => { setLoadError(true); });
     api.listWeapons().then(setWeapons).catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -43,15 +41,16 @@ export default function CompBuilder({ perms, onOpenChange }: {
 
   if (!active) {
     return (
-      <CompList perms={perms} offline={offline} compList={compList} setCompList={setCompList}
+      <CompList perms={perms} compList={compList} loadError={loadError} setCompList={setCompList}
         onOpen={(id, draft, _startEditing, importCode) => setActive({ id, draft, importCode: importCode ?? null })} />
     );
   }
 
   return (
     <CompEditor initialDraft={active.draft} initialImportCode={active.importCode}
-      perms={perms} offline={offline} weapons={weapons}
+      perms={perms} weapons={weapons}
       onBack={() => setActive(null)}
       onDeleted={(id) => setCompList(prev => prev?.filter(c => c.id !== id) ?? prev)} />
   );
 }
+

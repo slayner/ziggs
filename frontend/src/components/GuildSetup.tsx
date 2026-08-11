@@ -12,6 +12,24 @@ interface Props {
   onComplete: () => void;
 }
 
+// Defined OUTSIDE GuildSetup — defining a component inside another causes
+// React to treat it as a new type each render, unmounting/remounting the
+// subtree and stealing focus from the input on every keystroke.
+function Step({ done, n, icon, title, children }: { done: boolean; n: number; icon: string; title: string; children?: React.ReactNode }) {
+  return (
+    <div className={`rounded-xl border p-5 transition-colors ${done ? "border-emerald-700/40 bg-emerald-950/10" : "border-zinc-800 bg-zinc-900/60"}`}>
+      <div className="flex items-center gap-3 mb-2">
+        <span className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ${done ? "bg-emerald-500/20 text-emerald-400" : "bg-zinc-800 text-zinc-400"}`}>
+          {done ? "✓" : n}
+        </span>
+        <i className={`ti ${icon} text-lg ${done ? "text-emerald-400" : "text-zinc-400"}`} aria-hidden="true" />
+        <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 export default function GuildSetup({ guildId, guildName, botPresent, hasAlbionName, onSwitch, onComplete }: Props) {
   const t = useT();
   const { lang } = useLang();
@@ -21,7 +39,7 @@ export default function GuildSetup({ guildId, guildName, botPresent, hasAlbionNa
   const [error, setError] = useState<string | null>(null);
 
   const stepBot = botPresent;
-  const stepName = hasAlbionName || albionName.trim().length > 0;
+  const stepName = (hasAlbionName || albionName.trim().length > 0) && region.length > 0;
   const allDone = stepBot && stepName;
 
   async function complete() {
@@ -39,19 +57,6 @@ export default function GuildSetup({ guildId, guildName, botPresent, hasAlbionNa
       setSaving(false);
     }
   }
-
-  const Step = ({ done, n, icon, title, children }: { done: boolean; n: number; icon: string; title: string; children?: React.ReactNode }) => (
-    <div className={`rounded-xl border p-5 transition-colors ${done ? "border-emerald-700/40 bg-emerald-950/10" : "border-zinc-800 bg-zinc-900/60"}`}>
-      <div className="flex items-center gap-3 mb-2">
-        <span className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ${done ? "bg-emerald-500/20 text-emerald-400" : "bg-zinc-800 text-zinc-400"}`}>
-          {done ? "✓" : n}
-        </span>
-        <i className={`ti ${icon} text-lg ${done ? "text-emerald-400" : "text-zinc-400"}`} aria-hidden="true" />
-        <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>
-      </div>
-      {children}
-    </div>
-  );
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-10">
@@ -93,9 +98,10 @@ export default function GuildSetup({ guildId, guildName, botPresent, hasAlbionNa
                   <select
                     value={region}
                     onChange={e => setRegion(e.target.value)}
+                    required
                     className="w-36 shrink-0 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-2 text-sm text-zinc-100 outline-none focus:border-amber-500"
                   >
-                    <option value="">{t("albionRegionAuto")}</option>
+                    <option value="">{t("albionRegionPlaceholder")}</option>
                     {ALBION_REGIONS.map(r => (
                       <option key={r} value={r}>{REGION_LABELS[lang][r]}</option>
                     ))}

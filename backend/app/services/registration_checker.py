@@ -39,6 +39,8 @@ async def _check_once() -> None:
                      r.is_ally, r.discord_user_id, r.role_id) for r in regs]
         guild_data = {gid: (g.albion_guild_id, g.albion_alliance_id, g.settings or {})
                       for gid, g in guilds.items()}
+        from app.services.guild_links import albion_guild_ids
+        owned_ids_by_guild = {gid: set(albion_guild_ids(db, gid)) for gid in guilds}
         db.commit()
 
         bot_token = get_settings().discord_bot_token
@@ -71,7 +73,10 @@ async def _check_once() -> None:
                             and ("all" in allowed_allies or player_guild_id in allowed_allies)
                         )
                     else:
-                        still_valid = data is not None and player_guild_id == str(g_guild_id)
+                        owned = owned_ids_by_guild.get(guild_id, set())
+                        if g_guild_id:
+                            owned.add(str(g_guild_id))
+                        still_valid = data is not None and player_guild_id in owned
 
                     if still_valid:
                         continue

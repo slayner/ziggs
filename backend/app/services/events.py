@@ -234,6 +234,36 @@ def get_lootsplit_mode(guild: Guild | None) -> str:
     return mode if mode in LOOTSPLIT_MODES else "full"
 
 
+def get_guild_tax_percent(guild: Guild | None) -> int:
+    """Setting `guild_tax_percent` (Guild.settings) — % da tab debitada pro
+    banco da guilda ANTES do pool de participantes. Range 0-100, default 0
+    (sem taxa). Só vale em modos com split (não-none): sem pool pra repartir,
+    taxar a tab não faz sentido."""
+    if guild is None:
+        return 0
+    val = (guild.settings or {}).get("guild_tax_percent")
+    if isinstance(val, (int, float)) and 0 <= val <= 100:
+        return int(val)
+    return 0
+
+
+# Scout bonus source — decide se o bônus do scout sai do valor vendido do
+# node (pool separado, default) ou da tab do evento (deduzido da participant
+# pool, igual ao logger pool). "node" = comportamento histórico; "tab" =
+# bônus sai do bolso dos participantes.
+SCOUT_BONUS_SOURCES = ("node", "tab")
+
+
+def get_scout_bonus_source(guild: Guild | None) -> str:
+    """Setting `scout_bonus_source` (Guild.settings) — de onde vem o bônus do
+    scout. "node" (default) = NodeDef.weight × sold_value do node (pool
+    separado, financiado pelo que o node vendeu). "tab" = NodeDef.weight ×
+    tab_value, deduzido da participant pool (o scout come do bolso dos
+    participantes, igual ao logger pool)."""
+    src = (guild.settings or {}).get("scout_bonus_source") if guild else None
+    return src if src in SCOUT_BONUS_SOURCES else "node"
+
+
 def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     """Calcula o preview de pagamento. Regear é SEMPRE calculado (universal);
     o lootsplit_mode da guilda decide se/como o valor da tab vira split.
@@ -241,6 +271,7 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     pool) — mortes/regear seguem pelas linhas explícitas de EventDeath."""
     guild = db.get(Guild, ev.guild_id) if db is not None else None
     mode = get_lootsplit_mode(guild)
+    guild_tax_pct = get_guild_tax_percent(guild) if mode != "none" else 0
 
     valid_participants = [p for p in ev.participants if _participant_valid(ev, p)]
     total_pct = sum(p.percent for p in valid_participants)
@@ -284,15 +315,45 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
                     regear=0, scout=0, total=amount,
                 ))
 
+    # Scout: precompute os amounts ANTES do participant_pool pq em modo "tab"
+    # o bônus do scout é deduzido da tab (igual ao logger pool), não vem de um
+    # pool separado. Em modo "node" (default) os amounts são os mesmos mas o
+    # financiamento é separado — não consome tab.
+    #   "node": amount = int(sold_value * weight)        — pool separado
+    #   "tab":  amount = int(tab_value * weight / 100)    — sai da participant pool
+    # Scout que também é participante soma na própria linha (atribuição depois
+    # do regear, abaixo).
+    scout_source = get_scout_bonus_source(guild)
+    scout_rows_data: list[tuple[int | None, str | None, int]] = []
+    scout_pool = 0
+    if db is not None:
+        from app.services import nodes as nodes_svc
+        for log in nodes_svc.captured_for_event(db, ev.guild_id, ev.id):
+            w = nodes_svc.weight_for(db, ev.guild_id, log.node_type)
+            if scout_source == "tab":
+                amount = int(ev.tab_value * w / 100)
+            else:
+                amount = int(log.sold_value * w)
+            if amount <= 0 or log.scout_id is None:
+                continue
+            scout_rows_data.append((log.scout_id, log.scout_name, amount))
+            scout_pool += amount
+
     # guild_deficit_*: só preenchido em guild_backed quando o regear come mais
     # que a tab — é o rombo que _finalize_payouts vai descontar de cada membro
     # da guilda (EconomyBalance), em vez de zerar como o "leftover" faz.
     guild_deficit_total = 0
     guild_deficit_member_count = 0
+    # Taxa da guilda: % da tab debitada pro banco ANTES do pool. Aplicada em
+    # todos os modos com split (só "none" não tem pool). Taxa não consome tab
+    # em "none" (deveria 0 aqui mesmo), e participa do rombo em guild_backed.
+    guild_tax = int(ev.tab_value * guild_tax_pct / 100) if mode != "none" else 0
+    # scout_pool só consome tab em modo "tab"; em "node" é pool separado.
+    scout_from_tab = scout_pool if scout_source == "tab" else 0
     if mode == "none":
         participant_pool = 0
     elif mode in ("leftover", "guild_backed"):
-        raw_pool = ev.tab_value - logger_pool - total_regear_approved
+        raw_pool = ev.tab_value - logger_pool - guild_tax - scout_from_tab - total_regear_approved
         if raw_pool < 0 and mode == "guild_backed":
             participant_pool = 0
             guild_deficit_total = -raw_pool
@@ -306,7 +367,7 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
             # tab inteira, o split zera; ninguém "empresta" a diferença.
             participant_pool = max(0, raw_pool)
     else:  # "full"
-        participant_pool = max(0, ev.tab_value - logger_pool)
+        participant_pool = max(0, ev.tab_value - logger_pool - guild_tax - scout_from_tab)
 
     for p in valid_participants:
         lootsplit = 0
@@ -355,37 +416,31 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
                 "percent": 0, "lootsplit": 0, "regear": amt, "scout": 0, "total": amt,
             }
 
-    # Scout: pool SEPARADO financiado pelo valor vendido de cada node capturado
-    # (NodeDef.weight × sold_value). Não sai da tab — participantes repartem a tab
-    # inteira entre si; o scout recebe por cima, como uma linha extra (igual ao
-    # logger pool). Scout que também é participante soma na própria linha.
+    # Scout: atribui os amounts precomputados acima nas linhas. Em modo
+    # "node" é pool separado (financiado pelo que o node vendeu); em "tab" já
+    # foi deduzido da participant_pool acima. Scout que também é participante
+    # soma na própria linha.
     scout_payouts: list[PayoutRow] = []
-    if db is not None:
-        from app.services import nodes as nodes_svc
-        for log in nodes_svc.captured_for_event(db, ev.guild_id, ev.id):
-            w = nodes_svc.weight_for(db, ev.guild_id, log.node_type)
-            amount = int(log.sold_value * w)
-            if amount <= 0 or log.scout_id is None:
-                continue
-            key = log.scout_id
-            if key in rows:
-                rows[key]["scout"] += amount
-                rows[key]["total"] += amount
-            else:
-                rows[key] = {
-                    "user_id": log.scout_id,
-                    "display_name": log.scout_name or str(log.scout_id),
-                    "percent": 0,
-                    "lootsplit": 0,
-                    "regear": 0,
-                    "scout": amount,
-                    "total": amount,
-                }
-            scout_payouts.append(PayoutRow(
-                user_id=log.scout_id,
-                display_name=log.scout_name or str(log.scout_id),
-                percent=0, lootsplit=0, regear=0, scout=amount, total=amount,
-            ))
+    for scout_id, scout_name, amount in scout_rows_data:
+        key = scout_id
+        if key in rows:
+            rows[key]["scout"] += amount
+            rows[key]["total"] += amount
+        else:
+            rows[key] = {
+                "user_id": scout_id,
+                "display_name": scout_name or str(scout_id),
+                "percent": 0,
+                "lootsplit": 0,
+                "regear": 0,
+                "scout": amount,
+                "total": amount,
+            }
+        scout_payouts.append(PayoutRow(
+            user_id=scout_id,
+            display_name=scout_name or str(scout_id),
+            percent=0, lootsplit=0, regear=0, scout=amount, total=amount,
+        ))
 
     payouts = [PayoutRow(**r) for r in rows.values()]
     total_lootsplit = sum(r.lootsplit for r in payouts)
@@ -397,11 +452,15 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     # propósito. Em "leftover" o regear já saiu da tab pro virar pool (ver
     # participant_pool acima), então precisa descontar de novo aqui pra não
     # contar a mesma prata como "perdida". Em "none"/"full" regear é custo à
-    # parte do banco (não consome tab), então não entra nessa conta. Scout é
-    # pool separado (financiado pelo valor do node, não pela tab). Nunca negativo.
-    # "none": a tab inteira nunca teve intenção de virar split — não é "perda".
+    # parte do banco (não consome tab), então não entra nessa conta. Scout em
+    # modo "node" é pool separado (não consome tab); em "tab" já foi deduzido
+    # da participant_pool (scout_from_tab) e entra no fechamento. Nunca
+    # negativo. "none": a tab inteira nunca teve intenção de virar split —
+    # não é "perda".
     spent_from_tab = total_regear_approved if mode in ("leftover", "guild_backed") else 0
-    rounding_loss = 0 if mode == "none" else max(0, ev.tab_value - total_lootsplit - logger_total - spent_from_tab)
+    rounding_loss = 0 if mode == "none" else max(
+        0, ev.tab_value - total_lootsplit - logger_total - guild_tax - spent_from_tab - scout_from_tab
+    )
     return PayoutPreview(
         tab_value=ev.tab_value,
         lootsplit_mode=mode,
@@ -413,6 +472,7 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
         rounding_loss=rounding_loss,
         logger_pool=logger_pool,
         logger_payouts=logger_payouts,
+        guild_tax=guild_tax,
         guild_deficit_total=guild_deficit_total,
         guild_deficit_member_count=guild_deficit_member_count,
     )
@@ -515,13 +575,15 @@ def _battle_members(db: Session, ev: Event) -> dict[int, str]:
     Heurística por sobreposição de horário (não existe FK evento↔batalha). Só
     leitura. Usado tanto p/ flag de origem (battle_no_call) quanto p/ os
     absentees (membros em batalha sem nenhum EventParticipant)."""
+    from app.services.guild_links import albion_guild_ids
     guild = db.get(Guild, ev.guild_id)
     if guild is None or not guild.albion_guild_id or ev.started_at is None:
         return {}
+    owned_ids = albion_guild_ids(db, ev.guild_id)
     window_end = ev.ended_at or _now()
     battle_ids = db.scalars(
         select(Battle.id).join(BattleGuild, BattleGuild.battle_id == Battle.id).where(
-            BattleGuild.albion_guild_id == guild.albion_guild_id,
+            BattleGuild.albion_guild_id.in_(owned_ids),
             Battle.start_time <= window_end,
             or_(Battle.end_time.is_(None), Battle.end_time >= ev.started_at),
         )
@@ -533,7 +595,7 @@ def _battle_members(db: Session, ev: Event) -> dict[int, str]:
         for bp in db.scalars(
             select(BattleParticipant).where(
                 BattleParticipant.battle_id.in_(battle_ids),
-                BattleParticipant.guild_id == guild.albion_guild_id,
+                BattleParticipant.guild_id.in_(owned_ids),
             )
         )
     }
@@ -1265,6 +1327,15 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
         if guild is not None:
             guild.bank_balance -= payout.total_regear
 
+    # Taxa da guilda: credita bank_balance (prata debitada do pool de
+    # participantes vira saldo do banco). Sem EconomyTransaction porque não é
+    # movimento de saldo de membro — é contabilidade interna do banco, igual
+    # ao débito de regear acima (que também não gera linha).
+    if payout.guild_tax > 0:
+        guild = db.get(Guild, ev.guild_id)
+        if guild is not None:
+            guild.bank_balance += payout.guild_tax
+
     if payout.lootsplit_mode == "guild_backed" and payout.guild_deficit_total > 0:
         member_ids = db.scalars(
             select(GuildMember.user_id).where(GuildMember.guild_id == ev.guild_id)
@@ -1687,3 +1758,19 @@ def mark_event_thread_archived(db: Session, guild_id: int, event_id: int) -> boo
 if __name__ == "__main__":  # pragma: no cover
     _voice_self_check()
     print("voice self-check ok")
+    # ponytail: contrato da taxa — 0 fora do range, 0 quando mode=none, e a
+    # aritmética de pool respeita a ordem tab − logger − tax − regear.
+    from types import SimpleNamespace as _NS
+    g0 = _NS(settings={})
+    g10 = _NS(settings={"guild_tax_percent": 10})
+    gbad = _NS(settings={"guild_tax_percent": 150})
+    assert get_guild_tax_percent(None) == 0
+    assert get_guild_tax_percent(g0) == 0
+    assert get_guild_tax_percent(g10) == 10
+    assert get_guild_tax_percent(gbad) == 0  # fora de 0-100 vira 0
+    assert int(1_000_000 * 10 / 100) == 100_000
+    # "full" sem logger/regear: pool = tab − tax.
+    assert max(0, 1_000_000 - 0 - 100_000) == 900_000
+    # "leftover": tab=1M, tax=10%, regear=200k → pool = 1M − 0 − 100k − 200k.
+    assert max(0, 1_000_000 - 0 - 100_000 - 200_000) == 700_000
+    print("tax ok")

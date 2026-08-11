@@ -346,6 +346,38 @@ T: dict[str, dict[str, str]] = {
         "en": "📊 Total in circulation",
         "es": "📊 Total en circulación",
     },
+    # /bank — gestão do banco da guilda
+    "bank_title": {"pt": "Banco da guilda", "en": "Guild bank", "es": "Banco del gremio"},
+    "bank_balance_display": {
+        "pt": "🏦 Saldo: **{balance}**",
+        "en": "🏦 Balance: **{balance}**",
+        "es": "🏦 Saldo: **{balance}**",
+    },
+    "bank_fetch_fail": {
+        "pt": "⚠️ Não consegui consultar o saldo do banco agora.",
+        "en": "⚠️ Couldn't check the bank balance right now.",
+        "es": "⚠️ No pude consultar el saldo del banco ahora.",
+    },
+    "bank_fail": {
+        "pt": "⚠️ Não consegui ajustar o banco agora.",
+        "en": "⚠️ Couldn't adjust the bank right now.",
+        "es": "⚠️ No pude ajustar el banco ahora.",
+    },
+    "bank_invalid_action": {
+        "pt": "❌ Ação inválida. Use `view`, `add` ou `remove`.",
+        "en": "❌ Invalid action. Use `view`, `add`, or `remove`.",
+        "es": "❌ Acción inválida. Usa `view`, `add` o `remove`.",
+    },
+    "bank_add_success": {
+        "pt": "{actor} adicionou **{amount}** ao banco da guilda (saldo: `{balance}`)",
+        "en": "{actor} added **{amount}** to the guild bank (balance: `{balance}`)",
+        "es": "{actor} agregó **{amount}** al banco del gremio (saldo: `{balance}`)",
+    },
+    "bank_remove_success": {
+        "pt": "{actor} removeu **{amount}** do banco da guilda (saldo: `{balance}`)",
+        "en": "{actor} removed **{amount}** from the guild bank (balance: `{balance}`)",
+        "es": "{actor} retiró **{amount}** del banco del gremio (saldo: `{balance}`)",
+    },
     "leaderboard_fail": {
         "pt": "⚠️ Não consegui consultar o leaderboard agora.",
         "en": "⚠️ Couldn't check the leaderboard right now.",
@@ -797,6 +829,28 @@ CMD_I18N: dict[str, dict[str, str]] = {
 
     "cmd_desc_leaderboard": {"pt": "Ranking dos usuários pelo saldo atual de prata", "en": "Ranking of users by current silver balance", "es": "Ranking de usuarios por saldo actual de plata"},
     "cmd_desc_economystats": {"pt": "Mostra um snapshot da economia do servidor", "en": "Shows a snapshot of the server's economy", "es": "Muestra un resumen de la economía del servidor"},
+    "cmd_desc_bank": {
+        "pt": "Gerencia o saldo do banco da guilda (ver, adicionar, remover)",
+        "en": "Manage the guild bank balance (view / add / remove)",
+        "es": "Gestiona el saldo del banco del gremio (ver, añadir, quitar)",
+    },
+    "opt_name_acao": {"pt": "acao", "en": "action", "es": "accion"},
+    "opt_name_motivo": {"pt": "motivo", "en": "reason", "es": "motivo"},
+    "opt_desc_bank_acao": {
+        "pt": "Operação: ver (padrão), adicionar ou remover",
+        "en": "Operation: view (default), add, or remove",
+        "es": "Operación: ver (por defecto), añadir o quitar",
+    },
+    "opt_desc_bank_quantia": {
+        "pt": "Quantia (ex: 100k, 1.5m). Ignorada em 'ver'.",
+        "en": "Amount (e.g.: 100k, 1.5m). Ignored for 'view'.",
+        "es": "Cantidad (ej: 100k, 1.5m). Ignorada en 'ver'.",
+    },
+    "opt_desc_bank_motivo": {
+        "pt": "Motivo curto do ajuste (opcional)",
+        "en": "Short reason for the adjustment (optional)",
+        "es": "Motivo breve del ajuste (opcional)",
+    },
 
     "cmd_desc_undo": {"pt": "Reverte uma transação de economia pelo ID", "en": "Reverts an economy transaction by its ID", "es": "Revierte una transacción de economía por su ID"},
     "opt_desc_undo_id": {

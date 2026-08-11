@@ -26,7 +26,7 @@ from app.models.economy import EconomyBalance, EconomyTransaction
 from app.models.events import Event, EventSignup
 from app.models.nodes import NodeEvent
 from app.models.registration import BotRegistration
-from app.models.tenancy import Guild, GuildMember, GuildRolePermission, User
+from app.models.tenancy import Guild, GuildAlbionLink, GuildMember, GuildRolePermission, User
 from app.services import economy as economy_svc
 from app.services import event_signups as event_signups_svc
 from app.services import events as events_svc
@@ -423,6 +423,15 @@ class GuildSettingsIn(BaseModel):
     # negativo é descontado igualmente do saldo (EconomyBalance) de TODO
     # membro da guilda. Ver events.LOOTSPLIT_MODES/_calc_payout/_finalize_payouts.
     lootsplit_mode: str | None = None
+    # % da tab debitada pro banco da guilda ANTES do pool de participantes
+    # (0-100, default 0 = sem taxa). Só vale em modos com split; "none" ignora.
+    guild_tax_percent: int | None = None
+    # De onde vem o bônus do scout (NodeDef.weight). "node" (default) = peso ×
+    # sold_value do node, pool separado financiado pelo que o node vendeu.
+    # "tab" = peso × tab_value (% da tab), deduzido da participant pool — o
+    # scout come do bolso dos participantes (igual ao logger pool). Ver
+    # events.get_scout_bonus_source / _calc_payout.
+    scout_bonus_source: str | None = None
     # Momentos em que o mass-info do bot deleta a embed e reenvia com @everyone.
     # Subconjunto de {created, t10min, in_progress, review}; default (chave
     # ausente) = os 3 primeiros. [] = tudo off (status triggers ainda bumpam
@@ -570,6 +579,16 @@ async def update_guild_settings(
             settings["lootsplit_mode"] = body.lootsplit_mode
         else:
             settings.pop("lootsplit_mode", None)
+    if "guild_tax_percent" in body.model_fields_set:
+        if body.guild_tax_percent is not None and 0 <= body.guild_tax_percent <= 100:
+            settings["guild_tax_percent"] = body.guild_tax_percent
+        else:
+            settings.pop("guild_tax_percent", None)
+    if "scout_bonus_source" in body.model_fields_set:
+        if body.scout_bonus_source in events_svc.SCOUT_BONUS_SOURCES:
+            settings["scout_bonus_source"] = body.scout_bonus_source
+        else:
+            settings.pop("scout_bonus_source", None)
     if "events_ping_triggers" in body.model_fields_set:
         valid = [t for t in (body.events_ping_triggers or []) if t in event_signups_svc.ALL_PING_TRIGGERS]
         # [] explícito = admin desligou tudo (fica gravado, distinto de "nunca
@@ -685,11 +704,13 @@ async def guild_allies(
         raise HTTPException(404)
     if not g.albion_alliance_id:
         return []
+    from app.services.guild_links import async_albion_guild_ids
+    owned_ids = await async_albion_guild_ids(db, guild_id)
     rows = (await db.execute(
         select(BattleGuild.albion_guild_id, BattleGuild.guild_name)
         .where(
             BattleGuild.alliance_id == g.albion_alliance_id,
-            BattleGuild.albion_guild_id != str(g.albion_guild_id),
+            BattleGuild.albion_guild_id.notin_(owned_ids),
         )
         .distinct()
     )).all()
@@ -704,6 +725,108 @@ async def guild_allies(
         _is_guild_in_alliance(gid, alliance_id, region) for gid, _ in rows
     ))
     return [{"id": gid, "name": name} for (gid, name), ok in zip(rows, still_in) if ok]
+
+
+# ── Guildas de Albion vinculadas (multi-guilda por Discord) ───────────────────
+
+@router.get("/auth/guilds/{guild_id}/albion-links")
+async def list_albion_links(
+    guild_id: int,
+    user: User = Depends(deps.require_user),
+    db: AsyncSession = Depends(deps.async_db_session),
+):
+    await _require_admin_async(db, user, guild_id)
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
+    primary = str(g.albion_guild_id) if g and g.albion_guild_id else None
+    links = (await db.scalars(
+        select(GuildAlbionLink).where(GuildAlbionLink.guild_id == guild_id)
+        .order_by(GuildAlbionLink.id.asc())
+    )).all()
+    return {
+        "primary": primary,
+        "primary_name": (g.albion_guild_name if g else None),
+        "links": [
+            {
+                "albion_guild_id": l.albion_guild_id,
+                "albion_guild_name": l.albion_guild_name,
+                "region": l.region,
+                "alliance_id": l.alliance_id,
+                "alliance_name": l.alliance_name,
+            }
+            for l in links
+        ],
+    }
+
+
+class AlbionLinkIn(BaseModel):
+    name: str
+    region: str
+
+
+@router.post("/auth/guilds/{guild_id}/albion-links")
+async def add_albion_link(
+    guild_id: int,
+    body: AlbionLinkIn,
+    user: User = Depends(deps.require_user),
+    db: AsyncSession = Depends(deps.async_db_session),
+):
+    await _require_admin_async(db, user, guild_id)
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    region = body.region if body.region in HOSTS else (g.settings or {}).get("albion_guild_region")
+    # Libera read tx antes do HTTP (_lookup_albion_guild chama a API do Albion).
+    await db.commit()
+    found = await _lookup_albion_guild(body.name.strip(), region)
+    if not found:
+        raise HTTPException(404, "guilda de Albion não encontrada")
+    agid = str(found["Id"])
+    # A guilda primária não entra como link (é deduplicada na resolução).
+    if g.albion_guild_id and agid == str(g.albion_guild_id):
+        raise HTTPException(409, "essa já é a guilda primária")
+    existing = await db.scalar(select(GuildAlbionLink).where(
+        GuildAlbionLink.guild_id == guild_id,
+        GuildAlbionLink.albion_guild_id == agid,
+    ))
+    if existing:
+        existing.albion_guild_name = found.get("Name") or existing.albion_guild_name
+        existing.alliance_id = str(found.get("AllianceId") or "") or None
+        existing.alliance_name = found.get("AllianceName")
+        await db.commit()
+        return {"ok": True, "albion_guild_id": agid}
+    link = GuildAlbionLink(
+        guild_id=guild_id,
+        albion_guild_id=agid,
+        albion_guild_name=found.get("Name") or body.name.strip(),
+        region=region or "americas",
+        alliance_id=str(found.get("AllianceId") or "") or None,
+        alliance_name=found.get("AllianceName"),
+    )
+    db.add(link)
+    await db.commit()
+    return {"ok": True, "albion_guild_id": agid}
+
+
+@router.delete("/auth/guilds/{guild_id}/albion-links/{albion_guild_id}")
+async def remove_albion_link(
+    guild_id: int,
+    albion_guild_id: str,
+    user: User = Depends(deps.require_user),
+    db: AsyncSession = Depends(deps.async_db_session),
+):
+    await _require_admin_async(db, user, guild_id)
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g and g.albion_guild_id and albion_guild_id == str(g.albion_guild_id):
+        raise HTTPException(409, "não é possível remover a guilda primária")
+    link = await db.scalar(select(GuildAlbionLink).where(
+        GuildAlbionLink.guild_id == guild_id,
+        GuildAlbionLink.albion_guild_id == albion_guild_id,
+    ))
+    if link is None:
+        raise HTTPException(404)
+    await db.delete(link)
+    await db.commit()
+    return {"ok": True}
 
 
 # ── Permissões ────────────────────────────────────────────────────────────────
@@ -856,6 +979,7 @@ COMMANDS_REGISTRY = [
     {"name": "leaderboard", "description": "Ranking dos usuários pelo saldo atual de prata", "category": "economy"},
     {"name": "economystats", "description": "Mostra um snapshot da economia do servidor", "category": "economy"},
     {"name": "undo", "description": "Reverte uma transação de economia pelo ID", "category": "economy"},
+    {"name": "bank", "description": "Gerencia o saldo do banco da guilda (ver, adicionar, remover)", "category": "economy"},
     {"name": "event", "description": "Gerencia eventos (CTAs): criar, deletar, editar e adiar", "category": "management"},
 ]
 
@@ -870,6 +994,7 @@ DEFAULT_ALLOWED_ROLES = {
     "addmoney": ["admin"],
     "economystats": ["admin"],
     "undo": ["admin"],
+    "bank": ["admin"],
     "event": ["admin"],
 }
 
@@ -1130,14 +1255,14 @@ async def bot_battle_feed(
     if guild_region and guild_region in HOSTS:
         q = q.where(Battle.region == guild_region)
     if min_players > 0:
-        # Filtro pela guilda CONFIGURADA daqui (albion_guild_id) — só posta
-        # batalhas onde a própria guilda teve >= N jogadores, não qualquer
-        # guilda na batalha.
-        albion_guild_id = str(g.albion_guild_id or "") if g else ""
-        if albion_guild_id:
+        # Filtro pelas guildas CONFIGURADAS daqui (primária + links) — só posta
+        # batalhas onde alguma guilda própria teve >= N jogadores.
+        from app.services.guild_links import async_albion_guild_ids
+        owned_ids = await async_albion_guild_ids(db, guild_id)
+        if owned_ids:
             guild_battle_ids = (
                 select(BattleParticipant.battle_id)
-                .where(BattleParticipant.guild_id == albion_guild_id)
+                .where(BattleParticipant.guild_id.in_(owned_ids))
                 .group_by(BattleParticipant.battle_id)
                 .having(func.count(BattleParticipant.id) >= min_players)
             )
@@ -1275,10 +1400,13 @@ async def bot_register(
     settings = g.settings or {}
     is_ally = False
 
-    if player_guild_id == str(g.albion_guild_id):
-        # Membro direto — a busca já trouxe o AllianceId dele, e como aliança é
-        # atributo da guilda (não do jogador), isso já basta pra descobrir a
-        # aliança da própria guilda sem nenhuma chamada extra à API da Albion.
+    from app.services.guild_links import async_albion_guild_ids
+    owned_ids = await async_albion_guild_ids(db, guild_id)
+    if player_guild_id in owned_ids:
+        # Membro direto (guilda primária ou qualquer link) — a busca já trouxe o
+        # AllianceId dele, e como aliança é atributo da guilda (não do jogador),
+        # isso já basta pra descobrir a aliança da própria guilda sem nenhuma
+        # chamada extra à API da Albion.
         if player_alliance_id and player_alliance_id != g.albion_alliance_id:
             g.albion_alliance_id = player_alliance_id
             g.albion_alliance_name = found.get("AllianceName") or None
@@ -1717,6 +1845,82 @@ async def bot_economy_stats(
         .where(EconomyBalance.guild_id == guild_id)
     )).one()
     return {"user_count": row[0], "balances_sum": int(row[1])}
+
+
+# ── Bot: banco da guilda (admin adjust) ──────────────────────────────────────
+# !bank add/remove do bot-v2 — admin-only no bot (guild admin permission check
+# local, mesmo padrão dos outros comandos admin). O backend confia no
+# BOT_API_SECRET e no caller validar; nunca revalida admin aqui (igual ao
+# /bot/economy/add e /bot/economy/remove).
+
+class BankAdjustIn(BaseModel):
+    # Positivo = credito (add silver ao banco), negativo = débito. Reason é
+    # livre e curto — vai no EconomyTransaction.kind e no audit_log, pra o
+    # histórico do banco ser rastreável.
+    amount: int
+    reason: str | None = None
+    actor_discord_id: int
+    request_id: str | None = None
+
+
+@router.post("/bot/guilds/{guild_id}/bank/adjust")
+def bot_guild_bank_adjust(
+    guild_id: int,
+    body: BankAdjustIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Ajusta o bank_balance da guilda em ±amount. amount=0 é no-op (não cria
+    linha). Cria um EconomyTransaction kind="bank_adjust" pra /undo poder
+    reverter e audit_log pra trilha imutável. Pode deixar bank_balance
+    negativo (débito sem cobertura é permitido — a guilda pode dever prata)."""
+    _require_bot_secret(authorization)
+    if body.amount == 0:
+        g = db.scalar(select(Guild).where(Guild.id == guild_id))
+        return {"ok": True, "balance": g.bank_balance if g else 0, "transaction_id": None}
+    if body.request_id:
+        previous = db.scalar(select(EconomyTransaction).where(
+            EconomyTransaction.request_id == body.request_id,
+            EconomyTransaction.guild_id == guild_id,
+        ))
+        if previous:
+            g = db.scalar(select(Guild).where(Guild.id == guild_id))
+            return {"ok": True, "balance": g.bank_balance if g else 0, "transaction_id": previous.id}
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404, "guilda não encontrada")
+    before = g.bank_balance
+    g.bank_balance += body.amount
+    tx = EconomyTransaction(
+        request_id=body.request_id,
+        guild_id=guild_id, kind="bank_adjust", actor_discord_id=body.actor_discord_id,
+        # Sem from/to_user_id — é movimento de banco, não de membro. /undo lê
+        # o delta e o sinal; o sinal está em amount (negativo = débito).
+        from_user_id=None, to_user_id=None, total_earned_user_id=None,
+        amount=body.amount,
+    )
+    db.add(tx)
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=body.actor_discord_id, actor_type="bot", source="bot",
+        action="guild.bank_adjust", entity="guild", entity_id=str(guild_id),
+        before={"bank_balance": before},
+        after={"bank_balance": g.bank_balance, "amount": body.amount, "reason": body.reason},
+    ))
+    db.commit()
+    db.refresh(tx)
+    return {"ok": True, "balance": g.bank_balance, "transaction_id": tx.id}
+
+
+@router.get("/bot/guilds/{guild_id}/bank")
+def bot_guild_bank_balance(
+    guild_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """!bank (sem args) lê aqui o saldo atual do banco da guilda."""
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    return {"balance": g.bank_balance if g else 0}
 
 
 # ── Bot: eventos (mass-info + inscrições) ───────────────────────────────────────
