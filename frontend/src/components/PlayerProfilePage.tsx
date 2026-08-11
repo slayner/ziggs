@@ -506,7 +506,7 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
                 {t("viewOnAlbion")}
               </a>
             ) : null}
-            <div className="text-[10px] capitalize text-zinc-600">{ev.participant_count > 5 ? (ev.role ?? "—") : ev.participant_count === 0 ? "Solo" : ev.participant_count}</div>
+
           </div>
           <EquipMini equipment={ev.other_equipment} />
         </div>
