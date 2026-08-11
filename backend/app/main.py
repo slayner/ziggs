@@ -77,7 +77,6 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(companion_scan.run_forever()),
             asyncio.create_task(companion_kill_scan.run_forever()),
             asyncio.create_task(scan_dispatcher.run_forever()),
-            asyncio.create_task(scan_dispatcher.run_idle_worker_forever()),
             asyncio.create_task(player_count_snapshot.run_forever()),
             asyncio.create_task(battle_price_reprocessor.run_forever()),
             asyncio.create_task(silver_dropped.run_forever()),
