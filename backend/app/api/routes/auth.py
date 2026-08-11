@@ -737,25 +737,32 @@ async def list_albion_links(
 ):
     await _require_admin_async(db, user, guild_id)
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
-    primary = str(g.albion_guild_id) if g and g.albion_guild_id else None
     links = (await db.scalars(
         select(GuildAlbionLink).where(GuildAlbionLink.guild_id == guild_id)
         .order_by(GuildAlbionLink.id.asc())
     )).all()
-    return {
-        "primary": primary,
-        "primary_name": (g.albion_guild_name if g else None),
-        "links": [
-            {
-                "albion_guild_id": l.albion_guild_id,
-                "albion_guild_name": l.albion_guild_name,
-                "region": l.region,
-                "alliance_id": l.alliance_id,
-                "alliance_name": l.alliance_name,
-            }
-            for l in links
-        ],
-    }
+    primary_id = str(g.albion_guild_id) if g and g.albion_guild_id else None
+    primary_region = (g.settings or {}).get("albion_guild_region", "americas") if g else "americas"
+    all_links = []
+    if primary_id:
+        all_links.append({
+            "albion_guild_id": primary_id,
+            "albion_guild_name": g.albion_guild_name if g else None,
+            "region": primary_region,
+            "alliance_id": g.albion_alliance_id if g else None,
+            "alliance_name": g.albion_alliance_name if g else None,
+            "is_primary": True,
+        })
+    for l in links:
+        all_links.append({
+            "albion_guild_id": l.albion_guild_id,
+            "albion_guild_name": l.albion_guild_name,
+            "region": l.region,
+            "alliance_id": l.alliance_id,
+            "alliance_name": l.alliance_name,
+            "is_primary": False,
+        })
+    return {"primary": primary_id, "links": all_links}
 
 
 class AlbionLinkIn(BaseModel):
@@ -781,26 +788,41 @@ async def add_albion_link(
     if not found:
         raise HTTPException(404, "guilda de Albion não encontrada")
     agid = str(found["Id"])
-    # A guilda primária não entra como link (é deduplicada na resolução).
-    if g.albion_guild_id and agid == str(g.albion_guild_id):
+    gname = found.get("Name") or body.name.strip()
+    alliance_id = str(found.get("AllianceId") or "") or None
+    alliance_name = found.get("AllianceName")
+    # If no primary yet, set it as the primary instead of a link.
+    if not g.albion_guild_id:
+        g.albion_guild_id = agid
+        g.albion_guild_name = gname
+        g.albion_alliance_id = alliance_id
+        g.albion_alliance_name = alliance_name
+        if g.settings is None:
+            g.settings = {}
+        if region:
+            g.settings["albion_guild_region"] = region
+        await db.commit()
+        return {"ok": True, "albion_guild_id": agid, "primary": True}
+    # Already the primary — no-op update.
+    if agid == str(g.albion_guild_id):
         raise HTTPException(409, "essa já é a guilda primária")
     existing = await db.scalar(select(GuildAlbionLink).where(
         GuildAlbionLink.guild_id == guild_id,
         GuildAlbionLink.albion_guild_id == agid,
     ))
     if existing:
-        existing.albion_guild_name = found.get("Name") or existing.albion_guild_name
-        existing.alliance_id = str(found.get("AllianceId") or "") or None
-        existing.alliance_name = found.get("AllianceName")
+        existing.albion_guild_name = gname
+        existing.alliance_id = alliance_id
+        existing.alliance_name = alliance_name
         await db.commit()
         return {"ok": True, "albion_guild_id": agid}
     link = GuildAlbionLink(
         guild_id=guild_id,
         albion_guild_id=agid,
-        albion_guild_name=found.get("Name") or body.name.strip(),
+        albion_guild_name=gname,
         region=region or "americas",
-        alliance_id=str(found.get("AllianceId") or "") or None,
-        alliance_name=found.get("AllianceName"),
+        alliance_id=alliance_id,
+        alliance_name=alliance_name,
     )
     db.add(link)
     await db.commit()

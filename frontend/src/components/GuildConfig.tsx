@@ -143,11 +143,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const { lang } = useLang();
   const PERM_COLS = usePermCols();
   const [guild, setGuild] = useState<(SiteGuild & { albion_alliance_id: string | null; albion_alliance_name: string | null; settings: Record<string, unknown> }) | null>(null);
-  const [albionName, setAlbionName] = useState("");
-  const [albionRegion, setAlbionRegion] = useState("");
-  const [albionNotFound, setAlbionNotFound] = useState(false);
-  const [albionLinks, setAlbionLinks] = useState<{ albion_guild_id: string; albion_guild_name: string; region: string; alliance_name: string | null }[]>([]);
-  const [primaryAlbionId, setPrimaryAlbionId] = useState<string | null>(null);
+  const [albionLinks, setAlbionLinks] = useState<{ albion_guild_id: string; albion_guild_name: string; region: string; alliance_name: string | null; is_primary?: boolean }[]>([]);
   const [newLinkName, setNewLinkName] = useState("");
   const [newLinkRegion, setNewLinkRegion] = useState("");
   const [linkErr, setLinkErr] = useState<string | null>(null);
@@ -309,8 +305,6 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   useEffect(() => {
     api.guildInfo(guildId).then(g => {
       setGuild(g);
-      setAlbionName(g.albion_guild_name ?? "");
-      setAlbionRegion((g.settings.albion_guild_region as string | undefined) ?? "");
       setRegisterRoleId((g.settings.register_role_id as string | undefined) ?? "");
       setAllyRoleId((g.settings.ally_role_id as string | undefined) ?? "");
       setAllyAllowedGuilds((g.settings.ally_allowed_guilds as string[] | undefined) ?? [NO_ALLIES]);
@@ -494,40 +488,22 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     });
   }
 
-  async function saveAlbion() {
-    if (!guild) return;
-    if (albionName && !albionRegion) return; // region required when name present
-    setAlbionNotFound(false);
-    const res = await api.updateGuildSettings(guildId, {
-      albion_guild_name: albionName || null,
-      albion_guild_region: albionRegion || null,
-    });
-    if (albionName && !res.albion_guild_resolved) {
-      setAlbionNotFound(true);
-      return;
-    }
-    // Resolvida (ou limpa) — refaz o fetch pra pegar id/aliança recém-descobertos,
-    // e a lista de aliados junto (a aliança pode ter mudado nesse save).
-    const [g, allies] = await Promise.all([api.guildInfo(guildId), api.guildAllies(guildId)]);
-    setGuild(g);
-    setAllyGuilds(allies);
-    refreshAlbionLinks();
-  }
-
   function refreshAlbionLinks() {
     api.listAlbionLinks(guildId).then(r => {
-      setPrimaryAlbionId(r.primary);
       setAlbionLinks(r.links);
     }).catch(() => {});
   }
 
   async function addAlbionLink() {
     const name = newLinkName.trim();
-    if (!name) return;
+    if (!name || !newLinkRegion) return;
     setLinkErr(null);
     try {
       await api.addAlbionLink(guildId, name, newLinkRegion);
       setNewLinkName("");
+      const [g, allies] = await Promise.all([api.guildInfo(guildId), api.guildAllies(guildId)]);
+      setGuild(g);
+      setAllyGuilds(allies);
       refreshAlbionLinks();
     } catch (e: any) {
       const msg = String((e as Error)?.message ?? e);
@@ -1115,33 +1091,11 @@ async function saveJuicyKillMinSilver() {
             </select>
           </div>
 
-          <div className="flex items-center gap-2 mb-3">
-            <label className="text-xs text-zinc-500">{t("albionGuildTitle")}</label>
-            <input
-              value={albionName}
-              onChange={e => { setAlbionName(e.target.value); setAlbionNotFound(false); }}
-              onBlur={() => void saveAlbion()}
-              placeholder={t("guildNamePlaceholder")}
-              className="flex-1 rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-amber-500 placeholder:text-zinc-600"
-            />
-            <select
-              value={albionRegion}
-              onChange={e => { setAlbionRegion(e.target.value); void saveAlbion(); }}
-              className="w-28 shrink-0 rounded-md border border-zinc-700 bg-zinc-800 px-1 py-1 text-xs text-zinc-200"
-            >
-              <option value="">{t("albionRegionPlaceholder")}</option>
-              {ALBION_REGIONS.map(r => (
-                <option key={r} value={r}>{REGION_LABELS[lang][r]}</option>
-              ))}
-            </select>
-          </div>
-          {albionNotFound && <p className="text-xs text-red-400 mb-2">{t("albionGuildNotFound")}</p>}
-
-          {/* Guildas adicionais — alianças com 300+ membros operam em várias
-              guildas sob o mesmo Discord. A primária fica acima (input); estas
-              são as secundárias. */}
+          {/* Guildas de Albion — uma única lista (primária + adicionais).
+              Alianças com 300+ membros operam em várias guildas sob o mesmo
+              Discord. A primeira guilda adicionada vira a primária. */}
           <div className="mt-3 mb-2">
-            <label className="block text-xs text-zinc-500 mb-1">{t("albionLinkedGuilds")}</label>
+            <label className="block text-xs text-zinc-500 mb-1">{t("albionGuildTitle")}</label>
             {albionLinks.length === 0 ? (
               <p className="text-[11px] text-zinc-600">{t("albionLinkedEmpty")}</p>
             ) : (
@@ -1154,9 +1108,9 @@ async function saveJuicyKillMinSilver() {
                     <button
                       type="button"
                       onClick={() => removeAlbionLink(l.albion_guild_id)}
-                      disabled={l.albion_guild_id === primaryAlbionId}
+                      disabled={l.is_primary}
                       className="text-xs text-zinc-500 hover:text-red-400 disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={l.albion_guild_id === primaryAlbionId ? t("albionPrimaryLock") : t("remove")}
+                      title={l.is_primary ? t("albionPrimaryLock") : t("remove")}
                     >
                       <i className="ti ti-x" aria-hidden="true" />
                     </button>
