@@ -838,8 +838,29 @@ async def remove_albion_link(
 ):
     await _require_admin_async(db, user, guild_id)
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
-    if g and g.albion_guild_id and albion_guild_id == str(g.albion_guild_id):
-        raise HTTPException(409, "não é possível remover a guilda primária")
+    if g is None:
+        raise HTTPException(404)
+    is_primary = g.albion_guild_id and albion_guild_id == str(g.albion_guild_id)
+    if is_primary:
+        remaining = (await db.scalars(
+            select(GuildAlbionLink).where(GuildAlbionLink.guild_id == guild_id)
+        )).all()
+        if remaining:
+            raise HTTPException(409, "remova as guildas secundárias antes da primária")
+        g.albion_guild_id = None
+        g.albion_guild_name = None
+        g.albion_alliance_id = None
+        g.albion_alliance_name = None
+        s = g.settings or {}
+        for k in ("events_channel_id", "event_review_channel_id", "regear_thread_channel_id",
+                  "lootlog_thread_channel_id", "nodes_calendar_channel_id", "voice_cta_channel_id",
+                  "battle_feed_channel_id", "juicy_kill_channel_id", "register_role_id",
+                  "ally_role_id", "ally_allowed_guilds", "lootsplit_mode", "guild_tax_percent",
+                  "scout_bonus_source", "albion_guild_region"):
+            s.pop(k, None)
+        g.settings = s
+        await db.commit()
+        return {"ok": True}
     link = await db.scalar(select(GuildAlbionLink).where(
         GuildAlbionLink.guild_id == guild_id,
         GuildAlbionLink.albion_guild_id == albion_guild_id,

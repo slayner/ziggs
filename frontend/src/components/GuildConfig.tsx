@@ -515,6 +515,9 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     setLinkErr(null);
     try {
       await api.removeAlbionLink(guildId, albionGid);
+      const [g, allies] = await Promise.all([api.guildInfo(guildId), api.guildAllies(guildId)]);
+      setGuild(g);
+      setAllyGuilds(allies);
       refreshAlbionLinks();
     } catch (e: any) {
       setLinkErr(String((e as Error)?.message ?? e));
@@ -1108,9 +1111,8 @@ async function saveJuicyKillMinSilver() {
                     <button
                       type="button"
                       onClick={() => removeAlbionLink(l.albion_guild_id)}
-                      disabled={l.is_primary}
-                      className="text-xs text-zinc-500 hover:text-red-400 disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={l.is_primary ? t("albionPrimaryLock") : t("remove")}
+                      className="text-xs text-zinc-500 hover:text-red-400"
+                      title={t("remove")}
                     >
                       <i className="ti ti-x" aria-hidden="true" />
                     </button>
