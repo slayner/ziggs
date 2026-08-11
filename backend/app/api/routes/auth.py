@@ -754,6 +754,8 @@ async def list_albion_links(
             "is_primary": True,
         })
     for l in links:
+        if primary_id and l.albion_guild_id == primary_id:
+            continue  # dedup: backfill may have created a link matching the primary
         all_links.append({
             "albion_guild_id": l.albion_guild_id,
             "albion_guild_name": l.albion_guild_name,
