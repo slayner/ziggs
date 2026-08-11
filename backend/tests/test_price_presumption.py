@@ -101,6 +101,40 @@ def test_craft_cost_missing_main_material_aborts():
     assert _craft_cost_estimate(var, {"T4_METALBAR": 0}) == 0
 
 
+def test_craft_cost_all_no_return_sums_artifacts_without_rrr():
+    """Receita só-noReturn (Royal Guards, capas faction): sem material returnable,
+    custo = soma dos noReturn priced, SEM fator RRR. Regra do usuário: itens
+    Royal usam 1 artefato base + N tokens de quest; token sem preço -> ignora
+    (soma só o que tem preço)."""
+    # T8_HEAD_PLATE_ROYAL: 1 artefato SET1 + 8 tokens ROYAL (sem preço)
+    var = {"resources": [
+        {"uniqueName": "T8_HEAD_PLATE_SET1", "count": 1, "noReturn": True},
+        {"uniqueName": "QUESTITEM_TOKEN_ROYAL_T8", "count": 8, "noReturn": True},
+    ]}
+    # Só artefato tem preço (1000); token sem preço -> ignorado.
+    # Sem RRR factor: custo = 1000 (não 752).
+    assert _craft_cost_estimate(var, {"T8_HEAD_PLATE_SET1": 1000}) == 1000
+
+
+def test_craft_cost_all_no_return_with_multiple_priced_artifacts():
+    """Receita só-noReturn com múltiplos noReturn priced: soma todos sem RRR."""
+    var = {"resources": [
+        {"uniqueName": "T8_HEAD_PLATE_SET1", "count": 1, "noReturn": True},
+        {"uniqueName": "T8_TOKEN_PRICE", "count": 2, "noReturn": True},
+    ]}
+    # 1 × 1000 + 2 × 500 = 2000 (sem RRR)
+    assert _craft_cost_estimate(var, {"T8_HEAD_PLATE_SET1": 1000, "T8_TOKEN_PRICE": 500}) == 2000
+
+
+def test_craft_cost_all_no_return_no_price_aborts():
+    """Receita só-noReturn sem NENHUM preço -> aborta (devolve 0)."""
+    var = {"resources": [
+        {"uniqueName": "T8_HEAD_PLATE_SET1", "count": 1, "noReturn": True},
+        {"uniqueName": "QUESTITEM_TOKEN_ROYAL_T8", "count": 8, "noReturn": True},
+    ]}
+    assert _craft_cost_estimate(var, {}) == 0
+
+
 def test_item_base_id_compat():
     """`item_base_id` continua sendo o helper pra gerar equivalentes."""
     assert item_base_id("T7_HEAD_PLATE_SET3@4") == "HEAD_PLATE_SET3"
@@ -196,6 +230,9 @@ if __name__ == "__main__":
     test_craft_cost_artifact_without_price_is_ignored()
     test_craft_cost_artifact_with_price_sums_full()
     test_craft_cost_missing_main_material_aborts()
+    test_craft_cost_all_no_return_sums_artifacts_without_rrr()
+    test_craft_cost_all_no_return_with_multiple_priced_artifacts()
+    test_craft_cost_all_no_return_no_price_aborts()
     test_item_base_id_compat()
     test_journal_empty_fallback_maps_full_and_bare()
     test_journal_empty_fallback_returns_none_for_already_empty()

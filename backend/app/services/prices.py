@@ -1111,17 +1111,23 @@ def _artifact_alternatives(uid: str) -> list[str]:
     alts = _ARTEFACTS_BY_TIER_AND_CATEGORY.get((tier, cat), [])
     return [a for a in alts if a != uid]
 
-
 def _craft_cost_estimate(
     variation: dict,
     material_prices: dict[str, int],
 ) -> int:
     """Presunção: custos de materiais × (1 − RRR bonus city).
+
     - Material principal (returnable) SEM preço -> ABORTA (devolve 0). Não inventa.
-    - Artefato (noReturn=True) sem preço -> IGNORA (soma só materiais).
-    - Artefato COM preço -> soma valor cheio (artefatos não sofrem RRR)."""
+    - Artefato (noReturn=True) sem preço -> IGNORA (regra do usuário).
+    - Artefato COM preço -> soma valor cheio (artefatos não sofrem RRR).
+    - Receita só-noReturn (Royal Guards, capas faction): sem material returnable,
+      o custo = soma dos noReturn priced, sem RRR factor. Items Royal usam
+      1 artefato base + 8 tokens de quest (noReturn, sem preço); presumir
+      = preço do artefato base (token virou lixo sem valor de mercado)."""
     materials_total = 0
     artifacts_total = 0
+    has_returnable = False  # tem pelo menos 1 resource returnable na receita
+    has_returnable_priced = False  # tem pelo menos 1 returnable COM preço
     for r in variation.get("resources", []):
         ruid = r.get("uniqueName")
         rcount = int(r.get("count", 0) or 0)
@@ -1132,12 +1138,21 @@ def _craft_cost_estimate(
             if rprice > 0:
                 artifacts_total += rprice * rcount
         else:
+            has_returnable = True
             if rprice <= 0:
-                return 0
+                return 0  # material principal sem preço -> aborta
+            has_returnable_priced = True
             materials_total += rprice * rcount
-    if materials_total == 0 and artifacts_total == 0:
-        return 0
-    return round(materials_total * _RRR_BONUS_CITY_FACTOR) + artifacts_total
+    # Se há returnable na receita, tem que ter preço (saiu no gate acima).
+    # Se NÃO há returnable (só noReturn), soma os artefatos priced sem RRR.
+    if has_returnable:
+        if not has_returnable_priced:
+            return 0
+        if materials_total == 0 and artifacts_total == 0:
+            return 0
+        return round(materials_total * _RRR_BONUS_CITY_FACTOR) + artifacts_total
+    # Receita só-noReturn (Royal etc): custo = soma dos noReturn priced, sem RRR.
+    return artifacts_total if artifacts_total > 0 else 0
 
 
 async def get_battle_prices_with_presumption(
