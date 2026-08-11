@@ -22,7 +22,7 @@ def test_embed_links_every_player_and_footer_is_site_only():
     assert "silver" not in embed.description
     assert "fame" not in embed.description
     assert "Europe" not in embed.description
-    assert embed.footer.text == "https://ziggs.example · ziggs:juicy-kill:1"
+    assert embed.footer.text == "https://ziggs.example · ziggs:juicy-kill:1 · API delay 15min"
     assert embed.timestamp is None
     assert embed.image.url == "attachment://kill.png"
 

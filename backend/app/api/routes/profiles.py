@@ -754,14 +754,22 @@ async def _search_entities(db: AsyncSession, entity_type: str, q: str, nq: str, 
 
     `region` (opcional) filtra players/guilds/alliances por servidor — nomes
     não são únicos entre Americas/Europe/Asia, e o usuário pode pesquisar
-    "slayner americas" pra restringir. None = todas as regiões."""
+    "slayner americas" pra restringir. None = todas as regiões.
+
+    Ranking: peso (nº de batalhas) é o critério primário, mas a correspondência
+    exata do nome sempre aparece antes — se o usuário pesquisa "PXocs", um
+    "PXocs" exato em outra região com menos batalhas aparece antes de um
+    "pxocs_alt" com mais batalhas."""
     lo, hi = prefix_range(nq)
     region_filter = [SearchEntry.region == region] if region else []
+    # Over-fetch 2× pra ter material pra re-sort por relevância (peso sozinho
+    # enterra o match exato quando outro mesmo-nome tem mais batalhas).
+    fetch_n = limit * 2
     found = list((await db.scalars(
         select(SearchEntry)
         .where(SearchEntry.entity_type == entity_type, SearchEntry.norm_name >= lo, SearchEntry.norm_name < hi, *region_filter)
         .order_by(SearchEntry.weight.desc())
-        .limit(limit)
+        .limit(fetch_n)
     )).all())
     seen = {e.entity_id for e in found}
 
@@ -775,7 +783,7 @@ async def _search_entities(db: AsyncSession, entity_type: str, q: str, nq: str, 
                 *region_filter,
             )
             .order_by(SearchEntry.weight.desc())
-            .limit(limit - len(found))
+            .limit(limit - len(found) + limit)
         )).all()
         found.extend(more)
         seen.update(e.entity_id for e in more)
@@ -798,13 +806,26 @@ async def _search_entities(db: AsyncSession, entity_type: str, q: str, nq: str, 
             .limit(300)
         )).all()
         for e in candidates:
-            if len(found) == limit:
+            if len(found) >= fetch_n:
                 break
             if search_match(q, e.display_name):
                 found.append(e)
                 seen.add(e.entity_id)
 
-    return found
+    # Re-sort: match exato (casefold) primeiro, depois prefixo, resto por peso.
+    q_lower = q.casefold()
+    nq_lower = nq.casefold()
+    def _rank_key(e: SearchEntry):
+        name_lower = e.display_name.casefold()
+        if name_lower == q_lower:
+            return (0, -e.weight)
+        if name_lower.startswith(q_lower):
+            return (1, -e.weight)
+        if nq_lower and name_lower.startswith(nq_lower):
+            return (2, -e.weight)
+        return (3, -e.weight)
+    found.sort(key=_rank_key)
+    return found[:limit]
 
 
 async def _search(db: AsyncSession, q: str, region: str | None = None) -> dict:

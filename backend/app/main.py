@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(highscores_cache.run_forever()),
             asyncio.create_task(gold_price.run_forever()),
             asyncio.create_task(market_snapshot.run_forever()),
+            asyncio.create_task(search_index.run_forever()),
         ]
     yield
     for t in tasks:

@@ -434,7 +434,14 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen]);
+  useEffect(() => {
+    if (forceOpen && rowRef.current) {
+      const id = setTimeout(() => rowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+      return () => clearTimeout(id);
+    }
+  }, [forceOpen]);
   const isKill = ev.kind === "kill";
   const color = isKill ? "text-blue-400" : "text-red-400";
   const borderColor = isKill ? "#60a5fa" : "#f87171";
@@ -453,8 +460,9 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
 
   return (
     <div
+      ref={rowRef}
       className={`bg-zinc-900/60 border-l-2${isNew ? " dash-glow" : ""}${isJuicy ? " juicy-kill" : ""}`}
-      style={{ borderLeftColor: isJuicy ? "#fbbf24" : borderColor }}
+      style={{ borderLeftColor: borderColor }}
       onAnimationEnd={onGlowEnd}
     >
       {/* div (não button) porque o nome do oponente já é um botão clicável aninhado */}
@@ -476,7 +484,6 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
         />
 
         <img src={itemRenderUrl(otherWeaponId, otherWeapon?.Quality ?? 0)} alt="" title={otherWeapon ? otherWeapon.Type : t("noWeaponEquipped")} width={28} height={28} className="shrink-0" />
-        {isJuicy && <span className="shrink-0 text-[10px] font-bold text-amber-400">JUICY</span>}
       </div>
       {open && (
         <div className="flex items-center justify-between gap-4 border-t border-zinc-800 px-3 py-3">
@@ -499,7 +506,7 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
                 {t("viewOnAlbion")}
               </a>
             ) : null}
-            <div className="text-[10px] capitalize text-zinc-600">{ev.role ?? "—"}</div>
+            <div className="text-[10px] capitalize text-zinc-600">{ev.participant_count > 5 ? (ev.role ?? "—") : ev.participant_count === 0 ? "Solo" : ev.participant_count}</div>
           </div>
           <EquipMini equipment={ev.other_equipment} />
         </div>

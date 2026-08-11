@@ -28,6 +28,17 @@ def _link(region: str, player: dict, event_id: str | None = None) -> str:
 
 
 
+def _fmt_delay(secs: float | None) -> str | None:
+    if not secs or secs <= 0:
+        return None
+    mins = int(secs // 60)
+    if mins < 1:
+        return f"{int(secs)}s"
+    if mins < 60:
+        return f"{mins}min"
+    return f"{mins // 60}h{mins % 60}min"
+
+
 def _build_embed(kill: dict, filename: str) -> discord.Embed:
     killer = kill.get("killer") or {}
     victim = kill.get("victim") or {}
@@ -61,6 +72,14 @@ def _build_embed(kill: dict, filename: str) -> discord.Embed:
         color=discord.Color.gold(),
     )
     embed.set_image(url=f"attachment://{filename}")
+
+    footer_parts = [PUBLIC_URL, f"{JUICY_MARKER}{kill['id']}"]
+    delay_secs = kill.get("api_delay_secs")
+    if delay_secs and delay_secs > 1800:
+        delay_str = _fmt_delay(delay_secs)
+        if delay_str:
+            footer_parts.append(f"API delay {delay_str}")
+    embed.set_footer(text=" · ".join(footer_parts))
     return embed
 
 
