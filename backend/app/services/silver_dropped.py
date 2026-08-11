@@ -28,7 +28,7 @@ from app.db import AsyncSessionLocal
 from app.models.players import PlayerKillEvent
 from app.services.awakened import awakened_value
 from app.services.lethality import is_likely_lethal
-from app.services.prices import get_battle_prices
+from app.services.prices import get_battle_prices_with_presumption
 
 log = logging.getLogger(__name__)
 
@@ -71,8 +71,15 @@ async def _price_events(db: AsyncSession, events: list[PlayerKillEvent]) -> int:
         return 0
     item_ids = list({iid for iid, _ in pairs})
     t0 = time.monotonic()
-    price_by_id = await get_battle_prices(db, item_ids)
+    price_by_id, basis_by_id = await get_battle_prices_with_presumption(db, item_ids)
     t_fetch = time.monotonic() - t0
+
+    # Conta bases pra log de auditoria — quantos itens saíram de cada estágio
+    # da cadeia de presunção (exact|quality|equivalent|presumed|missing).
+    basis_counts: dict[str, int] = {}
+    for iid in item_ids:
+        b = basis_by_id.get(iid, "missing")
+        basis_counts[b] = basis_counts.get(b, 0) + 1
 
     updated = 0
     for ev in events:
@@ -94,11 +101,11 @@ async def _price_events(db: AsyncSession, events: list[PlayerKillEvent]) -> int:
     await db.commit()
     t_commit = time.monotonic() - t1
     if t_fetch > 2.0 or t_commit > 1.0:
-        log.warning("silver_dropped: LENTO — %d eventos, fetch=%.1fs commit=%.1fs (%d itens)",
-                    len(events), t_fetch, t_commit, len(item_ids))
+        log.warning("silver_dropped: LENTO — %d eventos, fetch=%.1fs commit=%.1fs (%d itens, bases=%s)",
+                    len(events), t_fetch, t_commit, len(item_ids), basis_counts)
     else:
-        log.info("silver_dropped: %d eventos, fetch=%.1fs commit=%.1fs (%d itens)",
-                 len(events), t_fetch, t_commit, len(item_ids))
+        log.info("silver_dropped: %d eventos, fetch=%.1fs commit=%.1fs (%d itens, bases=%s)",
+                 len(events), t_fetch, t_commit, len(item_ids), basis_counts)
     return updated
 
 

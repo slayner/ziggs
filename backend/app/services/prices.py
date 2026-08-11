@@ -940,6 +940,214 @@ async def suggest_regear_price(
     }
 
 
+# ── Presunção de preço (juicy kills e gear ilíquido) ──────────────────────────
+#
+# Quando `get_battle_prices` devolve 0 pra um item ilíquido (T8.4, artefatos
+# raros, qualquer gear que não aparece nos 5 mercados nas últimas 8h), a
+# cadeia tenta preencher o buraco em 3 passos:
+#
+#   1. QUALIDADE FALLBACK — varre cache (item_prices_latest) pelas qualidades
+#      1-5 do MESMO item_id, prefere menor q. Q5 é só se nenhuma 1-4 tem preço
+#      (Masterpiece é atípico — mesmo critério já usado em routes/catalog.py).
+#   2. EQUIVALÊNCIA DE TIER — gera cadeia T±k/E∓k (mesmo T+E), busca o 1º
+#      equivalente com preço real. Ex.: 7.4 → 8.3. Tier MAIOR primeiro.
+#   3. PRESUNÇÃO DE CRAFT — ler receita no catalog.json, somar
+#      (preço × qtd) dos materiais × (1 − RRR bonus city sem focus).
+#      Artefato sem preço é IGNORADO (soma só materiais). Material principal
+#      sem preço ABORTA a presunção (devolve 0 — não inventa número).
+#
+# Sem cache próprio — silver_dropped cacheia downstream gravando silver_dropped>0.
+# Re-fetch de materiais é amortizado pelo TTL de 8h do get_battle_prices.
+
+import threading as _threading
+
+_BASIS_EXACT = "exact"
+_BASIS_MISSING = "missing"
+_BASIS_QUALITY = "quality"
+_BASIS_EQUIVALENT = "equivalent"
+_BASIS_PRESUMED = "presumed"
+
+# RRR bonus city sem focus: 18 pts base + 15 pts spec = 33 pts → 33/133 ≈ 24.81%.
+# Fator multiplicador dos materiais = 1 − 24.81% ≈ 0.7519.
+# Focus (+59 pts) é finito demais pra presumir default — ver AGENTS.md.
+_RRR_BONUS_CITY_PTS = 33
+_RRR_BONUS_CITY_FACTOR = 1 - _RRR_BONUS_CITY_PTS / (100 + _RRR_BONUS_CITY_PTS)
+
+_CATALOG_LOCK = _threading.Lock()
+_CRAFT_CATALOG: dict[str, dict] | None = None
+
+
+def _load_craft_catalog() -> dict[str, dict]:
+    """Carrega `frontend/public/data/catalog.json` uma vez (thread-safe).
+    Devolve {} se faltar/inválido — presunção fica desligada, sem quebrar o resto."""
+    global _CRAFT_CATALOG
+    if _CRAFT_CATALOG is not None:
+        return _CRAFT_CATALOG
+    with _CATALOG_LOCK:
+        if _CRAFT_CATALOG is not None:
+            return _CRAFT_CATALOG
+        path = Path(__file__).resolve().parents[3] / "frontend" / "public" / "data" / "catalog.json"
+        if not path.exists():
+            log.warning("catalog.json não encontrado em %s — presunção de preço desligada", path)
+            _CRAFT_CATALOG = {}
+            return _CRAFT_CATALOG
+        try:
+            raw = json.loads(path.read_bytes())
+        except Exception as e:
+            log.warning("catalog.json inválido (%s) — presunção de preço desligada", e)
+            _CRAFT_CATALOG = {}
+            return _CRAFT_CATALOG
+        catalog: dict[str, dict] = {}
+        for fam in raw:
+            for var in (fam.get("variations") or []):
+                uid = var.get("uniqueName")
+                if uid:
+                    catalog[uid] = var
+        _CRAFT_CATALOG = catalog
+        log.info("craft catalog carregado: %d variações", len(catalog))
+        return _CRAFT_CATALOG
+
+
+_TIER_PREFIX_RE = _re.compile(r"^T(\d+)_")
+
+
+def _parse_tier_enchant(uid: str) -> tuple[int, int]:
+    """Extrai (tier, enchant) de UniqueName. Ex.: T7_HEAD_PLATE_SET3@4 -> (7, 4)."""
+    t_match = _TIER_PREFIX_RE.match(uid or "")
+    tier = int(t_match.group(1)) if t_match else 0
+    e_match = _ENCH_RE.search(uid or "")
+    enchant = int(e_match.group(0)[1:]) if e_match else 0
+    return tier, enchant
+
+
+def _equivalent_tier_chain(uid: str) -> list[str]:
+    """Cadeia T±k/E∓k (mesmo T+E), com T∈[4,8] e E∈[0,4]. Tier MAIOR primeiro
+    (8.3 antes de 6.5, conforme pedido do usuário pra 7.4 -> 8.3)."""
+    tier, ench = _parse_tier_enchant(uid)
+    if tier == 0:
+        return []
+    base = item_base_id(uid)
+    out: list[str] = []
+    for dt in (+1, -1, +2, -2, +3, -3):
+        t2, e2 = tier + dt, ench - dt
+        if 4 <= t2 <= 8 and 0 <= e2 <= 4 and (t2, e2) != (tier, ench):
+            out.append(f"T{t2}_{base}@{e2}" if e2 else f"T{t2}_{base}")
+    return out
+
+
+def _craft_cost_estimate(
+    variation: dict,
+    material_prices: dict[str, int],
+) -> int:
+    """Presunção: custos de materiais × (1 − RRR bonus city).
+    - Material principal (returnable) SEM preço -> ABORTA (devolve 0). Não inventa.
+    - Artefato (noReturn=True) sem preço -> IGNORA (soma só materiais).
+    - Artefato COM preço -> soma valor cheio (artefatos não sofrem RRR)."""
+    materials_total = 0
+    artifacts_total = 0
+    for r in variation.get("resources", []):
+        ruid = r.get("uniqueName")
+        rcount = int(r.get("count", 0) or 0)
+        if not ruid or rcount <= 0:
+            continue
+        rprice = material_prices.get(ruid, 0)
+        if r.get("noReturn"):
+            if rprice > 0:
+                artifacts_total += rprice * rcount
+        else:
+            if rprice <= 0:
+                return 0
+            materials_total += rprice * rcount
+    if materials_total == 0 and artifacts_total == 0:
+        return 0
+    return round(materials_total * _RRR_BONUS_CITY_FACTOR) + artifacts_total
+
+
+async def get_battle_prices_with_presumption(
+    db: AsyncSession,
+    item_ids: list[str],
+) -> tuple[dict[str, int], dict[str, str]]:
+    """`get_battle_prices` + cadeia de fallback (qualidade -> equivalência ->
+    presunção de craft). Devolve (price_by_id, basis_by_id) onde basis é
+    'exact'|'quality'|'equivalent'|'presumed'|'missing'."""
+    unique = list(dict.fromkeys(item_ids))
+    if not unique:
+        return {}, {}
+    spot = await get_battle_prices(db, unique)
+    out: dict[str, int] = dict(spot)
+    basis: dict[str, str] = {
+        uid: _BASIS_EXACT if p > 0 else _BASIS_MISSING for uid, p in spot.items()
+    }
+
+    missing = [uid for uid in unique if not out.get(uid)]
+
+    if missing:
+        # Passo 1: varre cache pelas qualidades 1-5 do MESMO item (prefere menor q).
+        # _BATTLE_SENTINEL armazena sempre q1 (agregado); _AVG_SENTINEL por q1-4.
+        # Q5 nunca é povoado hoje, mas cobrimos caso mude ou haja rows orfãos.
+        rows = (await db.scalars(
+            select(ItemPriceLatest).where(
+                ItemPriceLatest.item_id.in_(missing),
+                ItemPriceLatest.quality.in_([1, 2, 3, 4, 5]),
+                ItemPriceLatest.sell_price_min > 0,
+            ).order_by(ItemPriceLatest.quality)
+        )).all()
+        for r in rows:
+            if not out.get(r.item_id):
+                out[r.item_id] = r.sell_price_min
+                basis[r.item_id] = _BASIS_QUALITY
+        missing = [uid for uid in unique if not out.get(uid)]
+
+    if missing:
+        # Passo 2: equivalência de tier. Primeiro equivalente com preço no
+        # cache vence. Tier MAIOR primeiro (regra do usuário: 7.4 -> 8.3).
+        equiv_ids: list[str] = []
+        equiv_map: dict[str, list[str]] = {}
+        for uid in missing:
+            for equiv in _equivalent_tier_chain(uid):
+                equiv_ids.append(equiv)
+                equiv_map.setdefault(equiv, []).append(uid)
+        equiv_ids = list(dict.fromkeys(equiv_ids))
+        if equiv_ids:
+            equiv_spot = await get_battle_prices(db, equiv_ids)
+            for equiv_uid, equiv_price in equiv_spot.items():
+                if equiv_price <= 0:
+                    continue
+                for orig in equiv_map.get(equiv_uid, []):
+                    if not out.get(orig):
+                        out[orig] = equiv_price
+                        basis[orig] = _BASIS_EQUIVALENT
+            missing = [uid for uid in unique if not out.get(uid)]
+
+    if missing:
+        # Passo 3: presunção de craft. Custo de materiais × (1 − RRR bonus city).
+        # Material sem preço -> presume aborta pra AQUELE item, não pra todo o lote.
+        catalog = _load_craft_catalog()
+        if catalog:
+            material_ids: set[str] = set()
+            for uid in missing:
+                var = catalog.get(uid)
+                if var:
+                    for r in var.get("resources", []):
+                        if r.get("uniqueName"):
+                            material_ids.add(r["uniqueName"])
+            if material_ids:
+                # Materiais são eles mesmos itens viveis em `get_battle_prices`.
+                # Não recursa em presunção: se um material falha, presume aborta
+                # pra aquele item (decisão documentada em AGENTS.md).
+                mat_prices = await get_battle_prices(db, list(material_ids))
+                for uid in missing:
+                    var = catalog.get(uid)
+                    if not var:
+                        continue
+                    presumed = _craft_cost_estimate(var, mat_prices)
+                    if presumed > 0:
+                        out[uid] = presumed
+                        basis[uid] = _BASIS_PRESUMED
+
+    return out, basis
+
+
 # ── self-check ────────────────────────────────────────────────────────────────
 
 def _demo_iqr() -> None:
@@ -996,9 +1204,48 @@ async def _demo_freshest_wins() -> None:
     print("freshest-wins OK")
 
 
+def _demo_presumption() -> None:
+    """Cadeia de presunção: equivalência de tier + craft cost + RRR factor."""
+    # Equivalência: 7.4 -> primeira variação é 8.3 (tier maior primeiro).
+    chain = _equivalent_tier_chain("T7_HEAD_PLATE_SET3@4")
+    assert chain and chain[0] == "T8_HEAD_PLATE_SET3@3", f"esperado 8.3 primeiro, veio {chain[:2]}"
+    # 8.4 é ponta — não há T9 nem E<0, cadeia vazia.
+    assert _equivalent_tier_chain("T8_HEAD_PLATE_SET3@4") == []
+    # 6.0 -> 5.1 (k=-1) e 4.2 (k=-2); 7.-1 inválido.
+    chain6 = _equivalent_tier_chain("T6_HEAD_PLATE_SET3")
+    assert "T5_HEAD_PLATE_SET3@1" in chain6, chain6
+    assert "T4_HEAD_PLATE_SET3@2" in chain6, chain6
+
+    # RRR bonus city = 33 pts → 33/133. Fator = 1 − 33/133 ≈ 0.75188.
+    assert abs(_RRR_BONUS_CITY_FACTOR - (1 - 33 / 133)) < 1e-9
+
+    # Craft cost: 8 metalbar @ 1000 = 8000. Sem artefato.
+    # Presumo: 8000 × 0.75188 ≈ 6015.
+    var = {"resources": [{"uniqueName": "T4_METALBAR", "count": 8}]}
+    assert _craft_cost_estimate(var, {"T4_METALBAR": 1000}) == round(8000 * _RRR_BONUS_CITY_FACTOR)
+
+    # Artefato sem preço -> soma só materiais.
+    var_art = {"resources": [
+        {"uniqueName": "T4_METALBAR", "count": 8},
+        {"uniqueName": "T4_ARTEFACT_X", "count": 1, "noReturn": True},
+    ]}
+    assert _craft_cost_estimate(var_art, {"T4_METALBAR": 1000}) == round(8000 * _RRR_BONUS_CITY_FACTOR)
+
+    # Artefato com preço -> soma cheio (não sofre RRR).
+    full = _craft_cost_estimate(var_art, {"T4_METALBAR": 1000, "T4_ARTEFACT_X": 50000})
+    assert full == round(8000 * _RRR_BONUS_CITY_FACTOR) + 50000
+
+    # Material principal sem preço -> aborta (devolve 0).
+    assert _craft_cost_estimate(var, {}) == 0
+    assert _craft_cost_estimate(var, {"T4_METALBAR": 0}) == 0
+
+    print("presumption OK")
+
+
 if __name__ == "__main__":
     _demo_iqr()
     asyncio.run(_demo_freshest_wins())
+    _demo_presumption()
     # item_base_id sanity
     assert item_base_id("T5_HEAD_PLATE_SET1@2") == "HEAD_PLATE_SET1"
     assert item_base_id("T8_MOUNT_OX") == "MOUNT_OX"
