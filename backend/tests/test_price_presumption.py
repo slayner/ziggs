@@ -17,6 +17,7 @@ from app.services.prices import (
     _equivalent_tier_chain,
     _parse_tier_enchant,
     item_base_id,
+    journal_empty_fallback,
 )
 
 
@@ -105,6 +106,24 @@ def test_item_base_id_compat():
     assert item_base_id("T4_METALBAR") == "METALBAR"
 
 
+def test_journal_empty_fallback_maps_full_and_bare():
+    """Jornal não-EMPTY (bare ou _FULL) -> versão _EMPTY correspondente.
+    Regra do usuário: jornal não-vazio sem preço usa preço do EMPTY."""
+    assert journal_empty_fallback("T7_JOURNAL_HIDE") == "T7_JOURNAL_HIDE_EMPTY"
+    assert journal_empty_fallback("T7_JOURNAL_HIDE_FULL") == "T7_JOURNAL_HIDE_EMPTY"
+    assert journal_empty_fallback("T6_JOURNAL_TROPHY_WOOD") == "T6_JOURNAL_TROPHY_WOOD_EMPTY"
+    assert journal_empty_fallback("T6_JOURNAL_TROPHY_WOOD_FULL") == "T6_JOURNAL_TROPHY_WOOD_EMPTY"
+
+
+def test_journal_empty_fallback_returns_none_for_already_empty():
+    """Já é _EMPTY -> retorna None (não há fallback a aplicar)."""
+    assert journal_empty_fallback("T7_JOURNAL_HIDE_EMPTY") is None
+    # Não-journal -> None.
+    assert journal_empty_fallback("T7_HEAD_PLATE_SET3@4") is None
+    assert journal_empty_fallback("T4_METALBAR") is None
+    assert journal_empty_fallback("") is None
+
+
 if __name__ == "__main__":
     test_parse_tier_enchant_handles_flat_and_enchanted()
     test_equivalent_chain_higher_tier_first()
@@ -116,4 +135,6 @@ if __name__ == "__main__":
     test_craft_cost_artifact_with_price_sums_full()
     test_craft_cost_missing_main_material_aborts()
     test_item_base_id_compat()
+    test_journal_empty_fallback_maps_full_and_bare()
+    test_journal_empty_fallback_returns_none_for_already_empty()
     print("ok")

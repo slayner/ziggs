@@ -973,14 +973,22 @@ _BASIS_PRESUMED = "presumed"
 _RRR_BONUS_CITY_PTS = 33
 _RRR_BONUS_CITY_FACTOR = 1 - _RRR_BONUS_CITY_PTS / (100 + _RRR_BONUS_CITY_PTS)
 
+_TIER_PREFIX_RE = _re.compile(r"^T(\d+)_")
+
 _CATALOG_LOCK = _threading.Lock()
 _CRAFT_CATALOG: dict[str, dict] | None = None
+# Artefatos AVALON indexados por tier, extraídos dos resources `noReturn`
+# referenciados nas receitas do catalog.json. Usado no passo 3 pra fallback
+# de artefato sem spot: se `T4_ARTEFACT_2H_QUARTERSTAFF_AVALON` não tem
+# preço, tenta outros `T4_ARTEFACT_*_AVALON` (regra do usuário: artefato
+# avaloniano sem preço -> usa artefato avaloniano do mesmo tier).
+_AVALON_ARTIFACTS_BY_TIER: dict[int, list[str]] = {}
 
 
 def _load_craft_catalog() -> dict[str, dict]:
     """Carrega `frontend/public/data/catalog.json` uma vez (thread-safe).
     Devolve {} se faltar/inválido — presunção fica desligada, sem quebrar o resto."""
-    global _CRAFT_CATALOG
+    global _CRAFT_CATALOG, _AVALON_ARTIFACTS_BY_TIER
     if _CRAFT_CATALOG is not None:
         return _CRAFT_CATALOG
     with _CATALOG_LOCK:
@@ -998,17 +1006,26 @@ def _load_craft_catalog() -> dict[str, dict]:
             _CRAFT_CATALOG = {}
             return _CRAFT_CATALOG
         catalog: dict[str, dict] = {}
+        avalon_by_tier: dict[int, set[str]] = {}
         for fam in raw:
             for var in (fam.get("variations") or []):
                 uid = var.get("uniqueName")
                 if uid:
                     catalog[uid] = var
+                    # Indexa artefatos AVALON referenciados como resource
+                    # `noReturn` (artefatos são drops, não varições do
+                    # catalog — só aparecem como ingredients de receitas).
+                    for r in var.get("resources", []):
+                        ruid = r.get("uniqueName") or ""
+                        if r.get("noReturn") and "_ARTEFACT_" in ruid and ruid.endswith("_AVALON"):
+                            t_match = _TIER_PREFIX_RE.match(ruid)
+                            if t_match:
+                                avalon_by_tier.setdefault(int(t_match.group(1)), set()).add(ruid)
         _CRAFT_CATALOG = catalog
-        log.info("craft catalog carregado: %d variações", len(catalog))
+        _AVALON_ARTIFACTS_BY_TIER = {t: sorted(s) for t, s in avalon_by_tier.items()}
+        log.info("craft catalog carregado: %d variações, %d tiers com artefatos AVALON",
+                 len(catalog), len(_AVALON_ARTIFACTS_BY_TIER))
         return _CRAFT_CATALOG
-
-
-_TIER_PREFIX_RE = _re.compile(r"^T(\d+)_")
 
 
 def _parse_tier_enchant(uid: str) -> tuple[int, int]:
@@ -1033,6 +1050,32 @@ def _equivalent_tier_chain(uid: str) -> list[str]:
         if 4 <= t2 <= 8 and 0 <= e2 <= 4 and (t2, e2) != (tier, ench):
             out.append(f"T{t2}_{base}@{e2}" if e2 else f"T{t2}_{base}")
     return out
+
+
+_JOURNAL_RE = _re.compile(r"^(T\d+_JOURNAL_\w+?)(?:_(EMPTY|FULL))?$")
+
+
+def journal_empty_fallback(uid: str) -> str | None:
+    """Mapeia T{n}_JOURNAL_{family} (ou _FULL) -> T{n}_JOURNAL_{family}_EMPTY.
+    Regra do usuário: jornal sem preço usa preço do EMPTY correspondente.
+    Devolve None se não é journal, ou já é _EMPTY."""
+    m = _JOURNAL_RE.match(uid or "")
+    if not m:
+        return None
+    base, suffix = m.group(1), m.group(2)
+    if suffix == "EMPTY":
+        return None  # já é o EMPTY
+    return f"{base}_EMPTY"
+
+
+def _avalon_artifact_alternatives(uid: str) -> list[str]:
+    """Outros artefatos AVALON do mesmo tier (do catalog.json), exceto o próprio.
+    Regra do usuário: artefato avaloniano sem preço -> usa outro do mesmo tier."""
+    tier, _ = _parse_tier_enchant(uid)
+    if tier == 0:
+        return []
+    alts = _AVALON_ARTIFACTS_BY_TIER.get(tier, [])
+    return [a for a in alts if a != uid]
 
 
 def _craft_cost_estimate(
@@ -1099,6 +1142,26 @@ async def get_battle_prices_with_presumption(
         missing = [uid for uid in unique if not out.get(uid)]
 
     if missing:
+        # Passo 1.5: journals não-EMPTY sem preço -> fallback pra versão EMPTY
+        # (regra do usuário: jornal não-vazio vale o preço do EMPTY correspondente).
+        journal_fallbacks: dict[str, str] = {}  # empty_uid -> [journal uids que precisam]
+        for uid in missing:
+            empty_uid = journal_empty_fallback(uid)
+            if empty_uid:
+                journal_fallbacks.setdefault(empty_uid, []).append(uid)
+        if journal_fallbacks:
+            # Tenta spot dos EMPTY, depois equivalência (já está no cache _BATTLE_SENTINEL).
+            empty_spot = await get_battle_prices(db, list(journal_fallbacks.keys()))
+            for empty_uid, empty_price in empty_spot.items():
+                if empty_price <= 0:
+                    continue
+                for orig in journal_fallbacks[empty_uid]:
+                    if not out.get(orig):
+                        out[orig] = empty_price
+                        basis[orig] = _BASIS_EQUIVALENT
+            missing = [uid for uid in unique if not out.get(uid)]
+
+    if missing:
         # Passo 2: equivalência de tier. Primeiro equivalente com preço no
         # cache vence. Tier MAIOR primeiro (regra do usuário: 7.4 -> 8.3).
         equiv_ids: list[str] = []
@@ -1122,6 +1185,10 @@ async def get_battle_prices_with_presumption(
     if missing:
         # Passo 3: presunção de craft. Custo de materiais × (1 − RRR bonus city).
         # Material sem preço -> presume aborta pra AQUELE item, não pra todo o lote.
+        #
+        # Exceção: artefato AVALON sem preço tenta fallback pra outro artefato
+        # AVALON do mesmo tier (regra do usuário). Mantém "material returnable
+        # sem preço -> aborta" — só o artefato (noReturn) tolera fallback.
         catalog = _load_craft_catalog()
         if catalog:
             material_ids: set[str] = set()
@@ -1136,6 +1203,27 @@ async def get_battle_prices_with_presumption(
                 # Não recursa em presunção: se um material falha, presume aborta
                 # pra aquele item (decisão documentada em AGENTS.md).
                 mat_prices = await get_battle_prices(db, list(material_ids))
+
+                # Fallback AVALON: para cada artefato AVALON sem preço, tenta
+                # alternativas do mesmo tier catalogadas. Mesma chamada única
+                # de get_battle_prices (a chamada interna faz cache de spot).
+                avalon_alt_ids: set[str] = set()
+                for ruid, rprice in mat_prices.items():
+                    if rprice > 0 or "_ARTEFACT_" not in ruid or not ruid.endswith("_AVALON"):
+                        continue
+                    for alt in _avalon_artifact_alternatives(ruid):
+                        if alt not in mat_prices:
+                            avalon_alt_ids.add(alt)
+                if avalon_alt_ids:
+                    alt_prices = await get_battle_prices(db, list(avalon_alt_ids))
+                    for ruid_orig, rprice in list(mat_prices.items()):
+                        if rprice > 0 or "_ARTEFACT_" not in ruid_orig or not ruid_orig.endswith("_AVALON"):
+                            continue
+                        for alt in _avalon_artifact_alternatives(ruid_orig):
+                            if alt_prices.get(alt, 0) > 0:
+                                mat_prices[ruid_orig] = alt_prices[alt]
+                                break
+
                 for uid in missing:
                     var = catalog.get(uid)
                     if not var:
