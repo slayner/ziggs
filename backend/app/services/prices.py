@@ -977,18 +977,41 @@ _TIER_PREFIX_RE = _re.compile(r"^T(\d+)_")
 
 _CATALOG_LOCK = _threading.Lock()
 _CRAFT_CATALOG: dict[str, dict] | None = None
-# Artefatos AVALON indexados por tier, extraídos dos resources `noReturn`
-# referenciados nas receitas do catalog.json. Usado no passo 3 pra fallback
-# de artefato sem spot: se `T4_ARTEFACT_2H_QUARTERSTAFF_AVALON` não tem
-# preço, tenta outros `T4_ARTEFACT_*_AVALON` (regra do usuário: artefato
-# avaloniano sem preço -> usa artefato avaloniano do mesmo tier).
-_AVALON_ARTIFACTS_BY_TIER: dict[int, list[str]] = {}
+# Artefatos indexados por (tier, categoria de slot), extraídos dos resources
+# `noReturn` referenciados nas receitas do catalog.json. Usado no passo 3
+# pra fallback de artefato sem spot: se `T4_ARTEFACT_2H_QUARTERSTAFF_AVALON`
+# não tem preço, tenta outros `T4_ARTEFACT_(2H|MAIN)_*_AVALON|_HELL|_UNDEAD...`
+# — respeitando a regra do usuário: arma>arma, offhand>offhand, peito>peito.
+_ARTEFACTS_BY_TIER_AND_CATEGORY: dict[tuple[int, str], list[str]] = {}
+
+# Convenção do nome de artefato: T{n}_ARTEFACT_{slot}_{type}_{faction}
+# Slots válidos: 2H_, MAIN_ (arma), OFF_ (offhand), HEAD_, ARMOR_, SHOES_.
+_ARTEFACT_SLOT_RE = _re.compile(r"^T\d+_ARTEFACT_(2H_|MAIN_|OFF_|HEAD_|ARMOR_|SHOES_|CAPE_|BAG_|MOUNT_)")
+_ARTEFACT_PREFIX_TO_CATEGORY = {
+    "2H_": "weapon", "MAIN_": "weapon",
+    "OFF_": "offhand",
+    "HEAD_": "helmet",
+    "ARMOR_": "armor",
+    "SHOES_": "boots",
+    "CAPE_": "cape",
+    "BAG_": "bag",
+    "MOUNT_": "mount",
+}
+
+
+def _artifact_slot_category(uid: str) -> str | None:
+    """Categoria de slot do artefato (weapon/offhand/helmet/armor/boots/...).
+    Devolve None se não é artefato ou é slot desconhecido."""
+    m = _ARTEFACT_SLOT_RE.match(uid or "")
+    if not m:
+        return None
+    return _ARTEFACT_PREFIX_TO_CATEGORY.get(m.group(1))
 
 
 def _load_craft_catalog() -> dict[str, dict]:
     """Carrega `frontend/public/data/catalog.json` uma vez (thread-safe).
     Devolve {} se faltar/inválido — presunção fica desligada, sem quebrar o resto."""
-    global _CRAFT_CATALOG, _AVALON_ARTIFACTS_BY_TIER
+    global _CRAFT_CATALOG, _ARTEFACTS_BY_TIER_AND_CATEGORY
     if _CRAFT_CATALOG is not None:
         return _CRAFT_CATALOG
     with _CATALOG_LOCK:
@@ -1006,25 +1029,30 @@ def _load_craft_catalog() -> dict[str, dict]:
             _CRAFT_CATALOG = {}
             return _CRAFT_CATALOG
         catalog: dict[str, dict] = {}
-        avalon_by_tier: dict[int, set[str]] = {}
+        artefacts_by_tc: dict[tuple[int, str], set[str]] = {}
         for fam in raw:
             for var in (fam.get("variations") or []):
                 uid = var.get("uniqueName")
                 if uid:
                     catalog[uid] = var
-                    # Indexa artefatos AVALON referenciados como resource
-                    # `noReturn` (artefatos são drops, não varições do
+                    # Indexa artefatos referenciados como resource `noReturn`
+                    # nas receitas (artefatos são drops, não variações do
                     # catalog — só aparecem como ingredients de receitas).
+                    # Classifica por (tier, categoria de slot) — qualquer
+                    # faction (AVALON/MORGANA/HELL/UNDEAD/KEEPER/ROYAL/etc).
                     for r in var.get("resources", []):
                         ruid = r.get("uniqueName") or ""
-                        if r.get("noReturn") and "_ARTEFACT_" in ruid and ruid.endswith("_AVALON"):
+                        if r.get("noReturn") and "_ARTEFACT_" in ruid:
                             t_match = _TIER_PREFIX_RE.match(ruid)
-                            if t_match:
-                                avalon_by_tier.setdefault(int(t_match.group(1)), set()).add(ruid)
+                            cat = _artifact_slot_category(ruid)
+                            if t_match and cat:
+                                artefacts_by_tc.setdefault(
+                                    (int(t_match.group(1)), cat), set()
+                                ).add(ruid)
         _CRAFT_CATALOG = catalog
-        _AVALON_ARTIFACTS_BY_TIER = {t: sorted(s) for t, s in avalon_by_tier.items()}
-        log.info("craft catalog carregado: %d variações, %d tiers com artefatos AVALON",
-                 len(catalog), len(_AVALON_ARTIFACTS_BY_TIER))
+        _ARTEFACTS_BY_TIER_AND_CATEGORY = {k: sorted(v) for k, v in artefacts_by_tc.items()}
+        log.info("craft catalog carregado: %d variações, %d pares (tier,categoria) com artefatos",
+                 len(catalog), len(_ARTEFACTS_BY_TIER_AND_CATEGORY))
         return _CRAFT_CATALOG
 
 
@@ -1068,13 +1096,19 @@ def journal_empty_fallback(uid: str) -> str | None:
     return f"{base}_EMPTY"
 
 
-def _avalon_artifact_alternatives(uid: str) -> list[str]:
-    """Outros artefatos AVALON do mesmo tier (do catalog.json), exceto o próprio.
-    Regra do usuário: artefato avaloniano sem preço -> usa outro do mesmo tier."""
+def _artifact_alternatives(uid: str) -> list[str]:
+    """Outros artefatos do mesmo tier E mesma categoria de slot (arma/offhand/
+    helmet/armor/boots/cape/bag/mount). Qualquer faction (AVALON/MORGANA/HELL/
+    UNDEAD/KEEPER/ROYAL/CRYSTAL/FEY etc), exceto o próprio uid.
+    Regra do usuário: artefato sem spot -> usa outro do mesmo tier e MESMA
+    categoria (arma>arma, peito>peito)."""
     tier, _ = _parse_tier_enchant(uid)
     if tier == 0:
         return []
-    alts = _AVALON_ARTIFACTS_BY_TIER.get(tier, [])
+    cat = _artifact_slot_category(uid)
+    if not cat:
+        return []
+    alts = _ARTEFACTS_BY_TIER_AND_CATEGORY.get((tier, cat), [])
     return [a for a in alts if a != uid]
 
 
@@ -1186,9 +1220,10 @@ async def get_battle_prices_with_presumption(
         # Passo 3: presunção de craft. Custo de materiais × (1 − RRR bonus city).
         # Material sem preço -> presume aborta pra AQUELE item, não pra todo o lote.
         #
-        # Exceção: artefato AVALON sem preço tenta fallback pra outro artefato
-        # AVALON do mesmo tier (regra do usuário). Mantém "material returnable
-        # sem preço -> aborta" — só o artefato (noReturn) tolera fallback.
+        # Exceção: artefato sem preço tenta fallback pra outro artefato do mesmo
+        # tier e MESMA categoria de slot (arma>arma, peito>peito, etc). Mantém
+        # "material returnable sem preço -> aborta" — só o artefato (noReturn)
+        # tolera fallback.
         catalog = _load_craft_catalog()
         if catalog:
             material_ids: set[str] = set()
@@ -1204,22 +1239,24 @@ async def get_battle_prices_with_presumption(
                 # pra aquele item (decisão documentada em AGENTS.md).
                 mat_prices = await get_battle_prices(db, list(material_ids))
 
-                # Fallback AVALON: para cada artefato AVALON sem preço, tenta
-                # alternativas do mesmo tier catalogadas. Mesma chamada única
-                # de get_battle_prices (a chamada interna faz cache de spot).
-                avalon_alt_ids: set[str] = set()
+                # Fallback de artefato: para cada artefato `_ARTEFACT_*` sem
+                # preço (qualquer faction: AVALON/MORGANA/HELL/UNDEAD/KEEPER/
+                # ROYAL/CRYSTAL/FEY), tenta alternativas do mesmo tier e
+                # MESMA categoria de slot (arma>arma, peito>peito). Mesma
+                # chamada única de get_battle_prices (cache interno de spot).
+                artefact_alt_ids: set[str] = set()
                 for ruid, rprice in mat_prices.items():
-                    if rprice > 0 or "_ARTEFACT_" not in ruid or not ruid.endswith("_AVALON"):
+                    if rprice > 0 or "_ARTEFACT_" not in ruid:
                         continue
-                    for alt in _avalon_artifact_alternatives(ruid):
+                    for alt in _artifact_alternatives(ruid):
                         if alt not in mat_prices:
-                            avalon_alt_ids.add(alt)
-                if avalon_alt_ids:
-                    alt_prices = await get_battle_prices(db, list(avalon_alt_ids))
+                            artefact_alt_ids.add(alt)
+                if artefact_alt_ids:
+                    alt_prices = await get_battle_prices(db, list(artefact_alt_ids))
                     for ruid_orig, rprice in list(mat_prices.items()):
-                        if rprice > 0 or "_ARTEFACT_" not in ruid_orig or not ruid_orig.endswith("_AVALON"):
+                        if rprice > 0 or "_ARTEFACT_" not in ruid_orig:
                             continue
-                        for alt in _avalon_artifact_alternatives(ruid_orig):
+                        for alt in _artifact_alternatives(ruid_orig):
                             if alt_prices.get(alt, 0) > 0:
                                 mat_prices[ruid_orig] = alt_prices[alt]
                                 break

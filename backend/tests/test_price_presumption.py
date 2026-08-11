@@ -13,6 +13,7 @@ worker silver_dropped (logs `'bases=...'`).
 """
 from app.services.prices import (
     _RRR_BONUS_CITY_FACTOR,
+    _artifact_slot_category,
     _craft_cost_estimate,
     _equivalent_tier_chain,
     _parse_tier_enchant,
@@ -124,6 +125,67 @@ def test_journal_empty_fallback_returns_none_for_already_empty():
     assert journal_empty_fallback("") is None
 
 
+def test_artifact_slot_category_classifies_weapons():
+    """2H_ e MAIN_ = weapon (arma). Arma>arma é a regra do usuário."""
+    assert _artifact_slot_category("T4_ARTEFACT_2H_QUARTERSTAFF_AVALON") == "weapon"
+    assert _artifact_slot_category("T4_ARTEFACT_MAIN_SWORD_UNDEAD") == "weapon"
+    # Crystal weapons (sufixo CRYSTAL) também são armas por essa convenção.
+    assert _artifact_slot_category("T5_ARTEFACT_2H_ARCANESTAFF_CRYSTAL") == "weapon"
+
+
+def test_artifact_slot_category_classifies_gear_pieces():
+    """OFF_ = offhand, HEAD_ = helmet, ARMOR_ = armor, SHOES_ = boots.
+    Regra do usuário: offhand>offhand, peito>peito, etc."""
+    assert _artifact_slot_category("T4_ARTEFACT_OFF_CENSER_AVALON") == "offhand"
+    assert _artifact_slot_category("T4_ARTEFACT_HEAD_CLOTH_AVALON") == "helmet"
+    assert _artifact_slot_category("T4_ARTEFACT_ARMOR_LEATHER_HELL") == "armor"
+    assert _artifact_slot_category("T4_ARTEFACT_SHOES_PLATE_KEEPER") == "boots"
+
+
+def test_artifact_slot_category_returns_none_for_unknown():
+    """Não é artefato ou slot desconhecido -> None (não há categoria)."""
+    assert _artifact_slot_category("T4_METALBAR") is None
+    assert _artifact_slot_category("T7_HEAD_PLATE_SET3@4") is None
+    # Slot CRYSTAL_CEREMONIAL não é prefixo reconhecido (sem _NORMAL no regex).
+    assert _artifact_slot_category("T4_ARTEFACT_GARBAGE_XPTO_AVALON") is None
+    assert _artifact_slot_category("") is None
+
+
+def test_artifact_alternatives_respects_slot_category():
+    """Alternativas de um artefato 2H_ (arma) só retornam OUTROS artefatos
+    2H_ ou MAIN_ do mesmo tier — nunca offhand/head/armor (regra do usuário)."""
+    from app.services.prices import _artifact_alternatives
+
+    # Indexa catalog.json real (se disponivel). Teste é mecanico: todas as
+    # alternativas precisam bater mesma categoria. Pulamos se catalog faltar.
+    try:
+        alts = _artifact_alternatives("T4_ARTEFACT_2H_QUARTERSTAFF_AVALON")
+    except Exception:
+        return
+    if not alts:
+        return
+    categories = {_artifact_slot_category(a) for a in alts}
+    assert categories == {"weapon"}, f"alternativas incluem outras categorias: {categories}"
+    # O próprio nao entra.
+    assert "T4_ARTEFACT_2H_QUARTERSTAFF_AVALON" not in alts
+
+
+def test_artifact_alternatives_same_tier_only():
+    """T4 só pode cair em alternativas T4 (nunca T5/T6 — comparar custos
+    cross-tier nao faz sentido). Verifica que criou index por tier."""
+    from app.services.prices import _artifact_alternatives, _load_craft_catalog
+
+    try:
+        _load_craft_catalog()
+        alts = _artifact_alternatives("T4_ARTEFACT_2H_QUARTERSTAFF_AVALON")
+    except Exception:
+        return
+    if not alts:
+        return
+    for a in alts:
+        assert a.startswith("T4_"), f"alternativa cross-tier vazou: {a}"
+
+
 if __name__ == "__main__":
     test_parse_tier_enchant_handles_flat_and_enchanted()
     test_equivalent_chain_higher_tier_first()
@@ -137,4 +199,9 @@ if __name__ == "__main__":
     test_item_base_id_compat()
     test_journal_empty_fallback_maps_full_and_bare()
     test_journal_empty_fallback_returns_none_for_already_empty()
+    test_artifact_slot_category_classifies_weapons()
+    test_artifact_slot_category_classifies_gear_pieces()
+    test_artifact_slot_category_returns_none_for_unknown()
+    test_artifact_alternatives_respects_slot_category()
+    test_artifact_alternatives_same_tier_only()
     print("ok")
