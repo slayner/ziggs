@@ -995,11 +995,12 @@ async def _apply_ingest_payload(
         )).all()) if raw_ids else set()
         for raw in payload:
             try:
-                battle = await upsert_battle_light(db, raw, task.region)
-                if battle is not None:
-                    battle.reprocess_reason = REPROCESS_REASON_SWEEPER
-                    if str(raw.get("id")) not in existing:
-                        accepted += 1
+                async with db.begin_nested():
+                    battle = await upsert_battle_light(db, raw, task.region)
+                    if battle is not None:
+                        battle.reprocess_reason = REPROCESS_REASON_SWEEPER
+                        if str(raw.get("id")) not in existing:
+                            accepted += 1
             except Exception as exc:
                 log.warning("scan_dispatcher: ingest battle %s: %s", raw.get("id"), exc)
                 errors += 1
