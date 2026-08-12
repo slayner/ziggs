@@ -165,6 +165,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [savingRole, setSavingRole] = useState(false);
   const [roleSaved, setRoleSaved] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [featOpen, setFeatOpen] = useState<Set<string>>(new Set());
   const [allyRoleId, setAllyRoleId] = useState("");
   const [savingAllyRole, setSavingAllyRole] = useState(false);
   const [allyRoleSaved, setAllyRoleSaved] = useState(false);
@@ -413,6 +414,17 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     });
   }
 
+  function toggleFeat(id: string) {
+    setFeatOpen(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function openFeat(id: string) {
+    setFeatOpen(prev => new Set(prev).add(id));
+  }
+
   async function toggleCommand(name: string, enabled: boolean) {
     setCommands(prev => prev?.map(c => c.name === name ? { ...c, enabled } : c) ?? prev);
     await api.toggleGuildCommand(guildId, name, enabled).catch(() => {
@@ -577,7 +589,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     setEventsEnabled(v);
     if (v) {
       if (eventsChannelId) api.updateGuildSettings(guildId, { events_channel_id: eventsChannelId });
-      else if (!eventsChannelId) { /* section always open â€” nothing to expand */ }
+      else if (!eventsChannelId) openFeat("events")
     } else {
       api.updateGuildSettings(guildId, { events_channel_id: null });
     }
@@ -607,7 +619,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     setNodesEnabled(v);
     if (v) {
       if (nodesCalendarChannelId) api.updateGuildSettings(guildId, { nodes_calendar_channel_id: nodesCalendarChannelId });
-      else if (!nodesCalendarChannelId) { /* section always open */ }
+      else if (!nodesCalendarChannelId) openFeat("nodes")
     } else {
       api.updateGuildSettings(guildId, { nodes_calendar_channel_id: null });
     }
@@ -632,7 +644,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     setBattleFeedEnabled(v);
     if (v) {
       if (battleFeedChannelId) api.updateGuildSettings(guildId, { battle_feed_channel_id: battleFeedChannelId });
-      else if (!battleFeedChannelId) { /* section always open */ }
+      else if (!battleFeedChannelId) openFeat("battlefeed")
     } else {
       api.updateGuildSettings(guildId, { battle_feed_channel_id: null });
     }
@@ -649,7 +661,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     setJuicyKillEnabled(v);
     if (v) {
       if (juicyKillChannelId) api.updateGuildSettings(guildId, { juicy_kill_channel_id: juicyKillChannelId });
-      else if (!juicyKillChannelId) { /* section always open */ }
+      else if (!juicyKillChannelId) openFeat("juicykills")
     } else {
       api.updateGuildSettings(guildId, { juicy_kill_channel_id: null });
     }
@@ -846,9 +858,9 @@ async function saveJuicyKillMinSilver() {
   // reescolher. Sem canal de thread ainda â†’ abre a seÃ§Ã£o pra escolher um.
   function toggleRegearFeature(v: boolean) {
     setRegearEnabled(v);
-    if (!regear) { return; }
+    if (!regear) { openFeat("regear"); return; }
     pushRegear({ enabled: v });
-    if (v && !regearThreadChannelId) { /* section always open */ }
+    if (v && !regearThreadChannelId) openFeat("regear")
   }
 
   async function saveLootLog() {
@@ -1192,7 +1204,7 @@ async function saveJuicyKillMinSilver() {
               disabled={!hasGuild}
               fullWidth
               statusHint={!hasGuild ? t("needsGuildFirst") : (eventsEnabled && eventsChannelId ? chName(eventsChannelId) : t("featNeedsSetup"))}
-              open={true} onOpen={() => {}}
+              open={featOpen.has("events")} onOpen={() => toggleFeat("events")}
             >
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
                 <div>
@@ -1403,7 +1415,7 @@ async function saveJuicyKillMinSilver() {
               onToggle={v => { if (registerCmd) toggleCommand("register", v); }}
               disabled={!hasGuild}
               statusHint={hasGuild ? (registerCmd ? rolePreviewLabel(registerCmd) : undefined) : t("needsGuildFirst")}
-              open={true} onOpen={() => {}}
+              open={featOpen.has("register")} onOpen={() => toggleFeat("register")}
             >
               {!registerCmd ? (
                 <p className="text-xs text-zinc-500">{t("loading")}</p>
@@ -1541,7 +1553,7 @@ async function saveJuicyKillMinSilver() {
               onToggle={v => { void toggleEconomyAll(v); }}
               statusHint={economyCmds.length ? `${economyOnCount}/${economyCmds.length}` : undefined}
               fullWidth
-              open={true} onOpen={() => {}}
+              open={featOpen.has("economy")} onOpen={() => toggleFeat("economy")}
             >
               {commands === null ? (
                 <p className="text-xs text-zinc-500">{t("loading")}</p>
@@ -1563,7 +1575,7 @@ async function saveJuicyKillMinSilver() {
                 ? `${regear.channels.length} ${regear.channels.length === 1 ? t("regcfgChannelSingular") : t("regcfgChannelPlural")}`
                 : t("featNeedsSetup")}
               fullWidth
-              open={true} onOpen={() => {}}
+              open={featOpen.has("regear")} onOpen={() => toggleFeat("regear")}
             >
               <p className="text-xs text-zinc-500 mb-4">{t("regcfgDesc")}</p>
               {!regear ? (
@@ -1689,7 +1701,7 @@ async function saveJuicyKillMinSilver() {
               on={lootlogEnabled} onToggle={v => void toggleLootlogFeature(v)}
               disabled={!hasGuild}
               statusHint={`${llPct}%`}
-              open={true} onOpen={() => {}}
+              open={featOpen.has("lootlog")} onOpen={() => toggleFeat("lootlog")}
             >
               <div className="mb-4">
                 <label className="block text-xs text-zinc-500 mb-2">{t("lootlogThreadChannelLabel")}</label>
@@ -1722,7 +1734,7 @@ async function saveJuicyKillMinSilver() {
               title={t("botLogsTitle")} desc={t("featBotLogsDesc")}
               on={botLogsEnabled} onToggle={toggleBotLogsFeature}
               statusHint={logsChannelId ? chName(logsChannelId) : t("botLogsPending")}
-              open={true} onOpen={() => {}}
+              open={featOpen.has("botlogs")} onOpen={() => toggleFeat("botlogs")}
             >
               <p className="text-xs text-zinc-500 mb-2">{t("botLogsDesc")}</p>
               <label className="block text-xs text-zinc-400 mb-1">{t("botLogsChannelLabel")}</label>
@@ -1740,7 +1752,7 @@ async function saveJuicyKillMinSilver() {
               disabled={!hasGuild}
               statusHint={nodesEnabled && nodesCalendarChannelId ? chName(nodesCalendarChannelId) : t("featNeedsSetup")}
               fullWidth
-              open={true} onOpen={() => {}}
+              open={featOpen.has("nodes")} onOpen={() => toggleFeat("nodes")}
             >
               <label className="block text-xs text-zinc-400 mb-1">{t("nodesCalendarTitle")}</label>
               <p className="text-[11px] text-zinc-600 mb-2">{t("nodesCalendarDesc")}</p>
@@ -1948,7 +1960,7 @@ async function saveJuicyKillMinSilver() {
               onToggle={toggleBattleFeedFeature}
               disabled={!hasGuild}
               statusHint={battleFeedEnabled && battleFeedChannelId ? chName(battleFeedChannelId) : t("featNeedsSetup")}
-              open={true} onOpen={() => {}}
+              open={featOpen.has("battlefeed")} onOpen={() => toggleFeat("battlefeed")}
             >
               <label className="block text-xs text-zinc-400 mb-1">{t("battleFeedChannelLabel")}</label>
               <p className="text-[11px] text-zinc-600 mb-2">{t("battleFeedChannelDesc")}</p>
@@ -1971,7 +1983,7 @@ async function saveJuicyKillMinSilver() {
               onToggle={toggleJuicyKillFeature}
               disabled={!hasGuild}
               statusHint={juicyKillEnabled && juicyKillChannelId ? chName(juicyKillChannelId) : t("featNeedsSetup")}
-              open={true} onOpen={() => {}}
+              open={featOpen.has("juicykills")} onOpen={() => toggleFeat("juicykills")}
             >
               <label className="block text-xs text-zinc-400 mb-1">{t("juicyKillsChannelLabel")}</label>
               <p className="text-[11px] text-zinc-600 mb-2">{t("juicyKillsChannelDesc")}</p>
@@ -2150,7 +2162,7 @@ function Switch({ checked, onChange, disabled }: { checked: boolean; onChange?: 
 
 // â”€â”€ FeatureRow â€” painel sempre-aberto com toggle mestre no header. Sem
 // colapso: toda config fica visÃ­vel o tempo todo (pÃ¡gina densa, nÃ£o comercial).
-function FeatureRow({ icon, iconColor, title, desc, on, onToggle, statusHint, open: _o, onOpen: _f, disabled, fullWidth, children }: {
+function FeatureRow({ icon, iconColor, title, desc, on, onToggle, statusHint, open, onOpen, disabled, fullWidth, children }: {
   icon: string;
   iconColor: string;
   title: string;
@@ -2158,32 +2170,41 @@ function FeatureRow({ icon, iconColor, title, desc, on, onToggle, statusHint, op
   on?: boolean;
   onToggle?: (v: boolean) => void;
   statusHint?: string;
-  open?: boolean;
-  onOpen?: () => void;
+  open: boolean;
+  onOpen: () => void;
   disabled?: boolean;
   fullWidth?: boolean;
   children: ReactNode;
 }) {
   return (
     <Panel className={`p-5 ${fullWidth ? "lg:col-span-2" : ""}`}>
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex items-center gap-3">
         {onToggle
           ? <Switch checked={!!on} onChange={disabled ? undefined : onToggle} disabled={disabled} />
           : <span className="w-9 shrink-0" aria-hidden="true" />}
-        <i className={`ti ${icon} ${iconColor} text-lg shrink-0`} aria-hidden="true" />
-        <div className="flex-1 min-w-0">
-          <span className="text-sm font-semibold text-zinc-100">{title}</span>
-          <span className="text-xs text-zinc-500 ml-2">{desc}</span>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex-1 flex items-center gap-3 text-left min-w-0"
+        >
+          <i className={`ti ${icon} ${iconColor} text-lg shrink-0`} aria-hidden="true" />
+          <div className="flex-1 min-w-0">
+            <span className="text-sm font-semibold text-zinc-100">{title}</span>
+            <span className="text-xs text-zinc-500 ml-2">{desc}</span>
+          </div>
+          {statusHint && (
+            <span className="text-[11px] shrink-0 ml-2 text-right max-w-[30%] truncate text-zinc-500">
+              {statusHint}
+            </span>
+          )}
+          <i className={`ti ti-chevron-down text-zinc-600 transition-transform shrink-0 ${open ? "rotate-180" : ""}`} />
+        </button>
+      </div>
+      {open && (
+        <div className={`mt-4 ${disabled ? "opacity-40 pointer-events-none" : ""}`}>
+          {children}
         </div>
-        {statusHint && (
-          <span className="text-[11px] shrink-0 ml-2 text-right max-w-[30%] truncate text-zinc-500">
-            {statusHint}
-          </span>
-        )}
-      </div>
-      <div className={disabled ? "opacity-40 pointer-events-none" : ""}>
-        {children}
-      </div>
+      )}
     </Panel>
   );
 }
@@ -2272,6 +2293,8 @@ function ItemMultiSelect({ selected, onChange }: { selected: string[]; onChange:
     </div>
   );
 }
+
+
 
 
 
