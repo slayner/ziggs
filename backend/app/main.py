@@ -46,6 +46,12 @@ from app.services import (
 )
 
 
+async def _bg_web_is_idle() -> bool:
+    """Callback for scan_dispatcher background workers — True when the backend
+    has no foreground HTTP pressure."""
+    return scan_dispatcher.backend_is_idle()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if get_settings().disable_background_fetchers:
@@ -77,6 +83,10 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(companion_scan.run_forever()),
             asyncio.create_task(companion_kill_scan.run_forever()),
             asyncio.create_task(scan_dispatcher.run_forever()),
+            asyncio.create_task(scan_dispatcher.run_ingest_forever(
+                lambda: _bg_web_is_idle())),
+            asyncio.create_task(scan_dispatcher.run_idle_worker_forever(
+                lambda: _bg_web_is_idle())),
             asyncio.create_task(player_count_snapshot.run_forever()),
             asyncio.create_task(battle_price_reprocessor.run_forever()),
             asyncio.create_task(silver_dropped.run_forever()),

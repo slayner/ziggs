@@ -1407,8 +1407,11 @@ async def run_ingest_forever(web_is_idle: Callable[[], Awaitable[bool]]) -> None
         if backlog == 0:
             await asyncio.sleep(1)
             continue
-        processed = await ingest_one()
-        await asyncio.sleep(0 if processed else 1)
+        # Process multiple payloads concurrently — each opens its own session
+        # and Postgres handles parallel transactions fine. 4 keeps DB pressure
+        # bounded while cutting drain time 4×.
+        concurrency = min(4, backlog)
+        await asyncio.gather(*(ingest_one() for _ in range(concurrency)))
 
 
 async def _fetch_task(task: ScanWorkTask) -> list[dict]:
