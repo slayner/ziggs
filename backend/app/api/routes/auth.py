@@ -742,16 +742,19 @@ async def list_albion_links(
         .order_by(GuildAlbionLink.id.asc())
     )).all()
     primary_id = str(g.albion_guild_id) if g and g.albion_guild_id else None
+    primary_name = g.albion_guild_name if g else None
     primary_region = (g.settings or {}).get("albion_guild_region", "americas") if g else "americas"
+    guild_verified = bool((g.settings or {}).get("guild_verified")) if g else False
     all_links = []
     if primary_id:
         all_links.append({
             "albion_guild_id": primary_id,
-            "albion_guild_name": g.albion_guild_name if g else None,
+            "albion_guild_name": primary_name,
             "region": primary_region,
             "alliance_id": g.albion_alliance_id if g else None,
             "alliance_name": g.albion_alliance_name if g else None,
             "is_primary": True,
+            "verified": guild_verified,
         })
     for l in links:
         if primary_id and l.albion_guild_id == primary_id:
@@ -763,8 +766,14 @@ async def list_albion_links(
             "alliance_id": l.alliance_id,
             "alliance_name": l.alliance_name,
             "is_primary": False,
+            "verified": bool(l.verified),
         })
-    return {"primary": primary_id, "links": all_links}
+    return {
+        "primary": primary_id,
+        "primary_name": primary_name,
+        "guild_verified": guild_verified,
+        "links": all_links,
+    }
 
 
 class AlbionLinkIn(BaseModel):

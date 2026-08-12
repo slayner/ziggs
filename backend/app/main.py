@@ -41,7 +41,7 @@ from app.config import get_settings
 from app.domain.states import EventState, allowed_targets
 from app.services import (
     battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, companion_scan, companion_kill_scan, dashboard_cache,
-    gold_price, highscores_cache, kill_sweeper, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
+    gold_price, guild_verifier, highscores_cache, kill_sweeper, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
     scan_dispatcher, search_index, silver_dropped, small_battle_discovery, weapon_stats,
 )
 
@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(gold_price.run_forever()),
             asyncio.create_task(market_snapshot.run_forever()),
             asyncio.create_task(search_index.run_forever()),
+            asyncio.create_task(guild_verifier.run_forever()),
         ]
     yield
     for t in tasks:

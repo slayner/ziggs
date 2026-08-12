@@ -1,7 +1,7 @@
 """guild_albion_links: suporte a multi-guilda por servidor Discord.
 
 Revision ID: zc1d2e3f4a5b
-Revises: zb1c2d3e4f5a
+Revises: zn3c4d5e6f7a
 """
 from typing import Sequence, Union
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision: str = "zc1d2e3f4a5b"
-down_revision: Union[str, None] = "zb1c2d3e4f5a"
+down_revision: Union[str, None] = "zn3c4d5e6f7a"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

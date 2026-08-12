@@ -142,6 +142,11 @@ class GuildAlbionLink(Base, TimestampMixin):
     region: Mapped[str] = mapped_column(String(16), nullable=False)
     alliance_id: Mapped[str | None] = mapped_column(String(64))
     alliance_name: Mapped[str | None] = mapped_column(String(255))
+    # True depois que o guild_verifier resolveu o nome na API pública da
+    # Albion e confirmou que a guilda existe. False = ainda não verificado
+    # (acabou de ser adicionado manualmente) ou nome não bateu com nenhuma
+    # guilda na região configurada.
+    verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
 
 
 class GuildRolePermission(Base, TimestampMixin):

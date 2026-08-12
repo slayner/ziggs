@@ -143,7 +143,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const { lang } = useLang();
   const PERM_COLS = usePermCols();
   const [guild, setGuild] = useState<(SiteGuild & { albion_alliance_id: string | null; albion_alliance_name: string | null; settings: Record<string, unknown> }) | null>(null);
-  const [albionLinks, setAlbionLinks] = useState<{ albion_guild_id: string; albion_guild_name: string; region: string; alliance_name: string | null; is_primary?: boolean }[]>([]);
+  const [albionLinks, setAlbionLinks] = useState<{ albion_guild_id: string; albion_guild_name: string; region: string; alliance_name: string | null; is_primary?: boolean; verified?: boolean }[]>([]);
   const hasGuild = albionLinks.length > 0;
   const [newLinkName, setNewLinkName] = useState("");
   const [newLinkRegion, setNewLinkRegion] = useState("");
@@ -347,6 +347,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setRegisterOthersRoles(commandRoles?.register_others ?? [ADMIN]);
     });
     api.guildAllies(guildId).then(setAllyGuilds).catch(() => setAllyGuilds([]));
+    setLinkErr(null);
     refreshAlbionLinks();
     api.guildDiscordChannels(guildId)
       .then(r => { setChannels(r); setChannelsErr(null); })
@@ -520,8 +521,8 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setGuild(g);
       setAllyGuilds(allies);
       refreshAlbionLinks();
-    } catch (e: any) {
-      setLinkErr(String((e as Error)?.message ?? e));
+    } catch {
+      refreshAlbionLinks();
     }
   }
 
@@ -1107,6 +1108,15 @@ async function saveJuicyKillMinSilver() {
                 {albionLinks.map(l => (
                   <li key={l.albion_guild_id} className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5">
                     <span className="text-xs text-zinc-200 flex-1 truncate">{l.albion_guild_name}</span>
+                    {l.verified === false && (
+                      <span
+                        className="text-amber-400 text-xs"
+                        title={t("albionLinkUnverified")}
+                        aria-label={t("albionLinkUnverified")}
+                      >
+                        <i className="ti ti-alert-triangle" aria-hidden="true" />
+                      </span>
+                    )}
                     <span className="text-[10px] uppercase tracking-wide text-zinc-500">{REGION_LABELS[lang][l.region as keyof typeof REGION_LABELS[typeof lang]] ?? l.region}</span>
                     {l.alliance_name && <span className="text-[10px] text-zinc-600 truncate max-w-[80px]">{l.alliance_name}</span>}
                     <button

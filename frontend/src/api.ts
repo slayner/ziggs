@@ -863,7 +863,8 @@ export const api = {
     req<{
       primary: string | null;
       primary_name: string | null;
-      links: { albion_guild_id: string; albion_guild_name: string; region: string; alliance_id: string | null; alliance_name: string | null }[];
+      guild_verified: boolean;
+      links: { albion_guild_id: string; albion_guild_name: string; region: string; alliance_id: string | null; alliance_name: string | null; verified: boolean }[];
     }>(`/auth/guilds/${guild_id}/albion-links`),
   addAlbionLink: (guild_id: string, name: string, region: string) =>
     req<{ ok: boolean; albion_guild_id: string }>(`/auth/guilds/${guild_id}/albion-links`, {
