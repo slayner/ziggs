@@ -623,9 +623,7 @@ export default function App() {
     content = view === "management"
       ? <ManagementPage perms={NO_PERMS} empty={<GuildPicker onSelect={onGuildSelected} />} />
       : <GuildPicker onSelect={onGuildSelected} />;
-  } else if (!loggedIn && view === "management") {
-    content = <ManagementPage perms={NO_PERMS} empty={loginGate} />;
-  } else if (!loggedIn && view === "config") {
+  } else if (!loggedIn && (view === "management" || view === "config")) {
     content = loginGate;
   } else if (loggedIn && needsSetup && (view === "management" || view === "config")) {
     content = (
@@ -724,9 +722,10 @@ export default function App() {
 
   // abas visíveis baseadas em permissões
   const showConfig = loggedIn && hasGuild && perms["guild.admin"];
-  // Management continua público como porta para Docs; as ferramentas internas
-  // seguem filtradas por permissão dentro de ManagementPage.
-  const showGuildBox = !loggedIn || !hasGuild || hasAnyGuildPerm;
+  // Management só pra usuários logados com guilda pra administrar — Docs
+  // (que vive dentro de ManagementPage) também fica gated pra esses usuários.
+  const showManagement = loggedIn && (hasGuild || hasAnyGuildPerm);
+  const showGuildBox = showManagement;
 
   return (
     <div className="app-shell">
@@ -751,7 +750,7 @@ export default function App() {
         <div className="nav-sep" />
 
         {showGuildBox && (
-          <div className={`nav-guild-box${loggedIn && hasGuild && !hasAnyGuildPerm ? " locked" : (!loggedIn ? " locked" : "")}`}>
+          <div className={`nav-guild-box${loggedIn && hasGuild && !hasAnyGuildPerm ? " locked" : ""}`}>
             {guildLabel}
             <nav className="nav">
               {nb("management", "ti-adjustments-alt", t("management"))}
@@ -759,7 +758,6 @@ export default function App() {
             </nav>
           </div>
         )}
-        {!showGuildBox && <nav className="nav">{nb("management", "ti-adjustments-alt", t("management"))}</nav>}
 
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
           {selectedApiUnstable && (
