@@ -133,6 +133,41 @@ def _is_placeholder(content: bytes) -> bool:
     )
 
 
+def _generate_placeholder(key: str) -> bytes | None:
+    """Gera um PNG placeholder quando a CDN da Albion não tem o render do item.
+    Mostra o número do tier num fundo escuro com borda colorida pela tier.
+    Itens sem tier (UNIQUE_*, etc.) mostram '?' num fundo cinza."""
+    import re
+    from io import BytesIO
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+    m = re.match(r"T(\d+)", key)
+    tier = int(m.group(1)) if m else 0
+    colors = {4: (0x4C, 0xAF, 0x50), 5: (0x2D, 0x9C, 0xDB), 6: (0x9C, 0x27, 0xB0),
+              7: (0xFF, 0xA0, 0x00), 8: (0xFF, 0x6B, 0x35)}
+    color = colors.get(tier, (0x60, 0x60, 0x68))
+    size = 128
+    img = Image.new("RGBA", (size, size), (0x1A, 0x1A, 0x22, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([0, 0, size - 1, size - 1], radius=8, outline=color, width=3)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+    except Exception:
+        try:
+            font = ImageFont.truetype("C:\\Windows\\Fonts\\segoeuib.ttf", 48)
+        except Exception:
+            font = ImageFont.load_default()
+    label = f"T{tier}" if tier else "?"
+    bbox = draw.textbbox((0, 0), label, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(((size - tw) // 2, (size - th) // 2 - bbox[1]), label, fill=color, font=font)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 @router.get("/item/{key}")
 async def render_item(key: str, quality: int = 0, size: int = 0) -> Response:
     params: dict[str, int] = {}
@@ -209,8 +244,15 @@ async def _cached_render(
         raise HTTPException(502, "Albion render unavailable")
 
     if content is None:
-        # Don't cache: no art today may have art in the next patch, and the
-        # client `onError` already hides the image.
+        # A CDN da Albion não tem render pra este item (kill trophies do Mists,
+        # itens novos antes do render ser publicado). Gera um placeholder com
+        # a cor do tier em vez de 404 — o site/companion sempre tem uma imagem.
+        placeholder = _generate_placeholder(key)
+        if placeholder is not None:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(placeholder)
+            _mem_put(mkey, placeholder)
+            return Response(content=placeholder, media_type="image/png", headers=_CACHE_HEADERS)
         raise HTTPException(404, "render not found")
 
     # Written under the ORIGINAL key even when it came from the fallback —

@@ -169,23 +169,60 @@ GRID_W = GRID_COLS * (ICON_SIZE + SLOT_GAP)
 #可靠 pra TODOS os itens (256 retorna 500 em vários). Upscale via LANCZOS.
 CDN_ICON_SIZE = 128
 
+# Cores de tier (alinhadas com o site): T4=verde, T5=azul, T6=roxo, T7=dourado, T8=laranja
+_TIER_COLORS = {
+    4: (0x4C, 0xAF, 0x50),  # verde
+    5: (0x2D, 0x9C, 0xDB),  # azul
+    6: (0x9C, 0x27, 0xB0),  # roxo
+    7: (0xFF, 0xA0, 0x00),  # dourado
+    8: (0xFF, 0x6B, 0x35),  # laranja
+}
+_DEFAULT_TIER_COLOR = (0x60, 0x60, 0x68)
+
+
+def _generate_placeholder_icon(item_id: str, quality: int = 0) -> Image.Image:
+    """Gera um ícone placeholder quando a CDN da Albion não tem o render.
+    Mostra o número do tier num fundo colorido pela tier do item."""
+    import re
+    m = re.match(r"T(\d+)", item_id)
+    tier = int(m.group(1)) if m else 0
+    color = _TIER_COLORS.get(tier, _DEFAULT_TIER_COLOR)
+    img = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (0x1A, 0x1A, 0x22, 255))
+    draw = ImageDraw.Draw(img)
+    # Borda colorida pela tier
+    draw.rounded_rectangle([0, 0, ICON_SIZE - 1, ICON_SIZE - 1], radius=6, outline=color, width=2)
+    # Número do tier centralizado
+    _load_fonts()
+    font = _FONT_TITLE or ImageFont.load_default()
+    label = f"T{tier}" if tier else "??"
+    bbox = draw.textbbox((0, 0), label, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(((ICON_SIZE - tw) // 2, (ICON_SIZE - th) // 2 - bbox[1]), label, fill=color, font=font)
+    return img
+
 
 async def _fetch_item_icon(item_id: str, quality: int = 0) -> Image.Image | None:
     try:
         response = await render_item(item_id, quality, CDN_ICON_SIZE)
     except HTTPException:
-        return None
-    try:
-        img = Image.open(BytesIO(response.body)).convert("RGBA")
-        return img.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
-    except Exception:
-        return None
+        pass  # CDN não tem — gera placeholder abaixo
+    else:
+        try:
+            img = Image.open(BytesIO(response.body)).convert("RGBA")
+            return img.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
+        except Exception:
+            pass
+    # Fallback: ícone gerado com a cor do tier + nome encurtado.
+    # A CDN da Albion não tem render pra TODOS os itens (kill trophies do
+    # Mists, itens novos antes do render ser publicado, etc.). Em vez de
+    # mostrar "—" ou abortar a imagem, geramos um placeholder visual.
+    return _generate_placeholder_icon(item_id, quality)
 
 
 async def _load_icons(items: list[dict], icon_cache: dict) -> bool:
-    """Carrega ícones da CDN. Itens sem render (kill trophies do Mists, etc.)
-    ficam None no cache e o grid desenha '—' no lugar — não aborta a imagem
-    inteira por causa de um item sem arte."""
+    """Carrega ícones da CDN. Itens sem render na CDN (kill trophies do Mists,
+    itens novos) recebem um placeholder gerado com a cor do tier — a imagem
+    nunca fica sem ícone."""
     keys = list(dict.fromkeys(
         (item["Type"], item.get("Quality", 0))
         for item in items if item and item.get("Type")
