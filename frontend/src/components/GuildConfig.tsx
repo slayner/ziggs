@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, BOT_INVITE, type CatalogRole, type DiscordRole, type NodeDef, type NodeMaps, type Permissions, type RegearSettings, type SiteGuild } from "../api";
 import { useLang, useT, REGION_LABELS, LANG_FULL, type Lang, type TKey } from "../i18n";
 import { ALBION_ITEMS, itemRenderUrl } from "../data/albion-items";
@@ -7,58 +7,58 @@ import { Panel } from "./Panel";
 export const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
 const JUICY_KILL_HARD_FLOOR = 20_000_000;
 
-// ── Itens desabilitados do regear: o backend guarda por BASE ID (sem tier/
-// enchant — "HEAD_PLATE_SET1", "MOUNT_OX"). O catálogo lista variantes
-// T4-T8 × @0-@4 da mesma base, então deduplicamos p/ uma entrada por base.
+// â”€â”€ Itens desabilitados do regear: o backend guarda por BASE ID (sem tier/
+// enchant â€” "HEAD_PLATE_SET1", "MOUNT_OX"). O catÃ¡logo lista variantes
+// T4-T8 Ã— @0-@4 da mesma base, entÃ£o deduplicamos p/ uma entrada por base.
 function itemBaseId(id: string): string {
   return id.replace(/^T\d+_/, "").replace(/@\d+$/, "");
 }
-// ── Catálogo default de tipos de node (localizado por idioma do bot).
-// `key` = nome guardado no banco (canônico); `name.*` é a tradução exibida
+// â”€â”€ CatÃ¡logo default de tipos de node (localizado por idioma do bot).
+// `key` = nome guardado no banco (canÃ´nico); `name.*` Ã© a traduÃ§Ã£o exibida
 // conforme o idioma do bot. node_events.node_type guarda o `key`.
-// 28 nodes: 5 recursos × 5 tiers (4.4-8.4) + 4 vortex por cor + 4 orbes por cor.
+// 28 nodes: 5 recursos Ã— 5 tiers (4.4-8.4) + 4 vortex por cor + 4 orbes por cor.
 const DEFAULT_NODE_DEFS: {
   key: string; name: { pt: string; en: string; es: string };
   emoji: string | null; weight: number;
 }[] = [
   // Wood (Madeira)
-  { key: "wood_4.4", name: { pt: "Madeira 4.4", en: "Wood 4.4", es: "Madera 4.4" }, emoji: "🪵", weight: 0.0016 },
-  { key: "wood_5.4", name: { pt: "Madeira 5.4", en: "Wood 5.4", es: "Madera 5.4" }, emoji: "🪵", weight: 0.008 },
-  { key: "wood_6.4", name: { pt: "Madeira 6.4", en: "Wood 6.4", es: "Madera 6.4" }, emoji: "🪵", weight: 0.04 },
-  { key: "wood_7.4", name: { pt: "Madeira 7.4", en: "Wood 7.4", es: "Madera 7.4" }, emoji: "🪵", weight: 0.2 },
-  { key: "wood_8.4", name: { pt: "Madeira 8.4", en: "Wood 8.4", es: "Madera 8.4" }, emoji: "🪵", weight: 1.0 },
-  // Ore (Minério)
-  { key: "ore_4.4", name: { pt: "Minério 4.4", en: "Ore 4.4", es: "Mineral 4.4" }, emoji: "🪨", weight: 0.0016 },
-  { key: "ore_5.4", name: { pt: "Minério 5.4", en: "Ore 5.4", es: "Mineral 5.4" }, emoji: "🪨", weight: 0.008 },
-  { key: "ore_6.4", name: { pt: "Minério 6.4", en: "Ore 6.4", es: "Mineral 6.4" }, emoji: "🪨", weight: 0.04 },
-  { key: "ore_7.4", name: { pt: "Minério 7.4", en: "Ore 7.4", es: "Mineral 7.4" }, emoji: "🪨", weight: 0.2 },
-  { key: "ore_8.4", name: { pt: "Minério 8.4", en: "Ore 8.4", es: "Mineral 8.4" }, emoji: "🪨", weight: 1.0 },
+  { key: "wood_4.4", name: { pt: "Madeira 4.4", en: "Wood 4.4", es: "Madera 4.4" }, emoji: "ðŸªµ", weight: 0.0016 },
+  { key: "wood_5.4", name: { pt: "Madeira 5.4", en: "Wood 5.4", es: "Madera 5.4" }, emoji: "ðŸªµ", weight: 0.008 },
+  { key: "wood_6.4", name: { pt: "Madeira 6.4", en: "Wood 6.4", es: "Madera 6.4" }, emoji: "ðŸªµ", weight: 0.04 },
+  { key: "wood_7.4", name: { pt: "Madeira 7.4", en: "Wood 7.4", es: "Madera 7.4" }, emoji: "ðŸªµ", weight: 0.2 },
+  { key: "wood_8.4", name: { pt: "Madeira 8.4", en: "Wood 8.4", es: "Madera 8.4" }, emoji: "ðŸªµ", weight: 1.0 },
+  // Ore (MinÃ©rio)
+  { key: "ore_4.4", name: { pt: "MinÃ©rio 4.4", en: "Ore 4.4", es: "Mineral 4.4" }, emoji: "ðŸª¨", weight: 0.0016 },
+  { key: "ore_5.4", name: { pt: "MinÃ©rio 5.4", en: "Ore 5.4", es: "Mineral 5.4" }, emoji: "ðŸª¨", weight: 0.008 },
+  { key: "ore_6.4", name: { pt: "MinÃ©rio 6.4", en: "Ore 6.4", es: "Mineral 6.4" }, emoji: "ðŸª¨", weight: 0.04 },
+  { key: "ore_7.4", name: { pt: "MinÃ©rio 7.4", en: "Ore 7.4", es: "Mineral 7.4" }, emoji: "ðŸª¨", weight: 0.2 },
+  { key: "ore_8.4", name: { pt: "MinÃ©rio 8.4", en: "Ore 8.4", es: "Mineral 8.4" }, emoji: "ðŸª¨", weight: 1.0 },
   // Fiber (Fibra)
-  { key: "fiber_4.4", name: { pt: "Fibra 4.4", en: "Fiber 4.4", es: "Fibra 4.4" }, emoji: "🌿", weight: 0.0016 },
-  { key: "fiber_5.4", name: { pt: "Fibra 5.4", en: "Fiber 5.4", es: "Fibra 5.4" }, emoji: "🌿", weight: 0.008 },
-  { key: "fiber_6.4", name: { pt: "Fibra 6.4", en: "Fiber 6.4", es: "Fibra 6.4" }, emoji: "🌿", weight: 0.04 },
-  { key: "fiber_7.4", name: { pt: "Fibra 7.4", en: "Fiber 7.4", es: "Fibra 7.4" }, emoji: "🌿", weight: 0.2 },
-  { key: "fiber_8.4", name: { pt: "Fibra 8.4", en: "Fiber 8.4", es: "Fibra 8.4" }, emoji: "🌿", weight: 1.0 },
+  { key: "fiber_4.4", name: { pt: "Fibra 4.4", en: "Fiber 4.4", es: "Fibra 4.4" }, emoji: "ðŸŒ¿", weight: 0.0016 },
+  { key: "fiber_5.4", name: { pt: "Fibra 5.4", en: "Fiber 5.4", es: "Fibra 5.4" }, emoji: "ðŸŒ¿", weight: 0.008 },
+  { key: "fiber_6.4", name: { pt: "Fibra 6.4", en: "Fiber 6.4", es: "Fibra 6.4" }, emoji: "ðŸŒ¿", weight: 0.04 },
+  { key: "fiber_7.4", name: { pt: "Fibra 7.4", en: "Fiber 7.4", es: "Fibra 7.4" }, emoji: "ðŸŒ¿", weight: 0.2 },
+  { key: "fiber_8.4", name: { pt: "Fibra 8.4", en: "Fiber 8.4", es: "Fibra 8.4" }, emoji: "ðŸŒ¿", weight: 1.0 },
   // Hide (Couro)
-  { key: "hide_4.4", name: { pt: "Couro 4.4", en: "Hide 4.4", es: "Cuero 4.4" }, emoji: "🐗", weight: 0.0016 },
-  { key: "hide_5.4", name: { pt: "Couro 5.4", en: "Hide 5.4", es: "Cuero 5.4" }, emoji: "🐗", weight: 0.008 },
-  { key: "hide_6.4", name: { pt: "Couro 6.4", en: "Hide 6.4", es: "Cuero 6.4" }, emoji: "🐗", weight: 0.04 },
-  { key: "hide_7.4", name: { pt: "Couro 7.4", en: "Hide 7.4", es: "Cuero 7.4" }, emoji: "🐗", weight: 0.2 },
-  { key: "hide_8.4", name: { pt: "Couro 8.4", en: "Hide 8.4", es: "Cuero 8.4" }, emoji: "🐗", weight: 1.0 },
+  { key: "hide_4.4", name: { pt: "Couro 4.4", en: "Hide 4.4", es: "Cuero 4.4" }, emoji: "ðŸ—", weight: 0.0016 },
+  { key: "hide_5.4", name: { pt: "Couro 5.4", en: "Hide 5.4", es: "Cuero 5.4" }, emoji: "ðŸ—", weight: 0.008 },
+  { key: "hide_6.4", name: { pt: "Couro 6.4", en: "Hide 6.4", es: "Cuero 6.4" }, emoji: "ðŸ—", weight: 0.04 },
+  { key: "hide_7.4", name: { pt: "Couro 7.4", en: "Hide 7.4", es: "Cuero 7.4" }, emoji: "ðŸ—", weight: 0.2 },
+  { key: "hide_8.4", name: { pt: "Couro 8.4", en: "Hide 8.4", es: "Cuero 8.4" }, emoji: "ðŸ—", weight: 1.0 },
   // Vortex (by color)
-  { key: "vortex_green", name: { pt: "Vortex Verde", en: "Green Vortex", es: "Vortex Verde" }, emoji: "🟩", weight: 0.2 },
-  { key: "vortex_blue", name: { pt: "Vortex Azul", en: "Blue Vortex", es: "Vortex Azul" }, emoji: "🟦", weight: 0.2 },
-  { key: "vortex_purple", name: { pt: "Vortex Roxo", en: "Purple Vortex", es: "Vortex Morado" }, emoji: "🟪", weight: 0.2 },
-  { key: "vortex_gold", name: { pt: "Vortex Dourado", en: "Gold Vortex", es: "Vortex Dorado" }, emoji: "🟨", weight: 0.2 },
+  { key: "vortex_green", name: { pt: "Vortex Verde", en: "Green Vortex", es: "Vortex Verde" }, emoji: "ðŸŸ©", weight: 0.2 },
+  { key: "vortex_blue", name: { pt: "Vortex Azul", en: "Blue Vortex", es: "Vortex Azul" }, emoji: "ðŸŸ¦", weight: 0.2 },
+  { key: "vortex_purple", name: { pt: "Vortex Roxo", en: "Purple Vortex", es: "Vortex Morado" }, emoji: "ðŸŸª", weight: 0.2 },
+  { key: "vortex_gold", name: { pt: "Vortex Dourado", en: "Gold Vortex", es: "Vortex Dorado" }, emoji: "ðŸŸ¨", weight: 0.2 },
   // Orbs (Orbes)
-  { key: "orb_green", name: { pt: "Orbe Verde", en: "Green Orb", es: "Orbe Verde" }, emoji: "🟢", weight: 0.04 },
-  { key: "orb_blue", name: { pt: "Orbe Azul", en: "Blue Orb", es: "Orbe Azul" }, emoji: "🔵", weight: 0.04 },
-  { key: "orb_purple", name: { pt: "Orbe Roxa", en: "Purple Orb", es: "Orbe Morada" }, emoji: "🟣", weight: 0.04 },
-  { key: "orb_gold", name: { pt: "Orbe Dourada", en: "Gold Orb", es: "Orbe Dorada" }, emoji: "🟡", weight: 0.04 },
+  { key: "orb_green", name: { pt: "Orbe Verde", en: "Green Orb", es: "Orbe Verde" }, emoji: "ðŸŸ¢", weight: 0.04 },
+  { key: "orb_blue", name: { pt: "Orbe Azul", en: "Blue Orb", es: "Orbe Azul" }, emoji: "ðŸ”µ", weight: 0.04 },
+  { key: "orb_purple", name: { pt: "Orbe Roxa", en: "Purple Orb", es: "Orbe Morada" }, emoji: "ðŸŸ£", weight: 0.04 },
+  { key: "orb_gold", name: { pt: "Orbe Dourada", en: "Gold Orb", es: "Orbe Dorada" }, emoji: "ðŸŸ¡", weight: 0.04 },
 ];
 
-// Nome exibido de um def: se bater com uma key do catálogo default, mostra o
-// nome no idioma do bot; senão mostra o nome literal guardado no banco.
+// Nome exibido de um def: se bater com uma key do catÃ¡logo default, mostra o
+// nome no idioma do bot; senÃ£o mostra o nome literal guardado no banco.
 function nodeDefDisplayName(name: string, botLang: Lang): string {
   const d = DEFAULT_NODE_DEFS.find(x => x.key === name);
   return d ? (d.name[botLang] ?? d.name.pt ?? name) : name;
@@ -90,19 +90,19 @@ const ADMIN = "admin";
 const ALL_ALLIES = "all";
 const NO_ALLIES = "none";
 
-// @everyone é exclusivo — nenhum outro cargo (Administrators incluso) pode
+// @everyone Ã© exclusivo â€” nenhum outro cargo (Administrators incluso) pode
 // coexistir com ele: selecionar @everyone limpa a lista inteira, e
-// selecionar qualquer outro cargo tira @everyone se ele estiver lá.
+// selecionar qualquer outro cargo tira @everyone se ele estiver lÃ¡.
 function toggleRoleKey(prev: string[], key: string): string[] {
   if (key === EVERYONE) return prev.includes(EVERYONE) ? [] : [EVERYONE];
   const specific = prev.filter(k => k !== EVERYONE);
   return specific.includes(key) ? specific.filter(k => k !== key) : [...specific, key];
 }
 
-// Descrição de cada comando vem crua (PT) do backend (COMMANDS_REGISTRY) — o
-// site é multilíngue, então a exibição usa a tradução local por nome do
+// DescriÃ§Ã£o de cada comando vem crua (PT) do backend (COMMANDS_REGISTRY) â€” o
+// site Ã© multilÃ­ngue, entÃ£o a exibiÃ§Ã£o usa a traduÃ§Ã£o local por nome do
 // comando em vez do texto da API, com o texto da API como fallback pra
-// comando novo que ainda não ganhou uma entrada aqui.
+// comando novo que ainda nÃ£o ganhou uma entrada aqui.
 const CMD_DESC_KEYS: Record<string, TKey> = {
   avatar: "cmdDescAvatar",
   banner: "cmdDescBanner",
@@ -117,9 +117,9 @@ const CMD_DESC_KEYS: Record<string, TKey> = {
   undo: "cmdDescUndo",
 };
 
-// Comandos que só existem como dependência de outro (ex.: /unregister só faz
+// Comandos que sÃ³ existem como dependÃªncia de outro (ex.: /unregister sÃ³ faz
 // sentido se /register existir) entram aninhados dentro do pai em vez de
-// aparecer como uma linha própria na lista principal.
+// aparecer como uma linha prÃ³pria na lista principal.
 const SUBCOMMANDS_OF: Record<string, string[]> = { register: ["unregister"] };
 const CHILD_COMMANDS = new Set(Object.values(SUBCOMMANDS_OF).flat());
 
@@ -140,8 +140,8 @@ function usePermCols(): { key: keyof Permissions; label: string }[] {
 interface Props {
   guildId: string;
   onSwitch: () => void;
-  // false quando a aba tá escondida (keep-alive no App) → pausa o poll de 8s
-  // dos cargos/comandos do Discord pra não chover chamada em background.
+  // false quando a aba tÃ¡ escondida (keep-alive no App) â†’ pausa o poll de 8s
+  // dos cargos/comandos do Discord pra nÃ£o chover chamada em background.
   active?: boolean;
 }
 
@@ -157,7 +157,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [linkErr, setLinkErr] = useState<string | null>(null);
   const [roles, setRoles] = useState<DiscordRole[] | null>(null);
   const [rolesErr, setRolesErr] = useState<string | null>(null);
-  // Roles pinned in the permissions quadrant — initialized from any role that
+  // Roles pinned in the permissions quadrant â€” initialized from any role that
   // already has a permission enabled, then managed manually by the user.
   const [permVisibleRoles, setPermVisibleRoles] = useState<Set<string>>(new Set());
   const [commands, setCommands] = useState<BotCommand[] | null>(null);
@@ -165,8 +165,6 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [savingRole, setSavingRole] = useState(false);
   const [roleSaved, setRoleSaved] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  // Funcionalidades abertas (linhas expandidas da lista de features).
-  const [featOpen, setFeatOpen] = useState<Set<string>>(new Set());
   const [allyRoleId, setAllyRoleId] = useState("");
   const [savingAllyRole, setSavingAllyRole] = useState(false);
   const [allyRoleSaved, setAllyRoleSaved] = useState(false);
@@ -174,10 +172,10 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [allyGuilds, setAllyGuilds] = useState<AllyGuild[] | null>(null);
   const [registerOthersRoles, setRegisterOthersRoles] = useState<string[]>([ADMIN]);
   const [botLanguage, setBotLanguage] = useState<Lang>("pt");
-  // Eventos: canal do mass-info + gates de função por cargo (ver backend
-  // app/services/event_gates.py). gates = {nome_função_minusculo: [role_id, ...]}.
-  // `enabled` é um estado à parte do channelId: desligar a feature NÃO apaga
-  // o canal escolhido localmente, só manda null pro servidor — religar
+  // Eventos: canal do mass-info + gates de funÃ§Ã£o por cargo (ver backend
+  // app/services/event_gates.py). gates = {nome_funÃ§Ã£o_minusculo: [role_id, ...]}.
+  // `enabled` Ã© um estado Ã  parte do channelId: desligar a feature NÃƒO apaga
+  // o canal escolhido localmente, sÃ³ manda null pro servidor â€” religar
   // reenvia o mesmo canal sem precisar escolher de novo (era o bug reportado).
   const [eventsChannelId, setEventsChannelId] = useState<string>("");
   const [eventsEnabled, setEventsEnabled] = useState(false);
@@ -189,7 +187,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [trialRoleId, setTrialRoleId] = useState<string>("");
   const [nodesCalendarChannelId, setNodesCalendarChannelId] = useState<string>("");
   const [nodesEnabled, setNodesEnabled] = useState(false);
-  // Battle feed — mensageiro de batalhas (link + imagem de resumo no canal)
+  // Battle feed â€” mensageiro de batalhas (link + imagem de resumo no canal)
   const [battleFeedChannelId, setBattleFeedChannelId] = useState<string>("");
   const [battleFeedMinPlayers, setBattleFeedMinPlayers] = useState<string>("10");
   const [battleFeedEnabled, setBattleFeedEnabled] = useState(false);
@@ -198,30 +196,30 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [juicyKillMinFame, setJuicyKillMinFame] = useState("0");
   const [juicyKillRegions, setJuicyKillRegions] = useState<string[]>([]);
   const [juicyKillEnabled, setJuicyKillEnabled] = useState(false);
-  // Canal de logs do bot (retransmissão do AuditLog) — o bot cria e mantém
-  // sozinho quando ligado (ver cogs/audit_log.py); aqui é só leitura pro admin
+  // Canal de logs do bot (retransmissÃ£o do AuditLog) â€” o bot cria e mantÃ©m
+  // sozinho quando ligado (ver cogs/audit_log.py); aqui Ã© sÃ³ leitura pro admin
   // saber onde olhar. Toggle mestre em botLogsEnabled (default true).
   const [logsChannelId, setLogsChannelId] = useState<string>("");
   const [botLogsEnabled, setBotLogsEnabled] = useState(true);
   // Tipos de node + mapas (gerenciados aqui no lugar da antiga aba Nodes; adicionar
-  // node em si é pelo Discord). Form de def e de mapa extra:
+  // node em si Ã© pelo Discord). Form de def e de mapa extra:
   const [nodeDefs, setNodeDefs] = useState<NodeDef[]>([]);
   const [nodeDefsLoaded, setNodeDefsLoaded] = useState(false);
   const [nodeMaps, setNodeMaps] = useState<NodeMaps | null>(null);
   const [mapsOpen, setMapsOpen] = useState(false);
   const [ndName, setNdName] = useState("");
   const [ndEmoji, setNdEmoji] = useState("");
-  // Exibido como % (0-100); o backend guarda fração em NodeDef.weight.
+  // Exibido como % (0-100); o backend guarda fraÃ§Ã£o em NodeDef.weight.
   const [ndWeight, setNdWeight] = useState("100");
-  // Edição inline de um def já criado (por id — permite renomear sem criar
-  // linha nova, via PATCH /defs/{id}). Só um row editável por vez.
+  // EdiÃ§Ã£o inline de um def jÃ¡ criado (por id â€” permite renomear sem criar
+  // linha nova, via PATCH /defs/{id}). SÃ³ um row editÃ¡vel por vez.
   const [ndEditingId, setNdEditingId] = useState<number | null>(null);
   const [ndEditName, setNdEditName] = useState("");
   const [ndEditEmoji, setNdEditEmoji] = useState("");
   const [ndEditWeight, setNdEditWeight] = useState("100");
-  // Auto-seed do catálogo default só uma vez por mount da guilda, e só se a
-  // guilda ainda não tem nenhum def. ponytail: no-op enquanto DEFAULT_NODE_DEFS
-  // estiver vazio (lista exata do usuário pendente).
+  // Auto-seed do catÃ¡logo default sÃ³ uma vez por mount da guilda, e sÃ³ se a
+  // guilda ainda nÃ£o tem nenhum def. ponytail: no-op enquanto DEFAULT_NODE_DEFS
+  // estiver vazio (lista exata do usuÃ¡rio pendente).
   const nodeSeedRef = useRef(false);
   const [nmName, setNmName] = useState("");
   const [nodesErr, setNodesErr] = useState<string | null>(null);
@@ -230,28 +228,28 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [channelsErr, setChannelsErr] = useState<string | null>(null);
   const [gameRoles, setGameRoles] = useState<CatalogRole[]>([]);
   const [eventRoleGates, setEventRoleGates] = useState<Record<string, string[]>>({});
-  // Mínimo de builds (funções) ao se inscrever. Não existe limite máximo.
+  // MÃ­nimo de builds (funÃ§Ãµes) ao se inscrever. NÃ£o existe limite mÃ¡ximo.
   const [signupMinBuilds, setSignupMinBuilds] = useState<string>("");
   // Regear: canal de screenshots, % de cobertura, categorias cobertas, override
   // de itens e cargos aprovadores. Salvo em Guild.settings.regear (JSONB).
   const [regear, setRegear] = useState<RegearSettings | null>(null);
   const [regearEnabled, setRegearEnabled] = useState(false);
-  // Lootlog: % dos loggers (também editável na própria página de lootlog, mas
+  // Lootlog: % dos loggers (tambÃ©m editÃ¡vel na prÃ³pria pÃ¡gina de lootlog, mas
   // fica nas settings normais p/ o admin configurar sem abrir um CTA).
   const [llPct, setLlPct] = useState(5);
   const [lootlogEnabled, setLootlogEnabled] = useState(true);
-  // Lootsplit mode: regear é sempre calculado; isto só decide como a tab do
+  // Lootsplit mode: regear Ã© sempre calculado; isto sÃ³ decide como a tab do
   // evento vira split. Guild.settings.lootsplit_mode (ver events.get_lootsplit_mode).
   const [lootsplitMode, setLootsplitMode] = useState<string>("full");
   // Taxa da guilda: % da tab debitada pro banco ANTES do pool de participantes
-  // (0-100, default 0). Só em modos com split. Ver events.get_guild_tax_percent.
+  // (0-100, default 0). SÃ³ em modos com split. Ver events.get_guild_tax_percent.
   const [guildTaxPct, setGuildTaxPct] = useState<string>("0");
-  // Scout bonus source: de onde vem o bônus do scout (NodeDef.weight). "node"
-  // (default) = peso × sold_value, pool separado. "tab" = peso × tab_value,
+  // Scout bonus source: de onde vem o bÃ´nus do scout (NodeDef.weight). "node"
+  // (default) = peso Ã— sold_value, pool separado. "tab" = peso Ã— tab_value,
   // deduzido da participant pool. Ver events.get_scout_bonus_source.
   const [scoutBonusSource, setScoutBonusSource] = useState<string>("node");
   // Scout percent global (0-100): multiplica o weight de cada node. Se 5% e
-  // node weight=50%, bônus real = 50% de 5% = 2.5% do sold value.
+  // node weight=50%, bÃ´nus real = 50% de 5% = 2.5% do sold value.
   const [scoutPercent, setScoutPercent] = useState<string>("0");
   // Pings de @everyone do mass-info: momentos em que o bot deleta a embed e
   // reenvia com @everyone. Subconjunto de PING_TRIGGERS; default = os 3 primeiros
@@ -278,15 +276,15 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     { mode: "guild_backed", labelKey: "lootsplitModeGuildBacked", descKey: "lootsplitModeGuildBackedDesc" },
   ];
 
-  // Scout bonus source — de onde vem o bônus do scout (NodeDef.weight). "node"
-  // (default) = peso × sold_value (pool separado). "tab" = peso × tab_value,
+  // Scout bonus source â€” de onde vem o bÃ´nus do scout (NodeDef.weight). "node"
+  // (default) = peso Ã— sold_value (pool separado). "tab" = peso Ã— tab_value,
   // deduzido da participant pool. Ver events.get_scout_bonus_source no backend.
   const SCOUT_BONUS_SOURCES: { src: string; labelKey: TKey; descKey: TKey }[] = [
     { src: "node", labelKey: "scoutBonusSourceNode", descKey: "scoutBonusSourceNodeDesc" },
     { src: "tab", labelKey: "scoutBonusSourceTab", descKey: "scoutBonusSourceTabDesc" },
   ];
 
-  // Momentos configuráveis de ping @everyone do mass-info (ver event_signups.py
+  // Momentos configurÃ¡veis de ping @everyone do mass-info (ver event_signups.py
   // no backend). default ligado: created/t10min/in_progress; review off.
   const PING_TRIGGERS: { key: string; labelKey: TKey; descKey: TKey; defaultOn: boolean }[] = [
     { key: "created", labelKey: "pingTrgCreated", descKey: "pingTrgCreatedDesc", defaultOn: true },
@@ -295,14 +293,14 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     { key: "review", labelKey: "pingTrgReview", descKey: "pingTrgReviewDesc", defaultOn: false },
   ];
 
-  // Auto-seed do catálogo default: se a guilda ainda não tem nenhum def e o
-  // catálogo não está vazio, posta cada default via upsertNodeDef. Só roda uma
-  // vez por mount (nodeSeedRef) — não repopula se o usuário apagar tudo depois.
+  // Auto-seed do catÃ¡logo default: se a guilda ainda nÃ£o tem nenhum def e o
+  // catÃ¡logo nÃ£o estÃ¡ vazio, posta cada default via upsertNodeDef. SÃ³ roda uma
+  // vez por mount (nodeSeedRef) â€” nÃ£o repopula se o usuÃ¡rio apagar tudo depois.
   useEffect(() => {
     if (nodeSeedRef.current) return;
     if (DEFAULT_NODE_DEFS.length === 0) return;
     if (!nodeDefsLoaded) return;       // espera o primeiro GET resolver
-    if (nodeDefs.length > 0) return;    // já tem defs — não semea
+    if (nodeDefs.length > 0) return;    // jÃ¡ tem defs â€” nÃ£o semea
     nodeSeedRef.current = true;
     (async () => {
       for (const d of DEFAULT_NODE_DEFS) {
@@ -353,8 +351,8 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setEventRoleGates((g.settings.event_role_gates as Record<string, string[]> | undefined) ?? {});
       setSignupMinBuilds(String(g.settings.signup_min_builds ?? ""));
       const commandRoles = g.settings.command_roles as Record<string, string[]> | undefined;
-      // Sem nada salvo ainda, o default é admin-only (ver DEFAULT_ALLOWED_ROLES
-      // no backend) — mostra isso já marcado em vez de aparentar "ninguém".
+      // Sem nada salvo ainda, o default Ã© admin-only (ver DEFAULT_ALLOWED_ROLES
+      // no backend) â€” mostra isso jÃ¡ marcado em vez de aparentar "ninguÃ©m".
       setRegisterOthersRoles(commandRoles?.register_others ?? [ADMIN]);
     });
     api.guildAllies(guildId).then(setAllyGuilds).catch(() => setAllyGuilds([]));
@@ -377,13 +375,13 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     api.listNodeMaps().then(setNodeMaps).catch(() => {});
   }, [guildId]);
 
-  // Cargos e comandos vêm direto do Discord (sem cache no backend) — então
-  // novo cargo, troca de nome ou de hierarquia, e até comandos liberados por
-  // outro admin aparecem aqui sem precisar recarregar a página. 8s é rápido
-  // o bastante pra parecer ao vivo numa tela de config (pouco tráfego, sem
+  // Cargos e comandos vÃªm direto do Discord (sem cache no backend) â€” entÃ£o
+  // novo cargo, troca de nome ou de hierarquia, e atÃ© comandos liberados por
+  // outro admin aparecem aqui sem precisar recarregar a pÃ¡gina. 8s Ã© rÃ¡pido
+  // o bastante pra parecer ao vivo numa tela de config (pouco trÃ¡fego, sem
   // necessidade de WebSocket pra isso).
-  // ponytail: effect separado do load inicial, deps [guildId, active] —
-  // `active` pausa o poll quando a aba tá escondida (keep-alive no App) sem
+  // ponytail: effect separado do load inicial, deps [guildId, active] â€”
+  // `active` pausa o poll quando a aba tÃ¡ escondida (keep-alive no App) sem
   // refazer os loads iniciais (guildInfo/channels) a cada toggle de visibilidade.
   useEffect(() => {
     if (!active) return;
@@ -394,8 +392,8 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
         if (cancelled) return;
         setRoles(r); setRolesErr(null); hasLoadedRoles = true;
       }).catch(e => {
-        // só mostra erro antes do 1º sucesso — depois disso, uma falha pontual
-        // no poll (rede instável) não deve apagar a última lista boa da tela.
+        // sÃ³ mostra erro antes do 1Âº sucesso â€” depois disso, uma falha pontual
+        // no poll (rede instÃ¡vel) nÃ£o deve apagar a Ãºltima lista boa da tela.
         if (cancelled || hasLoadedRoles) return;
         setRolesErr(e.message);
       });
@@ -413,17 +411,6 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       if (next.has(name)) next.delete(name); else next.add(name);
       return next;
     });
-  }
-
-  function toggleFeat(id: string) {
-    setFeatOpen(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-  function openFeat(id: string) {
-    setFeatOpen(prev => new Set(prev).add(id));
   }
 
   async function toggleCommand(name: string, enabled: boolean) {
@@ -560,8 +547,8 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     await api.updateGuildSettings(guildId, { events_channel_id: value || null });
   }
 
-  // Sala de revisão: ao entrar em review, o bot abre uma thread aqui e posta o
-  // embed 📑 dentro. Vazio = embed fica no canal de eventos como mensagem simples.
+  // Sala de revisÃ£o: ao entrar em review, o bot abre uma thread aqui e posta o
+  // embed ðŸ“‘ dentro. Vazio = embed fica no canal de eventos como mensagem simples.
   async function saveReviewChannel(value: string) {
     setReviewChannelId(value);
     await api.updateGuildSettings(guildId, { event_review_channel_id: value || null });
@@ -569,28 +556,28 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
 
   // Canal dedicado de threads de regear: ao entrar em IN_PROGRESS o bot cria
   // uma thread aqui; prints postadas nela viram regears atrelados ao evento.
-  // Vazio = sem thread automática (regears soltos caem na fila geral sem tag).
+  // Vazio = sem thread automÃ¡tica (regears soltos caem na fila geral sem tag).
   async function saveRegearThreadChannel(value: string) {
     setRegearThreadChannelId(value);
     await api.updateGuildSettings(guildId, { regear_thread_channel_id: value || null });
   }
 
   // Canal dedicado de threads de lootlog por evento: o bot cria uma thread aqui
-  // ao entrar em IN_PROGRESS; .csv do lootlogger postado nela vira submissão
-  // atrelada ao evento. Vazio = sem thread automática.
+  // ao entrar em IN_PROGRESS; .csv do lootlogger postado nela vira submissÃ£o
+  // atrelada ao evento. Vazio = sem thread automÃ¡tica.
   async function saveLootlogThreadChannel(value: string) {
     setLootlogThreadChannelId(value);
     await api.updateGuildSettings(guildId, { lootlog_thread_channel_id: value || null });
   }
 
-  // Toggle mestre de Eventos: liga reenviando o canal já escolhido (sem
+  // Toggle mestre de Eventos: liga reenviando o canal jÃ¡ escolhido (sem
   // precisar reselecionar); desliga mandando null pro servidor SEM apagar
-  // `eventsChannelId` local, que fica de memória pra próxima vez que ligar.
+  // `eventsChannelId` local, que fica de memÃ³ria pra prÃ³xima vez que ligar.
   function toggleEventsFeature(v: boolean) {
     setEventsEnabled(v);
     if (v) {
       if (eventsChannelId) api.updateGuildSettings(guildId, { events_channel_id: eventsChannelId });
-      else openFeat("events"); // nada lembrado ainda — abre pro admin escolher
+      else if (!eventsChannelId) { /* section always open â€” nothing to expand */ }
     } else {
       api.updateGuildSettings(guildId, { events_channel_id: null });
     }
@@ -607,9 +594,9 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     await api.updateGuildSettings(guildId, { nodes_calendar_channel_id: value || null });
   }
 
-  // Canal de logs do bot. null/vazio = o bot cria e mantém um canal próprio
+  // Canal de logs do bot. null/vazio = o bot cria e mantÃ©m um canal prÃ³prio
   // "logs-bot" admin-only; escolher um canal aqui faz o bot usar esse. Cursor
-  // de histórico é inicializado no backend só na 1ª vez (não despeja histórico
+  // de histÃ³rico Ã© inicializado no backend sÃ³ na 1Âª vez (nÃ£o despeja histÃ³rico
   // ao trocar de canal).
   async function saveLogsChannel(value: string) {
     setLogsChannelId(value);
@@ -620,13 +607,13 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     setNodesEnabled(v);
     if (v) {
       if (nodesCalendarChannelId) api.updateGuildSettings(guildId, { nodes_calendar_channel_id: nodesCalendarChannelId });
-      else openFeat("nodes");
+      else if (!nodesCalendarChannelId) { /* section always open */ }
     } else {
       api.updateGuildSettings(guildId, { nodes_calendar_channel_id: null });
     }
   }
 
-  // ── Battle feed: mensageiro de batalhas ──
+  // â”€â”€ Battle feed: mensageiro de batalhas â”€â”€
   async function saveBattleFeedChannel(value: string) {
     setBattleFeedChannelId(value);
     setBattleFeedEnabled(!!value);
@@ -645,13 +632,13 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     setBattleFeedEnabled(v);
     if (v) {
       if (battleFeedChannelId) api.updateGuildSettings(guildId, { battle_feed_channel_id: battleFeedChannelId });
-      else openFeat("battlefeed");
+      else if (!battleFeedChannelId) { /* section always open */ }
     } else {
       api.updateGuildSettings(guildId, { battle_feed_channel_id: null });
     }
   }
 
-  // ── Juicy Kills: kills lethais acima dos filtros configurados ──
+  // â”€â”€ Juicy Kills: kills lethais acima dos filtros configurados â”€â”€
   async function saveJuicyKillChannel(value: string) {
     setJuicyKillChannelId(value);
     setJuicyKillEnabled(!!value);
@@ -662,7 +649,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     setJuicyKillEnabled(v);
     if (v) {
       if (juicyKillChannelId) api.updateGuildSettings(guildId, { juicy_kill_channel_id: juicyKillChannelId });
-      else openFeat("juicykills");
+      else if (!juicyKillChannelId) { /* section always open */ }
     } else {
       api.updateGuildSettings(guildId, { juicy_kill_channel_id: null });
     }
@@ -685,7 +672,7 @@ async function saveJuicyKillMinSilver() {
     await api.updateGuildSettings(guildId, { juicy_kill_regions: regions });
   }
 
-  // ── Nodes: tipos de node + mapas (a antiga aba Nodes virou esta seção) ──
+  // â”€â”€ Nodes: tipos de node + mapas (a antiga aba Nodes virou esta seÃ§Ã£o) â”€â”€
   async function refreshNodeDefs() {
     try {
       const [d, m] = await Promise.all([api.listNodeDefs(), api.listNodeMaps()]);
@@ -717,7 +704,7 @@ async function saveJuicyKillMinSilver() {
   async function saveNodeDef(id: number) {
     try {
       await api.updateNodeDef(id, {
-        // name vazio → null (backend: null = não mexer) — mantém o nome atual.
+        // name vazio â†’ null (backend: null = nÃ£o mexer) â€” mantÃ©m o nome atual.
         name: ndEditName.trim() || null,
         emoji: ndEditEmoji.trim() || null,
         weight: (Number(ndEditWeight) || 100) / 100,
@@ -747,7 +734,7 @@ async function saveJuicyKillMinSilver() {
     if (!nodeMaps) return;
     const isExcl = nodeMaps.exclusions.includes(name);
     try {
-      // reverte exclusão = re-adiciona como extra (backend dedupe por nome);
+      // reverte exclusÃ£o = re-adiciona como extra (backend dedupe por nome);
       // ocultar = remove (cai em exclusions).
       await (isExcl ? api.addNodeMap(name) : api.removeNodeMap(name));
       await refreshNodeDefs();
@@ -755,7 +742,7 @@ async function saveJuicyKillMinSilver() {
   }
 
   // Auto-save: trial role/percent aplicados na hora (role no onChange, % no
-  // onBlur). Params explícitos porque o onChange do role precisa do percent
+  // onBlur). Params explÃ­citos porque o onChange do role precisa do percent
   // atual antes do setTrialRoleId commitar no estado.
   async function saveTrialSettings(roleId: string, percent: string) {
     const tp = Math.max(0, Math.min(100, parseInt(percent, 10) || 0));
@@ -793,10 +780,10 @@ async function saveJuicyKillMinSilver() {
   }
 
   // Toggle de um gatilho de ping @everyone. Salva a lista inteira (a chave no
-  // backend é a lista completa, não um toggle individual) — [] explícito = tudo
+  // backend Ã© a lista completa, nÃ£o um toggle individual) â€” [] explÃ­cito = tudo
   // off, distinto de "nunca configurado" (default). Status triggers (created/
   // in_progress/review) continuam bumpando o embed silenciosamente mesmo off;
-  // só o @evenne desliga. t10min off = sem bump (pure ping).
+  // sÃ³ o @evenne desliga. t10min off = sem bump (pure ping).
   async function togglePingTrigger(key: string) {
     const next = pingTriggers.includes(key)
       ? pingTriggers.filter(k => k !== key)
@@ -806,16 +793,16 @@ async function saveJuicyKillMinSilver() {
       .then(() => { setPingTriggersSaved(true); setTimeout(() => setPingTriggersSaved(false), 1500); });
   }
 
-  // Auto-save: mínimo aplicado no blur. A quantidade máxima é irrestrita.
+  // Auto-save: mÃ­nimo aplicado no blur. A quantidade mÃ¡xima Ã© irrestrita.
   async function saveSignupMinimum() {
     const minN = signupMinBuilds === "" ? null : Math.max(1, parseInt(signupMinBuilds, 10) || 0);
     await api.updateGuildSettings(guildId, { signup_min_builds: minN });
   }
 
-  // Auto-save de regear: aplica local (otimista) + manda só o campo mudado pro
-  // servidor. O snapshot saneado que volta corrige normalizações (dedup de
-  // canal, clamp de %, validação de categoria). Sem botão Salvar — toda
-  // mudança na bracket persiste na hora.
+  // Auto-save de regear: aplica local (otimista) + manda sÃ³ o campo mudado pro
+  // servidor. O snapshot saneado que volta corrige normalizaÃ§Ãµes (dedup de
+  // canal, clamp de %, validaÃ§Ã£o de categoria). Sem botÃ£o Salvar â€” toda
+  // mudanÃ§a na bracket persiste na hora.
   function pushRegear(patch: Partial<RegearSettings>) {
     setRegear(r => (r ? { ...r, ...patch } : r));
     api.setRegearSettings(patch)
@@ -827,7 +814,7 @@ async function saveJuicyKillMinSilver() {
     if (!regear) return;
     const has = regear.enabled_categories.includes(cat);
     const next = has ? regear.enabled_categories.filter(c => c !== cat) : [...regear.enabled_categories, cat];
-    // "bag" saiu das categorias cobertas — limpa se ainda houver de dados antigos.
+    // "bag" saiu das categorias cobertas â€” limpa se ainda houver de dados antigos.
     pushRegear({ enabled_categories: next.filter(c => c !== "bag") });
   }
   function toggleRegearApprover(roleId: string) {
@@ -845,7 +832,7 @@ async function saveJuicyKillMinSilver() {
     if (!regear) return;
     pushRegear({ channels: regear.channels.filter(c => c.channel_id !== channelId) });
   }
-  // % de cobertura: edita local só no input (evita corrida de keystroke); commit
+  // % de cobertura: edita local sÃ³ no input (evita corrida de keystroke); commit
   // no blur manda o estado final dos canais pro servidor.
   function setRegearChannelPct(channelId: string, pct: number) {
     setRegear(r => r ? { ...r, channels: r.channels.map(c => c.channel_id === channelId ? { ...c, coverage_pct: pct } : c) } : r);
@@ -855,13 +842,13 @@ async function saveJuicyKillMinSilver() {
   }
 
   // Toggle mestre de Regear: liga/desliga o flag persistido `enabled`. Canais
-  // locais ficam de memória (não apagam ao desligar) — religar reusa sem
-  // reescolher. Sem canal de thread ainda → abre a seção pra escolher um.
+  // locais ficam de memÃ³ria (nÃ£o apagam ao desligar) â€” religar reusa sem
+  // reescolher. Sem canal de thread ainda â†’ abre a seÃ§Ã£o pra escolher um.
   function toggleRegearFeature(v: boolean) {
     setRegearEnabled(v);
-    if (!regear) { openFeat("regear"); return; }
+    if (!regear) { return; }
     pushRegear({ enabled: v });
-    if (v && !regearThreadChannelId) openFeat("regear");
+    if (v && !regearThreadChannelId) { /* section always open */ }
   }
 
   async function saveLootLog() {
@@ -922,12 +909,12 @@ async function saveJuicyKillMinSilver() {
     const prev = allyAllowedGuilds;
     let next: string[];
     if (key === ALL_ALLIES || key === NO_ALLIES) {
-      // "Todos" e "Nenhum" são exclusivos entre si e com qualquer guilda
-      // específica — selecionar um deles substitui a seleção inteira.
+      // "Todos" e "Nenhum" sÃ£o exclusivos entre si e com qualquer guilda
+      // especÃ­fica â€” selecionar um deles substitui a seleÃ§Ã£o inteira.
       next = prev.includes(key) ? [] : [key];
     } else {
-      // Selecionar uma guilda específica sai do modo "Todos"/"Nenhum" e
-      // passa a montar uma lista própria.
+      // Selecionar uma guilda especÃ­fica sai do modo "Todos"/"Nenhum" e
+      // passa a montar uma lista prÃ³pria.
       const specific = prev.filter(k => k !== ALL_ALLIES && k !== NO_ALLIES);
       next = specific.includes(key) ? specific.filter(k => k !== key) : [...specific, key];
     }
@@ -997,14 +984,14 @@ async function saveJuicyKillMinSilver() {
 
   if (!guild) return <div className="py-16 text-center text-zinc-500">{t("loading")}</div>;
 
-  // Agrupamento por dependência: cada comando vive dentro da feature da qual
-  // depende (balance não existe sem economia, unregister sem register, etc.).
+  // Agrupamento por dependÃªncia: cada comando vive dentro da feature da qual
+  // depende (balance nÃ£o existe sem economia, unregister sem register, etc.).
   const registerCmd = commands?.find(c => c.name === "register") ?? null;
   const economyCmds = (commands ?? []).filter(c => c.category === "economy");
   const miscCmds = (commands ?? []).filter(c => c.category === "miscellaneous" && !CHILD_COMMANDS.has(c.name));
   const economyOnCount = economyCmds.filter(c => c.enabled).length;
 
-  // Master toggle da economia — liga/desliga o grupo inteiro de comandos
+  // Master toggle da economia â€” liga/desliga o grupo inteiro de comandos
   // (o estado "on" da feature = pelo menos um comando ativo).
   async function toggleEconomyAll(enabled: boolean) {
     for (const c of economyCmds) {
@@ -1014,10 +1001,10 @@ async function saveJuicyKillMinSilver() {
 
   const chName = (id: string) => {
     const c = channels?.find(ch => ch.id === id);
-    return c ? `#${c.name}` : "…";
+    return c ? `#${c.name}` : "â€¦";
   };
 
-  // "Nenhum" sozinho (ou lista vazia) = nenhum aliado passa — não tem sentido
+  // "Nenhum" sozinho (ou lista vazia) = nenhum aliado passa â€” nÃ£o tem sentido
   // mostrar o cargo de aliados nesse caso, ele nunca seria usado.
   const anyAlliesAllowed = allyAllowedGuilds.includes(ALL_ALLIES)
     || allyAllowedGuilds.some(k => k !== NO_ALLIES && k !== ALL_ALLIES);
@@ -1041,7 +1028,7 @@ async function saveJuicyKillMinSilver() {
     </select>
   );
 
-  // Linha de comando genérica (toggle + expandir p/ cargos) — usada dentro
+  // Linha de comando genÃ©rica (toggle + expandir p/ cargos) â€” usada dentro
   // das features Economia e Diversos.
   const cmdRow = (cmd: BotCommand) => {
     const isExpanded = expanded.has(cmd.name);
@@ -1079,16 +1066,16 @@ async function saveJuicyKillMinSilver() {
   const unregisterCmd = commands?.find(c => c.name === "unregister") ?? null;
 
   return (
-    <div className="mx-auto w-full max-w-2xl px-4 py-10">
+    <div className="mx-auto w-full max-w-5xl px-4 py-10">
       <h1 className="text-lg font-bold text-zinc-100 mb-1">{t("config")}</h1>
       <p className="text-sm text-zinc-500 mb-8">
         {t("serverLabel")} <strong className="text-zinc-300">{guild.name}</strong>
       </p>
 
-      <div className="space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-        {/* Status do bot */}
-        <Panel className="p-5">
+        {/* Status do bot â€” full width */}
+        <Panel className="p-5 lg:col-span-2">
           <div className="flex items-center gap-3 mb-3">
             <i className="ti ti-brand-discord text-indigo-400 text-xl" aria-hidden="true" />
             <h2 className="text-sm font-semibold text-zinc-100">{t("discordBot")}</h2>
@@ -1114,9 +1101,9 @@ async function saveJuicyKillMinSilver() {
             </select>
           </div>
 
-          {/* Guildas de Albion — uma única lista (primária + adicionais).
-              Alianças com 300+ membros operam em várias guildas sob o mesmo
-              Discord. A primeira guilda adicionada vira a primária. */}
+          {/* Guildas de Albion â€” uma Ãºnica lista (primÃ¡ria + adicionais).
+              AlianÃ§as com 300+ membros operam em vÃ¡rias guildas sob o mesmo
+              Discord. A primeira guilda adicionada vira a primÃ¡ria. */}
           <div className="mt-3 mb-2">
             <label className="block text-xs text-zinc-500 mb-1">{t("albionGuildTitle")}</label>
             {albionLinks.length === 0 ? (
@@ -1196,43 +1183,37 @@ async function saveJuicyKillMinSilver() {
           )}
         </Panel>
 
-        {/* Funcionalidades — sistemas agrupados por dependência, cada um com
-            seu master toggle e suas configs/comandos aninhados dentro. */}
-        <Panel className="p-5">
-          <div className="flex items-center gap-3 mb-1">
-            <i className="ti ti-apps text-amber-400 text-xl" aria-hidden="true" />
-            <h2 className="text-sm font-semibold text-zinc-100">{t("featuresTitle")}</h2>
-          </div>
-          <p className="text-xs text-zinc-500 mb-3">{t("featuresIntro")}</p>
-
-          {rolesErr && <p style={{ color: "var(--red)", fontSize: 12, marginBottom: 8 }}>{rolesErr}</p>}
-
-          <div className="flex flex-col">
-
-            {/* ── Eventos: mass-info, voz, inscrições/gates, trial ── */}
+        {/* Eventos â€” full width (seÃ§Ã£o grande) */}
             <FeatureRow
               icon="ti-calendar-event" iconColor="text-indigo-400"
               title={t("events")} desc={t("featEventsDesc")}
               on={eventsEnabled}
               onToggle={toggleEventsFeature}
               disabled={!hasGuild}
-              statusHint={!hasGuild ? t("needsGuildFirst") : (eventsEnabled && eventsChannelId ? chName(eventsChannelId) : (featOpen.has("events") ? undefined : t("featNeedsSetup")))}
-              open={featOpen.has("events")} onOpen={() => toggleFeat("events")}
+              fullWidth
+              statusHint={!hasGuild ? t("needsGuildFirst") : (eventsEnabled && eventsChannelId ? chName(eventsChannelId) : t("featNeedsSetup"))}
+              open={true} onOpen={() => {}}
             >
-              <label className="block text-xs text-zinc-400 mb-1">{t("eventsPostingChannelLabel")}</label>
-              <p className="text-[11px] text-zinc-600 mb-2">{t("eventsChannelDesc")}</p>
-              {channelSelect(eventsChannelId, saveEventsChannel, "mb-3")}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">{t("eventsPostingChannelLabel")}</label>
+                  <p className="text-[11px] text-zinc-600 mb-2">{t("eventsChannelDesc")}</p>
+                  {channelSelect(eventsChannelId, saveEventsChannel)}
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">{t("reviewChannelLabel")}</label>
+                  <p className="text-[11px] text-zinc-600 mb-2">{t("reviewChannelDesc")}</p>
+                  {channelSelect(reviewChannelId, saveReviewChannel)}
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">{t("voiceCtaTitle")}</label>
+                  <p className="text-[11px] text-zinc-600 mb-2">{t("voiceCtaDesc")}</p>
+                  {channelSelect(voiceCtaChannelId, saveVoiceChannel, "", voiceChannels)}
+                </div>
+              </div>
+              {channelsErr && <p className="text-xs text-red-400 mb-2">{t("eventsChannelLoadError")}</p>}
 
-              <label className="block text-xs text-zinc-400 mb-1">{t("reviewChannelLabel")}</label>
-              <p className="text-[11px] text-zinc-600 mb-2">{t("reviewChannelDesc")}</p>
-              {channelSelect(reviewChannelId, saveReviewChannel, "mb-3")}
-
-              <label className="block text-xs text-zinc-400 mb-1">{t("voiceCtaTitle")}</label>
-              <p className="text-[11px] text-zinc-600 mb-2">{t("voiceCtaDesc")}</p>
-              {channelSelect(voiceCtaChannelId, saveVoiceChannel, "", voiceChannels)}
-              {channelsErr && <p className="text-xs text-red-400 mt-2">{t("eventsChannelLoadError")}</p>}
-
-              {/* Inscrições & Gates — dependem de eventos existirem */}
+              {/* InscriÃ§Ãµes & Gates â€” dependem de eventos existirem */}
               <div className="mt-4 pt-4 border-t border-zinc-800/60">
                 <div className="flex items-center gap-2 mb-2">
                   <i className="ti ti-shield-lock text-amber-400 text-base" aria-hidden="true" />
@@ -1306,7 +1287,7 @@ async function saveJuicyKillMinSilver() {
                 </div>
               </div>
 
-              {/* Trial — desconto aplicado no freeze dos eventos por voz */}
+              {/* Trial â€” desconto aplicado no freeze dos eventos por voz */}
               <div className="mt-4 pt-4 border-t border-zinc-800/60">
                 <div className="flex items-center gap-2 mb-2">
                   <i className="ti ti-egg text-emerald-400 text-base" aria-hidden="true" />
@@ -1336,7 +1317,7 @@ async function saveJuicyKillMinSilver() {
                 </div>
               </div>
 
-              {/* Lootsplit mode — regear é sempre calculado; isto só decide como
+              {/* Lootsplit mode â€” regear Ã© sempre calculado; isto sÃ³ decide como
                   a tab vira split (ver events.get_lootsplit_mode no backend). */}
               <div className="mt-4 pt-4 border-t border-zinc-800/60">
                 <div className="flex items-center gap-2 mb-2">
@@ -1344,7 +1325,7 @@ async function saveJuicyKillMinSilver() {
                   <h3 className="text-sm font-semibold text-zinc-100">{t("lootsplitModeTitle")}</h3>
                 </div>
                 <p className="text-xs text-zinc-500 mb-3">{t("lootsplitModeDesc")}</p>
-                <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {LOOTSPLIT_MODES.map(({ mode, labelKey, descKey }) => (
                     <button
                       key={mode} type="button"
@@ -1356,13 +1337,13 @@ async function saveJuicyKillMinSilver() {
                       }`}
                     >
                       <span className="block font-semibold">{t(labelKey)}</span>
-                      <span className="block text-[11px] opacity-80 mt-0.5">{t(descKey)}</span>
+                      <span className="block text-[10px] opacity-80 mt-0.5">{t(descKey)}</span>
                     </button>
                   ))}
                 </div>
 
-                {/* Taxa da guilda — % da tab debitada pro banco antes do pool de
-                    participantes. Só vale em modos com split; "none" ignora. */}
+                {/* Taxa da guilda â€” % da tab debitada pro banco antes do pool de
+                    participantes. SÃ³ vale em modos com split; "none" ignora. */}
                 <div className={`mt-3 ${lootsplitMode === "none" ? "opacity-40 pointer-events-none" : ""}`}>
                   <label className="block text-xs text-zinc-400 mb-1">{t("guildTaxLabel")}</label>
                   <p className="text-[11px] text-zinc-600 mb-2">{t("guildTaxHint")}</p>
@@ -1378,9 +1359,9 @@ async function saveJuicyKillMinSilver() {
                 </div>
               </div>
 
-              {/* Pings @everyone — quando o mass-info deleta a embed e reenvia
-                  pingando @everyone. Plataforma configurável: 4 gatilhos, default
-                  ligado nos 3 primeiros (review off). O bot só executa o que o
+              {/* Pings @everyone â€” quando o mass-info deleta a embed e reenvia
+                  pingando @everyone. Plataforma configurÃ¡vel: 4 gatilhos, default
+                  ligado nos 3 primeiros (review off). O bot sÃ³ executa o que o
                   site decide aqui (ver cogs/events.py + event_signups.py). */}
               <div className="mt-4 pt-4 border-t border-zinc-800/60">
                 <div className="flex items-center gap-2 mb-2">
@@ -1389,14 +1370,14 @@ async function saveJuicyKillMinSilver() {
                   {pingTriggersSaved && <i className="ti ti-check text-emerald-400 text-xs" aria-hidden="true" />}
                 </div>
                 <p className="text-xs text-zinc-500 mb-3">{t("pingTriggersDesc")}</p>
-                <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {PING_TRIGGERS.map(({ key, labelKey, descKey }) => {
                     const active = pingTriggers.includes(key);
                     return (
                       <button
                         key={key} type="button"
                         onClick={() => { void togglePingTrigger(key); }}
-                        className={`flex items-center gap-3 text-left text-xs px-3 py-2 rounded-md border transition-colors ${
+                        className={`flex items-center gap-2 text-left text-xs px-3 py-2 rounded-md border transition-colors ${
                           active
                             ? "border-amber-500 bg-amber-500/15 text-amber-300"
                             : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
@@ -1414,7 +1395,7 @@ async function saveJuicyKillMinSilver() {
                 </div>
             </FeatureRow>
 
-            {/* ── Registro: /register + tudo que depende dele ── */}
+            {/* â”€â”€ Registro: /register + tudo que depende dele â”€â”€ */}
             <FeatureRow
               icon="ti-user-check" iconColor="text-emerald-400"
               title={t("featRegisterTitle")} desc={t("featRegisterDesc")}
@@ -1422,7 +1403,7 @@ async function saveJuicyKillMinSilver() {
               onToggle={v => { if (registerCmd) toggleCommand("register", v); }}
               disabled={!hasGuild}
               statusHint={hasGuild ? (registerCmd ? rolePreviewLabel(registerCmd) : undefined) : t("needsGuildFirst")}
-              open={featOpen.has("register")} onOpen={() => toggleFeat("register")}
+              open={true} onOpen={() => {}}
             >
               {!registerCmd ? (
                 <p className="text-xs text-zinc-500">{t("loading")}</p>
@@ -1552,14 +1533,15 @@ async function saveJuicyKillMinSilver() {
               )}
             </FeatureRow>
 
-            {/* ── Economia: master toggle + comandos do grupo ── */}
+            {/* â”€â”€ Economia: master toggle + comandos do grupo â”€â”€ */}
             <FeatureRow
               icon="ti-coin" iconColor="text-amber-400"
               title={t("cmdCategoryEconomy")} desc={t("featEconomyDesc")}
               on={economyOnCount > 0}
               onToggle={v => { void toggleEconomyAll(v); }}
               statusHint={economyCmds.length ? `${economyOnCount}/${economyCmds.length}` : undefined}
-              open={featOpen.has("economy")} onOpen={() => toggleFeat("economy")}
+              fullWidth
+              open={true} onOpen={() => {}}
             >
               {commands === null ? (
                 <p className="text-xs text-zinc-500">{t("loading")}</p>
@@ -1570,7 +1552,7 @@ async function saveJuicyKillMinSilver() {
               )}
             </FeatureRow>
 
-            {/* ── Regear ── */}
+            {/* â”€â”€ Regear â”€â”€ */}
             <FeatureRow
               icon="ti-receipt-refund" iconColor="text-emerald-400"
               title={t("regcfgTitle")} desc={t("featRegearDesc")}
@@ -1579,29 +1561,30 @@ async function saveJuicyKillMinSilver() {
               disabled={!hasGuild}
               statusHint={regearEnabled && regear?.channels.length
                 ? `${regear.channels.length} ${regear.channels.length === 1 ? t("regcfgChannelSingular") : t("regcfgChannelPlural")}`
-                : (featOpen.has("regear") ? undefined : t("featNeedsSetup"))}
-              open={featOpen.has("regear")} onOpen={() => toggleFeat("regear")}
+                : t("featNeedsSetup")}
+              fullWidth
+              open={true} onOpen={() => {}}
             >
               <p className="text-xs text-zinc-500 mb-4">{t("regcfgDesc")}</p>
               {!regear ? (
                 <p className="text-xs text-zinc-500">{t("loading")}</p>
               ) : (
                 <div className="space-y-4">
-                  {/* Canal dedicado de threads de regear por evento (landmark) —
-                      primário: é ele que libera os canais extras abaixo. Setting
-                      top-level da guilda, não da blob regear.channels, então fica
-                      sempre interativo (não depende do master toggle). */}
+                  {/* Canal dedicado de threads de regear por evento (landmark) â€”
+                      primÃ¡rio: Ã© ele que libera os canais extras abaixo. Setting
+                      top-level da guilda, nÃ£o da blob regear.channels, entÃ£o fica
+                      sempre interativo (nÃ£o depende do master toggle). */}
                   <div>
                     <label className="block text-xs text-zinc-500 mb-2">{t("regearThreadChannelLabel")}</label>
                     {channelSelect(regearThreadChannelId, saveRegearThreadChannel, "mb-1")}
                     <p className="text-[11px] text-zinc-600">{t("regearThreadChannelDesc")}</p>
                   </div>
 
-                  {/* Canais extras monitorados — cada um com sua própria % de
-                      cobertura. Só libera depois do canal de threads acima
-                      definido (é ele que atrela os regears aos eventos; sem ele
-                      não faz sentido configurar canais extras soltos). Desligado
-                      no master toggle = dimmed também (evita re-ligar via Salvar
+                  {/* Canais extras monitorados â€” cada um com sua prÃ³pria % de
+                      cobertura. SÃ³ libera depois do canal de threads acima
+                      definido (Ã© ele que atrela os regears aos eventos; sem ele
+                      nÃ£o faz sentido configurar canais extras soltos). Desligado
+                      no master toggle = dimmed tambÃ©m (evita re-ligar via Salvar
                       sem querer, ver saveRegear/toggleRegearFeature). */}
                   <div className={regearEnabled && regearThreadChannelId ? "" : "opacity-40 pointer-events-none"}>
                     <label className="block text-xs text-zinc-500 mb-2">{t("regcfgChannel")}</label>
@@ -1699,14 +1682,14 @@ async function saveJuicyKillMinSilver() {
               )}
             </FeatureRow>
 
-            {/* ── Lootlog ── */}
+            {/* â”€â”€ Lootlog â”€â”€ */}
             <FeatureRow
               icon="ti-clipboard-list" iconColor="text-amber-400"
               title={t("ll")} desc={t("featLootlogDesc")}
               on={lootlogEnabled} onToggle={v => void toggleLootlogFeature(v)}
               disabled={!hasGuild}
               statusHint={`${llPct}%`}
-              open={featOpen.has("lootlog")} onOpen={() => toggleFeat("lootlog")}
+              open={true} onOpen={() => {}}
             >
               <div className="mb-4">
                 <label className="block text-xs text-zinc-500 mb-2">{t("lootlogThreadChannelLabel")}</label>
@@ -1732,14 +1715,14 @@ async function saveJuicyKillMinSilver() {
               </div>
             </FeatureRow>
 
-            {/* ── Logs do bot — canal criado e mantido pelo próprio bot quando
-                ligado (ver cogs/audit_log.py), sem nada pra configurar aqui. ── */}
+            {/* â”€â”€ Logs do bot â€” canal criado e mantido pelo prÃ³prio bot quando
+                ligado (ver cogs/audit_log.py), sem nada pra configurar aqui. â”€â”€ */}
             <FeatureRow
               icon="ti-file-text" iconColor="text-sky-400"
               title={t("botLogsTitle")} desc={t("featBotLogsDesc")}
               on={botLogsEnabled} onToggle={toggleBotLogsFeature}
               statusHint={logsChannelId ? chName(logsChannelId) : t("botLogsPending")}
-              open={featOpen.has("botlogs")} onOpen={() => toggleFeat("botlogs")}
+              open={true} onOpen={() => {}}
             >
               <p className="text-xs text-zinc-500 mb-2">{t("botLogsDesc")}</p>
               <label className="block text-xs text-zinc-400 mb-1">{t("botLogsChannelLabel")}</label>
@@ -1748,21 +1731,22 @@ async function saveJuicyKillMinSilver() {
               {channelsErr && <p className="text-xs text-red-400 mt-2">{t("eventsChannelLoadError")}</p>}
             </FeatureRow>
 
-            {/* ── Nodes ── */}
+            {/* â”€â”€ Nodes â”€â”€ */}
             <FeatureRow
               icon="ti-map-pin" iconColor="text-emerald-400"
               title={t("nodes")} desc={t("featNodesDesc")}
               on={nodesEnabled}
               onToggle={toggleNodesFeature}
               disabled={!hasGuild}
-              statusHint={nodesEnabled && nodesCalendarChannelId ? chName(nodesCalendarChannelId) : (featOpen.has("nodes") ? undefined : t("featNeedsSetup"))}
-              open={featOpen.has("nodes")} onOpen={() => toggleFeat("nodes")}
+              statusHint={nodesEnabled && nodesCalendarChannelId ? chName(nodesCalendarChannelId) : t("featNeedsSetup")}
+              fullWidth
+              open={true} onOpen={() => {}}
             >
               <label className="block text-xs text-zinc-400 mb-1">{t("nodesCalendarTitle")}</label>
               <p className="text-[11px] text-zinc-600 mb-2">{t("nodesCalendarDesc")}</p>
               {channelSelect(nodesCalendarChannelId, saveNodesCalendar)}
 
-              {/* Scout bonus source — de onde vem o bônus do scout. "node" =
+              {/* Scout bonus source â€” de onde vem o bÃ´nus do scout. "node" =
                   pool separado do valor vendido; "tab" = deduzido da tab do
                   evento. Ver events.get_scout_bonus_source no backend. */}
               <div className="mt-4">
@@ -1771,7 +1755,7 @@ async function saveJuicyKillMinSilver() {
                   <label className="text-xs text-zinc-400">{t("scoutBonusSourceTitle")}</label>
                 </div>
                 <p className="text-[11px] text-zinc-600 mb-2">{t("scoutBonusSourceDesc")}</p>
-                <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {SCOUT_BONUS_SOURCES.map(({ src, labelKey, descKey }) => (
                     <button
                       key={src} type="button"
@@ -1783,13 +1767,13 @@ async function saveJuicyKillMinSilver() {
                       }`}
                     >
                       <span className="block font-semibold">{t(labelKey)}</span>
-                      <span className="block text-[11px] opacity-80 mt-0.5">{t(descKey)}</span>
+                      <span className="block text-[10px] opacity-80 mt-0.5">{t(descKey)}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Scout percent global — multiplica o weight de cada node. */}
+              {/* Scout percent global â€” multiplica o weight de cada node. */}
               <div className="mt-4">
                 <div className="flex items-center gap-2 mb-1">
                   <i className="ti ti-percentage text-emerald-400 text-sm" aria-hidden="true" />
@@ -1805,7 +1789,7 @@ async function saveJuicyKillMinSilver() {
                 </div>
               </div>
 
-              {/* Tipos de node — adicionar node em si é pelo Discord. */}
+              {/* Tipos de node â€” adicionar node em si Ã© pelo Discord. */}
               <div className="mt-4 border-t border-zinc-800 pt-3">
                 <h4 className="text-xs font-semibold text-zinc-200 mb-1">{t("nodesDefsTitle")}</h4>
                 <p className="text-[11px] text-zinc-600 mb-2">{t("nodesDefsHint")}</p>
@@ -1853,7 +1837,7 @@ async function saveJuicyKillMinSilver() {
                       ) : (
                         <tr key={d.id} style={{ borderTop: "1px solid var(--border)" }}>
                           <td className="py-1.5 px-2 text-xs text-zinc-200">{nodeDefDisplayName(d.name, botLanguage)}</td>
-                          <td className="py-1.5 px-2 text-xs text-zinc-200">{d.emoji ?? "—"}</td>
+                          <td className="py-1.5 px-2 text-xs text-zinc-200">{d.emoji ?? "â€”"}</td>
                           <td className="py-1.5 px-2 text-xs text-zinc-200">
                             {Math.round(d.weight * 100)}%
                             {(() => {
@@ -1892,7 +1876,7 @@ async function saveJuicyKillMinSilver() {
                   </label>
                   <label className="flex flex-col gap-1">
                     <span className="text-[11px] text-zinc-500">{t("nodesDefEmoji")}</span>
-                    <input value={ndEmoji} onChange={e => setNdEmoji(e.target.value)} placeholder="🐉"
+                    <input value={ndEmoji} onChange={e => setNdEmoji(e.target.value)} placeholder="ðŸ‰"
                       className="bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200" style={{ width: 60 }} />
                   </label>
                   <label className="flex flex-col gap-1">
@@ -1907,12 +1891,12 @@ async function saveJuicyKillMinSilver() {
                 </div>
               </div>
 
-              {/* Mapas extras / exclusões — collapsable (collapsed by default) */}
+              {/* Mapas extras / exclusÃµes â€” collapsable (collapsed by default) */}
               {nodeMaps && (
                 <div className="mt-4 border-t border-zinc-800 pt-3">
                   <button onClick={() => setMapsOpen(o => !o)} className="flex w-full items-center justify-between text-xs font-semibold text-zinc-200 mb-1">
                     <span>{t("nodesMapsTitle")}</span>
-                    <span className="text-zinc-400">{mapsOpen ? "▾" : "▸"}</span>
+                    <span className="text-zinc-400">{mapsOpen ? "â–¾" : "â–¸"}</span>
                   </button>
                   {mapsOpen && (
                     <div className="space-y-2">
@@ -1930,7 +1914,7 @@ async function saveJuicyKillMinSilver() {
                       {nodeMaps.extras.map(m => (
                         <span key={m} className="badge" style={{ margin: "2px", cursor: "pointer" }}
                           onClick={() => removeNodeMapExtra(m)} title={t("nodesDelete")}>
-                          {m} ✕
+                          {m} âœ•
                         </span>
                       ))}
                     </div>
@@ -1956,15 +1940,15 @@ async function saveJuicyKillMinSilver() {
               )}
             </FeatureRow>
 
-            {/* ── Battle Feed — mensageiro de batalhas ── */}
+            {/* â”€â”€ Battle Feed â€” mensageiro de batalhas â”€â”€ */}
             <FeatureRow
               icon="ti-swords" iconColor="text-rose-400"
               title={t("battleFeedTitle")} desc={t("featBattleFeedDesc")}
               on={battleFeedEnabled}
               onToggle={toggleBattleFeedFeature}
               disabled={!hasGuild}
-              statusHint={battleFeedEnabled && battleFeedChannelId ? chName(battleFeedChannelId) : (featOpen.has("battlefeed") ? undefined : t("featNeedsSetup"))}
-              open={featOpen.has("battlefeed")} onOpen={() => toggleFeat("battlefeed")}
+              statusHint={battleFeedEnabled && battleFeedChannelId ? chName(battleFeedChannelId) : t("featNeedsSetup")}
+              open={true} onOpen={() => {}}
             >
               <label className="block text-xs text-zinc-400 mb-1">{t("battleFeedChannelLabel")}</label>
               <p className="text-[11px] text-zinc-600 mb-2">{t("battleFeedChannelDesc")}</p>
@@ -1979,15 +1963,15 @@ async function saveJuicyKillMinSilver() {
               />
             </FeatureRow>
 
-            {/* ── Juicy Kills — loot valioso em kills lethais ── */}
+            {/* â”€â”€ Juicy Kills â€” loot valioso em kills lethais â”€â”€ */}
             <FeatureRow
               icon="ti-coin" iconColor="text-amber-400"
               title={t("juicyKillsTitle")} desc={t("featJuicyKillsDesc")}
               on={juicyKillEnabled}
               onToggle={toggleJuicyKillFeature}
               disabled={!hasGuild}
-              statusHint={juicyKillEnabled && juicyKillChannelId ? chName(juicyKillChannelId) : (featOpen.has("juicykills") ? undefined : t("featNeedsSetup"))}
-              open={featOpen.has("juicykills")} onOpen={() => toggleFeat("juicykills")}
+              statusHint={juicyKillEnabled && juicyKillChannelId ? chName(juicyKillChannelId) : t("featNeedsSetup")}
+              open={true} onOpen={() => {}}
             >
               <label className="block text-xs text-zinc-400 mb-1">{t("juicyKillsChannelLabel")}</label>
               <p className="text-[11px] text-zinc-600 mb-2">{t("juicyKillsChannelDesc")}</p>
@@ -2023,23 +2007,23 @@ async function saveJuicyKillMinSilver() {
               </div>
             </FeatureRow>
 
-          </div>
+            {/* Comandos avulsos â€” half width */}
+            <FeatureRow
+              icon="ti-apps" iconColor="text-zinc-400"
+              title={t("cmdCategoryMiscellaneous")} desc=""
+              open={true} onOpen={() => {}}
+            >
+              {commands === null ? (
+                <p className="text-xs text-zinc-500">{t("loading")}</p>
+              ) : (
+                <div className="flex flex-col">
+                  {miscCmds.map(cmdRow)}
+                </div>
+              )}
+            </FeatureRow>
 
-          {/* Comandos avulsos (sem sistema por trás) */}
-          <p className="mt-4 mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
-            {t("cmdCategoryMiscellaneous")}
-          </p>
-          {commands === null ? (
-            <p className="text-xs text-zinc-500">{t("loading")}</p>
-          ) : (
-            <div className="flex flex-col">
-              {miscCmds.map(cmdRow)}
-            </div>
-          )}
-        </Panel>
-
-        {/* Permissões do site, por cargo */}
-        <Panel className="p-5">
+        {/* PermissÃµes do site, por cargo â€” full width */}
+        <Panel className="p-5 lg:col-span-2">
           <div className="flex items-center gap-3 mb-3">
             <i className="ti ti-key text-violet-400 text-xl" aria-hidden="true" />
             <h2 className="text-sm font-semibold text-zinc-100">{t("rolePermsTitle")}</h2>
@@ -2123,7 +2107,7 @@ async function saveJuicyKillMinSilver() {
           )}
         </Panel>
 
-        {/* Trocar servidor */}
+        {/* Trocar servidor â€” half width */}
         <Panel className="p-5">
           <div className="flex items-center gap-3 mb-3">
             <i className="ti ti-switch-horizontal text-zinc-400 text-xl" aria-hidden="true" />
@@ -2142,7 +2126,7 @@ async function saveJuicyKillMinSilver() {
   );
 }
 
-// ── Switch — o mesmo toggle visual da lista de comandos, deduplicado ────────
+// â”€â”€ Switch â€” o mesmo toggle visual da lista de comandos, deduplicado â”€â”€â”€â”€â”€â”€â”€â”€
 function Switch({ checked, onChange, disabled }: { checked: boolean; onChange?: (v: boolean) => void; disabled?: boolean }) {
   return (
     <label className={`relative inline-flex h-5 w-9 shrink-0 ${disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`} onClick={e => e.stopPropagation()}>
@@ -2164,10 +2148,9 @@ function Switch({ checked, onChange, disabled }: { checked: boolean; onChange?: 
   );
 }
 
-// ── FeatureRow — linha de funcionalidade na mesma linguagem visual das linhas
-// de comando: toggle mestre + ícone + nome + descrição + hint de status +
-// chevron. Sem `onToggle` a feature é sempre-disponível (só configuração).
-function FeatureRow({ icon, iconColor, title, desc, on, onToggle, statusHint, open, onOpen, disabled, children }: {
+// â”€â”€ FeatureRow â€” painel sempre-aberto com toggle mestre no header. Sem
+// colapso: toda config fica visÃ­vel o tempo todo (pÃ¡gina densa, nÃ£o comercial).
+function FeatureRow({ icon, iconColor, title, desc, on, onToggle, statusHint, open: _o, onOpen: _f, disabled, fullWidth, children }: {
   icon: string;
   iconColor: string;
   title: string;
@@ -2175,43 +2158,39 @@ function FeatureRow({ icon, iconColor, title, desc, on, onToggle, statusHint, op
   on?: boolean;
   onToggle?: (v: boolean) => void;
   statusHint?: string;
-  open: boolean;
-  onOpen: () => void;
+  open?: boolean;
+  onOpen?: () => void;
   disabled?: boolean;
+  fullWidth?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div className="border-b border-zinc-800/60 last:border-0">
-      <div className="flex items-center gap-3 py-3">
+    <Panel className={`p-5 ${fullWidth ? "lg:col-span-2" : ""}`}>
+      <div className="flex items-center gap-3 mb-4">
         {onToggle
           ? <Switch checked={!!on} onChange={disabled ? undefined : onToggle} disabled={disabled} />
           : <span className="w-9 shrink-0" aria-hidden="true" />}
-        <button
-          type="button"
-          onClick={onOpen}
-          className="flex-1 flex items-center gap-3 text-left min-w-0"
-        >
-          <i className={`ti ${icon} ${iconColor} text-lg shrink-0`} aria-hidden="true" />
-          <span className="flex-1 min-w-0">
-            <span className="text-sm font-semibold text-zinc-100">{title}</span>
-            <span className="text-xs text-zinc-500 ml-2">{desc}</span>
+        <i className={`ti ${icon} ${iconColor} text-lg shrink-0`} aria-hidden="true" />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-semibold text-zinc-100">{title}</span>
+          <span className="text-xs text-zinc-500 ml-2">{desc}</span>
+        </div>
+        {statusHint && (
+          <span className="text-[11px] shrink-0 ml-2 text-right max-w-[30%] truncate text-zinc-500">
+            {statusHint}
           </span>
-          {statusHint && (
-            <span className="text-[11px] shrink-0 ml-2 text-right max-w-[30%] truncate text-zinc-500">
-              {statusHint}
-            </span>
-          )}
-          <i className={`ti ti-chevron-down text-zinc-600 transition-transform shrink-0 ${open ? "rotate-180" : ""}`} />
-        </button>
+        )}
       </div>
-      {open && <div className="pb-4 pl-12">{children}</div>}
-    </div>
+      <div className={disabled ? "opacity-40 pointer-events-none" : ""}>
+        {children}
+      </div>
+    </Panel>
   );
 }
 
-// ── Multi-select pesquisável de itens (base) p/ o override de itens desabilitados
-// do regear. Lista todos os itens traduzidos do catálogo, aceita vários e guarda
-// base IDs — o formato que o backend compara (item_base_id).
+// â”€â”€ Multi-select pesquisÃ¡vel de itens (base) p/ o override de itens desabilitados
+// do regear. Lista todos os itens traduzidos do catÃ¡logo, aceita vÃ¡rios e guarda
+// base IDs â€” o formato que o backend compara (item_base_id).
 function ItemMultiSelect({ selected, onChange }: { selected: string[]; onChange: (ids: string[]) => void }) {
   const t = useT();
   const { lang } = useLang();
@@ -2228,7 +2207,7 @@ function ItemMultiSelect({ selected, onChange }: { selected: string[]; onChange:
     const filtered = ql === ""
       ? avail
       : avail.filter(b => b.baseId.toLowerCase().includes(ql) || disp(b).toLowerCase().includes(ql));
-    // ponytail: cap em 150 p/ não inflar o DOM — o catálogo tem milhares de bases.
+    // ponytail: cap em 150 p/ nÃ£o inflar o DOM â€” o catÃ¡logo tem milhares de bases.
     return filtered.slice(0, 150);
   }, [bases, q, selected, lang]);
 
@@ -2293,3 +2272,6 @@ function ItemMultiSelect({ selected, onChange }: { selected: string[]; onChange:
     </div>
   );
 }
+
+
+
