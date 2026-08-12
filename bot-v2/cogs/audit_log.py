@@ -95,10 +95,25 @@ class BotAuditLog(commands.Cog):
         cfg = await _guild_command_config(guild.id)
         channel_id = cfg.get("logs_channel_id")
         if channel_id:
-            channel = guild.get_channel(int(channel_id))
-            if channel is not None:
-                return channel
-            # canal configurado sumiu (deletado manualmente) — recria abaixo.
+            try:
+                cid = int(channel_id)
+            except (ValueError, TypeError):
+                cid = None
+            if cid is not None:
+                # get_channel só vê cache local; canais que o bot nunca acessou
+                # não estão lá. fetch_channel bate na API — custa 1 request mas
+                # garante que o canal configurado é encontrado em vez de criar
+                # um logs-bot duplicado só porque a cache não tinha o canal.
+                channel = guild.get_channel(cid)
+                if channel is None:
+                    try:
+                        ch = await guild.fetch_channel(cid)
+                        if isinstance(ch, discord.TextChannel):
+                            return ch
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        pass  # canal foi deletado de verdade — recria abaixo
+                else:
+                    return channel
         # Idempotência por nome: se já existe um logs-bot (ex.: criado num tick
         # anterior cujo POST de persistência ainda não refluiu pelo cache de 60s
         # de _guild_command_config, ou o site perdeu o id), reusa em vez de
