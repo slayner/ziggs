@@ -414,15 +414,29 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     });
   }
 
+  // Features pareadas no grid 2-col: expandir uma expande a outra da mesma linha,
+  // senão o painel fechado ao lado fica com altura diferente e quebra o visual.
+  const FEAT_PAIRS: Record<string, string> = {
+    lootlog: "botlogs", botlogs: "lootlog",
+    battlefeed: "juicykills", juicykills: "battlefeed",
+  };
   function toggleFeat(id: string) {
     setFeatOpen(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      const isOpen = next.has(id);
+      if (isOpen) next.delete(id); else next.add(id);
+      const pair = FEAT_PAIRS[id];
+      if (pair) { if (isOpen) next.delete(pair); else next.add(pair); }
       return next;
     });
   }
   function openFeat(id: string) {
-    setFeatOpen(prev => new Set(prev).add(id));
+    setFeatOpen(prev => {
+      const next = new Set(prev).add(id);
+      const pair = FEAT_PAIRS[id];
+      if (pair) next.add(pair);
+      return next;
+    });
   }
 
   async function toggleCommand(name: string, enabled: boolean) {
