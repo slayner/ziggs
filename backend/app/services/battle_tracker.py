@@ -31,7 +31,7 @@ from app.models.battles import (
 from app.services import battle_sides, search_index
 from app.services.lethality import ORANGE_GROUP_LIMIT, is_likely_lethal
 from app.services.albion_gate import (
-    NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, albion_scope, battle_priority, slot,
+    NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, PROFILE, albion_scope, battle_priority, slot,
 )
 from app.services.player_tracker import HOSTS, make_client
 
@@ -663,7 +663,10 @@ async def resolve_by_albion_id(client: httpx.AsyncClient, db: AsyncSession, albi
 
     if battle.processing_tier != "deep" or not _is_frozen(battle, datetime.now(timezone.utc)):
         try:
-            await deep_process(client, db, battle, host)
+            # Usuário forçou a batalha pelo ID → prioridade máxima (mesmo nível
+            # de uma pesquisa de perfil: humano esperando o resultado).
+            async with albion_scope(PROFILE):
+                await deep_process(client, db, battle, host)
         except Exception as e:
             log.warning("battle_tracker: falha ao resolver %s: %s", albion_id, e)
 

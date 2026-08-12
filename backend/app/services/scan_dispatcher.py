@@ -759,12 +759,15 @@ async def claim_work(
         task = await _claim_next(
             db, worker_id, recent_only=recent_only, prefer_latency=prefer_latency
         )
+    if task is None:
+        # Sem tarefas recentes — workers ociosos ajudam no backfill (prioridade
+        # mínima). Assim que uma tarefa recente aparece (prioridade > 0), o
+        # próximo worker a pega primeiro (ordem por prioridade descendente).
+        task = await _claim_next(
+            db, worker_id, backfill_only=True, prefer_latency=prefer_latency
+        )
     if task is not None:
         return task
-    # Sem generate_tasks aqui — o coordinator (run_forever) gera tarefas num
-    # loop singleton a cada 15s. Cham generate_tasks inline em claim_work
-    # causava UniqueViolation quando multiplos workers pediam trabalho
-    # concorrentemente e o coordinator criava a mesma tarefa ao mesmo tempo.
     return None
 
 
@@ -1381,7 +1384,9 @@ async def run_forever() -> None:
 
 
 async def run_ingest_forever(web_is_idle: Callable[[], Awaitable[bool]]) -> None:
-    """Bounded durable consumer; foreground traffic wins until a hard watermark."""
+    """Bounded durable consumer. On Postgres writes don't block reads, so we
+    always drain when there's backlog — the web_is_idle gate (kept for the
+    callback signature) is no longer the bottleneck it was on SQLite."""
     log.info("scan_dispatcher: ingest consumer started")
     while True:
         async with AsyncSessionLocal() as db:
@@ -1400,9 +1405,6 @@ async def run_ingest_forever(web_is_idle: Callable[[], Awaitable[bool]]) -> None
             ) or 0)
             await db.commit()
         if backlog == 0:
-            await asyncio.sleep(1)
-            continue
-        if not await web_is_idle() and backlog < INGEST_FORCE_DRAIN:
             await asyncio.sleep(1)
             continue
         processed = await ingest_one()
