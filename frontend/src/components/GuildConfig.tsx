@@ -1415,6 +1415,7 @@ async function saveJuicyKillMinSilver() {
               onToggle={v => { if (registerCmd) toggleCommand("register", v); }}
               disabled={!hasGuild}
               statusHint={hasGuild ? (registerCmd ? rolePreviewLabel(registerCmd) : undefined) : t("needsGuildFirst")}
+              fullWidth
               open={featOpen.has("register")} onOpen={() => toggleFeat("register")}
             >
               {!registerCmd ? (
@@ -2023,6 +2024,7 @@ async function saveJuicyKillMinSilver() {
             <FeatureRow
               icon="ti-apps" iconColor="text-zinc-400"
               title={t("cmdCategoryMiscellaneous")} desc=""
+              fullWidth
               open={true} onOpen={() => {}}
             >
               {commands === null ? (
