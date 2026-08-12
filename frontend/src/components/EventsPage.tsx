@@ -628,6 +628,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
             </div>
           </div>
           <EventRegearsRow detail={detail} act={act} canManage={canManage} />
+          <PayoutSummary detail={detail} />
           {/* Concluir vive colado ao pipeline lá em cima. */}
         </div>
       )}
@@ -640,6 +641,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
             {t("eventFinalized")}
           </div>
           <EventRegearsRow detail={detail} act={act} canManage={canManage} />
+          <PayoutSummary detail={detail} />
         </div>
       )}
 
@@ -931,7 +933,58 @@ function EventRegearsRow({ detail, act, canManage }: {
   );
 }
 
-// ── Inscrições (auto-inscrição via Discord, só leitura) ──────────────────
+// ── Payout breakdown (split %, valores, taxa) ─────────────────────────────────
+
+function PayoutSummary({ detail }: { detail: EventDetail }) {
+  const t = useT();
+  const p = detail.payout;
+  if (!p || p.lootsplit_mode === "none") return null;
+  const fmt = (n: number) => n.toLocaleString("pt-BR");
+  const rows = p.payouts.filter(r => r.total > 0).sort((a, b) => b.total - a.total);
+  return (
+    <div className="card ev-payout-summary">
+      <div className="ev-stage-h"><i className="ti ti-coins" aria-hidden />{t("payoutTitle")}</div>
+      <div className="ev-payout-totals">
+        <span className="ev-payout-tot"><i className="ti ti-vault" aria-hidden /> {t("payoutTab")}: <b>{fmt(p.tab_value)}</b></span>
+        <span className="ev-payout-tot"><i className="ti ti-percentage" aria-hidden /> {t("payoutTax")}: <b>{fmt(p.guild_tax ?? 0)}</b></span>
+        <span className="ev-payout-tot"><i className="ti ti-users" aria-hidden /> {t("payoutSplit")}: <b>{fmt(p.total_lootsplit)}</b></span>
+        {p.total_regear > 0 && <span className="ev-payout-tot"><i className="ti ti-receipt-refund" aria-hidden /> {t("payoutRegear")}: <b>{fmt(p.total_regear)}</b></span>}
+        {p.total_scout > 0 && <span className="ev-payout-tot"><i className="ti ti-eye" aria-hidden /> {t("payoutScout")}: <b>{fmt(p.total_scout)}</b></span>}
+      </div>
+      <table className="ev-payout-table">
+        <thead>
+          <tr>
+            <th>{t("payoutColName")}</th>
+            <th className="ev-pct-col">%</th>
+            <th className="ev-num-col">{t("payoutColSplit")}</th>
+            {p.total_regear > 0 && <th className="ev-num-col">{t("payoutColRegear")}</th>}
+            {p.total_scout > 0 && <th className="ev-num-col">{t("payoutColScout")}</th>}
+            <th className="ev-num-col">{t("payoutColTotal")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.user_id ?? r.display_name}>
+              <td className="ev-payout-name">{r.display_name}</td>
+              <td className="ev-pct-col">{r.percent}%</td>
+              <td className="ev-num-col">{fmt(r.lootsplit)}</td>
+              {p.total_regear > 0 && <td className="ev-num-col">{fmt(r.regear)}</td>}
+              {p.total_scout > 0 && <td className="ev-num-col">{fmt(r.scout)}</td>}
+              <td className="ev-num-col"><b>{fmt(r.total)}</b></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {p.guild_deficit_total && p.guild_deficit_total > 0 && (
+        <p className="hint" style={{ marginTop: 8 }}>
+          ⚠️ {t("payoutDeficit")}: {fmt(p.guild_deficit_total)} / {p.guild_deficit_member_count ?? 0}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Inscrições (auto-inscrição via Discord, só leitura) ──────────────────────
 
 // ── Participantes ─────────────────────────────────────────────────────────
 // A gestão importa nos dois extremos, não no meio: AUSENTES (inscritos /

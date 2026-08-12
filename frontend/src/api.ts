@@ -360,6 +360,7 @@ export interface PayoutPreview {
   total_scout: number;
   scout_payouts: PayoutRow[];
   rounding_loss?: number;
+  guild_tax?: number;
   // Fatia dos loggers (lootlog anônimo) — só p/ CTA com submissões.
   logger_pool?: number;
   logger_payouts?: PayoutRow[];
@@ -789,7 +790,7 @@ export const api = {
   switchGuild: (guild_id: string) =>
     req<{ guild_id: string; bot_present: boolean }>(`/auth/switch-guild/${guild_id}`, { method: "POST" }),
   mySiteGuilds: () => req<SiteGuild[]>("/auth/my-site-guilds"),
-  guildInfo: (guild_id: string) => req<SiteGuild & { albion_alliance_id: string | null; albion_alliance_name: string | null; settings: Record<string, unknown> }>(`/auth/guild-info/${guild_id}`),
+  guildInfo: (guild_id: string) => req<SiteGuild & { albion_alliance_id: string | null; albion_alliance_name: string | null; settings: Record<string, unknown>; bank_balance: number }>(`/auth/guild-info/${guild_id}`),
   updateGuildSettings: (guild_id: string, payload: {
     albion_guild_name?: string | null; albion_guild_region?: string | null; register_role_id?: string | null;
     ally_role_id?: string | null; ally_allowed_guilds?: string[] | null; bot_language?: string | null;

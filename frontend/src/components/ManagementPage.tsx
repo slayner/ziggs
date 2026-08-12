@@ -13,14 +13,13 @@ interface Props { guildId?: string; perms: Permissions; active?: boolean; empty?
 
 type Tab = "comps" | "events" | "regear" | "reconcile";
 
-// "comps" só faz sentido com Eventos ativo (é lá que uma comp é atribuída a
-// um evento) — eventsActive vem de settings.events_channel_id configurado,
-// mesmo sinal que GuildConfig usa pra "Eventos ligado".
+// "comps" sempre aparece (comps.view) — pode ser configurado antes do bot/events
+// estarem ativos. events/regear/reconcile dependem de eventsActive.
 const TABS: { id: Tab; icon: string; label: TKey; desc: TKey; show: (p: Permissions, eventsActive: boolean) => boolean }[] = [
-  { id: "comps",     icon: "ti-layout-grid",     label: "comps",  desc: "managementCompsDesc", show: (p, ev) => p["comps.view"] && ev },
+  { id: "comps",     icon: "ti-layout-grid",     label: "comps",  desc: "managementCompsDesc", show: p => p["comps.view"] },
   { id: "events",    icon: "ti-calendar-event",  label: "events", desc: "managementEventsDesc", show: p => p["events.view"] },
-  { id: "regear",    icon: "ti-receipt-refund",  label: "regear", desc: "managementRegearDesc", show: p => p["events.manage"] },
-  { id: "reconcile", icon: "ti-scale",           label: "rec",    desc: "managementReconcileDesc", show: p => p["events.manage"] },
+  { id: "regear",    icon: "ti-receipt-refund",  label: "regear", desc: "managementRegearDesc", show: (p, ev) => p["events.manage"] && ev },
+  { id: "reconcile", icon: "ti-scale",           label: "rec",    desc: "managementReconcileDesc", show: (p, ev) => p["events.manage"] && ev },
 ];
 
 export default function ManagementPage({ guildId, perms, active = true, empty }: Props) {

@@ -829,22 +829,20 @@ CMD_I18N: dict[str, dict[str, str]] = {
 
     "cmd_desc_leaderboard": {"pt": "Ranking dos usuários pelo saldo atual de prata", "en": "Ranking of users by current silver balance", "es": "Ranking de usuarios por saldo actual de plata"},
     "cmd_desc_economystats": {"pt": "Mostra um snapshot da economia do servidor", "en": "Shows a snapshot of the server's economy", "es": "Muestra un resumen de la economía del servidor"},
-    "cmd_desc_bank": {
-        "pt": "Gerencia o saldo do banco da guilda (ver, adicionar, remover)",
-        "en": "Manage the guild bank balance (view / add / remove)",
-        "es": "Gestiona el saldo del banco del gremio (ver, añadir, quitar)",
-    },
+    "cmd_desc_guildbank": {"pt": "Mostra o saldo do banco da guilda", "en": "Shows the guild bank balance", "es": "Muestra el saldo del banco del gremio"},
+    "cmd_desc_addguildmoney": {"pt": "Adiciona prata ao banco da guilda", "en": "Adds silver to the guild bank", "es": "Añade plata al banco del gremio"},
+    "cmd_desc_removeguildmoney": {"pt": "Remove prata do banco da guilda", "en": "Removes silver from the guild bank", "es": "Quita plata del banco del gremio"},
     "opt_name_acao": {"pt": "acao", "en": "action", "es": "accion"},
     "opt_name_motivo": {"pt": "motivo", "en": "reason", "es": "motivo"},
-    "opt_desc_bank_acao": {
-        "pt": "Operação: ver (padrão), adicionar ou remover",
-        "en": "Operation: view (default), add, or remove",
-        "es": "Operación: ver (por defecto), añadir o quitar",
+    "opt_desc_addguildmoney_quantia": {
+        "pt": "Quanto adicionar (ex: 100k, 1.5m)",
+        "en": "How much to add (e.g.: 100k, 1.5m)",
+        "es": "Cuánto añadir (ej: 100k, 1.5m)",
     },
-    "opt_desc_bank_quantia": {
-        "pt": "Quantia (ex: 100k, 1.5m). Ignorada em 'ver'.",
-        "en": "Amount (e.g.: 100k, 1.5m). Ignored for 'view'.",
-        "es": "Cantidad (ej: 100k, 1.5m). Ignorada en 'ver'.",
+    "opt_desc_removeguildmoney_quantia": {
+        "pt": "Quanto remover (ex: 100k, 1.5m)",
+        "en": "How much to remove (e.g.: 100k, 1.5m)",
+        "es": "Cuánto quitar (ej: 100k, 1.5m)",
     },
     "opt_desc_bank_motivo": {
         "pt": "Motivo curto do ajuste (opcional)",

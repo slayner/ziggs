@@ -333,6 +333,7 @@ def guild_info(
         "albion_alliance_id": g.albion_alliance_id,
         "albion_alliance_name": g.albion_alliance_name,
         "settings": g.settings,
+        "bank_balance": g.bank_balance,
     }
 
 
@@ -1022,7 +1023,9 @@ COMMANDS_REGISTRY = [
     {"name": "leaderboard", "description": "Ranking dos usuários pelo saldo atual de prata", "category": "economy"},
     {"name": "economystats", "description": "Mostra um snapshot da economia do servidor", "category": "economy"},
     {"name": "undo", "description": "Reverte uma transação de economia pelo ID", "category": "economy"},
-    {"name": "bank", "description": "Gerencia o saldo do banco da guilda (ver, adicionar, remover)", "category": "economy"},
+    {"name": "guildbank", "description": "Mostra o saldo atual do banco da guilda", "category": "economy"},
+    {"name": "addguildmoney", "description": "Adiciona prata ao banco da guilda", "category": "economy"},
+    {"name": "removeguildmoney", "description": "Remove prata do banco da guilda", "category": "economy"},
     {"name": "event", "description": "Gerencia eventos (CTAs): criar, deletar, editar e adiar", "category": "management"},
 ]
 
@@ -1037,7 +1040,9 @@ DEFAULT_ALLOWED_ROLES = {
     "addmoney": ["admin"],
     "economystats": ["admin"],
     "undo": ["admin"],
-    "bank": ["admin"],
+    "guildbank": ["admin"],
+    "addguildmoney": ["admin"],
+    "removeguildmoney": ["admin"],
     "event": ["admin"],
 }
 

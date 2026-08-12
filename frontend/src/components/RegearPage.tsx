@@ -33,6 +33,7 @@ export default function RegearPage({ guildId, initialRequestId, eventId, active 
   const [list, setList] = useState<RegearRequest[] | null>(null);
   const [settings, setSettings] = useState<RegearSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [bankBalance, setBankBalance] = useState<number | null>(null);
   // edits por request id: { finalText, notes }
   const [edits, setEdits] = useState<Record<number, { finalText: string; notes: string }>>({});
   const [busy, setBusy] = useState<Record<number, string>>({});  // id -> action in progress
@@ -81,7 +82,15 @@ export default function RegearPage({ guildId, initialRequestId, eventId, active 
     }
   }
 
+  async function loadBank() {
+    try {
+      const g = await api.guildInfo(guildId);
+      setBankBalance(g.bank_balance ?? 0);
+    } catch { /* silencioso — saldo é informativo, não crítico */ }
+  }
+
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [filter, eventFilter]);
+  useEffect(() => { loadBank(); }, [guildId]);
   // Polling leve só na fila pendente — pedidos pagos/negados mudam pouco.
   // ponytail: !active pausa quando a página tá escondida (keep-alive no App e
   // no ManagementPage) — sem isso o poll de 15s rodaria em background.
@@ -90,6 +99,12 @@ export default function RegearPage({ guildId, initialRequestId, eventId, active 
     const id = setInterval(load, 15000);
     return () => clearInterval(id);
   }, [filter, active]);
+  // Saldo do banco: poll de 30s (mais leve que a fila — só muda em approve/tax)
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(loadBank, 30000);
+    return () => clearInterval(id);
+  }, [active, guildId]);
 
   const canManage = true; // a view só é renderizada pra quem tem events.manage (ver App.tsx)
 
@@ -166,6 +181,11 @@ export default function RegearPage({ guildId, initialRequestId, eventId, active 
     <div className="regear-page">
       <div className="regear-head">
         <h2><i className="ti ti-receipt-refund" /> {t("regearTitle")}</h2>
+        {bankBalance != null && (
+          <span className="regear-bank-balance">
+            <i className="ti ti-building-bank" aria-hidden /> {t("guildBankBalance")}: <strong>{fmt(bankBalance)}</strong>
+          </span>
+        )}
         {settings && settings.channels.length === 1 && settings.channels[0].coverage_pct < 100 && (
           <span className="regear-cov-hint">{t("regearCoverage")}: {settings.channels[0].coverage_pct}%</span>
         )}
