@@ -94,7 +94,28 @@ async def _verify_guild(client, db: Session, g: Guild) -> None:
     host = HOSTS.get(region) or HOSTS["americas"]
 
     # ── Primária ────────────────────────────────────────────────────────────
-    if g.albion_guild_name:
+    if g.albion_guild_id:
+        # Já tem ID real — busca direto pelo ID (mais confiável que search
+        # por nome, que falha com espaços/timeout na API da Albion).
+        detail = await _fetch_guild(client, host, g.albion_guild_id)
+        if detail:
+            g.albion_guild_name = detail.get("Name") or g.albion_guild_name
+            g.albion_alliance_id = (str(detail.get("AllianceId") or "") or None)
+            g.albion_alliance_name = detail.get("AllianceName") or None
+            _set_guild_verified(g, True)
+            if g.albion_alliance_id:
+                members = await _fetch_alliance_members(client, host, g.albion_alliance_id)
+                s = g.settings if isinstance(g.settings, dict) else {}
+                s["alliance_members"] = members or []
+                g.settings = s
+            else:
+                s = g.settings if isinstance(g.settings, dict) else {}
+                s.pop("alliance_members", None)
+                g.settings = s
+        else:
+            _set_guild_verified(g, False)
+            log.info("guild_verifier: primária id=%s não encontrada em %s", g.albion_guild_id, region)
+    elif g.albion_guild_name:
         match = await _search_guild(client, host, g.albion_guild_name)
         if match and match.get("Id"):
             g.albion_guild_id = str(match["Id"])
