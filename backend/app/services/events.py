@@ -264,6 +264,18 @@ def get_scout_bonus_source(guild: Guild | None) -> str:
     return src if src in SCOUT_BONUS_SOURCES else "node"
 
 
+def get_scout_percent(guild: Guild | None) -> int:
+    """Setting `scout_percent` (Guild.settings, 0-100) — porcentagem global
+    que multiplica o NodeDef.weight de cada node. Se 5% e node weight=50%,
+    bônus real = 50% de 5% = 2.5% do sold value. Default 0 = sem scout bonus.
+    Compatibilidade: se não definido, behavior legado (weight direto, 100%)."""
+    raw = (guild.settings or {}).get("scout_percent") if guild else None
+    try:
+        return max(0, min(100, int(raw)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     """Calcula o preview de pagamento. Regear é SEMPRE calculado (universal);
     o lootsplit_mode da guilda decide se/como o valor da tab vira split.
@@ -324,12 +336,15 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     # Scout que também é participante soma na própria linha (atribuição depois
     # do regear, abaixo).
     scout_source = get_scout_bonus_source(guild)
+    scout_pct = get_scout_percent(guild)
+    # scout_pct > 0: compound (weight × scout_pct/100). 0 = legacy (weight direto).
+    scout_mult = (scout_pct / 100.0) if scout_pct > 0 else 1.0
     scout_rows_data: list[tuple[int | None, str | None, int]] = []
     scout_pool = 0
     if db is not None:
         from app.services import nodes as nodes_svc
         for log in nodes_svc.captured_for_event(db, ev.guild_id, ev.id):
-            w = nodes_svc.weight_for(db, ev.guild_id, log.node_type)
+            w = nodes_svc.weight_for(db, ev.guild_id, log.node_type) * scout_mult
             if scout_source == "tab":
                 amount = int(ev.tab_value * w / 100)
             else:
@@ -1488,13 +1503,17 @@ def embed_dto(db: Session, guild_id: int, event_id: int) -> dict | None:
         return None
     detail = _detail(ev, db)
     ts = ev.callout_at or ev.started_at or _now()
-    # scout_amount = sold_value × NodeDef.weight — o que o scout ganha por cima
-    # da tab (pool separado). Só custa um lookup de peso por node capturado.
+    # scout_amount = sold_value × NodeDef.weight × scout_percent — o que o
+    # scout ganha por cima da tab (pool separado). scout_percent = 0 → legacy
+    # (weight direto). Só custa um lookup de peso por node capturado.
+    guild = db.get(Guild, guild_id)
+    scout_pct = get_scout_percent(guild)
+    scout_mult = (scout_pct / 100.0) if scout_pct > 0 else 1.0
     nodes = []
     for n in nodes_svc.near_cta(db, guild_id, ts):
         is_mine = n.event_id == event_id
         sold = int(n.sold_value) if is_mine else 0
-        w = nodes_svc.weight_for(db, guild_id, n.node_type) if is_mine else 1.0
+        w = (nodes_svc.weight_for(db, guild_id, n.node_type) if is_mine else 1.0) * scout_mult
         nodes.append({
             "node_type": n.node_type, "map_name": n.map_name,
             "spawn_at": n.spawn_at.isoformat() if n.spawn_at else None,

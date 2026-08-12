@@ -809,6 +809,10 @@ export const api = {
     // "node" = peso × sold_value (pool separado). "tab" = peso × tab_value,
     // deduzido da participant pool. Ver events.get_scout_bonus_source no backend.
     scout_bonus_source?: string | null;
+    // % global do split que vai pro scout (0-100, default null = legacy weight
+    // direto). Cada node multiplica: weight × scout_percent/100. Ver
+    // events.get_scout_percent no backend.
+    scout_percent?: number | null;
     // Subconjunto de ["created","t10min","in_progress","review"] — momentos em
     // que o mass-info do bot deleta a embed e reenvia com @everyone. Default
     // (chave ausente) = os 3 primeiros; [] = tudo off. Ver event_signups.py.

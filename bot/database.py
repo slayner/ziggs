@@ -520,17 +520,44 @@ async def _init_schema(db):
         # IGNORE preserva qualquer custom que já exista com o mesmo nome.
         cur = await db.execute('SELECT COALESCE(nodes_seeded, 0) FROM economy_config WHERE id = 1')
         row = await cur.fetchone()
-        if not (row and row[0]):
+        if not (row and row[0] and row[0] >= 2):
             defaults = [
-                ("Couro 8.4",   "🐂", 1.0, 0),
-                ("Minério 8.4", "⛏️", 1.0, 1),
-                ("Fibra 8.4",   "🥀", 1.0, 2),
-                ("Madeira 8.4", "🪵", 1.0, 3),
+                # 4 recursos × 5 tiers (4.4-8.4)
+                ("Madeira 4.4", "🪵", 0.0016,  0),
+                ("Madeira 5.4", "🪵", 0.008,   1),
+                ("Madeira 6.4", "🪵", 0.04,    2),
+                ("Madeira 7.4", "🪵", 0.2,     3),
+                ("Madeira 8.4", "🪵", 1.0,     4),
+                ("Minério 4.4", "🪨", 0.0016,  5),
+                ("Minério 5.4", "🪨", 0.008,   6),
+                ("Minério 6.4", "🪨", 0.04,    7),
+                ("Minério 7.4", "🪨", 0.2,     8),
+                ("Minério 8.4", "🪨", 1.0,     9),
+                ("Fibra 4.4",   "🌿", 0.0016, 10),
+                ("Fibra 5.4",   "🌿", 0.008,  11),
+                ("Fibra 6.4",   "🌿", 0.04,   12),
+                ("Fibra 7.4",   "🌿", 0.2,    13),
+                ("Fibra 8.4",   "🌿", 1.0,    14),
+                ("Couro 4.4",   "🐗", 0.0016, 15),
+                ("Couro 5.4",   "🐗", 0.008,  16),
+                ("Couro 6.4",   "🐗", 0.04,   17),
+                ("Couro 7.4",   "🐗", 0.2,    18),
+                ("Couro 8.4",   "🐗", 1.0,    19),
+                # Vortex por cor
+                ("Vortex Verde",  "🟩", 0.2,  20),
+                ("Vortex Azul",   "🟦", 0.2,  21),
+                ("Vortex Roxo",   "🟪", 0.2,  22),
+                ("Vortex Dourado","🟨", 0.2,  23),
+                # Orbes por cor
+                ("Orbe Verde",   "🟢", 0.04,  24),
+                ("Orbe Azul",    "🔵", 0.04,  25),
+                ("Orbe Roxa",    "🟣", 0.04,  26),
+                ("Orbe Dourada", "🟡", 0.04,  27),
             ]
             await db.executemany(
                 'INSERT OR IGNORE INTO node_defs (name, emoji, weight, sort) VALUES (?, ?, ?, ?)',
                 defaults)
-            await db.execute('UPDATE economy_config SET nodes_seeded = 1 WHERE id = 1')
+            await db.execute('UPDATE economy_config SET nodes_seeded = 2 WHERE id = 1')
             await db.commit()
 
         # Saldos dos usuários (prata + energia da guilda)

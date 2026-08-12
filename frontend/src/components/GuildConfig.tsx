@@ -16,25 +16,32 @@ function itemBaseId(id: string): string {
 // ── Catálogo default de tipos de node (localizado por idioma do bot).
 // `key` = nome guardado no banco (canônico); `name.*` é a tradução exibida
 // conforme o idioma do bot. node_events.node_type guarda o `key`.
-// Lista completa dos 20 nodes do jogo: 4 recursos (wood/ore/fiber/hide) × 3
-// tiers (6.4/7.4/8.4) + 4 vortex por cor + 4 orbes por cor.
+// 28 nodes: 5 recursos × 5 tiers (4.4-8.4) + 4 vortex por cor + 4 orbes por cor.
 const DEFAULT_NODE_DEFS: {
   key: string; name: { pt: string; en: string; es: string };
   emoji: string | null; weight: number;
 }[] = [
   // Wood (Madeira)
+  { key: "wood_4.4", name: { pt: "Madeira 4.4", en: "Wood 4.4", es: "Madera 4.4" }, emoji: "🪵", weight: 0.0016 },
+  { key: "wood_5.4", name: { pt: "Madeira 5.4", en: "Wood 5.4", es: "Madera 5.4" }, emoji: "🪵", weight: 0.008 },
   { key: "wood_6.4", name: { pt: "Madeira 6.4", en: "Wood 6.4", es: "Madera 6.4" }, emoji: "🪵", weight: 0.04 },
   { key: "wood_7.4", name: { pt: "Madeira 7.4", en: "Wood 7.4", es: "Madera 7.4" }, emoji: "🪵", weight: 0.2 },
   { key: "wood_8.4", name: { pt: "Madeira 8.4", en: "Wood 8.4", es: "Madera 8.4" }, emoji: "🪵", weight: 1.0 },
   // Ore (Minério)
+  { key: "ore_4.4", name: { pt: "Minério 4.4", en: "Ore 4.4", es: "Mineral 4.4" }, emoji: "🪨", weight: 0.0016 },
+  { key: "ore_5.4", name: { pt: "Minério 5.4", en: "Ore 5.4", es: "Mineral 5.4" }, emoji: "🪨", weight: 0.008 },
   { key: "ore_6.4", name: { pt: "Minério 6.4", en: "Ore 6.4", es: "Mineral 6.4" }, emoji: "🪨", weight: 0.04 },
   { key: "ore_7.4", name: { pt: "Minério 7.4", en: "Ore 7.4", es: "Mineral 7.4" }, emoji: "🪨", weight: 0.2 },
   { key: "ore_8.4", name: { pt: "Minério 8.4", en: "Ore 8.4", es: "Mineral 8.4" }, emoji: "🪨", weight: 1.0 },
   // Fiber (Fibra)
+  { key: "fiber_4.4", name: { pt: "Fibra 4.4", en: "Fiber 4.4", es: "Fibra 4.4" }, emoji: "🌿", weight: 0.0016 },
+  { key: "fiber_5.4", name: { pt: "Fibra 5.4", en: "Fiber 5.4", es: "Fibra 5.4" }, emoji: "🌿", weight: 0.008 },
   { key: "fiber_6.4", name: { pt: "Fibra 6.4", en: "Fiber 6.4", es: "Fibra 6.4" }, emoji: "🌿", weight: 0.04 },
   { key: "fiber_7.4", name: { pt: "Fibra 7.4", en: "Fiber 7.4", es: "Fibra 7.4" }, emoji: "🌿", weight: 0.2 },
   { key: "fiber_8.4", name: { pt: "Fibra 8.4", en: "Fiber 8.4", es: "Fibra 8.4" }, emoji: "🌿", weight: 1.0 },
   // Hide (Couro)
+  { key: "hide_4.4", name: { pt: "Couro 4.4", en: "Hide 4.4", es: "Cuero 4.4" }, emoji: "🐗", weight: 0.0016 },
+  { key: "hide_5.4", name: { pt: "Couro 5.4", en: "Hide 5.4", es: "Cuero 5.4" }, emoji: "🐗", weight: 0.008 },
   { key: "hide_6.4", name: { pt: "Couro 6.4", en: "Hide 6.4", es: "Cuero 6.4" }, emoji: "🐗", weight: 0.04 },
   { key: "hide_7.4", name: { pt: "Couro 7.4", en: "Hide 7.4", es: "Cuero 7.4" }, emoji: "🐗", weight: 0.2 },
   { key: "hide_8.4", name: { pt: "Couro 8.4", en: "Hide 8.4", es: "Cuero 8.4" }, emoji: "🐗", weight: 1.0 },
@@ -243,6 +250,9 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   // (default) = peso × sold_value, pool separado. "tab" = peso × tab_value,
   // deduzido da participant pool. Ver events.get_scout_bonus_source.
   const [scoutBonusSource, setScoutBonusSource] = useState<string>("node");
+  // Scout percent global (0-100): multiplica o weight de cada node. Se 5% e
+  // node weight=50%, bônus real = 50% de 5% = 2.5% do sold value.
+  const [scoutPercent, setScoutPercent] = useState<string>("0");
   // Pings de @everyone do mass-info: momentos em que o bot deleta a embed e
   // reenvia com @everyone. Subconjunto de PING_TRIGGERS; default = os 3 primeiros
   // (review off). [] = tudo off (status triggers ainda bumpam silenciosamente).
@@ -322,6 +332,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setLootsplitMode((g.settings.lootsplit_mode as string | undefined) ?? "full");
       setGuildTaxPct(String(g.settings.guild_tax_percent ?? 0));
       setScoutBonusSource((g.settings.scout_bonus_source as string | undefined) ?? "node");
+      setScoutPercent(String(g.settings.scout_percent ?? 0));
       const pt = g.settings.events_ping_triggers as string[] | undefined;
       setPingTriggers(Array.isArray(pt) ? pt : ["created", "t10min", "in_progress"]);
       const nodesCh = (g.settings.nodes_calendar_channel_id as string | undefined) ?? "";
@@ -772,6 +783,13 @@ async function saveJuicyKillMinSilver() {
   async function saveScoutBonusSource(value: string) {
     setScoutBonusSource(value);
     await api.updateGuildSettings(guildId, { scout_bonus_source: value });
+  }
+
+  // Auto-save no blur: clamp 0-100. 0 = sem scout percent (default).
+  async function saveScoutPercent() {
+    const n = Math.max(0, Math.min(100, parseInt(scoutPercent, 10) || 0));
+    setScoutPercent(String(n));
+    await api.updateGuildSettings(guildId, { scout_percent: n > 0 ? n : null });
   }
 
   // Toggle de um gatilho de ping @everyone. Salva a lista inteira (a chave no
@@ -1771,6 +1789,22 @@ async function saveJuicyKillMinSilver() {
                 </div>
               </div>
 
+              {/* Scout percent global — multiplica o weight de cada node. */}
+              <div className="mt-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <i className="ti ti-percentage text-emerald-400 text-sm" aria-hidden="true" />
+                  <label className="text-xs text-zinc-400">{t("scoutPercentTitle")}</label>
+                </div>
+                <p className="text-[11px] text-zinc-600 mb-2">{t("scoutPercentDesc")}</p>
+                <div className="flex items-center gap-1">
+                  <input type="number" min={0} max={100} value={scoutPercent}
+                    onChange={e => setScoutPercent(e.target.value)}
+                    onBlur={() => void saveScoutPercent()}
+                    className="bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200" style={{ width: 80 }} />
+                  <span className="text-[11px] text-zinc-500">%</span>
+                </div>
+              </div>
+
               {/* Tipos de node — adicionar node em si é pelo Discord. */}
               <div className="mt-4 border-t border-zinc-800 pt-3">
                 <h4 className="text-xs font-semibold text-zinc-200 mb-1">{t("nodesDefsTitle")}</h4>
@@ -1822,9 +1856,22 @@ async function saveJuicyKillMinSilver() {
                           <td className="py-1.5 px-2 text-xs text-zinc-200">{d.emoji ?? "—"}</td>
                           <td className="py-1.5 px-2 text-xs text-zinc-200">
                             {Math.round(d.weight * 100)}%
-                            <div className="text-[10px] text-zinc-600" style={{ lineHeight: 1.3 }}>
-                              {t(scoutBonusSource === "tab" ? "nodesDefWeightHintTab" : "nodesDefWeightHint")}
-                            </div>
+                            {(() => {
+                              const sp = Math.max(0, Math.min(100, parseInt(scoutPercent, 10) || 0));
+                              if (sp > 0) {
+                                const compound = (d.weight * sp).toFixed(d.weight * sp < 1 ? 2 : 1);
+                                return (
+                                  <div className="text-[10px] text-emerald-400/70" style={{ lineHeight: 1.3 }}>
+                                    = {compound}% do split
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div className="text-[10px] text-zinc-600" style={{ lineHeight: 1.3 }}>
+                                  {t(scoutBonusSource === "tab" ? "nodesDefWeightHintTab" : "nodesDefWeightHint")}
+                                </div>
+                              );
+                            })()}
                           </td>
                           <td className="py-1.5 px-2 text-right whitespace-nowrap">
                             <button className="btn" style={{ padding: "2px 8px" }} onClick={() => startEditNodeDef(d)}>{t("nodesDefEdit")}</button>{" "}
