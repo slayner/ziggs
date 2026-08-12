@@ -18,7 +18,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column(
         "guild_albion_links",
-        sa.Column("verified", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("verified", sa.Boolean(), nullable=True, server_default=sa.text("NULL")),
     )
 
 

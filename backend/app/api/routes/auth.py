@@ -744,7 +744,8 @@ async def list_albion_links(
     primary_id = str(g.albion_guild_id) if g and g.albion_guild_id else None
     primary_name = g.albion_guild_name if g else None
     primary_region = (g.settings or {}).get("albion_guild_region", "americas") if g else "americas"
-    guild_verified = bool((g.settings or {}).get("guild_verified")) if g else False
+    raw_gv = (g.settings or {}).get("guild_verified") if g else None
+    guild_verified: bool | None = None if raw_gv is None else bool(raw_gv)
     all_links = []
     if primary_id:
         all_links.append({
@@ -766,7 +767,7 @@ async def list_albion_links(
             "alliance_id": l.alliance_id,
             "alliance_name": l.alliance_name,
             "is_primary": False,
-            "verified": bool(l.verified),
+            "verified": l.verified,
         })
     return {
         "primary": primary_id,
