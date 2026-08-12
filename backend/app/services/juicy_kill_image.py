@@ -183,6 +183,9 @@ async def _fetch_item_icon(item_id: str, quality: int = 0) -> Image.Image | None
 
 
 async def _load_icons(items: list[dict], icon_cache: dict) -> bool:
+    """Carrega ícones da CDN. Itens sem render (kill trophies do Mists, etc.)
+    ficam None no cache e o grid desenha '—' no lugar — não aborta a imagem
+    inteira por causa de um item sem arte."""
     keys = list(dict.fromkeys(
         (item["Type"], item.get("Quality", 0))
         for item in items if item and item.get("Type")
@@ -191,7 +194,7 @@ async def _load_icons(items: list[dict], icon_cache: dict) -> bool:
     if missing:
         icons = await asyncio.gather(*(_fetch_item_icon(*key) for key in missing))
         icon_cache.update(zip(missing, icons))
-    return all(icon_cache.get(key) is not None for key in keys)
+    return True
 
 
 def _draw_equip_grid(draw, img, equipment, x0, y0, icon_cache, show_awakened=False):
