@@ -1107,7 +1107,9 @@ async function saveJuicyKillMinSilver() {
               <ul className="space-y-1.5">
                 {albionLinks.map(l => (
                   <li key={l.albion_guild_id} className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5">
-                    <span className="text-xs text-zinc-200 flex-1 truncate">{l.albion_guild_name}</span>
+                    <span className="text-xs text-zinc-200 flex-1 truncate">
+                      {l.verified && l.alliance_name ? `[${l.alliance_name}] ` : ""}{l.albion_guild_name}
+                    </span>
                     {l.verified === false && (
                       <span
                         className="text-amber-400 text-xs"
@@ -1118,7 +1120,6 @@ async function saveJuicyKillMinSilver() {
                       </span>
                     )}
                     <span className="text-[10px] uppercase tracking-wide text-zinc-500">{REGION_LABELS[lang][l.region as keyof typeof REGION_LABELS[typeof lang]] ?? l.region}</span>
-                    {l.alliance_name && <span className="text-[10px] text-zinc-600 truncate max-w-[80px]">{l.alliance_name}</span>}
                     <button
                       type="button"
                       onClick={() => removeAlbionLink(l.albion_guild_id)}
