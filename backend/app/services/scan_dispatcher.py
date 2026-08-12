@@ -1408,11 +1408,11 @@ async def run_ingest_forever(web_is_idle: Callable[[], Awaitable[bool]]) -> None
         if backlog == 0:
             await asyncio.sleep(1)
             continue
-        # Process multiple payloads concurrently — each opens its own session
-        # and Postgres handles parallel transactions fine. 4 keeps DB pressure
-        # bounded while cutting drain time 4×.
-        concurrency = min(4, backlog)
-        await asyncio.gather(*(ingest_one() for _ in range(concurrency)))
+        # ponytail: 1 por vez — concurrency > 1 causava deadlock no Postgres
+        # (ingest + search_index + battle_tracker escrevendo em battles ao
+        # mesmo tempo). 1 é mais lento pra drenar backlog mas não deadlocka.
+        processed = await ingest_one()
+        await asyncio.sleep(0 if processed else 1)
 
 
 async def _fetch_task(task: ScanWorkTask) -> list[dict]:
