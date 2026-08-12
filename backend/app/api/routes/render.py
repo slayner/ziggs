@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from collections import OrderedDict
 from functools import lru_cache
@@ -261,3 +262,65 @@ async def _cached_render(
     cache_path.write_bytes(content)
     _mem_put(mkey, content)
     return Response(content=content, media_type="image/png", headers=_CACHE_HEADERS)
+
+
+# --- Pre-warm: baixa ícones que faltam no cache de disco ----------------------
+# Roda como task no lifespan. Lê item_names.json, checa quais IDs não têm PNG
+# no disco, e baixa com rate limit conservador (sem sobrecarregar a CDN).
+# Uma vez que o cache está quente, o worker é praticamente no-op.
+
+_PRERENDER_INTERVAL = 3600  # 1h entre ciclos completos
+_PRERENDER_BATCH = 50       # ícones por ciclo (pouco a pouco, sem flood)
+_PRERENDER_DELAY = 0.3      # segundos entre cada fetch
+
+_ITEM_NAMES_FILE = Path(__file__).resolve().parents[3] / "data" / "item_names.json"
+
+
+async def run_prerender_forever() -> None:
+    """Pré-aquece o cache de ícones baixando renders que faltam da CDN da Albion."""
+    log = logging.getLogger("render.prerender")
+    await asyncio.sleep(30)  # deixa o startup terminar primeiro
+    while True:
+        try:
+            if not _ITEM_NAMES_FILE.exists():
+                log.info("item_names.json ausente — pulando ciclo")
+            else:
+                data = json.loads(_ITEM_NAMES_FILE.read_text(encoding="utf-8"))
+                all_ids = list(data.keys()) if isinstance(data, dict) else []
+                missing = []
+                for item_id in all_ids:
+                    # só checa qualidade 0, tamanho 0 (o default do site)
+                    cache_path = _CACHE_DIR / f"{quote(item_id, safe='')}_q0_s0.png"
+                    if not _cache_usable(cache_path):
+                        missing.append(item_id)
+                if missing:
+                    batch = missing[:_PRERENDER_BATCH]
+                    log.info("pré-aquecendo %d/%d ícones restantes", len(batch), len(missing))
+                    fetched = 0
+                    for item_id in batch:
+                        cache_path = _CACHE_DIR / f"{quote(item_id, safe='')}_q0_s0.png"
+                        mkey = str(cache_path)
+                        if _mem_get(mkey) is not None or _cache_usable(cache_path):
+                            continue  # outro request preencheu enquanto esperávamos
+                        try:
+                            async with _FETCH_SEM:
+                                url = f"https://render.albiononline.com/v1/item/{quote(item_id, safe='')}.png"
+                                async with httpx.AsyncClient(timeout=10) as client:
+                                    resp = await client.get(url)
+                            if resp.status_code == 200 and resp.content and not _is_placeholder(resp.content):
+                                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                                cache_path.write_bytes(resp.content)
+                                _mem_put(mkey, resp.content)
+                                fetched += 1
+                            else:
+                                # sem render na CDN — placeholder vai ser gerado on-demand
+                                pass
+                        except Exception:
+                            pass  # erro individual não aborta o batch
+                        await asyncio.sleep(_PRERENDER_DELAY)
+                    log.info("pré-aquecimento: %d ícones baixados", fetched)
+                else:
+                    log.info("cache completo — %d ícones", len(all_ids))
+        except Exception as e:
+            log.warning("erro no ciclo de pré-aquecimento: %s", e)
+        await asyncio.sleep(_PRERENDER_INTERVAL)

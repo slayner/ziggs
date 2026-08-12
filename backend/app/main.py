@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.rate_limit import RateLimitMiddleware
 from app.api.routes import auth, battles, catalog, claims, companion, comps, craft, events, highscores, loot, lootlog, market_history, meta, nodes, players, profiles, regear, render, scan, user_profile
+from app.api.routes.render import run_prerender_forever
 from app.config import get_settings
 from app.domain.states import EventState, allowed_targets
 from app.services import (
@@ -97,6 +98,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(market_snapshot.run_forever()),
             asyncio.create_task(search_index.run_forever()),
             asyncio.create_task(guild_verifier.run_forever()),
+            asyncio.create_task(run_prerender_forever()),
         ]
     yield
     for t in tasks:
