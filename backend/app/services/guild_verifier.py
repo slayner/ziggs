@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SyncSessionLocal
 from app.models.tenancy import Guild, GuildAlbionLink
-from app.services.albion_gate import BOT_REGISTER, albion_scope, slot
+from app.services.albion_gate import GUILD_VERIFY, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client
 
 log = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ async def _run_once() -> None:
         return
 
     async with make_client() as client:
-        async with albion_scope(BOT_REGISTER):
+        async with albion_scope(GUILD_VERIFY):
             for (gid,) in targets:
                 db2 = SyncSessionLocal()
                 try:
@@ -190,6 +190,16 @@ async def _run_once() -> None:
 async def run_forever() -> None:
     log.info("guild_verifier: iniciando (intervalo=%ds)", VERIFY_INTERVAL)
     # ponytail: folga de 60s no boot — não brigar com os fetchers acordando.
+    #
+    # Escala: rodando no backend com albion_scope(GUILD_VERIFY=5) — abaixo das
+    # pesquisas user-facing (perfil/register/claim) mas acima da cadeia de
+    # batalhas (NEW_ELIGIBLE=10+). Se a lista de guildas crescer a ponto de
+    # a verificação recorrente concorrer demais com batalhas no pool bg,
+    # migrar pro scan_dispatcher: novo feed_type="guild_verify" com prioridade
+    # 5 (mesma) — VPS workers buscam search+guild+alliance na API pública e
+    # reportam o cru, backend aplica o upsert (mesmo padrão de "battles"/
+    # "kills"). Sem mudar schema hoje — ScanWorkTask.target é nullable e basta
+    # carregar guild_id lá; a coluna feed_type (String(16)) já comporta.
     await asyncio.sleep(60)
     while True:
         try:
