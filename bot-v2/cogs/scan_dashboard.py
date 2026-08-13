@@ -206,25 +206,16 @@ class ScanDashboard(commands.Cog):
         if data is None:
             return
 
-        ping_text = self._detect_grave(data)
         embed = _build_embed(data)
 
         try:
-            if ping_text:
-                # Transição grave: re-envia com @everyone (ping só funciona em msg nova)
-                await self._send_fresh(channel, embed, content=ping_text)
-            elif self._msg_is_ping and not self._any_critical(data):
-                # Recuperou: re-envia limpo pra remover o alerta
-                await self._send_fresh(channel, embed)
+            msg = await self._find_dashboard(channel)
+            if msg is None:
+                msg = await channel.send(embed=embed)
+                self._dashboard_msg_id = msg.id
+                self._msg_is_ping = False
             else:
-                # Normal: edita in-place
-                msg = await self._find_dashboard(channel)
-                if msg is None:
-                    msg = await channel.send(embed=embed)
-                    self._dashboard_msg_id = msg.id
-                    self._msg_is_ping = False
-                else:
-                    await msg.edit(embed=embed)
+                await msg.edit(embed=embed)
         except (discord.Forbidden, discord.HTTPException) as e:
             print(f"[scan_dashboard] erro: {e}")
 
