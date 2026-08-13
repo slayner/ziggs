@@ -1535,6 +1535,20 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
     [battle],
   );
 
+  useEffect(() => {
+    if (!battle) { document.title = "Ziggs"; return; }
+    const tags: string[] = [];
+    for (const s of battle.sides) {
+      const seen = new Set<string>();
+      for (const f of s.factions) {
+        const tag = f.alliance_name ? `[${f.alliance_name}]` : f.guild_name;
+        if (tag && !seen.has(tag)) { seen.add(tag); tags.push(tag); }
+      }
+    }
+    document.title = tags.length ? tags.slice(0, 4).join(" vs ") : "Ziggs";
+    return () => { document.title = "Ziggs"; };
+  }, [battle]);
+
   // mesmas guildas/alianças escondidas por padrão na lista (baixo impacto,
   // ver splitByImpact) não devem ganhar linha própria no horizonte de
   // eventos (pedido explícito) — os kills delas continuam fora do gráfico.

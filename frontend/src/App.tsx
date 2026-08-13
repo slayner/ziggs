@@ -385,20 +385,10 @@ export default function App() {
   // entrada de histórico vira o mesmo "Ziggs — Controle de guildas…".
   useEffect(() => {
     let label = "";
-    if (companionActive) label = t("companionNav");
-    else if (battleRoute) label = t("battles");
-    else if (playerRoute) label = playerRoute.name || t("players");
-    else if (!guildRoute) {
-      const map: Partial<Record<View, string>> = {
-        battles: t("battles"),
-        highscores: t("highscores"), craft: t("craft"),
-        companion: t("companionNav"),
-        management: t("management"), config: "Config",
-      };
-      label = map[view] ?? "";
-    }
-    document.title = label ? `${label} · Ziggs` : "Ziggs";
-  }, [view, companionActive, battleRoute, playerRoute, guildRoute, t]);
+    if (playerRoute) label = playerRoute.name || "";
+    else if (battleRoute) label = ""; // BattlePage sets its own title
+    document.title = label || "Ziggs";
+  }, [battleRoute, playerRoute]);
 
   // Banner "backend fora do ar": api.ts marca down em falha de rede; aqui
   // mostramos o aviso e fazemos poll de /health até voltar.
