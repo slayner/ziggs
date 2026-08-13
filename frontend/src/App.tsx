@@ -481,8 +481,9 @@ export default function App() {
     setView(res.bot_present ? "management" : "config");
   }
 
+  const URL_VIEWS: Set<string> = new Set(["battles", "highscores", "craft"]);
   const nb = (v: View, icon: string, label: string) => (
-    <button className={!battleRoute && !playerRoute && !guildRoute && view === v ? "active" : ""} onClick={() => { if (companionActive) navigate("/"); setView(v); }}>
+    <button className={!battleRoute && !playerRoute && !guildRoute && view === v ? "active" : ""} onClick={() => { if (companionActive) navigate("/"); setView(v); if (URL_VIEWS.has(v)) navigateReplace(`/?view=${v}`); }}>
       <i className={`ti ${icon}`} aria-hidden="true" /> {label}
     </button>
   );
@@ -682,8 +683,8 @@ export default function App() {
   } else if (view === "dashboard") {
     content = (
       <Dashboard
-        onOpenBattles={() => { navigate("/"); setView("battles"); }}
-        onOpenHighscores={() => { setHighscoresInitialWindow("week"); navigate("/"); setView("highscores"); }}
+        onOpenBattles={() => { setView("battles"); navigateReplace("/?view=battles"); }}
+        onOpenHighscores={() => { setHighscoresInitialWindow("week"); setView("highscores"); navigateReplace("/?view=highscores"); }}
       />
     );
   }
