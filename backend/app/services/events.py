@@ -267,8 +267,7 @@ def get_scout_bonus_source(guild: Guild | None) -> str:
 def get_scout_percent(guild: Guild | None) -> int:
     """Setting `scout_percent` (Guild.settings, 0-100) — porcentagem global
     que multiplica o NodeDef.weight de cada node. Se 5% e node weight=50%,
-    bônus real = 50% de 5% = 2.5% do sold value. Default 0 = sem scout bonus.
-    Compatibilidade: se não definido, behavior legado (weight direto, 100%)."""
+    bônus real = 50% de 5% = 2.5% do sold value. Default 0 = sem scout bonus."""
     raw = (guild.settings or {}).get("scout_percent") if guild else None
     try:
         return max(0, min(100, int(raw)))
@@ -337,8 +336,7 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     # do regear, abaixo).
     scout_source = get_scout_bonus_source(guild)
     scout_pct = get_scout_percent(guild)
-    # scout_pct > 0: compound (weight × scout_pct/100). 0 = legacy (weight direto).
-    scout_mult = (scout_pct / 100.0) if scout_pct > 0 else 1.0
+    scout_mult = scout_pct / 100.0
     scout_rows_data: list[tuple[int | None, str | None, int]] = []
     scout_pool = 0
     if db is not None:
@@ -1504,11 +1502,10 @@ def embed_dto(db: Session, guild_id: int, event_id: int) -> dict | None:
     detail = _detail(ev, db)
     ts = ev.callout_at or ev.started_at or _now()
     # scout_amount = sold_value × NodeDef.weight × scout_percent — o que o
-    # scout ganha por cima da tab (pool separado). scout_percent = 0 → legacy
-    # (weight direto). Só custa um lookup de peso por node capturado.
+    # scout ganha por cima da tab (pool separado). scout_percent = 0 → sem bônus.
     guild = db.get(Guild, guild_id)
     scout_pct = get_scout_percent(guild)
-    scout_mult = (scout_pct / 100.0) if scout_pct > 0 else 1.0
+    scout_mult = scout_pct / 100.0
     nodes = []
     for n in nodes_svc.near_cta(db, guild_id, ts):
         is_mine = n.event_id == event_id
