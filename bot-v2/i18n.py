@@ -750,6 +750,65 @@ T: dict[str, dict[str, str]] = {
         "en": "✅ Presence registered. Admins will confirm your build.",
         "es": "✅ Presencia registrada. La administración confirmará tu build.",
     },
+
+    # members.py — /profile /attendance /lowattendance
+    "profile_usage": {
+        "pt": "Informe o nick de um jogador do Albion, ex: `/profile jogador:SeuNick`.",
+        "en": "Provide an Albion player's nickname, e.g.: `/profile jogador:YourNick`.",
+        "es": "Indica el nick de un jugador de Albion, ej: `/profile jogador:TuNick`.",
+    },
+    "profile_api_error": {
+        "pt": "⚠️ Erro ao buscar dados na API do Albion. Tente novamente.",
+        "en": "⚠️ Error fetching data from the Albion API. Try again.",
+        "es": "⚠️ Error al buscar datos en la API de Albion. Inténtalo de nuevo.",
+    },
+    "profile_not_found": {
+        "pt": "❔ Jogador **{name}** não encontrado.",
+        "en": "❔ Player **{name}** not found.",
+        "es": "❔ Jugador **{name}** no encontrado.",
+    },
+    "profile_not_registered": {
+        "pt": "Esse usuário não está registrado no bot. Peça pra ele usar `/register`.",
+        "en": "That user isn't registered with the bot. Ask them to use `/register`.",
+        "es": "Ese usuario no está registrado en el bot. Pídele que use `/register`.",
+    },
+    "att_lifetime": {"pt": "📅 Histórico Total", "en": "📅 Lifetime", "es": "📅 Historial Total"},
+    "att_lifetime_val": {
+        "pt": "Eventos da guild: **{total}**\nVocê participou: **{user}**  ({pct:.1f}%)",
+        "en": "Guild events: **{total}**\nYou attended: **{user}**  ({pct:.1f}%)",
+        "es": "Eventos del gremio: **{total}**\nAsististe: **{user}**  ({pct:.1f}%)",
+    },
+    "att_no_events": {"pt": "*Nenhum evento registrado ainda.*", "en": "*No events recorded yet.*", "es": "*Aún no hay eventos registrados.*"},
+    "att_7d": {"pt": "🗓️ Últimos 7 dias", "en": "🗓️ Last 7 days", "es": "🗓️ Últimos 7 días"},
+    "att_7d_val": {
+        "pt": "Total: **{total}**\nVocê participou: **{user}**  ({pct:.1f}%)",
+        "en": "Total: **{total}**\nYou attended: **{user}**  ({pct:.1f}%)",
+        "es": "Total: **{total}**\nAsististe: **{user}**  ({pct:.1f}%)",
+    },
+    "att_no_events_7d": {"pt": "*Nenhum evento neste período.*", "en": "*No events in this period.*", "es": "*Sin eventos en este período.*"},
+    "att_rank": {"pt": "🏆 Ranking", "en": "🏆 Ranking", "es": "🏆 Ranking"},
+    "att_last": {"pt": "🕐 Último evento", "en": "🕐 Last event", "es": "🕐 Último evento"},
+    "att_no_data": {"pt": "*Sem dados*", "en": "*No data*", "es": "*Sin datos*"},
+    "att_never": {"pt": "*nunca*", "en": "*never*", "es": "*nunca*"},
+    "att_footer": {
+        "pt": "Considera participante válido (não irregular) como evento atendido",
+        "en": "Counts valid participants (non-irregular) as attended",
+        "es": "Cuenta participantes válidos (no irregulares) como asistidos",
+    },
+    "event_word": {"pt": "evento", "en": "event", "es": "evento"},
+    "events_word": {"pt": "eventos", "en": "events", "es": "eventos"},
+    "lowatt_title": {
+        "pt": "Low Attendance — últimos 7 dias",
+        "en": "Low Attendance — last 7 days",
+        "es": "Low Attendance — últimos 7 días",
+    },
+    "lowatt_desc": {
+        "pt": "Total de eventos no período: **{total}**\nMembros analisados: **{analyzed}**  ·  Filtrados (cargo < 7 dias): **{filtered}**",
+        "en": "Events in period: **{total}**\nMembers analyzed: **{analyzed}**  ·  Filtered (role < 7 days): **{filtered}**",
+        "es": "Eventos en el período: **{total}**\nMiembros analizados: **{analyzed}**  ·  Filtrados (rol < 7 días): **{filtered}**",
+    },
+    "lowatt_empty": {"pt": "*Nenhum membro elegível para análise.*", "en": "*No eligible members to analyze.*", "es": "*Ningún miembro elegible para analizar.*"},
+    "lowatt_ranking": {"pt": "Ranking", "en": "Ranking", "es": "Ranking"},
 }
 
 
@@ -899,5 +958,34 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "pt": "21h, 21:30 BRT, 11:30 CEST ou data completa",
         "en": "21h, 21:30 BRT, 11:30 CEST, or a full date",
         "es": "21h, 21:30 BRT, 11:30 CEST o fecha completa",
+    },
+
+    "cmd_desc_profile": {
+        "pt": "Mostra o perfil de um jogador do Albion (fama, guilda, saldo e attendance)",
+        "en": "Shows an Albion player's profile (fame, guild, balance and attendance)",
+        "es": "Muestra el perfil de un jugador de Albion (fama, gremio, saldo y asistencia)",
+    },
+    "opt_desc_profile_jogador": {
+        "pt": "Nick do jogador (em branco = o seu nick cadastrado)",
+        "en": "Player's nickname (blank = your registered nick)",
+        "es": "Nick del jugador (en blanco = tu nick registrado)",
+    },
+    "opt_name_profile_jogador": {"pt": "jogador", "en": "player", "es": "jugador"},
+
+    "cmd_desc_attendance": {
+        "pt": "Mostra estatísticas de participação em eventos CTA",
+        "en": "Shows attendance stats for CTA events",
+        "es": "Muestra estadísticas de participación en eventos CTA",
+    },
+    "opt_desc_attendance_target": {
+        "pt": "Usuário (em branco = você)",
+        "en": "User (blank = yourself)",
+        "es": "Usuario (en blanco = tú)",
+    },
+
+    "cmd_desc_lowattendance": {
+        "pt": "Lista membros com menor participação nos últimos 7 dias",
+        "en": "Lists members with lowest attendance in the last 7 days",
+        "es": "Lista miembros con menor participación en los últimos 7 días",
     },
 }

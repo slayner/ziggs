@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -23,7 +24,7 @@ from app.config import get_settings
 from app.models.audit import AuditLog
 from app.models.battles import BattleGuild
 from app.models.economy import EconomyBalance, EconomyTransaction
-from app.models.events import Event, EventSignup
+from app.models.events import Event, EventParticipant, EventSignup
 from app.models.nodes import NodeEvent
 from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildAlbionLink, GuildMember, GuildRolePermission, User
@@ -1027,6 +1028,9 @@ COMMANDS_REGISTRY = [
     {"name": "addguildmoney", "description": "Adiciona prata ao banco da guilda", "category": "economy"},
     {"name": "removeguildmoney", "description": "Remove prata do banco da guilda", "category": "economy"},
     {"name": "event", "description": "Gerencia eventos (CTAs): criar, deletar, editar e adiar", "category": "management"},
+    {"name": "profile", "description": "Mostra o perfil de um jogador do Albion (fama PvP/PvE, guilda, saldo e attendance)", "category": "miscellaneous"},
+    {"name": "attendance", "description": "Mostra estatísticas de participação em eventos CTA", "category": "management"},
+    {"name": "lowattendance", "description": "Lista membros com menor participação nos últimos 7 dias", "category": "management"},
 ]
 
 # Default de allowed_roles pra comandos sensíveis quando o admin ainda não
@@ -1044,6 +1048,7 @@ DEFAULT_ALLOWED_ROLES = {
     "addguildmoney": ["admin"],
     "removeguildmoney": ["admin"],
     "event": ["admin"],
+    "lowattendance": ["admin"],
 }
 
 # "register_others" não é um comando próprio — é uma sub-permissão do
@@ -1968,7 +1973,8 @@ def bot_guild_bank_balance(
     """!bank (sem args) lê aqui o saldo atual do banco da guilda."""
     _require_bot_secret(authorization)
     g = db.scalar(select(Guild).where(Guild.id == guild_id))
-    return {"balance": g.bank_balance if g else 0}
+    region = (g.settings or {}).get("albion_guild_region") if g else None
+    return {"balance": g.bank_balance if g else 0, "region": region}
 
 
 # ── Bot: eventos (mass-info + inscrições) ───────────────────────────────────────
@@ -3264,6 +3270,229 @@ async def bot_juicy_kill_image(
     if path is None:
         raise HTTPException(404, "juicy kill não encontrada")
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+# ── Bot: attendance / lowattendance / warm ─────────────────────────────────────
+
+@router.get("/bot/guilds/{guild_id}/attendance/{discord_user_id}")
+def bot_attendance(
+    guild_id: int,
+    discord_user_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Stats de attendance de um membro: eventos totais da guild, eventos
+    participados, ranking, e os mesmos números nos últimos 7 dias."""
+    _require_bot_secret(authorization)
+
+    now = datetime.now(timezone.utc)
+    week_ago = now - timedelta(days=7)
+
+    # Eventos finalizados/não-terminais: contamos todos que tiveram
+    # participação (IN_PROGRESS ou além). Eventos cancelados/deleted não contam.
+    counted_states = (
+        "in_progress", "review", "finalized",
+    )
+
+    total_all = db.scalar(
+        select(func.count(Event.id)).where(
+            Event.guild_id == guild_id,
+            Event.state.in_(counted_states),
+        )
+    ) or 0
+
+    total_7d = db.scalar(
+        select(func.count(Event.id)).where(
+            Event.guild_id == guild_id,
+            Event.state.in_(counted_states),
+            Event.ended_at >= week_ago,
+        )
+    ) or 0
+
+    # Participações do usuário (is_valid != False — irregular não conta).
+    user_all = db.scalar(
+        select(func.count(EventParticipant.id)).join(
+            Event, Event.id == EventParticipant.event_id
+        ).where(
+            EventParticipant.guild_id == guild_id,
+            EventParticipant.user_id == discord_user_id,
+            Event.state.in_(counted_states),
+            EventParticipant.is_valid != False,  # noqa: E712
+        )
+    ) or 0
+
+    user_7d = db.scalar(
+        select(func.count(EventParticipant.id)).join(
+            Event, Event.id == EventParticipant.event_id
+        ).where(
+            EventParticipant.guild_id == guild_id,
+            EventParticipant.user_id == discord_user_id,
+            Event.state.in_(counted_states),
+            Event.ended_at >= week_ago,
+            EventParticipant.is_valid != False,  # noqa: E712
+        )
+    ) or 0
+
+    # Ranking: quantos membros têm mais participações que este.
+    # Subquery: participações por user_id nesta guild.
+    per_user = (
+        select(
+            EventParticipant.user_id,
+            func.count(EventParticipant.id).label("cnt"),
+        ).join(Event, Event.id == EventParticipant.event_id)
+        .where(
+            EventParticipant.guild_id == guild_id,
+            Event.state.in_(counted_states),
+            EventParticipant.is_valid != False,  # noqa: E712
+        )
+        .group_by(EventParticipant.user_id)
+    ).subquery()
+
+    rank = db.scalar(
+        select(func.count()).select_from(per_user).where(
+            per_user.c.cnt > user_all
+        )
+    ) or 0
+    rank += 1  # 1-indexed
+
+    # Último evento participado
+    last_event = db.scalar(
+        select(Event.ended_at).join(
+            EventParticipant, EventParticipant.event_id == Event.id
+        ).where(
+            EventParticipant.guild_id == guild_id,
+            EventParticipant.user_id == discord_user_id,
+            Event.ended_at.is_not(None),
+            EventParticipant.is_valid != False,  # noqa: E712
+        ).order_by(Event.ended_at.desc()).limit(1)
+    )
+
+    # Nick registrado (pra /profile sem argumento) + região da guilda
+    reg = db.scalar(
+        select(BotRegistration).where(
+            BotRegistration.guild_id == guild_id,
+            BotRegistration.discord_user_id == discord_user_id,
+            BotRegistration.active.is_(True),
+        )
+    )
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    region = (g.settings or {}).get("albion_guild_region") if g else None
+
+    return {
+        "total_events": total_all,
+        "user_events": user_all,
+        "total_events_7d": total_7d,
+        "user_events_7d": user_7d,
+        "rank": rank if user_all > 0 else None,
+        "last_event": last_event.isoformat() if last_event else None,
+        "albion_player_name": reg.albion_player_name if reg else None,
+        "region": region,
+    }
+
+
+LOWATTENDANCE_MAX_ROWS = 15
+
+
+@router.get("/bot/guilds/{guild_id}/lowattendance")
+def bot_lowattendance(
+    guild_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Lista registrations ativas com menor attendance nos últimos 7 dias.
+    Filtra quem foi registrado há < 7 dias (created_at do BotRegistration)."""
+    _require_bot_secret(authorization)
+
+    now = datetime.now(timezone.utc)
+    week_ago = now - timedelta(days=7)
+    counted_states = ("in_progress", "review", "finalized")
+
+    # Registrations ativas
+    regs = db.scalars(
+        select(BotRegistration).where(
+            BotRegistration.guild_id == guild_id,
+            BotRegistration.active.is_(True),
+        )
+    ).all()
+
+    if not regs:
+        return {"members": [], "total_7d": 0}
+
+    # Total de eventos nos últimos 7 dias
+    total_7d = db.scalar(
+        select(func.count(Event.id)).where(
+            Event.guild_id == guild_id,
+            Event.state.in_(counted_states),
+            Event.ended_at >= week_ago,
+        )
+    ) or 0
+
+    results = []
+    filtered_recent = 0
+    for reg in regs:
+        # Filtra quem foi registrado há < 7 dias
+        if reg.created_at and reg.created_at > week_ago:
+            filtered_recent += 1
+            continue
+
+        count_7d = db.scalar(
+            select(func.count(EventParticipant.id)).join(
+                Event, Event.id == EventParticipant.event_id
+            ).where(
+                EventParticipant.guild_id == guild_id,
+                EventParticipant.user_id == reg.discord_user_id,
+                Event.state.in_(counted_states),
+                Event.ended_at >= week_ago,
+                EventParticipant.is_valid != False,  # noqa: E712
+            )
+        ) or 0
+
+        last_event = db.scalar(
+            select(Event.ended_at).join(
+                EventParticipant, EventParticipant.event_id == Event.id
+            ).where(
+                EventParticipant.guild_id == guild_id,
+                EventParticipant.user_id == reg.discord_user_id,
+                Event.ended_at.is_not(None),
+                EventParticipant.is_valid != False,  # noqa: E712
+            ).order_by(Event.ended_at.desc()).limit(1)
+        )
+
+        results.append({
+            "discord_user_id": str(reg.discord_user_id),
+            "albion_player_name": reg.albion_player_name,
+            "count_7d": count_7d,
+            "last_event": last_event.isoformat() if last_event else None,
+        })
+
+    # Ordena por count_7d ASC, depois last_event ASC (mais antigo primeiro)
+    results.sort(key=lambda r: (r["count_7d"], r["last_event"] or ""))
+    top_low = results[:LOWATTENDANCE_MAX_ROWS]
+
+    return {"members": top_low, "total_7d": total_7d, "filtered_recent": filtered_recent}
+
+
+class BotWarmIn(BaseModel):
+    name: str
+    region: str
+
+
+@router.post("/bot/guilds/{guild_id}/warm")
+async def bot_warm(
+    guild_id: int,
+    body: BotWarmIn,
+    authorization: str = Header(...),
+):
+    """Bot pede pra aquecer o perfil de um personagem no backend — reusa o
+    profile_warmer.warm_by_name (mesma lógica do companion). Sem teto de
+    install (o teto real é a cota da Albion no albion_gate)."""
+    _require_bot_secret(authorization)
+    from app.services import profile_warmer
+    name = (body.name or "").strip()
+    region = (body.region or "").strip().lower()
+    if not name or region not in HOSTS:
+        raise HTTPException(400, "name/region inválidos")
+    return await profile_warmer.warm_by_name(name, region)
 
 
 def _require_member(db: Session, user: User, guild_id: int) -> GuildMember:
