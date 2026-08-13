@@ -194,6 +194,46 @@ _FUNC_OVERRIDES: dict[str, str] = {
     "T4_MAIN_SPEAR_LANCE_AVALON": "dps",
     "T4_MAIN_SWORD": "dps",
     "T4_MAIN_SWORD_CRYSTAL": "dps",
+    # ── Battle mounts ──────────────────────────────────────────────────────
+    # Todas as battlemounts são função "battlemount" — aparecem como arma nas
+    # comps mas não são dps/tank/healer/support/pierce. O CompEditor mostra
+    # "battlemount" como fn type próprio (DEFAULT_FN_TYPES em helpers.ts).
+    "T8_MOUNT_MAMMOTH_BATTLE": "battlemount",
+    "T7_MOUNT_SWAMPDRAGON_BATTLE": "battlemount",
+    "T7_MOUNT_ARMORED_SWAMPDRAGON_BATTLE": "battlemount",
+    "T6_MOUNT_SIEGE_BALLISTA": "battlemount",
+    "T7_MOUNT_SWAMPDRAGON_AVALON_BASILISK": "battlemount",
+    "UNIQUE_MOUNT_RHINO_SEASON_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_RHINO_SEASON_GOLD": "battlemount",
+    "UNIQUE_MOUNT_RHINO_SEASON_SILVER": "battlemount",
+    "UNIQUE_MOUNT_RHINO_SEASON_BRONZE": "battlemount",
+    "UNIQUE_MOUNT_TOWER_CHARIOT_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_TOWER_CHARIOT_GOLD": "battlemount",
+    "UNIQUE_MOUNT_TOWER_CHARIOT_SILVER": "battlemount",
+    "UNIQUE_MOUNT_ARMORED_EAGLE_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_ARMORED_EAGLE_GOLD": "battlemount",
+    "UNIQUE_MOUNT_ARMORED_EAGLE_SILVER": "battlemount",
+    "UNIQUE_MOUNT_BEETLE_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_BEETLE_GOLD": "battlemount",
+    "UNIQUE_MOUNT_BEETLE_SILVER": "battlemount",
+    "UNIQUE_MOUNT_BEHEMOTH_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_BEHEMOTH_GOLD": "battlemount",
+    "UNIQUE_MOUNT_BEHEMOTH_SILVER": "battlemount",
+    "UNIQUE_MOUNT_ENT_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_ENT_GOLD": "battlemount",
+    "UNIQUE_MOUNT_ENT_SILVER": "battlemount",
+    "UNIQUE_MOUNT_BATTLESPIDER_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_BATTLESPIDER_GOLD": "battlemount",
+    "UNIQUE_MOUNT_BATTLESPIDER_SILVER": "battlemount",
+    "UNIQUE_MOUNT_BASTION_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_BASTION_GOLD": "battlemount",
+    "UNIQUE_MOUNT_BASTION_SILVER": "battlemount",
+    "UNIQUE_MOUNT_JUGGERNAUT_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_JUGGERNAUT_GOLD": "battlemount",
+    "UNIQUE_MOUNT_JUGGERNAUT_SILVER": "battlemount",
+    "UNIQUE_MOUNT_TANKBEETLE_CRYSTAL": "battlemount",
+    "UNIQUE_MOUNT_TANKBEETLE_GOLD": "battlemount",
+    "UNIQUE_MOUNT_TANKBEETLE_SILVER": "battlemount",
 }
 
 # Heurística grosseira só pra arma nova ainda não curada em _FUNC_OVERRIDES.
@@ -350,6 +390,56 @@ def main() -> None:
             category="two-hand",
         ))
         spell_rows.extend(_collect_spells(w, weapon_idx, base))
+
+    # ── Battle mounts (mounts com @shopsubcategory1 == "battle_mount") ────────
+    all_mounts: list[dict] = items_data["items"].get("mount", [])
+    if isinstance(all_mounts, dict): all_mounts = [all_mounts]
+    battle_mounts = [m for m in all_mounts if m.get("@shopsubcategory1") == "battle_mount"]
+    print(f"Battle mounts: {len(battle_mounts)}")
+
+    for m in battle_mounts:
+        uid  = m["@uniquename"]
+        base = _base_id(uid)
+        if base in seen_bases:
+            continue
+        seen_bases.add(base)
+
+        weapon_rows.append(Weapon(
+            item_id=uid,
+            name=name_map.get(uid, base.replace("_", " ").title()),
+            invisible_function=_infer_fn(m),
+            category="two-hand",  # BM não tem offhand
+        ))
+
+        # Mount spells vêm de mountspelllist.mountspell (não craftingspelllist).
+        # Slots: mapeia spellslot → Q/W/passive igual às armas normais.
+        ms_list = (m.get("mountspelllist") or {}).get("mountspell", [])
+        if isinstance(ms_list, dict): ms_list = [ms_list]
+
+        slot_counters = {"Q": 0, "W": 0, "passive": 0}
+        for spell in ms_list:
+            spell_id = spell.get("@uniquename", "")
+            if not spell_id:
+                continue
+            raw_slot = spell.get("@spellslot", "")
+            # mountspell slots: mainhand1→Q, mainhand2→W, offhandormainhand3→E(skip),
+            # armor/shoes→passive (não são Q/W na arma, mas guardamos como passive)
+            if raw_slot in ("mainhand1",):
+                slot = "Q"
+            elif raw_slot in ("mainhand2",):
+                slot = "W"
+            elif raw_slot in ("offhandormainhand3",):
+                continue  # E — não usado nas comps
+            else:
+                slot = "passive"
+            spell_rows.append(WeaponSpell(
+                weapon_base_id=base, slot=slot,
+                order_idx=slot_counters[slot],
+                spell_id=spell_id,
+                name=_spell_name(spell_id),
+                uisprite=spell_id,
+            ))
+            slot_counters[slot] += 1
 
     # ── Armor gear (capacetes, armaduras, botas) ──────────────────────────────
     equip_items: list[dict] = items_data["items"]["equipmentitem"]

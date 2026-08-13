@@ -57,6 +57,12 @@ function artAll(baseId: string, name: string, slot: ItemSlot, nameEn?: string): 
   return gen(T, E, baseId, name, slot, nameEn).map(i => ({ ...i, useEnRender: true as const }));
 }
 
+// Battle mount — tier fixo, sem variantes de tier/encant. ID próprio.
+function bm(id: string, namePt: string, nameEn: string): AlbionItem {
+  const tier = parseInt(id.match(/^T(\d+)_/)?.[1] ?? "8");
+  return { id, name: `${tier}.0 ${namePt}`, nameEn, slot: "weapon" };
+}
+
 export const ALBION_ITEMS: AlbionItem[] = [
 
   // ═══════════════════════════════════════════════════════════
@@ -456,6 +462,46 @@ export const ALBION_ITEMS: AlbionItem[] = [
   ...art("2H_QUARTERSTAFF_AVALON", "Buscador do Graal",    "weapon"),
   ...art("2H_COMBATSTAFF_MORGANA", "Cajado de Monge Negro","weapon"),
   ...artAll("2H_DOUBLEBLADEDSTAFF_CRYSTAL","Lâminas Gêmeas Fantasmagóricas","weapon","Phantom Twinblade"),
+
+  // ═══════════════════════════════════════════════════════════
+  // MONTARIAS DE BATALHA (battle mounts) — tratadas como arma
+  // ═══════════════════════════════════════════════════════════
+  bm("T8_MOUNT_MAMMOTH_BATTLE",                 "Mamute de Comando do Ancião",   "Elder's Command Mammoth"),
+  bm("T7_MOUNT_SWAMPDRAGON_BATTLE",             "Basilisco de Fogo",             "Flame Basilisk"),
+  bm("T7_MOUNT_ARMORED_SWAMPDRAGON_BATTLE",     "Basilisco Venenoso",            "Venom Basilisk"),
+  bm("T6_MOUNT_SIEGE_BALLISTA",                 "Balista de Cerco",              "Siege Ballista"),
+  bm("T7_MOUNT_SWAMPDRAGON_AVALON_BASILISK",    "Basilisco Avaloniano",          "Avalonian Basilisk"),
+  bm("UNIQUE_MOUNT_RHINO_SEASON_CRYSTAL",       "Rinoceronte de Batalha de Cristal", "Crystal Battle Rhino"),
+  bm("UNIQUE_MOUNT_RHINO_SEASON_GOLD",          "Rinoceronte de Batalha de Ouro",    "Gold Battle Rhino"),
+  bm("UNIQUE_MOUNT_RHINO_SEASON_SILVER",        "Rinoceronte de Batalha de Prata",   "Silver Battle Rhino"),
+  bm("UNIQUE_MOUNT_RHINO_SEASON_BRONZE",        "Rinoceronte de Batalha de Bronze",  "Bronze Battle Rhino"),
+  bm("UNIQUE_MOUNT_TOWER_CHARIOT_CRYSTAL",      "Carruagem de Torre de Cristal",     "Crystal Tower Chariot"),
+  bm("UNIQUE_MOUNT_TOWER_CHARIOT_GOLD",         "Carruagem de Torre de Ouro",        "Gold Tower Chariot"),
+  bm("UNIQUE_MOUNT_TOWER_CHARIOT_SILVER",       "Carruagem de Torre de Prata",       "Silver Tower Chariot"),
+  bm("UNIQUE_MOUNT_ARMORED_EAGLE_CRYSTAL",      "Águia de Batalha de Cristal",       "Crystal Battle Eagle"),
+  bm("UNIQUE_MOUNT_ARMORED_EAGLE_GOLD",         "Águia de Batalha de Ouro",          "Gold Battle Eagle"),
+  bm("UNIQUE_MOUNT_ARMORED_EAGLE_SILVER",       "Águia de Batalha de Prata",         "Silver Battle Eagle"),
+  bm("UNIQUE_MOUNT_BEETLE_CRYSTAL",             "Besouro do Colosso de Cristal",     "Crystal Colossus Beetle"),
+  bm("UNIQUE_MOUNT_BEETLE_GOLD",                "Besouro do Colosso de Ouro",        "Gold Colossus Beetle"),
+  bm("UNIQUE_MOUNT_BEETLE_SILVER",              "Besouro do Colosso de Prata",       "Silver Colossus Beetle"),
+  bm("UNIQUE_MOUNT_BEHEMOTH_CRYSTAL",           "Behemoth de Cristal",               "Crystal Behemoth"),
+  bm("UNIQUE_MOUNT_BEHEMOTH_GOLD",              "Behemoth de Ouro",                  "Gold Behemoth"),
+  bm("UNIQUE_MOUNT_BEHEMOTH_SILVER",            "Behemoth de Prata",                 "Silver Behemoth"),
+  bm("UNIQUE_MOUNT_ENT_CRYSTAL",                "Ent Ancião de Cristal",             "Crystal Ancient Ent"),
+  bm("UNIQUE_MOUNT_ENT_GOLD",                   "Ent Ancião de Ouro",                "Gold Ancient Ent"),
+  bm("UNIQUE_MOUNT_ENT_SILVER",                 "Ent Ancião de Prata",               "Silver Ancient Ent"),
+  bm("UNIQUE_MOUNT_BATTLESPIDER_CRYSTAL",       "Golias Devorador de Cristal",       "Crystal Goliath Horseeater"),
+  bm("UNIQUE_MOUNT_BATTLESPIDER_GOLD",          "Golias Devorador de Ouro",          "Gold Goliath Horseeater"),
+  bm("UNIQUE_MOUNT_BATTLESPIDER_SILVER",        "Golias Devorador de Prata",         "Silver Goliath Horseeater"),
+  bm("UNIQUE_MOUNT_BASTION_CRYSTAL",            "Bastião Errante de Cristal",        "Crystal Roving Bastion"),
+  bm("UNIQUE_MOUNT_BASTION_GOLD",               "Bastião Errante de Ouro",           "Gold Roving Bastion"),
+  bm("UNIQUE_MOUNT_BASTION_SILVER",             "Bastião Errante de Prata",          "Silver Roving Bastion"),
+  bm("UNIQUE_MOUNT_JUGGERNAUT_CRYSTAL",         "Juggernaut de Cristal",             "Crystal Juggernaut"),
+  bm("UNIQUE_MOUNT_JUGGERNAUT_GOLD",            "Juggernaut de Ouro",                "Gold Juggernaut"),
+  bm("UNIQUE_MOUNT_JUGGERNAUT_SILVER",          "Juggernaut de Prata",               "Silver Juggernaut"),
+  bm("UNIQUE_MOUNT_TANKBEETLE_CRYSTAL",         "Besouro Falange de Cristal",        "Crystal Phalanx Beetle"),
+  bm("UNIQUE_MOUNT_TANKBEETLE_GOLD",            "Besouro Falange de Ouro",           "Gold Phalanx Beetle"),
+  bm("UNIQUE_MOUNT_TANKBEETLE_SILVER",          "Besouro Falange de Prata",          "Silver Phalanx Beetle"),
 ];
 
 // Lookup por ID (para exibição rápida)
@@ -505,8 +551,21 @@ export function wBase(id: string): string {
   return id.replace(/^T\d+_/, "").replace(/@\d+$/, "");
 }
 
-// Arma de duas mãos? Pela base começar com "2H_" — esconde o slot offhand.
+// Arma de duas mãos? Pela base começar com "2H_" ou ser uma battlemount —
+// ambas escondem o slot offhand (BM não tem offhand).
 export function is2H(weaponId: string | undefined): boolean {
   if (!weaponId) return false;
-  return wBase(weaponId).startsWith("2H_");
+  const base = wBase(weaponId);
+  if (base.startsWith("2H_")) return true;
+  return _BATTLEMOUNT_PREFIXES.some(p => base.includes(p));
 }
+
+// ponytail: lista curta de substrings que identificam battlemounts por id.
+// Mesma lista do BATTLEMOUNT_NAMES do backend (battles.py), simplificada.
+const _BATTLEMOUNT_PREFIXES = [
+  "MOUNT_MAMMOTH_BATTLE", "SWAMPDRAGON_BATTLE", "ARMORED_SWAMPDRAGON_BATTLE",
+  "SIEGE_BALLISTA", "AVALON_BASILISK", "UNIQUE_MOUNT_RHINO_SEASON",
+  "UNIQUE_MOUNT_TOWER_CHARIOT", "UNIQUE_MOUNT_ARMORED_EAGLE", "UNIQUE_MOUNT_BEETLE",
+  "UNIQUE_MOUNT_BEHEMOTH", "UNIQUE_MOUNT_ENT", "UNIQUE_MOUNT_BATTLESPIDER",
+  "UNIQUE_MOUNT_BASTION", "UNIQUE_MOUNT_JUGGERNAUT", "UNIQUE_MOUNT_TANKBEETLE",
+];

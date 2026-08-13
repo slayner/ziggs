@@ -68,6 +68,9 @@ _sync_engine = create_engine(
     max_overflow=10,
 )
 
+# ponytail: alias mantido para scripts legados que fazem `from app.db import engine`.
+engine = _sync_engine
+
 SyncSessionLocal = sessionmaker(bind=_sync_engine, autoflush=False, expire_on_commit=False)
 
 

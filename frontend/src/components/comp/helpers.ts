@@ -8,11 +8,12 @@ import type { CompCode, CompCodeParty, CompCodeRole, Draft, DraftEquip, DraftRol
 export const MAX_SLOTS = 20;
 
 export const DEFAULT_FN_TYPES: FnTypeDef[] = [
-  { key: "tank",    label: "Tank",    color: "#1399FF", emoji: "🛡️" },
-  { key: "healer",  label: "Healer",  color: "#43B80E", emoji: "🕊️" },
-  { key: "support", label: "Suporte", color: "#FFE04D", emoji: "✨" },
-  { key: "dps",     label: "DPS",     color: "#FF2025", emoji: "🏹" },
-  { key: "pierce",  label: "Pierce",  color: "#06b6d4", emoji: "🎯" },
+  { key: "tank",        label: "Tank",        color: "#1399FF", emoji: "🛡️" },
+  { key: "healer",      label: "Healer",      color: "#43B80E", emoji: "🕊️" },
+  { key: "support",     label: "Suporte",     color: "#FFE04D", emoji: "✨" },
+  { key: "dps",         label: "DPS",         color: "#FF2025", emoji: "🏹" },
+  { key: "pierce",      label: "Pierce",      color: "#06b6d4", emoji: "🎯" },
+  { key: "battlemount", label: "Battle Mount", color: "#a855f7", emoji: "🐲" },
 ];
 
 export function getFnDef(fn: string | null, types: FnTypeDef[]): FnTypeDef | undefined {
