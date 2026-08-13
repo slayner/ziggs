@@ -861,7 +861,7 @@ function CraftMode({ t, server, lang, initialCartCode }: { t: (key: TKey) => str
         sp.set("cart", code);
         history.replaceState(history.state, "", `/?${sp.toString()}`);
       } catch { /* best-effort — o link só não atualiza, usuário não percebe */ }
-    }, 1500);
+    }, 300);
     return () => clearTimeout(t);
   }, [cart]);
 
