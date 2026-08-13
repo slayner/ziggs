@@ -792,7 +792,9 @@ export default function App() {
           {nb("battles", "ti-shield-bolt",    t("battles"))}
           {nb("highscores", "ti-trophy",      t("highscores"))}
           {nb("craft", "ti-hammer",          t("craft"))}
-          {nb("companion", "ti-device-desktop", t("companionNav"))}
+          <button className={companionActive ? "active" : ""} onClick={() => navigate("/download")}>
+            <i className="ti ti-device-desktop" aria-hidden="true" /> {t("companionNav")}
+          </button>
         </nav>
 
         <div className="nav-sep" />
