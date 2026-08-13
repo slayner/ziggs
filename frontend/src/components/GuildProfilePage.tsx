@@ -530,7 +530,10 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
     return () => { cancelled = true; refreshPollRef.current = null; };
   }, [mode, albionId]);
 
-  // Polling da etapa da montagem do perfil (ver LoadProgress) — a agregação
+  useEffect(() => {
+    if (data && "name" in data) document.title = data.name;
+    return () => { document.title = "Ziggs"; };
+  }, [data]);
   // no backend leva ~1min pra guildas grandes; só roda enquanto carrega.
   useEffect(() => {
     if (!loading) { setLoadStage(null); return; }
