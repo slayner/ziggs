@@ -666,6 +666,16 @@ export interface MarketHistoryOut {
 
 export interface MarketCatalogItem { id: string; en: string; pt: string; c: string; }
 
+// Item de um carrinho de craft compartilhável (mesmo formato entra/sai do backend).
+export interface CraftCartItem {
+  uniqueName: string;
+  qty: number;
+  useFocus: boolean;
+  placeLabel: string;
+  journalId: string | null;
+  transmuteTargetId: string | null;
+}
+
 export async function getMarketCatalog(): Promise<MarketCatalogItem[]> {
   return req<MarketCatalogItem[]>("/market-history/catalog");
 }
@@ -781,6 +791,12 @@ export const api = {
   getCraftFocusEfficiency: () => req<Record<string, number>>("/craft/focus-efficiency"),
   setCraftFocusEfficiency: (values: Record<string, number>) =>
     req<Record<string, number>>("/craft/focus-efficiency", { method: "PUT", body: JSON.stringify({ values }) }),
+  // ── Carrinho de craft compartilhável via link ──────────────────────────────
+  // POST devolve um código curto; GET recupera os itens. Sem auth.
+  saveCraftCart: (items: CraftCartItem[]) =>
+    req<{ code: string }>("/craft/carts", { method: "POST", body: JSON.stringify({ items }) }),
+  loadCraftCart: (code: string) =>
+    req<{ code: string; items: CraftCartItem[]; created_at: string }>(`/craft/carts/${encodeURIComponent(code)}`),
   myDiscordGuilds: () => req<DiscordGuild[]>("/auth/guilds"),
   selectGuild: (guild_id: string, guild_name: string, icon: string | null) =>
     req<{ guild_id: string; bot_present: boolean }>("/auth/select-guild", {

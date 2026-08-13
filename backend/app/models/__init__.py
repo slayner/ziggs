@@ -39,6 +39,7 @@ from app.models.companion import (  # noqa: F401
 from app.models.scan_worker import ScanWorker, ScanWorkTask  # noqa: F401
 from app.models.guild_profiles import GuildProfile, AllianceProfile  # noqa: F401
 from app.models.profile_media import ProfileMediaSubmission  # noqa: F401
+from app.models.craft import CraftCart  # noqa: F401
 
 __all__ = [
     "Base",
@@ -65,4 +66,5 @@ __all__ = [
     "ScanWorker", "ScanWorkTask",
     "GuildProfile", "AllianceProfile",
     "ProfileMediaSubmission",
+    "CraftCart",
 ]

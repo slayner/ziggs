@@ -305,13 +305,13 @@ function placeLabel(loc: ProductionLocation, t: (key: TKey) => string): string {
   return `HO Q${loc.quality}/Nv${loc.power}`;
 }
 
-export default function CraftCalculator() {
+export default function CraftCalculator({ initialCartCode }: { initialCartCode?: string } = {}) {
   const t = useT();
   const { server, lang } = useLang();
-  return <CraftMode t={t} server={server} lang={lang} />;
+  return <CraftMode t={t} server={server} lang={lang} initialCartCode={initialCartCode} />;
 }
 
-function CraftMode({ t, server, lang }: { t: (key: TKey) => string; server: PriceServer; lang: "pt" | "en" | "es" }) {
+function CraftMode({ t, server, lang, initialCartCode }: { t: (key: TKey) => string; server: PriceServer; lang: "pt" | "en" | "es"; initialCartCode?: string }) {
   const CITY_BIOME = useCityBiome();
   const cityBiome = (city?: string) => (city ? CITY_BIOME[city] : undefined);
   const [families, setFamilies] = useState<CatalogFamily[] | null>(null);
@@ -368,6 +368,7 @@ function CraftMode({ t, server, lang }: { t: (key: TKey) => string; server: Pric
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   const [cart, setCart] = useState<Order[]>([]);
+  const [shareState, setShareState] = useState<"idle" | "saving" | "copied" | "error">("idle");
 
   const pickerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -414,6 +415,43 @@ function CraftMode({ t, server, lang }: { t: (key: TKey) => string; server: Pric
     loadJournalBase().then(setJournalBase);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Deep link ?view=craft&cart=CODE: recupera um carrinho compartilhado.
+  // Roda quando o catálogo terminou de carregar (variações disponíveis pra
+  // casar uniqueName). Itens de famílias que sumiram do catálogo são pulados.
+  // rr/focus são aproximados do estado atual (o usuário pode re-fetchar preços).
+  useEffect(() => {
+    if (!initialCartCode || !families) return;
+    let alive = true;
+    api.loadCraftCart(initialCartCode)
+      .then((res) => {
+        if (!alive || !Array.isArray(res.items) || !res.items.length) return;
+        const restored: Order[] = [];
+        for (const it of res.items) {
+          const fam = families.find((f) => f.variations.some((v) => v.uniqueName === it.uniqueName));
+          const variation = fam?.variations.find((v) => v.uniqueName === it.uniqueName);
+          if (!fam || !variation) continue;
+          restored.push({
+            id: `restore-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            name: familyDisplayName(fam),
+            variation,
+            qty: it.qty,
+            useFocus: it.useFocus,
+            rr: it.useFocus ? rrFocus : rrNoFocus,
+            placeLabel: it.placeLabel,
+            journalId: it.journalId,
+            focusEfficiency: focusFce,
+            focusCostPerItem: variation.focus * focusMult,
+            transmuteRoute: null,
+            transmuteTargetId: it.transmuteTargetId,
+          });
+        }
+        if (restored.length) setCart(restored);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCartCode, families]);
 
   useEffect(() => {
     api.me().then((m) => {
@@ -790,6 +828,35 @@ function CraftMode({ t, server, lang }: { t: (key: TKey) => string; server: Pric
         transmuteTargetId,
       },
     ]);
+  }
+
+  // Share: salva o carrinho no backend, põe o código na URL (replaceState) e
+  // copia o link pra área de transferência.
+  async function shareCart() {
+    if (!cart.length || shareState === "saving") return;
+    setShareState("saving");
+    try {
+      const { code } = await api.saveCraftCart(
+        cart.map((o) => ({
+          uniqueName: o.variation.uniqueName,
+          qty: o.qty,
+          useFocus: o.useFocus,
+          placeLabel: o.placeLabel,
+          journalId: o.journalId,
+          transmuteTargetId: o.transmuteTargetId,
+        })),
+      );
+      const sp = new URLSearchParams(window.location.search);
+      sp.set("view", "craft");
+      sp.set("cart", code);
+      history.replaceState(history.state, "", `/?${sp.toString()}`);
+      if (navigator.clipboard) await navigator.clipboard.writeText(window.location.href);
+      setShareState("copied");
+      setTimeout(() => setShareState("idle"), 2000);
+    } catch {
+      setShareState("error");
+      setTimeout(() => setShareState("idle"), 3000);
+    }
   }
 
   function toggleJournalTier(t: number) {
@@ -1296,7 +1363,7 @@ function CraftMode({ t, server, lang }: { t: (key: TKey) => string; server: Pric
             citiesForGroup={citiesForGroup} setGroupBuyCities={setGroupBuyCities}
             orderForGroup={orderForGroup} setGroupOrder={setGroupOrder}
           />
-          <Cart cart={cart} matPrices={matPrices} sellPrices={sellPrices} weights={weights} journalBase={journalBase} fullJournalPrices={fullJournalPrices} settings={settings} ignoredTiers={ignoredJournalTiers} nameOf={nameOf} onRemove={(id) => setCart((c) => c.filter((o) => o.id !== id))} onClear={() => setCart([])} premium={premium} useFocus={useFocus} setPremium={setPremium} setUseFocus={setUseFocus} batchQty={batchQty} setBatchQty={setBatchQty} stationFeePer100={stationFeePer100} setStationFeePer100={setStationFeePer100} onRefresh={fetchMarket} loadingPrices={loadingPrices} />
+          <Cart cart={cart} matPrices={matPrices} sellPrices={sellPrices} weights={weights} journalBase={journalBase} fullJournalPrices={fullJournalPrices} settings={settings} ignoredTiers={ignoredJournalTiers} nameOf={nameOf} onRemove={(id) => setCart((c) => c.filter((o) => o.id !== id))} onClear={() => setCart([])} onShare={shareCart} shareState={shareState} premium={premium} useFocus={useFocus} setPremium={setPremium} setUseFocus={setUseFocus} batchQty={batchQty} setBatchQty={setBatchQty} stationFeePer100={stationFeePer100} setStationFeePer100={setStationFeePer100} onRefresh={fetchMarket} loadingPrices={loadingPrices} />
         </div>
       </div>
     </div>
@@ -1540,7 +1607,7 @@ function MarketPanel({
 /* ---------------- Cart ---------------- */
 
 function Cart({
-  cart, matPrices, sellPrices, weights, journalBase, fullJournalPrices, settings, ignoredTiers, nameOf, onRemove, onClear,
+  cart, matPrices, sellPrices, weights, journalBase, fullJournalPrices, settings, ignoredTiers, nameOf, onRemove, onClear, onShare, shareState,
   premium, useFocus, setPremium, setUseFocus, batchQty, setBatchQty, stationFeePer100, setStationFeePer100, onRefresh, loadingPrices,
 }: {
   cart: Order[];
@@ -1554,6 +1621,8 @@ function Cart({
   nameOf: (id: string) => string;
   onRemove: (id: string) => void;
   onClear: () => void;
+  onShare: () => void;
+  shareState: "idle" | "saving" | "copied" | "error";
   premium: boolean; useFocus: boolean; setPremium: (v: boolean) => void; setUseFocus: (v: boolean) => void;
   batchQty: number; setBatchQty: (v: number) => void;
   stationFeePer100: number; setStationFeePer100: (v: number) => void;
@@ -1630,7 +1699,21 @@ function Cart({
         </div>
         <div className="mt-2 flex items-center gap-2 border-t border-zinc-800 pt-2">
           <IconButton onClick={onRefresh} disabled={loadingPrices} title={t("updatePricesTitle")} spinning={loadingPrices}>⟳</IconButton>
-          <button onClick={onClear} className="ml-auto text-sm text-zinc-500 hover:text-red-400" title={t("clearAllBtn")}><i className="ti ti-trash" /></button>
+          <button
+            onClick={onShare}
+            disabled={!cart.length || shareState === "saving"}
+            title={shareState === "copied" ? t("shareCartCopied") : shareState === "error" ? t("shareCartError") : t("shareCartTitle")}
+            className="ml-auto text-sm disabled:opacity-40"
+          >
+            {shareState === "saving"
+              ? <i className="ti ti-loader-2 animate-spin text-zinc-400" />
+              : shareState === "copied"
+                ? <i className="ti ti-check" style={{ color: "var(--green)" }} />
+                : shareState === "error"
+                  ? <i className="ti ti-x" style={{ color: "var(--alert)" }} />
+                  : <i className="ti ti-share-3 text-zinc-500 hover:text-amber-400" />}
+          </button>
+          <button onClick={onClear} className="text-sm text-zinc-500 hover:text-red-400" title={t("clearAllBtn")}><i className="ti ti-trash" /></button>
         </div>
       </div>
 

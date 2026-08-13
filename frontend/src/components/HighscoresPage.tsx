@@ -411,16 +411,19 @@ const RankingRowView = memo(function RankingRowView({ rank, row, highlight, fall
   );
 });
 
-export default function HighscoresPage({ initialWindow = "alltime", initialKind, initialRegions, highlightPlayer, initialRank }: {
+export default function HighscoresPage({ initialWindow = "alltime", initialKind, initialRegions, highlightPlayer, initialRank, initialScope, initialSearch, initialPage }: {
   initialWindow?: RankingWindow;
   initialKind?: RankingKind;
   initialRegions?: string;
   highlightPlayer?: string;
   initialRank?: number;
+  initialScope?: "guild" | "player";
+  initialSearch?: string;
+  initialPage?: number;
 }) {
   const t = useT();
   const { servers } = useLang();
-  const [initial] = useState(() => ({ initialWindow, initialKind, initialRegions, highlightPlayer, initialRank }));
+  const [initial] = useState(() => ({ initialWindow, initialKind, initialRegions, highlightPlayer, initialRank, initialScope, initialSearch, initialPage }));
   const regions = useMemo(() => initial.initialRegions ?? servers.map(s => SERVER_TO_REGION[s]).join(","), [servers, initial]);
 
   const [weapons, setWeapons] = useState<WeaponDef[]>([]);
@@ -431,15 +434,19 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
 
   const [kind, setKind] = useState<RankingKind>(initial.initialKind ?? "pvp_fame");
   const [scopeView, setScopeView] = useState<"guild" | "player">(
-    GUILD_DEFAULT_KINDS.has(initial.initialKind ?? "pvp_fame") ? "guild" : "player",
+    initial.initialScope === "player" ? "player"
+    : initial.initialScope === "guild" ? "guild"
+    : (GUILD_DEFAULT_KINDS.has(initial.initialKind ?? "pvp_fame") ? "guild" : "player"),
   );
   const [window_, setWindow] = useState<RankingWindow>(
     ALLTIME_ONLY_KINDS.has(initial.initialKind ?? "pvp_fame") ? "alltime" : initial.initialWindow,
   );
   const [currentSeason, setCurrentSeason] = useState<number | null>(null);
   const [historicalSeasons, setHistoricalSeasons] = useState<number[]>([]);
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState<number>(initial.initialRank != null ? Math.floor((initial.initialRank - 1) / PAGE_SIZE) : 0);
+  const [search, setSearch] = useState(initial.initialSearch ?? "");
+  const [page, setPage] = useState<number>(
+    initial.initialRank != null ? Math.floor((initial.initialRank - 1) / PAGE_SIZE) : (initial.initialPage ?? 0),
+  );
   const [rows, setRows] = useState<RankingRow[] | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -488,6 +495,20 @@ export default function HighscoresPage({ initialWindow = "alltime", initialKind,
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [kind, window_, search, page, regions, apiScope]);
+
+  // Espelha filtros na URL (replaceState — não empilha histórico a cada troca).
+  // Defaults: kind=pvp_fame, window=alltime, scope=guild, page=0, search="" — só
+  // os que diferem entram na query, pra manter o link curto e shareable.
+  useEffect(() => {
+    const sp = new URLSearchParams();
+    sp.set("view", "highscores");
+    if (kind !== "pvp_fame") sp.set("kind", kind);
+    if (window_ !== "alltime") sp.set("window", window_);
+    if (scopeView !== "guild") sp.set("scope", scopeView);
+    if (page > 0) sp.set("page", String(page));
+    if (search) sp.set("search", search);
+    history.replaceState(history.state, "", `/?${sp.toString()}`);
+  }, [kind, window_, scopeView, page, search]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const pageNums = useMemo(() => {

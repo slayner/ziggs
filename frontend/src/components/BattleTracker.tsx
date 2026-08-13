@@ -126,7 +126,21 @@ interface Filters {
 
 const STAGGER_MS = 350;
 
-export default function BattleTracker() {
+export default function BattleTracker({
+  initialPage,
+  initialSearch,
+  initialMinPlayers,
+  initialMinKills,
+  initialDateFrom,
+  initialDateTo,
+}: {
+  initialPage?: number;
+  initialSearch?: string;
+  initialMinPlayers?: string;
+  initialMinKills?: string;
+  initialDateFrom?: string;
+  initialDateTo?: string;
+} = {}) {
   const t = useT();
   const { lang, servers } = useLang();
   const [battles, setBattles] = useState<Battle[] | null>(null);
@@ -135,12 +149,12 @@ export default function BattleTracker() {
   const [error, setError] = useState<string | null>(null);
 
   // filtros — sempre combinados (AND) na consulta, que só olha pra nossa base.
-  const [search, setSearch] = useState("");
-  const [minPlayers, setMinPlayers] = useState(DEFAULT_MIN_PLAYERS);
-  const [minKills, setMinKills] = useState(DEFAULT_MIN_KILLS);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState(initialSearch ?? "");
+  const [minPlayers, setMinPlayers] = useState(initialMinPlayers ?? DEFAULT_MIN_PLAYERS);
+  const [minKills, setMinKills] = useState(initialMinKills ?? DEFAULT_MIN_KILLS);
+  const [dateFrom, setDateFrom] = useState(initialDateFrom ?? "");
+  const [dateTo, setDateTo] = useState(initialDateTo ?? "");
+  const [page, setPage] = useState(initialPage ?? 0);
   const pageSize = PAGE_SIZE;
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filtersRef = useRef<Filters & { page: number }>({
@@ -259,6 +273,20 @@ export default function BattleTracker() {
 
     return () => { clearInterval(id); clearInterval(insertTimerRef.current!); };
   }, [servers]);
+
+  // Espelha filtros na URL (replaceState — não empilha histórico a cada troca).
+  // Só entram os que diferem do default, pra link ficar curto e shareable.
+  useEffect(() => {
+    const sp = new URLSearchParams();
+    sp.set("view", "battles");
+    if (page > 0) sp.set("page", String(page));
+    if (search) sp.set("search", search);
+    if (minPlayers !== DEFAULT_MIN_PLAYERS) sp.set("min_players", minPlayers);
+    if (minKills !== DEFAULT_MIN_KILLS) sp.set("min_kills", minKills);
+    if (dateFrom) sp.set("date_from", dateFrom);
+    if (dateTo) sp.set("date_to", dateTo);
+    history.replaceState(history.state, "", `/?${sp.toString()}`);
+  }, [page, search, minPlayers, minKills, dateFrom, dateTo]);
 
   // qualquer filtro muda -> debounce curto, volta pra página 1 e recarrega.
   function debouncedReload() {

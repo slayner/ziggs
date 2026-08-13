@@ -224,6 +224,36 @@ export default function App() {
   // não ficar presa na barra de endereço.
   const hsDeep = loc.split("?")[0] === "/highscores";
 
+  // ?view=highscores|battles|craft&... — deep links shareable dos filtros.
+  // Parseados aqui (durante o render, não em efeito) pra chegarem frescos nos
+  // componentes no render em que eles montam (evita lag de 1 render que um
+  // useEffect introducing setView+params causaria). O próprio componente
+  // reescreve a URL via replaceState quando o filtro muda — replaceState não
+  // dispara popstate, então `loc` (e estes params) só mudam em navegação real.
+  const _sp = new URLSearchParams(loc.split("?")[1] ?? "");
+  const _urlView = _sp.get("view");
+  // Narrowing explícito (sempre "guild"|"player"|undefined) — sem isso, o
+  // literal do objeto alarga pra string e quebra o prop tipado do componente.
+  const _scopeRaw = _sp.get("scope");
+  const hsScopeParam: "guild" | "player" | undefined =
+    _scopeRaw === "player" ? "player" : _scopeRaw === "guild" ? "guild" : undefined;
+  const hsUrlParams = _urlView === "highscores" ? {
+    kind: _sp.get("kind") ?? undefined,
+    window: _sp.get("window") ?? undefined,
+    scope: hsScopeParam,
+    page: _sp.get("page") ? Number(_sp.get("page")) : undefined,
+    search: _sp.get("search") ?? undefined,
+  } : undefined;
+  const battlesUrlParams = _urlView === "battles" ? {
+    page: _sp.get("page") ? Number(_sp.get("page")) : undefined,
+    search: _sp.get("search") ?? undefined,
+    minPlayers: _sp.get("min_players") ?? undefined,
+    minKills: _sp.get("min_kills") ?? undefined,
+    dateFrom: _sp.get("date_from") ?? undefined,
+    dateTo: _sp.get("date_to") ?? undefined,
+  } : undefined;
+  const craftCartCode = _urlView === "craft" ? (_sp.get("cart") ?? undefined) : undefined;
+
   useEffect(() => {
     const query = loc.split("?")[1];
     if (loc.split("?")[0] !== "/" || !query) return;
@@ -231,7 +261,14 @@ export default function App() {
     if (returnView === "management" || returnView === "config") {
       setView(returnView);
       navigateReplace("/");
+      return;
     }
+    // Views públicas com estado na URL: só setam a view (NÃO limpam a URL — o
+    // próprio componente gerencia os query params via replaceState). Os params
+    // já foram parseados durante o render (hsUrlParams/battlesUrlParams/...).
+    if (returnView === "highscores") setView("highscores");
+    else if (returnView === "battles") setView("battles");
+    else if (returnView === "craft") setView("craft");
   }, [loc]);
 
   useEffect(() => {
@@ -650,15 +687,25 @@ export default function App() {
       />
     );
   }
-  else if (view === "battles") { content = <BattleTracker />; }
+  else if (view === "battles") { content = <BattleTracker
+    initialPage={battlesUrlParams?.page}
+    initialSearch={battlesUrlParams?.search}
+    initialMinPlayers={battlesUrlParams?.minPlayers}
+    initialMinKills={battlesUrlParams?.minKills}
+    initialDateFrom={battlesUrlParams?.dateFrom}
+    initialDateTo={battlesUrlParams?.dateTo}
+  />; }
   else if (view === "highscores") { content = <HighscoresPage
-    initialWindow={highscoresInitialWindow}
-    initialKind={hsParams?.kind as never}
+    initialWindow={(hsUrlParams?.window ?? highscoresInitialWindow) as never}
+    initialKind={(hsParams?.kind ?? hsUrlParams?.kind) as never}
+    initialScope={hsUrlParams?.scope}
     highlightPlayer={hsParams?.player}
     initialRank={hsParams?.rank}
     initialRegions={hsParams?.regions || undefined}
+    initialSearch={hsUrlParams?.search}
+    initialPage={hsUrlParams?.page}
   />; }
-  else if (view === "craft")     { content = <CraftCalculator />; }
+  else if (view === "craft")     { content = <CraftCalculator initialCartCode={craftCartCode} />; }
   else if (view === "management") { content = <ManagementPage guildId={me!.guild_id!} perms={perms} />; }
   else                           { content = <GuildConfig guildId={me!.guild_id!} onSwitch={() => setPickingGuild(true)} />; }
 
