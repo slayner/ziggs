@@ -397,7 +397,7 @@ export default function App() {
       };
       label = map[view] ?? "";
     }
-    document.title = label ? `${label} · Ziggs` : "Ziggs — Controle de guildas de Albion";
+    document.title = label ? `${label} · Ziggs` : "Ziggs";
   }, [view, companionActive, battleRoute, playerRoute, guildRoute, t]);
 
   // Banner "backend fora do ar": api.ts marca down em falha de rede; aqui

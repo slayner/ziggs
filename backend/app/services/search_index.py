@@ -25,7 +25,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.db import SyncSessionLocal
+from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import Battle, BattleGuild, BattleParticipant
 from app.models.players import AlbionPlayer, SearchEntry
 from app.services.search_norm import normalize
@@ -100,14 +100,17 @@ def safe_upsert_entry(db: Session, **kwargs) -> None:
 
 
 async def safe_upsert_entry_async(db: AsyncSession, **kwargs) -> None:
-    """Versão ASYNC — pra callers com AsyncSession (player_tracker migrado,
-    profiles async). Nunca propaga."""
+    """Versão ASYNC — usa sessão PRÓPRIA pra isolar deadlock do search_entries
+    da transação do caller (batalha/kill). Um deadlock no índice aborta só
+    esta mini-transação, não a ingestão inteira. Nunca propaga."""
     if _rebuilding.is_set():
         return
     try:
-        result = upsert_entry(db, **kwargs)
-        if asyncio.iscoroutine(result):
-            await result
+        async with AsyncSessionLocal() as idx_db:
+            result = upsert_entry(idx_db, **kwargs)
+            if asyncio.iscoroutine(result):
+                await result
+            await idx_db.commit()
     except Exception as e:
         _handle_upsert_error(e, kwargs.get("entity_id"))
 

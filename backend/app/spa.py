@@ -40,12 +40,12 @@ async def _og_for_path(path: str) -> tuple[str, str, str | None]:
         from urllib.parse import unquote
         name = unquote(m.group(2))
         return (f"{name} · Albion {_REGION_NAME[m.group(1)]}",
-                "Perfil de jogador — batalhas, K/D e armas no Ziggs.", None)
+                "", None)
 
     m = _EVENT_RE.match(path)
     if m:
         return (f"Evento #{m.group(2)} — Escalação",
-                "Escalação e inscrições do evento no Ziggs.", None)
+                "", None)
 
     if _BATTLE_IDS_RE.match(path) or path == "multi":
         return ("Batalha", "", None)
@@ -55,7 +55,7 @@ async def _og_for_path(path: str) -> tuple[str, str, str | None]:
         return (title, "", image)
 
     if path.startswith(("guild/", "alliance/")):
-        return ("Perfil de guilda — Ziggs", "Batalhas e jogadores da guilda no Albion Online.", None)
+        return ("Perfil de guilda — Ziggs", "", None)
 
     return ("", "", None)  # rota sem OG específico → index como está
 
