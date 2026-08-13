@@ -723,14 +723,22 @@ def _synthetic_raw(player: AlbionPlayer) -> dict:
     PlayerProfilePage.tsx): Id/Name/Guild*/Alliance*/Avatar/*Fame e o
     LifetimeStatistics. Com lifetime_statistics preenchido (perfil/feed), o
     blob cru volta inteiro — inclui coleta por recurso (Wood/Ore/...), que os
-    escalares não guardam. Sem o blob, reconstrói o mínimo a partir dos
-    escalares (coleta por recurso só aparece depois de um refresh ao vivo)."""
+    escalares não guardam. Sem o blob, reconstrói a partir dos escalares,
+    INCLUINDO coleta por recurso e FishingFame (antes eram perdidos)."""
     lifetime = player.lifetime_statistics
     if not lifetime:
         lifetime = {
             "PvE": {"Total": player.pve_fame},
             "Crafting": {"Total": player.crafting_fame},
-            "Gathering": {"All": {"Total": player.gathering_fame}},
+            "Gathering": {
+                "All": {"Total": player.gathering_fame},
+                "Wood": {"Total": player.gather_wood},
+                "Hide": {"Total": player.gather_hide},
+                "Ore": {"Total": player.gather_ore},
+                "Rock": {"Total": player.gather_rock},
+                "Fiber": {"Total": player.gather_fiber},
+            },
+            "FishingFame": player.fishing_fame,
         }
     return {
         "Id": player.albion_id, "Name": player.name,

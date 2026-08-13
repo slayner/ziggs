@@ -124,15 +124,25 @@ async def upsert_player(db: AsyncSession, data: dict, region: str, *, commit: bo
         await db.flush()
     else:
         player.name = name
-        player.guild_id = guild_id
-        player.guild_name = guild_name
-        player.alliance_id = alliance_id
-        player.alliance_name = alliance_name
-        player.alliance_tag = alliance_tag
+        # Guilda/aliança do snapshot do evento/search pode ser ANTIGA (o
+        # jogador trocou de guilda depois). Só sobrescreve se veio de um
+        # payload COM LifetimeStatistics (perfil completo, estado atual) —
+        # evento do feed global traz a guilda de quando a luta aconteceu.
+        if has_lifetime:
+            player.guild_id = guild_id
+            player.guild_name = guild_name
+            player.alliance_id = alliance_id
+            player.alliance_name = alliance_name
+            player.alliance_tag = alliance_tag
         if avatar:
             player.avatar = avatar
-        player.kill_fame = kill_fame
-        player.death_fame = death_fame
+        # kill_fame/death_fame: só sobrescreve se veio do perfil completo
+        # (has_lifetime). O feed global/search traz valores do snapshot do
+        # evento, que podem ser MENORES que os atuais (o evento aconteceu no
+        # passado) — sobrescrever faz a fama regredir.
+        if has_lifetime:
+            player.kill_fame = kill_fame
+            player.death_fame = death_fame
         if has_lifetime:
             player.lifetime_statistics = lifetime
             player.pve_fame = pve_fame
