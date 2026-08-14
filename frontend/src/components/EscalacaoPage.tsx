@@ -260,11 +260,10 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
   // ── Colapso responsivo por cobertura (painel overlay) ────────────────────────
   // Dois modos conforme a página cabe ou não:
   //  • WIDE  (cabe): [planilha | painel] em fluxo, centrado, painel colado à direita
-  //    de price — gap 0, sem cobertura, sem colapso.
-  //  • NARROW (não cabe): painel vira overlay cobrindo da direita. Uma coluna só
-  //    colapsa quando está 100% coberta (left da coluna >= left do painel). build é
-  //    a parede: o painel nunca passa da direita de build (clamp). Se mesmo assim
-  //    não couber, a página rola horizontal (overflow-x: auto) — build nunca some.
+  //    de price — gap 0, sem cobertura, sem colapso. Painel é position: sticky.
+  //  • NARROW (não cabe): painel vira position: fixed cobrindo da direita. Uma
+  //    coluna só colapsa quando está 100% coberta (left da coluna >= left do painel).
+  //    build é a parede: o painel nunca passa da direita de build (clamp).
   // Hooks antes dos early-returns (Rules of Hooks).
   const tableRef = useRef<HTMLTableElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -273,8 +272,8 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
   useEffect(() => {
     const tbl = tableRef.current;            // .comp-sheet
     const wrap = tbl?.parentElement;          // .sheet-wrap
-    const left = wrap?.parentElement;         // .comp-left
-    const row = left?.parentElement;          // .esc-layout
+    const leftCol = wrap?.parentElement;      // .comp-left
+    const row = leftCol?.parentElement;       // .esc-layout
     const panel = panelRef.current;           // .comp-right
     if (!tbl || !row || !panel) return;
     let raf = 0;
@@ -282,7 +281,6 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     const recompute = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
-        const rowRect = row.getBoundingClientRect();
         const avail = row.clientWidth;
         const fits = tbl.offsetWidth + PANEL_W <= avail + 1;
         row.classList.toggle("esc-narrow", !fits);
@@ -290,11 +288,12 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
         if (fits) {
           panel.style.left = ""; panel.style.right = "";     // WIDE: flex posiciona
         } else {
+          // NARROW: painel é position: fixed (viewport-relative).
           const ths = tbl.tHead?.rows[0]?.cells;
           const buildRight = ths && ths[TH_INDEX.build]
-            ? ths[TH_INDEX.build].getBoundingClientRect().right - rowRect.left : 0;
+            ? ths[TH_INDEX.build].getBoundingClientRect().right : 0;
           // Parede: painel nunca passa da direita de build.
-          const panelLeft = Math.max(avail - PANEL_W, buildRight);
+          const panelLeft = Math.max(window.innerWidth - PANEL_W, buildRight);
           panel.style.left = panelLeft + "px"; panel.style.right = "auto";
         }
         setHidden(prev => {
@@ -311,16 +310,16 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
             }
             return prev;
           }
-          // NARROW: colapso por 100% de cobertura.
+          // NARROW: colapso por 100% de cobertura (coordenadas viewport).
           const ths = tbl.tHead?.rows[0]?.cells;
           if (!ths) return prev;
           const colLeft = (key: string) => {
             const th = ths[TH_INDEX[key]];
-            return th ? th.getBoundingClientRect().left - rowRect.left : Infinity;
+            return th ? th.getBoundingClientRect().left : Infinity;
           };
           const buildRight = ths[TH_INDEX.build]
-            ? ths[TH_INDEX.build].getBoundingClientRect().right - rowRect.left : 0;
-          const panelLeft = Math.max(avail - PANEL_W, buildRight);
+            ? ths[TH_INDEX.build].getBoundingClientRect().right : 0;
+          const panelLeft = Math.max(window.innerWidth - PANEL_W, buildRight);
           // Colapso: primeira coluna (da direita) ainda visível e 100% coberta.
           for (const k of COLLAPSE_ORDER) {
             if (prev.has(k)) continue;
@@ -816,7 +815,7 @@ function PartyRows({
   }
   return (
     <>
-      <tr><td colSpan={6} className="cs-ph"><div className="cs-ph-inner"><span className="cs-pname">{name}</span></div></td></tr>
+      <tr className="cs-party-header"><td colSpan={6} className="cs-ph"><div className="cs-ph-inner"><span className="cs-pname">{name}</span></div></td></tr>
       {rows}
     </>
   );

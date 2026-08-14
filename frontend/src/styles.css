@@ -117,10 +117,27 @@ a { color: var(--info); text-decoration: none; }
 }
 .comp-name-input:focus { outline: none; background: var(--surface-2); }
 
-.sheet-wrap { overflow: visible; margin: 0; }
+.sheet-wrap { overflow-x: auto; margin: 0; }
 .comp-sheet {
-  border-collapse: collapse; font-size: 13px; width: auto;
+  border-collapse: separate; border-spacing: 0; font-size: 13px; width: auto;
 }
+.comp-sheet th, .comp-sheet td { border-width: 0; }
+.comp-sheet thead th + th { border-left: 1px solid var(--border); }
+.comp-sheet tbody td + td { border-left: 1px solid var(--border); }
+.comp-sheet tbody tr td:first-child, .comp-sheet thead tr th:first-child { border-left: 1px solid var(--border); }
+.comp-sheet tbody tr { border-top: 1px solid var(--border); }
+.comp-sheet tbody td { border-top: 1px solid var(--border); }
+.comp-sheet thead th { border-top: 1px solid var(--border); }
+/* Sticky header da planilha: cola no topo ao rolar. Party header cola
+   abaixo do header. background cobre o conteúdo que passa por trás. */
+.comp-sheet thead th {
+  position: sticky; top: 0; z-index: 3; background: var(--surface-2);
+  padding: 5px 8px; white-space: nowrap; text-align: left;
+}
+.comp-sheet .cs-party-header {
+  position: sticky; top: 28px; z-index: 2;
+}
+.comp-sheet .cs-party-header td { background: var(--surface-2); }
 /* Colapso responsivo: hide-style(5) / hide-obs(6) / hide-price(7) escondem a
    col + o th/td daquela posição. Linhas colSpan=7 (cabeçalho de party e detalhe
    do meu slot) são nth-child(1), então não são afetadas. */
@@ -412,7 +429,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    sem afetar o CompBuilder (que reusa .comp-layout com align-items flex-start).
    O painel imita a planilha: bordas retas (sem radius), cabeçalhos com
    --surface-2, linhas com borda inferior — pra se enturmar com a tabela. */
-.esc-layout { align-items: stretch; justify-content: center; gap: 0; position: relative; overflow-x: auto; }
+.esc-layout { align-items: stretch; justify-content: center; gap: 0; position: relative; overflow-x: clip; }
 /* WIDE: [planilha | painel] em fluxo, centrado, painel colado à direita de price
    (gap 0, sem cobertura). */
 .esc-layout .comp-left { flex: 0 0 auto; min-width: 0; }
@@ -421,15 +438,17 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   box-shadow: -8px 0 16px -8px rgba(0,0,0,.55);
   position: sticky; top: 0; align-self: flex-start;
   max-height: 100vh; overflow: hidden;
+  z-index: 10;
 }
 /* NARROW: o bloco não cabe → o painel vira overlay cobrindo as colunas da
    direita. A planilha fica alinhada à esquerda (role/player/build visíveis); o
    painel é posicionado via JS (left) e nunca passa da direita de build (parede).
-   Se ainda assim não couber, .esc-layout rola horizontal — build nunca é escondida. */
+   Se ainda assim não couber, .sheet-wrap rola horizontal — build nunca é escondida. */
 .esc-layout.esc-narrow .comp-left { flex: 1 1 auto; }
 .esc-layout.esc-narrow .comp-right {
-  position: absolute; top: 0; bottom: 0; width: 320px;
-  max-height: none; align-self: stretch;
+  position: fixed; top: 0; bottom: auto; width: 320px;
+  max-height: 100vh; align-self: flex-start; overflow: hidden;
+  z-index: 10;
 }
 .esc-panel {
   display: flex; flex-direction: column; width: 100%; height: 100%;
