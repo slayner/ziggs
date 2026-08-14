@@ -307,6 +307,7 @@ async def main() -> None:
         await bot.load_extension("cogs.profile_moderation")
         await bot.load_extension("cogs.scan_dashboard")
         await bot.load_extension("cogs.members")
+        await bot.load_extension("cogs.forfeit")
         try:
             await bot.start(TOKEN)
         finally:

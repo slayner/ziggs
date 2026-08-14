@@ -1979,6 +1979,48 @@ def bot_guild_bank_balance(
     return {"balance": g.bank_balance if g else 0, "region": region}
 
 
+# ── Bot: confisc de saldo de membros que saíram (grace 7 dias) ───────────────
+
+@router.post("/bot/economy/member-left/{guild_id}/{discord_user_id}")
+def bot_economy_member_left(
+    guild_id: int, discord_user_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Chamado pelo bot em on_member_remove: marca left_at no GuildMember."""
+    _require_bot_secret(authorization)
+    economy_svc.set_member_left(db, guild_id, discord_user_id)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/bot/economy/member-returned/{guild_id}/{discord_user_id}")
+def bot_economy_member_returned(
+    guild_id: int, discord_user_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Chamado pelo bot em on_member_join: limpa left_at (membro voltou)."""
+    _require_bot_secret(authorization)
+    economy_svc.clear_member_left(db, guild_id, discord_user_id)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/bot/economy/forfeit-due/{guild_id}")
+def bot_economy_forfeit_due(
+    guild_id: int,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Loop do bot chama isto periodicamente: confisca saldos de membros que
+    saíram há mais de 7 dias. Devolve a lista de confiscos pro bot logar."""
+    _require_bot_secret(authorization)
+    result = economy_svc.forfeit_due(db, guild_id)
+    db.commit()
+    return {"forfeited": result}
+
+
 # ── Bot: eventos (mass-info + inscrições) ───────────────────────────────────────
 # Fonte da verdade do gate/inscrições é o site — o bot só chama estas rotas e
 # renderiza; nunca reimplementa a cascata de parties/cargos (ver

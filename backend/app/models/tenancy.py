@@ -121,6 +121,11 @@ class GuildMember(Base, TimestampMixin):
     # True se o membro tem MANAGE_GUILD no servidor (admin/owner) → acesso total
     is_guild_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Quando o membro saiu do Discord (on_member_remove). NULL = ainda está no
+    # servidor. Após 7 dias, o loop de confisc transfere o saldo pro banco da
+    # guilda e limpa este campo.
+    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 
 class GuildAlbionLink(Base, TimestampMixin):
     """Vínculo adicional entre um servidor Discord e uma guilda de Albion.
