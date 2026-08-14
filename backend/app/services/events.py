@@ -6,6 +6,7 @@ audit). Carimba started_at/callout_at/ended_at conforme entra em cada fase.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import func, or_, select
@@ -43,6 +44,8 @@ from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildMember
 from app.services import economy as economy_svc
 from app.services import lootlog
+
+log = logging.getLogger(__name__)
 
 
 class ServiceError(Exception):
@@ -1338,11 +1341,19 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
     """
     payout = _calc_payout(ev, db)
     payout_map = {r.user_id: r for r in payout.payouts}
+    paid = 0
+    skipped = []
     for p in ev.participants:
         row = payout_map.get(p.user_id)
+        valid = _participant_valid(ev, p)
+        if not valid:
+            reason = "is_valid=false (override)" if p.is_valid is False else "sem signup"
+            skipped.append(f"{p.user_name or p.user_id} ({p.percent}% — {reason})")
+            continue
         if row:
             p.silver_received = row.total
             if row.total > 0:
+                paid += 1
                 bal = economy_svc.get_or_create_balance(db, ev.guild_id, p.user_id)
                 bal.balance += row.total
                 bal.total_earned += row.total
@@ -1352,6 +1363,14 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
                     from_user_id=None, to_user_id=p.user_id, total_earned_user_id=p.user_id,
                     amount=row.total,
                 ))
+
+    log.info(
+        "payout evento %d/%d: tab=%d tax=%d modo=%s — %d pago(s), %d excluido(s), total=%d%s",
+        ev.id, ev.guild_id, ev.tab_value, payout.guild_tax,
+        payout.lootsplit_mode,
+        paid, len(skipped), payout.total_lootsplit,
+        f" | excluidos: {'; '.join(skipped)}" if skipped else "",
+    )
 
     if payout.total_regear > 0 and payout.lootsplit_mode not in ("leftover", "guild_backed"):
         guild = db.get(Guild, ev.guild_id)
