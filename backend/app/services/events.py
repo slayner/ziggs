@@ -524,10 +524,28 @@ def _detail(ev: Event, db: Session) -> EventDetail:
             GuildMember.user_id.in_(part_user_ids),
         )
     )) if part_user_ids else set()
+    # VOICE_PERCENT em IN_PROGRESS: percent/base_percent ainda não foram
+    # congelados (só rodam no callout IN_PROGRESS→REVIEW). Calcula ao vivo
+    # pra UI não mostrar 0% pra quem tá na call agora.
+    live_voice = (
+        ev.state is EventState.IN_PROGRESS
+        and ev.participation_mode is ParticipationMode.VOICE_PERCENT
+        and ev.total_snapshots > 0
+    )
+    trial_pct = _trial_percent_for(db, ev) if live_voice else 0
     participants = [
         ParticipantOut(
             id=p.id, user_id=p.user_id, user_name=p.user_name,
-            percent=p.percent, base_percent=p.base_percent,
+            percent=(
+                round(p.snapshots_present * 100 / ev.total_snapshots * (1 - trial_pct / 100))
+                if (live_voice and p.is_trial) else
+                (round(p.snapshots_present * 100 / ev.total_snapshots)
+                if live_voice else p.percent)
+            ),
+            base_percent=(
+                max(0, min(100, round(p.snapshots_present * 100 / ev.total_snapshots)))
+                if live_voice else p.base_percent
+            ),
             is_trial=p.is_trial, silver_received=p.silver_received,
             snapshots_present=p.snapshots_present,
             game_role_id=p.game_role_id,
