@@ -37,6 +37,20 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 
+@bot.event
+async def setup_hook() -> None:
+    """Roda ANTES do on_ready — garantido pelo discord.py 2.x. O on_ready
+    pode demorar minutos (rate-limit de IDENTIFY do Discord após muitos
+    restarts) ou nunca disparar em resume de sessão. O tree.sync() aqui
+    garante que comandos novos apareçam no Discord o mais cedo possível."""
+    try:
+        await bot.tree.set_translator(ZiggsTranslator())
+        synced = await bot.tree.sync()
+        print(f"✓ {len(synced)} comando(s) sincronizado(s) [setup_hook]", flush=True)
+    except Exception as e:
+        print(f"✗ sync: {e}", flush=True)
+
+
 async def _post(path: str, body: dict | None = None) -> dict | None:
     """Confirma escritas de outbox; se o backend cair, a fila tenta novamente."""
     return await http_client.post_json(
@@ -172,12 +186,12 @@ async def _wait_for_backend() -> None:
 
 @bot.event
 async def on_ready() -> None:
-    print(f"✓ {bot.user} — {len(bot.guilds)} servidor(es)")
+    print(f"✓ {bot.user} — {len(bot.guilds)} servidor(es)", flush=True)
     # Confirma config essencial no console — sem isto, um BOT_SITE_URL/SECRET
     # vazio faz todo _get/_post virar no-op silencioso (nenhum erro, nenhuma
     # thread, nenhum snapshot) e não há como saber olhando só pro Discord.
     print(f"  BOT_SITE_URL={SITE_URL or '(vazio!)'} "
-          f"BOT_API_SECRET={'definido' if API_SECRET else '(vazio!)'}")
+          f"BOT_API_SECRET={'definido' if API_SECRET else '(vazio!)'}", flush=True)
     for guild in bot.guilds:
         await heartbeat(guild)
     if not heartbeat_loop.is_running():
@@ -271,12 +285,6 @@ async def on_ready() -> None:
                 await audit_cog.sync_guild(guild)
             except Exception:
                 pass
-    try:
-        await bot.tree.set_translator(ZiggsTranslator())
-        synced = await bot.tree.sync()
-        print(f"✓ {len(synced)} comando(s) sincronizado(s)")
-    except Exception as e:
-        print(f"✗ sync: {e}")
 
 
 @bot.event
