@@ -664,6 +664,36 @@ class EventCmd(commands.Cog):
         await interaction.response.send_message(
             t(lang, "ev_pick_event"), view=EventSelectView(lang, events, on_event), ephemeral=True)
 
+    # ── finalizar ───────────────────────────────────────────────────────────────
+
+    @group.command(name="finalize",
+                   description=loc("Move an in-progress event to review", "cmd_desc_event_finalizar"))
+    async def finalizar(self, interaction: Interaction) -> None:
+        if not await check_command_access(interaction, "event"):
+            return
+        lang, events = await self._manageable(interaction)
+        in_progress = [e for e in events if e.get("state") == "in_progress"]
+        if not in_progress:
+            await interaction.response.send_message(t(lang, "ev_no_in_progress"), ephemeral=True)
+            return
+
+        async def on_event(inter, ev):
+            await _defer(inter)
+            res = await _post(f"/bot/events/{inter.guild_id}/{ev['id']}/transition", {
+                "to": "review", "actor_id": inter.user.id, "actor_name": inter.user.display_name,
+            })
+            if res is None:
+                await inter.followup.send(t(lang, "ev_update_fail"), ephemeral=True)
+                return
+            await inter.followup.send(
+                t(lang, "ev_finalize_done", ev=_event_label(ev, lang)), ephemeral=True)
+
+        await interaction.response.send_message(
+            t(lang, "ev_pick_event"),
+            view=EventSelectView(lang, in_progress, on_event, show_cancel=False),
+            ephemeral=True,
+        )
+
     # Nomes dos subcomandos localizados por locale do cliente Discord (o nome
     # canonico é inglês; pt/es via name_localizations — o Translator não cobre
     # nomes, só descrições/options). Setado no corpo da classe pq Group.command
@@ -672,6 +702,7 @@ class EventCmd(commands.Cog):
     deletar.name_localizations = name_locs("deletar", "delete", "eliminar")
     editar.name_localizations = name_locs("editar", "edit", "editar")
     adiar.name_localizations = name_locs("adiar", "reschedule", "aplazar")
+    finalizar.name_localizations = name_locs("finalizar", "finalize", "finalizar")
 
 
 async def setup(bot: commands.Bot) -> None:

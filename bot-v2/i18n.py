@@ -961,6 +961,21 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "en": "Reschedule an event (new UTC time)",
         "es": "Aplaza un evento (nueva hora UTC)",
     },
+    "cmd_desc_event_finalizar": {
+        "pt": "Finaliza um evento em andamento (passa para revisão)",
+        "en": "Finalize an in-progress event (moves to review)",
+        "es": "Finaliza un evento en curso (pasa a revisión)",
+    },
+    "ev_no_in_progress": {
+        "pt": "Nenhum evento em andamento.",
+        "en": "No in-progress events.",
+        "es": "Ningún evento en curso.",
+    },
+    "ev_finalize_done": {
+        "pt": "✅ Evento **{ev}** finalizado — movido para revisão.",
+        "en": "✅ Event **{ev}** finalized — moved to review.",
+        "es": "✅ Evento **{ev}** finalizado — movido a revisión.",
+    },
     "opt_name_event_objetivo": {"pt": "objetivo", "en": "objective", "es": "objetivo"},
     "opt_desc_event_objetivo": {
         "pt": "Objetivo do evento (o nome/título dele)",
