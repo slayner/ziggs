@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import urllib.parse
 from typing import Optional
 
@@ -17,7 +18,7 @@ from discord import app_commands, Interaction
 from discord.ext import commands
 
 import http_client
-from cogs.general import check_command_access, guild_lang, resolve_user_or_guild
+from cogs.general import check_command_access, guild_lang
 from i18n import t
 from localization import loc
 
@@ -34,6 +35,12 @@ _UA = (
 )
 _API_TIMEOUT = 10
 _API_RETRIES = 3
+
+# Retry da API do Albion no /profile: mesma filosofia do /register — em vez
+# de devolver erro e obrigar o usuário a rodar de novo, re-tenta com feedback
+# ao vivo. Teto de 5 min como pedido pelo dono.
+_PROFILE_RETRY_INTERVAL = 15
+_PROFILE_RETRY_CAP = 5 * 60
 
 
 def _num(v) -> str:
@@ -73,12 +80,148 @@ async def _warm_profile(guild_id: int, name: str, region: str) -> None:
     )
 
 
+async def _resolve_name_and_region(interaction: Interaction, raw: str, guild_id: int) -> tuple[str | None, str, str | None]:
+    """Devolve (name, region, error_key). error_key não-None = o que mostrar
+    pro usuário; name None significa que não dá pra buscar."""
+    lang = await guild_lang(interaction)
+    if not raw:
+        # Sem nick: busca o nick registrado + região no backend
+        await interaction.response.defer()
+        data = await http_client.get_json(
+            f"/bot/guilds/{guild_id}/attendance/{interaction.user.id}",
+            timeout=10, tag="profile",
+        )
+        if data is None:
+            return None, "americas", "retry_later"
+        name = (data.get("albion_player_name") or "").strip()
+        region = data.get("region") or "americas"
+        if not name:
+            return None, region, "profile_usage"
+        return name, region, None
+    elif raw.startswith("<@") or raw.isdigit():
+        # Menção/ID: busca o nick registrado dessa pessoa
+        await interaction.response.defer()
+        target_id = int(raw.strip("<@!>")) if raw.startswith("<@") else int(raw)
+        data = await http_client.get_json(
+            f"/bot/guilds/{guild_id}/attendance/{target_id}",
+            timeout=10, tag="profile",
+        )
+        if data is None:
+            return None, "americas", "retry_later"
+        name = (data.get("albion_player_name") or "").strip()
+        region = data.get("region") or "americas"
+        if not name:
+            return None, region, "profile_not_registered"
+        return name, region, None
+    else:
+        name = raw
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        region = await _get_guild_region(guild_id)
+        return name, region, None
+
+
+async def _fetch_profile(name: str, host: str) -> tuple[dict | None, bool]:
+    """Busca o perfil completo na API do Albion. Devolve (detail, api_ok).
+    api_ok=False = a API não respondeu/erro → merece retry. api_ok=True com
+    detail=None = a API respondeu mas o jogador não existe → não re-tentar."""
+    q = urllib.parse.quote(name)
+    search_data = await _fetch_albion(f"https://{host}/api/gameinfo/search?q={q}")
+    if not isinstance(search_data, dict):
+        return None, False
+    players = search_data.get("players") or []
+    nl = name.lower()
+    exact = [p for p in players if (p.get("Name") or "").lower() == nl]
+    cand = exact or players
+    if not cand:
+        return None, True
+    # Múltiplos com o mesmo nome exato: pega o de maior KillFame.
+    if len(exact) > 1:
+        cand = sorted(exact, key=lambda p: p.get("KillFame") or 0, reverse=True)
+    summary = cand[0]
+    player_id = summary.get("Id")
+    detail = await _fetch_albion(f"https://{host}/api/gameinfo/players/{player_id}")
+    if not isinstance(detail, dict):
+        detail = summary
+    return detail, True
+
+
+async def _search_region(name: str, region: str) -> tuple[str, dict | None, bool]:
+    """Busca o player numa região. Devolve (region, summary, api_ok).
+    summary=None+api_ok=True = não existe nessa região."""
+    host = _HOSTS[region]
+    q = urllib.parse.quote(name)
+    search_data = await _fetch_albion(f"https://{host}/api/gameinfo/search?q={q}")
+    if not isinstance(search_data, dict):
+        return region, None, False
+    players = search_data.get("players") or []
+    nl = name.lower()
+    exact = [p for p in players if (p.get("Name") or "").lower() == nl]
+    cand = exact or players
+    if not cand:
+        return region, None, True
+    if len(exact) > 1:
+        cand = sorted(exact, key=lambda p: p.get("KillFame") or 0, reverse=True)
+    return region, cand[0], True
+
+
+async def _search_all_regions(name: str) -> list[tuple[str, dict, bool]]:
+    """Busca o nick nas 3 regiões em paralelo. Devolve lista de
+    (region, summary, api_ok) — só as regiões onde api_ok=True E summary
+    não-None (player existe). Regiões com erro de API são excluídas."""
+    regions = list(_HOSTS.keys())
+    results = await asyncio.gather(*(_search_region(name, r) for r in regions))
+    return [(r, s, ok) for r, s, ok in results if ok and s is not None]
+
+
+_REGION_LABELS = {
+    "americas": "Americas",
+    "europe": "Europe",
+    "asia": "Asia",
+}
+
+
+class _RegionSelectView(discord.ui.View):
+    """Botões pra escolher a região quando o nick existe em mais de uma.
+    Timeout de 10s → escolhe automaticamente o de maior KillFame."""
+
+    def __init__(self, candidates: list[tuple[str, dict]], lang: str, on_select):
+        super().__init__(timeout=10)
+        self._candidates = candidates
+        self._lang = lang
+        self._on_select = on_select
+        self._resolved = False
+        for region, summary in candidates:
+            kf = summary.get("KillFame") or 0
+            label = f"{_REGION_LABELS.get(region, region)} · {kf:,} fame"
+            btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
+            btn.callback = self._make_callback(region)
+            self.add_item(btn)
+
+    def _make_callback(self, region: str):
+        async def callback(interaction: Interaction) -> None:
+            if self._resolved:
+                return
+            self._resolved = True
+            self.stop()
+            await self._on_select(interaction, region)
+        return callback
+
+    async def on_timeout(self) -> None:
+        if self._resolved:
+            return
+        self._resolved = True
+        # Pick most recent events = highest KillFame (proxy for activity).
+        best = max(self._candidates, key=lambda c: c[1].get("KillFame") or 0)
+        await self._on_select(None, best[0])
+
+
 class Members(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     # ------------------------------------------------------------------
-    # /profile — busca Albion API + warm
+    # /profile — busca Albion API + warm, com retry
     # ------------------------------------------------------------------
     @app_commands.command(
         name="profile",
@@ -95,81 +238,89 @@ class Members(commands.Cog):
         guild_id = interaction.guild_id
 
         raw = (jogador or "").strip()
-        if not raw:
-            # Sem nick: busca o nick registrado + região no backend
-            await interaction.response.defer()
-            data = await http_client.get_json(
-                f"/bot/guilds/{guild_id}/attendance/{interaction.user.id}",
-                timeout=10, tag="profile",
-            )
-            if data is None:
-                await interaction.followup.send(t(lang, "retry_later"))
-                return
-            name = (data.get("albion_player_name") or "").strip()
-            region = data.get("region") or "americas"
-            if not name:
-                await interaction.followup.send(t(lang, "profile_usage"))
-                return
-        elif raw.startswith("<@") or raw.isdigit():
-            # Menção/ID: busca o nick registrado dessa pessoa
-            await interaction.response.defer()
-            target_id = int(raw.strip("<@!>")) if raw.startswith("<@") else int(raw)
-            data = await http_client.get_json(
-                f"/bot/guilds/{guild_id}/attendance/{target_id}",
-                timeout=10, tag="profile",
-            )
-            if data is None:
-                await interaction.followup.send(t(lang, "retry_later"))
-                return
-            name = (data.get("albion_player_name") or "").strip()
-            region = data.get("region") or "americas"
-            if not name:
-                await interaction.followup.send(t(lang, "profile_not_registered"))
-                return
-        else:
-            name = raw
-            if not interaction.response.is_done():
-                await interaction.response.defer()
-            region = await _get_guild_region(guild_id)
+        name, region, err_key = await _resolve_name_and_region(interaction, raw, guild_id)
+        if err_key:
+            await interaction.followup.send(t(lang, err_key))
+            return
 
+        # Nick digitado livremente (não de registro): pode existir em várias
+        # regiões. Busca nas 3 em paralelo e oferece botões se achar em >1.
+        region_known = bool(raw and not raw.startswith("<@") and not raw.isdigit())
+        if region_known:
+            candidates = await _search_all_regions(name)
+            if not candidates:
+                await interaction.edit_original_response(
+                    content=t(lang, "profile_not_found", name=name)
+                )
+                return
+            if len(candidates) == 1:
+                region = candidates[0][0]
+            else:
+                await self._show_region_buttons(interaction, name, candidates, lang, guild_id)
+                return
+
+        await self._fetch_and_show(interaction, name, region, lang, guild_id)
+
+    async def _show_region_buttons(
+        self, interaction: Interaction, name: str,
+        candidates: list[tuple[str, dict, bool]], lang: str, guild_id: int,
+    ) -> None:
+        """Mostra botões de região e processa a escolha (ou auto-após 10s)."""
+        cands = [(r, s) for r, s, _ in candidates]
+
+        async def on_select(btn_interaction: Interaction | None, chosen_region: str) -> None:
+            if btn_interaction is not None:
+                await btn_interaction.response.edit_message(
+                    content=t(lang, "processing"), view=None
+                )
+            else:
+                # Timeout — edita a mensagem original sem nova interação.
+                try:
+                    await interaction.edit_original_response(
+                        content=t(lang, "profile_region_auto", region=_REGION_LABELS.get(chosen_region, chosen_region)),
+                        view=None,
+                    )
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+            await self._fetch_and_show(interaction, name, chosen_region, lang, guild_id)
+
+        await interaction.edit_original_response(
+            content=t(lang, "profile_region_prompt", name=name),
+            view=_RegionSelectView(cands, lang, on_select),
+        )
+
+    async def _fetch_and_show(
+        self, interaction: Interaction, name: str, region: str, lang: str, guild_id: int,
+    ) -> None:
+        """Busca o perfil na API do Albion com retry, mostra o embed."""
         host = _HOSTS[region]
+        start = time.monotonic()
+        attempt = 0
+        detail, api_ok = await _fetch_profile(name, host)
+        while not api_ok and (time.monotonic() - start) < _PROFILE_RETRY_CAP:
+            attempt += 1
+            await interaction.edit_original_response(
+                content=t(lang, "profile_retrying", attempt=attempt)
+            )
+            await asyncio.sleep(_PROFILE_RETRY_INTERVAL)
+            detail, api_ok = await _fetch_profile(name, host)
 
-        # Busca na API do Albion
-        q = urllib.parse.quote(name)
-        search_data = await _fetch_albion(f"https://{host}/api/gameinfo/search?q={q}")
-        if not isinstance(search_data, dict):
-            await interaction.followup.send(t(lang, "profile_api_error"))
+        if not api_ok:
+            await interaction.edit_original_response(
+                content=t(lang, "profile_api_error")
+            )
             return
-
-        players = search_data.get("players") or []
-        nl = name.lower()
-        exact = [p for p in players if (p.get("Name") or "").lower() == nl]
-        cand = exact or players
-        if not cand:
-            await interaction.followup.send(t(lang, "profile_not_found", name=name))
+        if detail is None:
+            await interaction.edit_original_response(
+                content=t(lang, "profile_not_found", name=name)
+            )
             return
-
-        # Se tem múltiplos com o mesmo nome exato, pega o primeiro (ordena por
-        # KillFame desc). Ponytail: sem dropdown como o bot antigo.
-        if len(exact) > 1:
-            cand = sorted(exact, key=lambda p: p.get("KillFame") or 0, reverse=True)
-
-        summary = cand[0]
-        player_id = summary.get("Id")
-        detail = await _fetch_albion(f"https://{host}/api/gameinfo/players/{player_id}")
-        if not isinstance(detail, dict):
-            detail = summary
 
         # Warm do perfil no backend (best-effort, não bloqueia a resposta)
         asyncio.create_task(_warm_profile(guild_id, name, region))
 
-        # Busca dados extras do backend (saldo + attendance) se o jogador for
-        # registrado na guilda
-        # Ponytail: buscar pelo nick é indireto — o backend tem attendance por
-        # discord_user_id, não por nick. Vamos pular os dados extras por agora;
-        # o /attendance cobre isso separado.
         embed = self._build_profile_embed(detail, name)
-        await interaction.followup.send(embed=embed)
+        await interaction.edit_original_response(content=None, embed=embed)
 
     def _build_profile_embed(self, detail: dict, name: str) -> discord.Embed:
         gname = (detail.get("GuildName") or "").strip()

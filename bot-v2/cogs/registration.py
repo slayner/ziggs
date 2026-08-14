@@ -14,7 +14,7 @@ from discord.ext import commands
 from typing import Optional
 
 import http_client
-from cogs.general import _MENTION_RE, check_command_access, guild_lang, resolve_user_or_guild
+from cogs.general import check_command_access, guild_lang, resolve_user_or_guild
 from i18n import t
 from localization import loc
 
@@ -40,13 +40,6 @@ def _spawn_background(coro) -> None:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-
-
-def _looks_like_discord_ref(s: str) -> bool:
-    """Marca explícita de que o texto É uma referência ao Discord — menção,
-    ID puro, ou "@algo" digitado à mão — usada pra desempatar quando o outro
-    lado do split TAMBÉM bate com um membro por coincidência de nome."""
-    return bool(_MENTION_RE.fullmatch(s) or s.isdigit() or s.startswith("@"))
 
 
 def _is_transient(result: dict | None) -> bool:
@@ -111,15 +104,6 @@ async def _post_role_removed(guild_id: int, discord_user_id: int, removed_role_i
     )
 
 
-async def _is_clear_discord_ref(interaction: Interaction, raw: str) -> bool:
-    """Só True pra menção, ID que resolve, ou nome/apelido EXATO — sem busca
-    aproximada (fuzzy=False). Usado só pra decidir, entre os 2 argumentos do
-    /register, qual é o usuário do Discord e qual é o nick do Albion; com
-    busca aproximada aqui, um nick parecido com o nome de algum membro
-    confundiria a heurística."""
-    return await resolve_user_or_guild(interaction, raw, fuzzy=False) is not None
-
-
 async def _apply_result(guild: discord.Guild, lang: str, invoker_id: int, target: discord.Member, result: dict) -> str:
     """Resultado FINAL (não-transitório) de um /bot/register — aplica o cargo
     se for sucesso e devolve o texto pronto pra mostrar/enviar ao usuário."""
@@ -163,21 +147,11 @@ async def _retry_in_background(guild: discord.Guild, lang: str, invoker: discord
         pass
 
 
-async def _do_register(interaction: Interaction, nick: str, discord_raw: Optional[str]) -> None:
+async def _do_register(interaction: Interaction, nick: str, target: discord.Member) -> None:
     """Espera que `interaction` já tenha uma resposta em andamento (defer ou
-    edit_message) — sempre edita essa resposta original, porque é chamada
-    tanto direto do comando quanto do callback de um botão de desambiguação."""
+    edit_message) — sempre edita essa resposta original."""
     assert interaction.guild_id and interaction.guild
     lang = await guild_lang(interaction)
-
-    if discord_raw:
-        target = await resolve_user_or_guild(interaction, discord_raw, allow_guild=False)
-        if not isinstance(target, discord.Member):
-            await interaction.edit_original_response(content=t(lang, "user_not_found_in_server", discord_raw=discord_raw))
-            return
-    else:
-        target = interaction.user
-
     nick = nick.strip()
     guild, invoker, guild_id = interaction.guild, interaction.user, interaction.guild_id
 
@@ -202,106 +176,36 @@ async def _do_register(interaction: Interaction, nick: str, discord_raw: Optiona
     _spawn_background(_retry_in_background(guild, lang, invoker, target, nick, guild_id))
 
 
-class _DisambiguateView(discord.ui.View):
-    """Dois botões, um pra cada jeito de interpretar o texto digitado — qual
-    parte é o nick do Albion, qual é a referência ao Discord. Só aparece
-    quando nenhuma das duas pontas é claramente identificável como Discord."""
-
-    def __init__(self, cand_a: tuple[str, str], cand_b: tuple[str, str]):
-        super().__init__(timeout=60)
-
-        def make_callback(*, nick: str, discord_raw: str):
-            async def callback(interaction: Interaction) -> None:
-                lang = await guild_lang(interaction)
-                await interaction.response.edit_message(content=t(lang, "processing"), view=None)
-                await _do_register(interaction, nick, discord_raw)
-            return callback
-
-        nick_a, ref_a = cand_a
-        nick_b, ref_b = cand_b
-        btn_a = discord.ui.Button(label=f'"{nick_a}" = nick · "{ref_a}" = Discord', style=discord.ButtonStyle.primary)
-        btn_a.callback = make_callback(nick=nick_a, discord_raw=ref_a)
-        btn_b = discord.ui.Button(label=f'"{nick_b}" = nick · "{ref_b}" = Discord', style=discord.ButtonStyle.secondary)
-        btn_b.callback = make_callback(nick=nick_b, discord_raw=ref_b)
-        self.add_item(btn_a)
-        self.add_item(btn_b)
-
-
 class Registration(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @app_commands.command(name="register", description=loc("Links an Albion nickname to a Discord account and unlocks the role", "cmd_desc_register"))
-    @app_commands.describe(register=loc("Your Albion nickname — or, to register someone else, nickname + Discord user (any order)", "opt_desc_register"))
+    @app_commands.describe(
+        nick=loc("Albion nickname to register", "opt_desc_register_nick"),
+        usuario=loc("Discord user to register (blank = yourself)", "opt_desc_register_usuario"),
+    )
     @app_commands.guild_only()
-    async def register(self, interaction: Interaction, register: Optional[str] = None) -> None:
+    async def register(
+        self,
+        interaction: Interaction,
+        nick: str,
+        usuario: Optional[discord.Member] = None,
+    ) -> None:
         assert interaction.guild_id and interaction.guild
 
         if not await check_command_access(interaction, "register"):
             return
 
-        lang = await guild_lang(interaction)
-        raw = (register or "").strip()
-        if not raw:
-            await interaction.response.send_message(t(lang, "register_usage"), ephemeral=True)
-            return
-
-        tokens = raw.split()
-        if len(tokens) == 1:
-            # Uma única palavra que já é uma referência ao Discord (menção,
-            # ID, ou "@algo") não é um nick válido do Albion — faltou o nick.
-            if _looks_like_discord_ref(tokens[0]):
-                await interaction.response.send_message(t(lang, "register_usage"), ephemeral=True)
+        # Registering someone else requires the register_others permission,
+        # checked BEFORE deferring — check_command_access sends the first
+        # response itself when it refuses.
+        if usuario is not None and usuario.id != interaction.user.id:
+            if not await check_command_access(interaction, "register_others"):
                 return
-            await interaction.response.defer(ephemeral=True)
-            await _do_register(interaction, tokens[0], None)
-            return
 
-        # Mais de 1 palavra = tentativa de registrar OUTRA pessoa — checa a
-        # sub-permissão antes de responder (não pode ser dentro de
-        # _do_register: a essa altura a interação já foi deferida/editada, e
-        # check_command_access tenta mandar a 1ª resposta da interação quando
-        # recusa).
-        if not await check_command_access(interaction, "register_others"):
-            return
-
-        # O nick do Albion nunca tem espaço, então ele fica sempre numa ponta
-        # — a referência ao Discord (menção, ID, ou nome/apelido, podendo ter
-        # espaço) ocupa o resto do texto, seja no início ou no fim.
-        head_nick, head_ref = tokens[0], " ".join(tokens[1:])
-        tail_nick, tail_ref = tokens[-1], " ".join(tokens[:-1])
-
-        # "@fulano" ou uma menção/ID digitado numa ponta é um sinal explícito
-        # e decide sozinho — mesmo que o outro lado TAMBÉM bata com um membro
-        # por coincidência (ex.: "@slayner slayner", onde o nick do Albion é
-        # igual ao nome do usuário do Discord).
-        head_explicit = _looks_like_discord_ref(head_ref)
-        tail_explicit = _looks_like_discord_ref(tail_ref)
-
-        if head_explicit and not tail_explicit:
-            await interaction.response.defer(ephemeral=True)
-            await _do_register(interaction, head_nick, head_ref)
-            return
-        if tail_explicit and not head_explicit:
-            await interaction.response.defer(ephemeral=True)
-            await _do_register(interaction, tail_nick, tail_ref)
-            return
-
-        head_is_ref = await _is_clear_discord_ref(interaction, head_ref)
-        tail_is_ref = await _is_clear_discord_ref(interaction, tail_ref)
-
-        if head_is_ref and not tail_is_ref:
-            await interaction.response.defer(ephemeral=True)
-            await _do_register(interaction, head_nick, head_ref)
-        elif tail_is_ref and not head_is_ref:
-            await interaction.response.defer(ephemeral=True)
-            await _do_register(interaction, tail_nick, tail_ref)
-        else:
-            await interaction.response.send_message(
-                t(lang, "register_disambiguate_prompt"),
-                view=_DisambiguateView((head_nick, head_ref), (tail_nick, tail_ref)),
-                ephemeral=True,
-            )
+        await interaction.response.defer(ephemeral=True)
+        await _do_register(interaction, nick, usuario or interaction.user)
 
     # ------------------------------------------------------------------
     # /unregister — comando de controle (admin por padrão)

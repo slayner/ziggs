@@ -123,9 +123,9 @@ T: dict[str, dict[str, str]] = {
         "es": "{mention} fue",
     },
     "register_usage": {
-        "pt": "Informe seu nick do Albion, ex: `/register register:SeuNick`.\nPra registrar outra pessoa, informe o nick e o usuário do Discord juntos (em qualquer ordem).",
-        "en": "Provide your Albion nickname, e.g.: `/register register:YourNick`.\nTo register someone else, provide the nickname and the Discord user together (in any order).",
-        "es": "Indica tu nick de Albion, ej: `/register register:TuNick`.\nPara registrar a otra persona, indica el nick y el usuario de Discord juntos (en cualquier orden).",
+        "pt": "Informe seu nick do Albion, ex: `/register nick:SeuNick`.\nPra registrar outra pessoa, use o parâmetro `usuario`.",
+        "en": "Provide your Albion nickname, e.g.: `/register nick:YourNick`.\nTo register someone else, use the `usuario` parameter.",
+        "es": "Indica tu nick de Albion, ej: `/register nick:TuNick`.\nPara registrar a otra persona, usa el parámetro `usuario`.",
     },
     "processing": {
         "pt": "⏳ Processando…",
@@ -141,11 +141,6 @@ T: dict[str, dict[str, str]] = {
         "pt": "⏳ A API do Albion Online continua instável. Seu registro segue na fila em segundo plano — assim que resolver, você recebe uma mensagem direta com o resultado, sem precisar rodar o comando de novo.",
         "en": "⏳ Albion Online's API is still unstable. Your registration stays queued in the background — once it resolves, you'll get a DM with the result, no need to run the command again.",
         "es": "⏳ La API de Albion Online sigue inestable. Tu registro sigue en cola en segundo plano — en cuanto se resuelva, recibirás un mensaje directo con el resultado, sin necesidad de ejecutar el comando de nuevo.",
-    },
-    "register_disambiguate_prompt": {
-        "pt": "Não consegui saber qual dos dois é o nick do Albion e qual é o usuário do Discord. Escolha:",
-        "en": "I couldn't tell which of the two is the Albion nickname and which is the Discord user. Choose:",
-        "es": "No pude saber cuál de los dos es el nick de Albion y cuál es el usuario de Discord. Elige:",
     },
     "unregister_success": {
         "pt": "✅ Registro de `{alvo}` removido — a tag é removida imediatamente.",
@@ -758,9 +753,24 @@ T: dict[str, dict[str, str]] = {
         "es": "Indica el nick de un jugador de Albion, ej: `/profile jogador:TuNick`.",
     },
     "profile_api_error": {
-        "pt": "⚠️ Erro ao buscar dados na API do Albion. Tente novamente.",
-        "en": "⚠️ Error fetching data from the Albion API. Try again.",
-        "es": "⚠️ Error al buscar datos en la API de Albion. Inténtalo de nuevo.",
+        "pt": "⚠️ Não foi possível buscar dados na API do Albion após várias tentativas. Tente novamente mais tarde.",
+        "en": "⚠️ Could not fetch data from the Albion API after several attempts. Try again later.",
+        "es": "⚠️ No se pudieron obtener datos de la API de Albion tras varios intentos. Inténtalo de nuevo más tarde.",
+    },
+    "profile_retrying": {
+        "pt": "🔄 A API do Albion está instável — tentando novamente (tentativa {attempt})…",
+        "en": "🔄 Albion's API is unstable — retrying (attempt {attempt})…",
+        "es": "🔄 La API de Albion está inestable — reintentando (intento {attempt})…",
+    },
+    "profile_region_prompt": {
+        "pt": "🌍 O nick **{name}** existe em mais de uma região. Escolha um servidor (ou aguarde 10s para selecionar automaticamente o mais ativo):",
+        "en": "🌍 The nickname **{name}** exists in more than one region. Choose a server (or wait 10s to auto-select the most active one):",
+        "es": "🌍 El nick **{name}** existe en más de una región. Elige un servidor (o espera 10s para seleccionar automáticamente el más activo):",
+    },
+    "profile_region_auto": {
+        "pt": "⏱️ Tempo esgotado — selecionando automaticamente: **{region}**",
+        "en": "⏱️ Time's up — auto-selecting: **{region}**",
+        "es": "⏱️ Tiempo agotado — seleccionando automáticamente: **{region}**",
     },
     "profile_not_found": {
         "pt": "❔ Jogador **{name}** não encontrado.",
@@ -847,6 +857,16 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "pt": "Seu nick do Albion — ou, pra registrar outra pessoa, nick + usuário do Discord (qualquer ordem)",
         "en": "Your Albion nickname — or, to register someone else, nickname + Discord user (any order)",
         "es": "Tu nick de Albion — o, para registrar a otra persona, nick + usuario de Discord (cualquier orden)",
+    },
+    "opt_desc_register_nick": {
+        "pt": "Nick do Albion para registrar",
+        "en": "Albion nickname to register",
+        "es": "Nick de Albion para registrar",
+    },
+    "opt_desc_register_usuario": {
+        "pt": "Usuário do Discord para registrar (em branco = você mesmo)",
+        "en": "Discord user to register (blank = yourself)",
+        "es": "Usuario de Discord para registrar (vacío = tú mismo)",
     },
     "cmd_desc_unregister": {"pt": "Remove o registro e o cargo de um membro", "en": "Removes a member's registration and role", "es": "Elimina el registro y el rol de un miembro"},
     "opt_desc_unregister_alvo": {
