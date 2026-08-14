@@ -167,11 +167,11 @@ def _require_mutable(ev: Event) -> None:
 
 def _participant_valid(ev: Event, p) -> bool:
     """Regular vs irregular: override do admin (is_valid True/False) ou, sem
-    override, derivado — válido sse o user se INSCREVEU no evento. Presença na
-    call sem inscrição = irregular por padrão (o admin valida arrastando)."""
+    override, derivado — válido sse o user se INSCREVEU no evento OU esteve na
+    call (snapshots_present > 0)."""
     if p.is_valid is not None:
         return bool(p.is_valid)
-    return any(s.user_id == p.user_id for s in ev.signups)
+    return any(s.user_id == p.user_id for s in ev.signups) or p.snapshots_present > 0
 
 
 def _participant_origin(
@@ -1347,7 +1347,7 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
         row = payout_map.get(p.user_id)
         valid = _participant_valid(ev, p)
         if not valid:
-            reason = "is_valid=false (override)" if p.is_valid is False else "sem signup"
+            reason = "is_valid=false (override admin)"
             skipped.append(f"{p.user_name or p.user_id} ({p.percent}% — {reason})")
             continue
         if row:
