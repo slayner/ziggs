@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.domain.states import EventState
 from app.models.audit import AuditLog
-from app.models.catalog import GameRole, Weapon
+from app.models.catalog import GameRole
 from app.models.comp_preferences import CompRolePreference
 from app.models.comps import Comp, CompParty, CompSlot, CompSlotRole
 from app.models.events import Event, EventSignup
@@ -281,17 +281,14 @@ def ack_ping_triggers(db: Session, guild_id: int) -> None:
 def _load_party_defs(
     db: Session, comp_id: int | None,
 ) -> tuple[list[event_gates.PartyDef], dict[str, str]]:
-    """(parties, {nome_da_funcao: categoria}) — categoria vem de
-    GameRole.weapon_id -> Weapon.invisible_function (tank/healer/support/dps/
-    pierce), usada pro bot agrupar o picker. O bot antigo usava um emoji
-    prefixado no nome da função pra isso; os GameRole reais daqui não têm essa
-    convenção (conferido direto no banco antes de portar).
+    """(parties, {nome_da_funcao: categoria}) — categoria vem do CompSlot.fn
+    (tipo de função que o usuário definiu no CompBuilder: tank/healer/support/
+    dps/pierce/battlemount/...), usada pro bot agrupar o picker.
 
-    Cache: 3 queries pesadas (Comp selectinload + GameRole batch + Weapon
-    batch) por clique de botão. Durante clique-massa (30 pessoas em 10s) a
-    comp não muda — TTL 30s corta de ~90 queries pra 3 por janela. Inva-
-    lidação por TTL: se o admin editar a comp no meio, expira em até 30s,
-    sem acoplar esse serviço a cada mutação de comp/role/weapon."""
+    Cache: 2 queries (Comp selectinload + GameRole batch) por clique de botão.
+    Durante clique-massa (30 pessoas em 10s) a comp não muda — TTL 30s corta
+    de ~60 queries pra 2 por janela. Invalidação por TTL: se o admin editar a
+    comp no meio, expira em até 30s."""
     if comp_id is None:
         return [], {}
     now = time.monotonic()
@@ -310,6 +307,9 @@ _PARTY_DEFS_TTL = 30.0  # segundos
 def _load_party_defs_uncached(
     db: Session, comp_id: int,
 ) -> tuple[list[event_gates.PartyDef], dict[str, str]]:
+    """(parties, {nome_da_role: categoria}) — categoria vem do CompSlot.fn
+    (tipo de função que o usuário definiu no CompBuilder: tank/healer/support/
+    dps/pierce/battlemount/...). Se o slot não tem fn, cai em "other"."""
     comp = db.scalar(
         select(Comp)
         .where(Comp.id == comp_id)
@@ -327,18 +327,29 @@ def _load_party_defs_uncached(
         game_roles = {
             r.id: r for r in db.scalars(select(GameRole).where(GameRole.id.in_(game_role_ids)))
         }
-    weapon_ids = {r.weapon_id for r in game_roles.values() if r.weapon_id}
-    weapon_functions: dict[int, str] = {}
-    if weapon_ids:
-        weapon_functions = {
-            w.id: w.invisible_function
-            for w in db.scalars(select(Weapon).where(Weapon.id.in_(weapon_ids)))
-            if w.invisible_function
-        }
 
+    # Categoria de cada role = fn do slot onde ela aparece. Um role pode
+    # aparecer em slots com fn diferente — usa o primeiro fn não-nulo que
+    # encontrar (em prática a comp agrupa roles do mesmo fn no mesmo slot).
     categories: dict[str, str] = {}
-    for r in game_roles.values():
-        categories[r.name] = weapon_functions.get(r.weapon_id, FALLBACK_CATEGORY) if r.weapon_id else FALLBACK_CATEGORY
+    for party in comp.parties:
+        for slot in party.slots:
+            slot_fn = slot.fn or FALLBACK_CATEGORY
+            for csr in slot.roles:
+                role = game_roles.get(csr.game_role_id)
+                if role and role.name not in categories:
+                    categories[role.name] = slot_fn
+
+    parties: list[event_gates.PartyDef] = []
+    for party in comp.parties:
+        names: set[str] = set()
+        for slot in party.slots:
+            for csr in slot.roles:
+                role = game_roles.get(csr.game_role_id)
+                if role:
+                    names.add(role.name)
+        parties.append(event_gates.PartyDef(total_slots=len(party.slots), role_names=names))
+    return parties, categories
 
     parties: list[event_gates.PartyDef] = []
     for party in comp.parties:

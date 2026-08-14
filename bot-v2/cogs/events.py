@@ -37,8 +37,22 @@ CAT_PER_PAGE = 23
 
 # ponytail: review não aparece no mass-info (só scheduled/in_progress) — sem emoji p/ ele.
 _STATUS_EMOJI = {"scheduled": "🗓️", "in_progress": "🟢"}
-_CATEGORY_EMOJI = {"tank": "🛡️", "healer": "🕊️", "support": "✨", "dps": "⚔️", "pierce": "🏹", "other": "❔"}
-_CATEGORY_ORDER = ("tank", "healer", "support", "dps", "pierce", "other")
+# Emojis conhecidos para categorias que o CompBuilder já usa. Categorias novas
+# (custom fn types que o usuário inventar) ganham ❔ — o nome aparece do lado.
+_CATEGORY_EMOJI = {"tank": "🛡️", "healer": "🕊️", "support": "✨", "dps": "⚔️", "pierce": "🏹", "battlemount": "🐲", "other": "❔"}
+# Ordem preferida das categorias conhecidas; categorias desconhecidas vão pro
+# final em ordem alfabética (other por último de qualquer jeito).
+_CATEGORY_ORDER = {"tank": 0, "healer": 1, "support": 2, "dps": 3, "pierce": 4, "battlemount": 5}
+
+
+def _category_sort_key(cat: str) -> tuple:
+    """Categorias conhecidas primeiro (na ordem de _CATEGORY_ORDER), depois
+    alfabético, 'other' sempre por último."""
+    if cat == "other":
+        return (2, "")
+    if cat in _CATEGORY_ORDER:
+        return (0, str(_CATEGORY_ORDER[cat]))
+    return (1, cat)
 
 
 async def _get(path: str, *, interactive: bool = False) -> Optional[dict]:
@@ -608,7 +622,10 @@ class FunctionPickView(discord.ui.View):
 
     def _build_category_step(self) -> None:
         self.clear_items()
-        cats = [c for c in self.by_category if self._available(c)]
+        cats = sorted(
+            (c for c in self.by_category if self._available(c)),
+            key=_category_sort_key,
+        )
         if not cats:
             return
         pages = max(1, -(-len(cats) // CAT_PER_PAGE))
@@ -717,10 +734,9 @@ class FunctionPickView(discord.ui.View):
                 value=f"*{t(self.lang, 'signup_none_yet')}*",
                 inline=False,
             )
-        rank = {category: index for index, category in enumerate(_CATEGORY_ORDER)}
         ordered = sorted(
             self.chosen,
-            key=lambda function: rank.get(self.categories.get(function, "other"), len(rank)),
+            key=lambda function: _category_sort_key(self.categories.get(function, "other")),
         )
         lines = [
             f"{_CATEGORY_EMOJI.get(self.categories.get(function, 'other'), '❔')} {function}"
