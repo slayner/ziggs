@@ -119,13 +119,6 @@ async def snapshot_loop(cog: "VoicePresence") -> None:
 
 @snapshot_loop.before_loop
 async def _before() -> None:
-    # discord.py chama before_loop SEM os args de .start(cog) (só o corpo
-    # principal do loop recebe) — declarar `cog` aqui derruba a task com
-    # TypeError a CADA .start(), antes do primeiro tick. Era por isto que a
-    # detecção de presença NUNCA funcionava (este cog não tem catch-up
-    # direto no on_ready do main.py como os outros — depende 100% deste
-    # loop). Usa o _cog_ref global (setado em cog_load) em vez de receber
-    # como parâmetro.
     if _cog_ref is not None:
         await _cog_ref.bot.wait_until_ready()
 

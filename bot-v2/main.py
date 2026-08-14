@@ -187,9 +187,6 @@ async def _wait_for_backend() -> None:
 @bot.event
 async def on_ready() -> None:
     print(f"✓ {bot.user} — {len(bot.guilds)} servidor(es)", flush=True)
-    # Confirma config essencial no console — sem isto, um BOT_SITE_URL/SECRET
-    # vazio faz todo _get/_post virar no-op silencioso (nenhum erro, nenhuma
-    # thread, nenhum snapshot) e não há como saber olhando só pro Discord.
     print(f"  BOT_SITE_URL={SITE_URL or '(vazio!)'} "
           f"BOT_API_SECRET={'definido' if API_SECRET else '(vazio!)'}", flush=True)
     for guild in bot.guilds:
@@ -200,28 +197,19 @@ async def on_ready() -> None:
         event_work_loop.start()
     if not offline_queue_loop.is_running():
         offline_queue_loop.start()
-    # Catch-up imediato pós-(re)conexão: se o bot esteve offline, eventos cujo
-    # horário chegou nesse meio ainda estão SCHEDULED no site. O pending-work faz
-    # a transição automática SCHEDULED->IN_PROGRESS — força esse poll agora em
-    # vez de esperar o primeiro tick do loop (~5s). Eventos que já estavam
-    # IN_PROGRESS também voltam pro mass-info no mesmo ciclo (o estado vive no
-    # site, não no bot). force=True: reedita o embed do mass-info AGORA, mesmo
-    # se o site não tiver nada de novo — um restart mata os botões antigos
-    # (View sem custom_id, ver MassinfoView) e só religa quando a mensagem é
-    # reeditada; sem force, isso ficava esperando o gate de staleness do site
-    # (podia deixar clique em "interaction failed" por dezenas de segundos).
-    # Best-effort: falhou aqui, o loop de 5s cobre depois (sem force).
-    # Antes de qualquer catch-up: garante que o backend subiu. start-all.cmd
-    # liga os dois em paralelo; sem esta espera, o catch-up one-shot abaixo
-    # dispara contra um backend ainda fora do ar e falha em silêncio.
+    # Catch-up em background: recriar threads de event_embeds, regear, lootlog,
+    # nodes, audit_log etc. demora minutos e bloqueia o event loop — tasks.loop
+    # (voice_presence, audit_log, etc.) não consegue tickar enquanto on_ready
+    # não retorna. Rodar em asyncio.create_task libera o event loop imediatamente.
+    asyncio.create_task(_catch_up())
+
+
+async def _catch_up() -> None:
+    """Catch-up pesado pós-(re)conexão: recria embeds, threads, calendários.
+    Roda em background pra não bloquear o event loop (e os tasks.loop dos cogs)."""
     await _wait_for_backend()
     cog = bot.get_cog("Events")
     if cog is not None:
-        # Marca TODAS as guildas pra rebind ANTES de tentar — o event_work_loop
-        # (startado acima) pode tickar durante este catch-up e precisa enxergar
-        # o rebind pendente. refresh_massinfo limpa o flag de cada guilda que
-        # conseguir reeditar com sucesso; as que falharem (site fora do ar)
-        # ficam pendentes pro loop reeditar no primeiro poll bom.
         for guild in bot.guilds:
             cog._rebind_pending.add(guild.id)
         for guild in bot.guilds:
@@ -229,9 +217,6 @@ async def on_ready() -> None:
                 await cog.refresh_massinfo(guild, force=True)
             except Exception:
                 pass
-    # Mesmo catch-up pros embeds de evento (thread 📑 EVENTO #N em review/
-    # finalizado) — EventEmbedView tem o mesmo problema de botão morto pós-
-    # restart, e sem staleness-timer de fallback (ver EventEmbedView).
     embeds_cog = bot.get_cog("EventEmbeds")
     if embeds_cog is not None:
         for guild in bot.guilds:
@@ -239,11 +224,6 @@ async def on_ready() -> None:
                 await embeds_cog.sync_event_embeds(guild, force=True)
             except Exception:
                 pass
-    # Mesmo catch-up pras threads de regear (🛠️ Regear — Evento #N) — de
-    # propósito SEM listener de on_ready próprio no cog (ver regear_threads.py):
-    # rodar antes do backend estar de pé sempre pegava config vazia (erro de
-    # rede) e não criava nada, silenciosamente. Fazendo aqui, depois de
-    # _wait_for_backend(), o catch-up imediato realmente funciona.
     regear_cog = bot.get_cog("RegearThreads")
     if regear_cog is not None:
         for guild in bot.guilds:
@@ -251,7 +231,6 @@ async def on_ready() -> None:
                 await regear_cog.sync_guild(guild)
             except Exception:
                 pass
-    # Mesmo catch-up pras threads de lootlog (🪵 Log — Evento #N).
     lootlog_cog = bot.get_cog("LootlogThreads")
     if lootlog_cog is not None:
         for guild in bot.guilds:
@@ -259,14 +238,6 @@ async def on_ready() -> None:
                 await lootlog_cog.sync_guild(guild)
             except Exception:
                 pass
-    # Mesmo catch-up pro calendário de nodes — sem isto, o update_calendar
-    # (loop de 5min, cogs/nodes.py) faz a 1ª tentativa gated só por
-    # wait_until_ready() (gateway do Discord), sem esperar o backend. Bot
-    # costuma ganhar a corrida do start-all.cmd contra o backend, então essa
-    # 1ª tentativa quase sempre batia num backend ainda fora do ar antes desse
-    # catch-up existir — _sync_calendar já tem a defesa (não cria mensagem
-    # nova se a requisição falhar), mas sem chamar aqui o calendário só
-    # relinkava depois de até 5min esperando o próximo tick do loop.
     nodes_cog = bot.get_cog("Nodes")
     if nodes_cog is not None:
         for guild in bot.guilds:
@@ -274,10 +245,6 @@ async def on_ready() -> None:
                 await nodes_cog.refresh_calendar(guild)
             except Exception:
                 pass
-    # Canal de logs (feature sempre ativa, ver cogs/audit_log.py): garante o
-    # canal já na reconexão em vez de esperar o primeiro tick do loop (8s) —
-    # guildas sem logs_channel_id ainda ganham o canal admin-only assim que o
-    # bot sobe, sem depender de nenhuma mutação acontecer primeiro.
     audit_cog = bot.get_cog("BotAuditLog")
     if audit_cog is not None:
         for guild in bot.guilds:
