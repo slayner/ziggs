@@ -289,11 +289,13 @@ export default function App() {
       setMe(m);
       if (m?.guild_id) {
         setGuild(m.guild_id);
-        Promise.all([api.mySiteGuilds(), api.myPermissions()]).then(([gs, p]) => {
-          setSiteGuilds(gs);
-          setPerms(p);
-        });
       }
+      // Sempre carrega guildas e permissões quando logado — mesmo sem
+      // guild_id ativa, o usuário pode ser membro de guildas com o bot.
+      Promise.all([api.mySiteGuilds(), api.myPermissions()]).then(([gs, p]) => {
+        setSiteGuilds(gs);
+        setPerms(p);
+      });
     });
     return () => clearTimeout(to);
   }, [loc, me]);
@@ -760,9 +762,9 @@ export default function App() {
 
   // abas visíveis baseadas em permissões
   const showConfig = loggedIn && hasGuild && perms["guild.admin"];
-  // Management só pra usuários logados com guilda pra administrar — Docs
-  // (que vive dentro de ManagementPage) também fica gated pra esses usuários.
-  const showManagement = loggedIn && (hasGuild || hasAnyGuildPerm);
+  // Management aparece pra usuários logados que são membros de pelo menos
+  // uma guilda onde o bot tá presente (botGuilds vem de siteGuilds).
+  const showManagement = loggedIn && (botGuilds.length > 0 || hasAnyGuildPerm);
   const showGuildBox = showManagement;
 
   return (
