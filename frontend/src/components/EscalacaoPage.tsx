@@ -40,8 +40,8 @@ const BUILD_ORDER = ["weapon", "offhand", "helmet", "armor", "boots", "cape", "f
 // quando está 100% coberta (left da coluna >= left do painel). build é a parede:
 // o painel nunca passa da direita de build. Índice 0-based do <th>: #(0) role(1)
 // player(2) build(3) style(4) obs(5) price(6).
-const COLLAPSE_ORDER = ["price", "obs", "style"] as const;
-const TH_INDEX: Record<string, number> = { build: 3, style: 4, obs: 5, price: 6 };
+const COLLAPSE_ORDER = ["obs", "style"] as const;
+const TH_INDEX: Record<string, number> = { build: 3, style: 4, obs: 5 };
 
 type BuildImg = { item_id: string; name: string; quality: number; alt: boolean; slot: string };
 type BuildGroup = { slotType: string; items: BuildImg[] };
@@ -198,12 +198,10 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [data, setData] = useState<EscalationOut | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [prices, setPrices] = useState<Record<string, number> | null>(null);
   const [flexPick, setFlexPick] = useState<FlexPick | null>(null);
   const [popoverSlot, setPopoverSlot] = useState<number | null>(null);
   const [autoFillBusy, setAutoFillBusy] = useState(false);
   const [undoRunId, setUndoRunId] = useState<string | null>(null);
-  const [expandedProfiles, setExpandedProfiles] = useState<Set<number>>(new Set());
   const autoTried = useRef(false);
   const lastEnlistedKey = useRef<string>("");
 
@@ -234,13 +232,6 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, guildId, eventId]);
-
-  useEffect(() => {
-    if (!data) return;
-    api.escalacaoPrices(guildId, eventId)
-      .then(r => setPrices(r.prices))
-      .catch(() => setPrices({}));
-  }, [data, guildId, eventId]);
 
   // Polling: checa por novos signups a cada 4s e atualiza a lista de
   // inscritos ao vivo (sem precisar recarregar a página) — sempre ligado,
@@ -355,7 +346,7 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     const ro = new ResizeObserver(recompute);
     ro.observe(row); ro.observe(tbl);
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
-  }, [data, prices, hidden]);
+  }, [data, hidden]);
 
   if (me === undefined) return null;
 
@@ -442,16 +433,6 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     .filter(a => !enlistedMap.has(a.user_id))
     .filter((a, i, arr) => arr.findIndex(x => x.user_id === a.user_id) === i);
 
-  const rolePrice = (r: EscalationRole): string => {
-    if (prices === null) return NA;
-    let sum = 0, known = 0;
-    for (const b of r.build_items) {
-      const p = prices[b.item_id];
-      if (p) { sum += p * (b.quantity || 1); known++; }
-    }
-    return known === 0 ? NA : sum.toLocaleString("pt-BR");
-  };
-
   const doAssign = (slotId: number, userId: number, userName: string | null, gameRoleId: number) => {
     api.assignEscalacao(guildId, eventId, { slot_id: slotId, user_id: userId, user_name: userName, game_role_id: gameRoleId })
       .then(load).catch(e => alert(String((e as Error)?.message ?? e)));
@@ -500,7 +481,6 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
                   <col style={{ minWidth: 200 }} />
                   <col style={{ minWidth: 130 }} />
                   <col style={{ minWidth: 140 }} />
-                  <col style={{ width: 110 }} />
                 </colgroup>
                 <thead>
                   <tr>
@@ -510,7 +490,6 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
                     <th className="cs-ph">{t("colBuild")}</th>
                     <th className="cs-ph">{t("colCombatStyle")}</th>
                     <th className="cs-ph">{t("colObs")}</th>
-                    <th className="cs-ph">{t("colBuildPrice")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -521,8 +500,6 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
                       slots={p.slots}
                       assignedBySlot={assignedBySlot}
                       canManage={canManage}
-                      pricesReady={prices !== null}
-                      rolePrice={rolePrice}
                       onDropSlot={onDropSlot}
                       onUnassignUser={(userId) => api.unassignUser(guildId, eventId, userId).then(load)}
                       mySlotId={mySlotId}
@@ -648,26 +625,18 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
                       {canManage && (!placed || flexible) && <i className="ti ti-grip-horizontal esc-signup-grip" />}
                       <span className="esc-signup-name">{s.user_name || String(s.user_id)}</span>
                       {s.functions.length > 0 && (
-                        <span className="esc-signup-fns">
-                          {(expandedProfiles.has(s.user_id) ? s.functions : s.functions.slice(0, 4)).map(f => (
-                            <span key={f} className="esc-role-chip" title={f}>{f}</span>
-                          ))}
-                          {s.functions.length > 4 && (
-                            <button
-                              type="button"
-                              className="esc-role-more"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setExpandedProfiles(prev => {
-                                  const next = new Set(prev);
-                                  next.has(s.user_id) ? next.delete(s.user_id) : next.add(s.user_id);
-                                  return next;
-                                });
-                              }}
-                              title={expandedProfiles.has(s.user_id) ? "Ocultar roles" : "Mostrar todas as roles"}
-                            >
-                              {expandedProfiles.has(s.user_id) ? "−" : `+${s.functions.length - 4}`}
-                            </button>
+                        <span
+                          className="esc-signup-fns"
+                          title={s.functions.join(", ")}
+                        >
+                          <span className="esc-role-bracket">
+                            {s.functions.slice(0, 2).map(f => (
+                              <span key={f} className="esc-role-chip">{f}</span>
+                            ))}
+                            {s.functions.length > 2 && <span className="esc-role-more">+{s.functions.length - 2}</span>}
+                          </span>
+                          {s.functions.length > 2 && (
+                            <span className="esc-role-tooltip">{s.functions.map(f => <span key={f} className="esc-role-chip">{f}</span>)}</span>
                           )}
                         </span>
                       )}
@@ -724,8 +693,6 @@ interface PartyRowsProps {
   slots: EscalationOut["parties"][number]["slots"];
   assignedBySlot: Map<number, EscalationOut["assignments"][number]>;
   canManage: boolean;
-  pricesReady: boolean;
-  rolePrice: (r: EscalationRole) => string;
   onDropSlot: (slotId: number, e: React.DragEvent) => void;
   onUnassignUser: (userId: number) => void;
   mySlotId: number | null;
@@ -738,8 +705,8 @@ interface PartyRowsProps {
 }
 
 function PartyRows({
-  name, slots, assignedBySlot, canManage, pricesReady,
-  rolePrice, onDropSlot, onUnassignUser, mySlotId, t, lang,
+  name, slots, assignedBySlot, canManage,
+  onDropSlot, onUnassignUser, mySlotId, t, lang,
   candidatesBySlot, popoverSlot, setPopoverSlot, onPickCandidate,
 }: PartyRowsProps) {
   const rows: React.ReactNode[] = [];
@@ -777,7 +744,7 @@ function PartyRows({
               ? <span>{slot.roles.map(r => <span key={r.id} className="ct" style={{ color: r.color || "var(--muted)" }}>{r.name}</span>)}</span>
               : <span className="cs-lbl">{slot.label || slot.fn || slot.roles[0]?.name || NA}</span>}
         </td>
-        <td className="cs-cell">
+        <td className={"cs-cell" + (popoverSlot === slot.id ? " cs-cell-open" : "")}>
           {a ? (
             <span
               className="ct cs-player-drag"
@@ -823,7 +790,6 @@ function PartyRows({
         </td>
         <td className="cs-cell">{previewRole?.play_style || NA}</td>
         <td className="cs-cell">{previewRole?.obs || NA}</td>
-        <td className="cs-cell">{pricesReady ? rolePrice(previewRole ?? slot.roles[0]) : NA}</td>
       </tr>
     );
     if (isMine) {
@@ -831,7 +797,7 @@ function PartyRows({
       if (detailRole) {
         rows.push(
           <tr key={slot.id + "-detail"} className="cs-myrow-detail">
-            <td colSpan={7}>
+            <td colSpan={6}>
               <div className="cs-detail-inner">
                 <div className="cs-detail-section">
                   <div className="cs-detail-label">{t("colBuild" as never)}</div>
@@ -850,7 +816,7 @@ function PartyRows({
   }
   return (
     <>
-      <tr><td colSpan={7} className="cs-ph"><div className="cs-ph-inner"><span className="cs-pname">{name}</span></div></td></tr>
+      <tr><td colSpan={6} className="cs-ph"><div className="cs-ph-inner"><span className="cs-pname">{name}</span></div></td></tr>
       {rows}
     </>
   );
