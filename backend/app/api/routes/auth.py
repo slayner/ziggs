@@ -35,7 +35,6 @@ from app.services import nodes as nodes_svc
 from app.services import comps as comps_svc
 from app.api.schemas.events import EventCreate
 from app.services.events import ServiceError
-from app.services.albion_gate import BOT_REGISTER, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client
 
 router = APIRouter(tags=["auth"])
@@ -355,23 +354,23 @@ async def _lookup_albion_guild(name: str, region: str | None = None) -> dict | N
     nome, não algo crítico de latência."""
     nl = name.lower()
     hosts = [HOSTS[region]] if region in HOSTS else list(HOSTS.values())
+    # User-facing (configuração de guilda no dashboard) — não passa pelo
+    # albion_gate (rate limiter compartilhado com background).
     async with make_client() as client:
-        async with albion_scope(BOT_REGISTER):
-            for host in hosts:
-                for attempt in range(ALBION_LOOKUP_RETRIES):
-                    try:
-                        async with slot():
-                            resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
-                        resp.raise_for_status()
-                    except httpx.HTTPError:
-                        if attempt + 1 < ALBION_LOOKUP_RETRIES:
-                            await asyncio.sleep(ALBION_LOOKUP_BACKOFF * (attempt + 1))
-                        continue
-                    candidates = resp.json().get("guilds", [])
-                    match = next((g for g in candidates if (g.get("Name") or "").lower() == nl), None)
-                    if match:
-                        return match
-                    break  # resposta válida (só não tem essa guilda nessa região) — não repete
+        for host in hosts:
+            for attempt in range(ALBION_LOOKUP_RETRIES):
+                try:
+                    resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
+                    resp.raise_for_status()
+                except httpx.HTTPError:
+                    if attempt + 1 < ALBION_LOOKUP_RETRIES:
+                        await asyncio.sleep(ALBION_LOOKUP_BACKOFF * (attempt + 1))
+                    continue
+                candidates = resp.json().get("guilds", [])
+                match = next((g for g in candidates if (g.get("Name") or "").lower() == nl), None)
+                if match:
+                    return match
+                break  # resposta válida (só não tem essa guilda nessa região) — não repete
     return None
 
 
@@ -672,19 +671,18 @@ async def _is_guild_in_alliance(guild_id: str, alliance_id: str, region: str | N
     sugestões pro admin escolher, quem decide de fato quem pode usar /register
     é o ally_allowed_guilds + o check ao vivo em bot_register/registration_checker."""
     hosts = [HOSTS[region]] if region in HOSTS else list(HOSTS.values())
+    # User-facing (dashboard de aliados) — não passa pelo albion_gate.
     async with make_client() as client:
-        async with albion_scope(BOT_REGISTER):
-            for host in hosts:
-                try:
-                    async with slot():
-                        resp = await client.get(f"https://{host}/api/gameinfo/guilds/{guild_id}")
-                    if resp.status_code == 404:
-                        continue
-                    resp.raise_for_status()
-                except httpx.HTTPError:
+        for host in hosts:
+            try:
+                resp = await client.get(f"https://{host}/api/gameinfo/guilds/{guild_id}")
+                if resp.status_code == 404:
                     continue
-                data = resp.json()
-                return (str(data.get("AllianceId") or "") or None) == alliance_id
+                resp.raise_for_status()
+            except httpx.HTTPError:
+                continue
+            data = resp.json()
+            return (str(data.get("AllianceId") or "") or None) == alliance_id
     return True
 
 
@@ -1418,26 +1416,30 @@ async def bot_register(
     # separado) — se a região da guilda já é conhecida, busca só nela, senão um
     # personagem com o mesmo nick em outra região pode "casar" com a guilda errada.
     hosts = {guild_region: HOSTS[guild_region]} if guild_region in HOSTS else HOSTS
+    # Register é user-facing (um humano esperando no Discord) — NÃO passa pelo
+    # albion_gate (rate limiter + pool de concorrência compartilhado com 1822+
+    # requests de background). Sem isso, o register espera horas na fila quando
+    # a API do Albion está instável e o rate limiter recua. O make_client ainda
+    # alimenta o rate limiter via response hook (observe_response), mas o
+    # request não fica preso atrás de background.
     async with make_client() as client:
-        async with albion_scope(BOT_REGISTER):
-            for r, host in hosts.items():
-                for attempt in range(ALBION_LOOKUP_RETRIES):
-                    try:
-                        async with slot():
-                            resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
-                        resp.raise_for_status()
-                    except httpx.HTTPError:
-                        if attempt + 1 < ALBION_LOOKUP_RETRIES:
-                            await asyncio.sleep(ALBION_LOOKUP_BACKOFF * (attempt + 1))
-                        continue
-                    any_host_ok = True
-                    candidates = resp.json().get("players", [])
-                    match = next((p for p in candidates if (p.get("Name") or "").lower() == nl), None)
-                    if match:
-                        found, region = match, r
-                    break  # resposta válida (só não achou esse nick nessa região) — não repete
-                if found:
-                    break
+        for r, host in hosts.items():
+            for attempt in range(ALBION_LOOKUP_RETRIES):
+                try:
+                    resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
+                    resp.raise_for_status()
+                except httpx.HTTPError:
+                    if attempt + 1 < ALBION_LOOKUP_RETRIES:
+                        await asyncio.sleep(ALBION_LOOKUP_BACKOFF * (attempt + 1))
+                    continue
+                any_host_ok = True
+                candidates = resp.json().get("players", [])
+                match = next((p for p in candidates if (p.get("Name") or "").lower() == nl), None)
+                if match:
+                    found, region = match, r
+                break  # resposta válida (só não achou esse nick nessa região) — não repete
+            if found:
+                break
 
     if not found:
         # Sem NENHUMA resposta válida da API da Albion (fora do ar/instável) é
