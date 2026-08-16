@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmNNeHdnbXdYK0lzaUcyR3FOaXFpQWhLaHcwM1h0NE9tZVB0eTZ0enpRZEpzaTcvOFlNcU0vT0poQU9uMDdzY2dVdmRaVGhKQ20rOTdrQXpKaS9yS0FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTIzNjc3CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4zX3g2NC1zZXR1cC5leGUKM3ZYY2ZBL0lJb0Q1WS8zYjlZcThONm05cThuN3M2VG90cGY4a0xJRkhHL3VncTk2d2M5MWRLUGo0d05hd0lSTmRrNjlwaGdMdmp1Rkw0U2FVUnAyQmc9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.2.3_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlhYN2x6RzN3RU1MTmcwWlJVRkU4eDBmM3MwYTZpcWFPSEkycml4cUhrbnZaSmQyang4eThIOXB0U3JCNjRTKzAwK1gycWxsdDA2dmJ2UCtFWVBSY0FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTI0MjU0CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi40X3g2NC1zZXR1cC5leGUKNUl4SFJYNW1Jd09FRkR3aG5qc0xndlNQckFWUVBzQ0FnNE10N014bFMvUnJCdHdPTkdmdjNwYXFFZkkrTElMOEYvb041NGNFaDNPdGNqNHRKREVBQ0E9PQo=",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.2.4_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-16T20:41:34Z",
-    "version":  "0.2.3",
-    "notes":  "Refresh skill names, icons, shapeshifter damage classification, and damage timeline."
+    "pub_date":  "2026-08-16T20:51:12Z",
+    "version":  "0.2.4",
+    "notes":  "Install updates silently and restart the companion automatically."
 }
