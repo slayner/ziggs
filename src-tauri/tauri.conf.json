@@ -63,7 +63,7 @@
                 "https://ziggs.xyz/companion/latest.json"
             ],
             "windows": {
-                "installMode": "passive"
+                "installMode": "quiet"
             }
         }
     }
