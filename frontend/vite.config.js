@@ -8,6 +8,12 @@ const rootDir = fileURLToPath(new URL(".", import.meta.url));
 export default defineConfig({
     plugins: [react(), tailwindcss()],
     build: {
+        // NÃO limpa o dist no build: tabs abertas durante um deploy seguem
+        // baixando os chunks antigos (hashes endereçados por conteúdo, não
+        // colidem). Sem isso, cada build quebra "error loading dynamically
+        // imported module" pra todo usuário com o site aberto. Limpeteza
+        // eventual na mão (rm dist/assets) quando acumular.
+        emptyOutDir: false,
         rollupOptions: {
             input: {
                 site: `${rootDir}/index.html`,

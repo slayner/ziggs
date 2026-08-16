@@ -17,15 +17,16 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.routes.battles import (
     ASSISTS_PER_POINT, HEALING_PER_POINT,
-    _wbase, _weapon_function_map, eligible_guild_battles_subquery, lethal_with_healing_filter,
+    _wbase, eligible_guild_battles_subquery, lethal_with_healing_filter,
 )
 from app.db import SyncSessionLocal
 from app.models.battles import Battle, BattleGuild, BattleParticipant
+from app.models.catalog import Weapon
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerWeaponStat
 
 log = logging.getLogger(__name__)
@@ -41,63 +42,78 @@ def _empty_counters() -> dict[str, int]:
     }
 
 
-def rebuild_player_weapon_stats(db: Session) -> int:
-    import asyncio
-    # ponytail: _weapon_function_map é async (migração async DB), mas weapon_stats
-    # roda em thread (to_thread) — asyncio.run cria loop efêmero.
-    weapon_fn = asyncio.run(_weapon_function_map(db))
-    stats: dict[tuple[str, str], dict[str, int]] = {}
+def _id_ranges(db: Session, id_col, chunk: int = 20000) -> list[tuple[int, int]]:
+    """Ranges de PK [lo, hi] cobrindo a tabela — o rebuild lê as tabelas
+    grandes em FATIAS. Materializar tudo com .all() (~931k rows com equipment
+    JSON embutido) comia GBs de RAM de uma vez e derrubou a box inteira em
+    14/ago/2026 (OOM: primeiro rebuild real após o bug do await, que fazia a
+    rodada morrer em 1s desde 13/ago — ninguém percebeu o apetite de memória).
+    Cada fatia é uma query curta com a própria read tx, fechada antes da
+    próxima; a agregação incremental só segura o stats dict final."""
+    lo, hi = db.execute(select(func.min(id_col), func.max(id_col))).one()
+    if lo is None:
+        return []
+    return [(s, min(s + chunk - 1, hi)) for s in range(lo, hi + 1, chunk)]
 
-    # Materializa TODOS os SELECTs com .all() e fecha a read tx ANTES de
-    # qualquer processamento em Python. Iterar um cursor lazy mantém a read
-    # tx aberta por minutos (931k rows), bloqueando WAL checkpoint e causando
-    # SQLITE_BUSY_SNAPSHOT quando a fase de escrita começa.
+
+def _chunked(db: Session, id_col, build_stmt):
+    """Executa build_stmt(lo, hi) por fatia de PK e comita entre elas (fecha a
+    read tx — não segura lock nem cursor aberto durante a agregação)."""
+    for lo, hi in _id_ranges(db, id_col):
+        for row in db.execute(build_stmt(lo, hi)).all():
+            yield row
+        db.commit()
+
+
+def rebuild_player_weapon_stats(db: Session) -> int:
+    # _weapon_function_map (battles.py) é async e recebe AsyncSession; aqui a
+    # sessão é SYNC, então o await explodia ("ChunkedIteratorResult can't be
+    # used in 'await' expression"). Query sync inline — mesma lógica, a tabela
+    # Weapon tem ~771 rows e isto roda 1×/h, não precisa de cache.
+    weapon_fn = {
+        _wbase(item_id): fn
+        for item_id, fn in db.execute(
+            select(Weapon.item_id, Weapon.invisible_function)
+        ).all()
+        if fn
+    }
+    stats: dict[tuple[str, str], dict[str, int]] = {}
 
     # Kills vêm do ledger de kills (PlayerKillEvent) — cobre qualquer kill
     # com fama, incluindo 1v1 fora de batalha registrada, não só BattleParticipant.
-    kill_rows = db.execute(
-        select(AlbionPlayer.albion_id, PlayerKillEvent.killer_equipment)
-        .join(AlbionPlayer, AlbionPlayer.id == PlayerKillEvent.killer_player_id)
-        .where(PlayerKillEvent.fame > 0)
-    ).all()
+    for albion_id, equip in _chunked(db, PlayerKillEvent.id, lambda lo, hi: select(
+            AlbionPlayer.albion_id, PlayerKillEvent.killer_equipment)
+            .join(AlbionPlayer, AlbionPlayer.id == PlayerKillEvent.killer_player_id)
+            .where(PlayerKillEvent.fame > 0, PlayerKillEvent.id.between(lo, hi))):
+        wb = _wbase(((equip or {}).get("MainHand") or {}).get("Type"))
+        if not wb:
+            continue
+        stats.setdefault((albion_id, wb), _empty_counters())["kills"] += 1
 
-    # Elegibilidade/assists/cura vêm de toda BattleParticipant deep-processada
+    # Elegibilidade/assists/cura vêm de toda BattleParticipant deep-processada.
+    # Sets/dicts de ints e tuplas pequenas — baratos, ficam inteiros em memória.
     lethal_healing_ids = set(db.scalars(select(Battle.id).where(*lethal_with_healing_filter())).all())
-
     eligible_sq = eligible_guild_battles_subquery()
     guild_player_count = {
         (bid, gid): cnt for bid, gid, cnt in db.execute(
             select(eligible_sq.c.battle_id, eligible_sq.c.guild_id, eligible_sq.c.player_count)
         ).all()
     }
-    death_rows = db.execute(
-        select(BattleGuild.battle_id, BattleGuild.albion_guild_id, BattleGuild.deaths)
-    ).all()
+    db.commit()
 
-    bp_rows = db.execute(
-        select(
+    deaths_by_battle: dict[int, dict[str, int]] = {}
+    for bid, gid, deaths in _chunked(db, BattleGuild.id, lambda lo, hi: select(
+            BattleGuild.battle_id, BattleGuild.albion_guild_id, BattleGuild.deaths)
+            .where(BattleGuild.id.between(lo, hi))):
+        deaths_by_battle.setdefault(bid, {})[gid] = deaths
+
+    for battle_id, albion_player_id, guild_id, equipment, assists, healing_done, deaths in _chunked(
+        db, BattleParticipant.id, lambda lo, hi: select(
             BattleParticipant.battle_id, BattleParticipant.albion_player_id, BattleParticipant.guild_id,
             BattleParticipant.equipment, BattleParticipant.assists, BattleParticipant.healing_done,
             BattleParticipant.deaths,
-        ).where(BattleParticipant.equipment.isnot(None))
-    ).all()
-
-    # Fecha a read tx ANTES do processamento em Python — sem isso, o cursor
-    # lazy mantém a tx aberta e o WAL checkpoint fica bloqueado.
-    db.commit()
-
-    # ── Processamento em Python (read tx já fechada) ──
-    for albion_id, equip in kill_rows:
-        wb = _wbase(((equip or {}).get("MainHand") or {}).get("Type"))
-        if not wb:
-            continue
-        stats.setdefault((albion_id, wb), _empty_counters())["kills"] += 1
-
-    deaths_by_battle: dict[int, dict[str, int]] = {}
-    for bid, gid, deaths in death_rows:
-        deaths_by_battle.setdefault(bid, {})[gid] = deaths
-
-    for battle_id, albion_player_id, guild_id, equipment, assists, healing_done, deaths in bp_rows:
+        ).where(BattleParticipant.equipment.isnot(None), BattleParticipant.id.between(lo, hi))
+    ):
         if not equipment:
             continue  # equipment.isnot(None) não pega JSON null nem lista vazia
         wb = _wbase((equipment[0] or {}).get("weapon"))
@@ -139,7 +155,7 @@ def rebuild_player_weapon_stats(db: Session) -> int:
     # 50k IDs estoura "too many SQL variables".
     _t_del0 = _t.monotonic()
     _BATCH = 500
-    all_ids = [pid for (pid, _wb) in stats.keys()]
+    all_ids = list({pid for pid, _wb in stats.keys()})  # dedup: jogador com N armas aparece N vezes
 
     # Delete em batches por albion_player_id (evita DELETE ALL de uma vez)
     for i in range(0, len(all_ids), _BATCH):

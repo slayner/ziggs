@@ -30,7 +30,7 @@ import { useLang, useT } from "../i18n";
 import { silver, silverShort, decimal, percent } from "../lib/format";
 
 const iconUrl = (id: string, size = 64) =>
-  `/render/item/${encodeURIComponent(id)}?size=${size}`;
+  `/render/item/${encodeURIComponent(id)}?size=${size}&v=2`;
 
 const SELL_CITIES = [
   "Caerleon", "Bridgewatch", "Martlock", "Thetford", "Fort Sterling",

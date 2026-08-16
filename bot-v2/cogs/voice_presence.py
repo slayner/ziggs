@@ -26,6 +26,14 @@ from cogs.general import _guild_command_config
 SITE_URL   = os.getenv("BOT_SITE_URL", "").rstrip("/")
 API_SECRET = os.getenv("BOT_API_SECRET", "")
 
+# Teto de tempo para UM snapshot de guild (GET /voice-active + fetch do canal
+# de voz + POST /voice-snapshot). fetch_channel é REST do discord.py sem cap
+# de rate limit (_max_ratelimit_timeout=None) — sem este teto, um wedge mata
+# o snapshot_loop em silêncio (visto em produção 15/ago/26: loop parou de
+# tickar quando o evento entrou em IN_PROGRESS e nenhum snapshot de voz foi
+# coletado, congelando % em 100 pra todo mundo no callout).
+_SNAPSHOT_TIMEOUT = 60  # segundos
+
 
 async def _get(path: str) -> Optional[dict]:
     return await http_client.get_json(path, tag="voice_presence")
@@ -112,7 +120,11 @@ class VoicePresence(commands.Cog):
 async def snapshot_loop(cog: "VoicePresence") -> None:
     for guild in cog.bot.guilds:
         try:
-            await cog._snapshot_guild(guild)
+            async with asyncio.timeout(_SNAPSHOT_TIMEOUT):
+                await cog._snapshot_guild(guild)
+        except (TimeoutError, asyncio.TimeoutError):
+            print(f"[voice_presence] snapshot de {guild.id} passou de "
+                  f"{_SNAPSHOT_TIMEOUT}s — cancelando wedge, próximo tick repete")
         except Exception as e:
             print(f"[voice_presence] erro no loop ({guild.id}): {type(e).__name__}: {e}")
 

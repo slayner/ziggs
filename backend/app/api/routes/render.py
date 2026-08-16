@@ -1,8 +1,8 @@
 """Local render cache for Albion item icons.
 
 Avoids hitting the Albion CDN on every icon load and keeps the site working
-even if the Albion API/CDN goes down — once downloaded, the PNG is saved to
-disk forever and never fetched again for the same id+quality+size combination.
+even if the Albion API/CDN goes down — real art is saved to disk and reused
+for the same id+quality+size combination.
 """
 from __future__ import annotations
 
@@ -11,13 +11,19 @@ import hashlib
 import json
 import logging
 import re
+import time
 from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Response
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from app.db import AsyncSessionLocal
+from app.models.renders import RenderMiss
 
 router = APIRouter(prefix="/render", tags=["render"])
 
@@ -39,6 +45,8 @@ _KEY_LOCKS = tuple(asyncio.Lock() for _ in range(64))
 _SAFE_KEY = re.compile(r"^[\w@.\-' ]+$")
 
 _CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+_MISSING_CACHE_HEADERS = {"Cache-Control": "public, max-age=300"}
+_VALID_ITEM_SIZES = (0, 64, 128)
 
 # In-memory cache for HOT icons. The browser caches each icon once (immutable),
 # but different users repeat the same common icons (meta gear, weapons) — and
@@ -70,6 +78,13 @@ def _mem_put(k: str, content: bytes) -> None:
     while _MEM_CACHE_BYTES > _MEM_CACHE_MAX_BYTES:
         _, evicted = _MEM_CACHE.popitem(last=False)  # remove least recently used
         _MEM_CACHE_BYTES -= len(evicted)
+
+
+def _mem_drop(k: str) -> None:
+    global _MEM_CACHE_BYTES
+    content = _MEM_CACHE.pop(k, None)
+    if content is not None:
+        _MEM_CACHE_BYTES -= len(content)
 
 # The spell CDN never returns 404. For an id with no art it returns 200 with
 # one of:
@@ -169,17 +184,145 @@ def _generate_placeholder(key: str) -> bytes | None:
     return buf.getvalue()
 
 
-@router.get("/item/{key}")
-async def render_item(key: str, quality: int = 0, size: int = 0) -> Response:
+def _missing_path(cache_path: Path) -> Path:
+    return cache_path.with_name(f"{cache_path.name}.missing")
+
+
+@lru_cache(maxsize=10)
+def _placeholder_bytes_for_tier(tier_key: str) -> bytes | None:
+    # The generated placeholder only varies by tier. Caching the variants lets
+    # us recognize legacy placeholders without decoding every cached PNG.
+    return _generate_placeholder(tier_key)
+
+
+def _is_generated_placeholder(content: bytes, key: str) -> bool:
+    tier = re.match(r"T(\d+)", key)
+    placeholder = _placeholder_bytes_for_tier(f"T{tier.group(1)}" if tier else "UNIQUE")
+    return placeholder is not None and content == placeholder
+
+
+def _cached_real_render(cache_path: Path, key: str) -> bytes | None:
+    """Read real cache bytes, excluding corrupt and generated-placeholder files."""
+    if not _cache_usable(cache_path):
+        return None
+    try:
+        content = cache_path.read_bytes()
+    except OSError:
+        return None
+    if _is_generated_placeholder(content, key):
+        _missing_path(cache_path).touch(exist_ok=True)
+        _mem_drop(str(cache_path))
+        return None
+    return content
+
+
+def _cache_has_real_render(cache_path: Path, key: str) -> bool:
+    return _cached_real_render(cache_path, key) is not None
+
+
+def _cached_missing_render(cache_path: Path, mkey: str) -> bytes | None:
+    """Serve a known placeholder without reopening the CDN on every request."""
+    marker = _missing_path(cache_path)
+    if not marker.exists():
+        return None
+    hot = _mem_get(mkey)
+    if hot is not None:
+        return hot
+    try:
+        content = cache_path.read_bytes()
+    except OSError:
+        marker.unlink(missing_ok=True)
+        return None
+    _mem_put(mkey, content)
+    return content
+
+
+def _cache_path(kind: str, key: str, quality: int = 0, size: int = 0) -> Path:
+    if kind == "item":
+        return _CACHE_DIR / f"{quote(key, safe='')}_q{quality}_s{size}.png"
+    if kind == "spell":
+        return _SPELL_DIR / f"{quote(key, safe='')}.png"
+    raise ValueError(f"unknown render kind: {kind}")
+
+
+def _request_params(kind: str, quality: int = 0, size: int = 0) -> dict[str, int]:
+    if kind != "item":
+        return {}
     params: dict[str, int] = {}
     if quality:
         params["quality"] = quality
     if size:
         params["size"] = size
-    # File name kept as it always was — changing it would invalidate the cache
-    # already downloaded to disk.
+    return params
+
+
+_RETRY_DELAYS = (timedelta(hours=6), timedelta(days=1), timedelta(days=7))
+_UNAVAILABLE_RETRY_DELAY = timedelta(hours=1)
+_RECORDED_MISSES: set[tuple[str, str, int, int]] = set()
+_last_miss_error_log = 0.0
+
+
+def retry_delay(miss_count: int) -> timedelta:
+    return _RETRY_DELAYS[min(max(miss_count, 1) - 1, len(_RETRY_DELAYS) - 1)]
+
+
+async def _record_render_miss(kind: str, key: str, quality: int, size: int) -> None:
+    """Insert once; retries themselves update the existing row in the worker."""
+    global _last_miss_error_log
+    identity = (kind, key, quality, size)
+    if identity in _RECORDED_MISSES:
+        return
+    now = datetime.now(timezone.utc)
+    stmt = pg_insert(RenderMiss).values(
+        kind=kind,
+        key=key,
+        quality=quality,
+        size=size,
+        miss_count=1,
+        last_attempt_at=now,
+        next_retry_at=now + retry_delay(1),
+    ).on_conflict_do_nothing()
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(stmt)
+            await db.commit()
+    except Exception as exc:
+        now_monotonic = time.monotonic()
+        if now_monotonic - _last_miss_error_log >= 60:
+            _last_miss_error_log = now_monotonic
+            logging.getLogger(__name__).warning(
+                "não foi possível registrar render ausente: %s; tentará no próximo acesso (%s)", key, exc,
+            )
+    else:
+        _RECORDED_MISSES.add(identity)
+
+
+async def _fetch_render(
+    kind: str, key: str, params: dict[str, int], fallback: str | None = None,
+) -> bytes | None:
+    """Fetch real render bytes, or None when Albion has no art for the key."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        async def fetch(candidate: str) -> bytes | None:
+            url = f"https://render.albiononline.com/v1/{kind}/{quote(candidate, safe='')}.png"
+            resp = await client.get(url, params=params)
+            if resp.status_code != 200 or not resp.content or _is_placeholder(resp.content):
+                return None
+            return resp.content
+
+        content = await fetch(key)
+        if content is None and fallback and fallback != key:
+            return await fetch(fallback)
+        return content
+
+
+@router.get("/item/{key}")
+async def render_item(
+    key: str, quality: int = 0, size: int = 0,
+) -> Response:
+    if not 0 <= quality <= 5 or size not in _VALID_ITEM_SIZES:
+        raise HTTPException(400, "invalid render parameters")
     return await _cached_render(
-        "item", key, _CACHE_DIR / f"{quote(key, safe='')}_q{quality}_s{size}.png", params
+        "item", key, _cache_path("item", key, quality, size), _request_params("item", quality, size)
     )
 
 
@@ -191,7 +334,7 @@ async def render_spell(key: str) -> Response:
     # NAME, not uniquename; a sub-spell then returns the white placeholder by
     # id and resolves through the name.
     return await _cached_render(
-        "spell", key, _SPELL_DIR / f"{quote(key, safe='')}.png", {},
+        "spell", key, _cache_path("spell", key), {},
         fallback=_spell_display_names().get(key),
     )
 
@@ -208,60 +351,120 @@ async def _cached_render(
 
     mkey = str(cache_path)
     key_lock = _KEY_LOCKS[hash(mkey) % len(_KEY_LOCKS)]
+    missing = _cached_missing_render(cache_path, mkey)
+    if missing is not None:
+        await _record_render_miss(kind, key, params.get("quality", 0), params.get("size", 0))
+        return Response(content=missing, media_type="image/png", headers=_MISSING_CACHE_HEADERS)
     hot = _mem_get(mkey)
     if hot is not None:  # hot icon: served from RAM, no stat or disk
         return Response(content=hot, media_type="image/png", headers=_CACHE_HEADERS)
-
-    if _cache_usable(cache_path):
-        content = cache_path.read_bytes()
-        _mem_put(mkey, content)  # warm it for next time
-        return Response(content=content, media_type="image/png", headers=_CACHE_HEADERS)
-
-    async def fetch(k: str) -> bytes | None:
-        """Render bytes, or None if Albion has no art for this key."""
-        url = f"https://render.albiononline.com/v1/{kind}/{quote(k, safe='')}.png"
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, params=params)
-        if resp.status_code != 200 or not resp.content or _is_placeholder(resp.content):
-            return None
-        return resp.content
+    cached = _cached_real_render(cache_path, key)
+    if cached is not None:
+        _mem_put(mkey, cached)
+        return Response(content=cached, media_type="image/png", headers=_CACHE_HEADERS)
 
     try:
         async with key_lock:
-            # another request may have filled the cache (RAM or disk) while we
-            # were waiting our turn
+            # Fetch and write share the lock so a cold key has one CDN request.
+            missing = _cached_missing_render(cache_path, mkey)
+            if missing is not None:
+                await _record_render_miss(kind, key, params.get("quality", 0), params.get("size", 0))
+                return Response(content=missing, media_type="image/png", headers=_MISSING_CACHE_HEADERS)
             hot = _mem_get(mkey)
             if hot is not None:
                 return Response(content=hot, media_type="image/png", headers=_CACHE_HEADERS)
-            if _cache_usable(cache_path):
-                content = cache_path.read_bytes()
-                _mem_put(mkey, content)
-                return Response(content=content, media_type="image/png", headers=_CACHE_HEADERS)
+            cached = _cached_real_render(cache_path, key)
+            if cached is not None:
+                _mem_put(mkey, cached)
+                return Response(content=cached, media_type="image/png", headers=_CACHE_HEADERS)
             async with _FETCH_SEM:
-                content = await fetch(key)
-                if content is None and fallback and fallback != key:
-                    content = await fetch(fallback)
+                content = await _fetch_render(kind, key, params, fallback)
+            if content is None:
+                placeholder = _generate_placeholder(key)
+                if placeholder is None:
+                    raise HTTPException(404, "render not found")
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_bytes(placeholder)
+                _missing_path(cache_path).touch(exist_ok=True)
+                _mem_put(mkey, placeholder)
+                await _record_render_miss(kind, key, params.get("quality", 0), params.get("size", 0))
+                return Response(content=placeholder, media_type="image/png", headers=_MISSING_CACHE_HEADERS)
+
+            # Written under the original key even when it came from spell fallback.
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(content)
+            _missing_path(cache_path).unlink(missing_ok=True)
+            _RECORDED_MISSES.discard((kind, key, params.get("quality", 0), params.get("size", 0)))
+            _mem_drop(mkey)
+            _mem_put(mkey, content)
+            return Response(content=content, media_type="image/png", headers=_CACHE_HEADERS)
     except httpx.HTTPError:
         raise HTTPException(502, "Albion render unavailable")
 
-    if content is None:
-        # A CDN da Albion não tem render pra este item (kill trophies do Mists,
-        # itens novos antes do render ser publicado). Gera um placeholder com
-        # a cor do tier em vez de 404 — o site/companion sempre tem uma imagem.
-        placeholder = _generate_placeholder(key)
-        if placeholder is not None:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_bytes(placeholder)
-            _mem_put(mkey, placeholder)
-            return Response(content=placeholder, media_type="image/png", headers=_CACHE_HEADERS)
-        raise HTTPException(404, "render not found")
 
-    # Written under the ORIGINAL key even when it came from the fallback —
-    # requesters always ask by uniquename.
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_bytes(content)
-    _mem_put(mkey, content)
-    return Response(content=content, media_type="image/png", headers=_CACHE_HEADERS)
+async def recover_render_miss(kind: str, key: str, quality: int, size: int) -> bool | None:
+    """Retry one queued miss: true=recovered, false=still absent, none=CDN error."""
+    try:
+        cache_path = _cache_path(kind, key, quality, size)
+    except ValueError:
+        return True  # Discard malformed legacy rows instead of retrying forever.
+    mkey = str(cache_path)
+    key_lock = _KEY_LOCKS[hash(mkey) % len(_KEY_LOCKS)]
+    fallback = _spell_display_names().get(key) if kind == "spell" else None
+    async with key_lock:
+        missing = _cached_missing_render(cache_path, mkey)
+        if missing is None and _cache_has_real_render(cache_path, key):
+            _missing_path(cache_path).unlink(missing_ok=True)
+            _mem_drop(mkey)
+            return True
+        try:
+            async with _FETCH_SEM:
+                content = await _fetch_render(kind, key, _request_params(kind, quality, size), fallback)
+        except httpx.HTTPError:
+            return None
+        if content is None:
+            if not cache_path.exists():
+                placeholder = _generate_placeholder(key)
+                if placeholder is not None:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_bytes(placeholder)
+                    _mem_put(mkey, placeholder)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            _missing_path(cache_path).touch(exist_ok=True)
+            return False
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(content)
+        _missing_path(cache_path).unlink(missing_ok=True)
+        _RECORDED_MISSES.discard((kind, key, quality, size))
+        _mem_drop(mkey)
+        _mem_put(mkey, content)
+        return True
+
+
+_ITEM_CACHE_FILE = re.compile(r"^(.*)_q(\d+)_s(\d+)\.png$")
+
+
+def discover_cached_render_misses(cache_dir: Path = _CACHE_DIR) -> list[tuple[str, str, int, int]]:
+    """Mark old generated placeholders so deployments also heal past misses."""
+    misses: set[tuple[str, str, int, int]] = set()
+    for cache_path in cache_dir.glob("*.png"):
+        match = _ITEM_CACHE_FILE.match(cache_path.name)
+        if not match:
+            continue
+        key = unquote(match.group(1))
+        identity = ("item", key, int(match.group(2)), int(match.group(3)))
+        marker = _missing_path(cache_path)
+        if marker.exists():
+            misses.add(identity)
+        else:
+            try:
+                content = cache_path.read_bytes()
+            except OSError:
+                continue
+            if _is_generated_placeholder(content, key):
+                marker.touch(exist_ok=True)
+                misses.add(identity)
+    return sorted(misses)
 
 
 # --- Pre-warm: baixa ícones que faltam no cache de disco ----------------------
@@ -291,7 +494,7 @@ async def run_prerender_forever() -> None:
                 for item_id in all_ids:
                     # só checa qualidade 0, tamanho 0 (o default do site)
                     cache_path = _CACHE_DIR / f"{quote(item_id, safe='')}_q0_s0.png"
-                    if not _cache_usable(cache_path):
+                    if _cached_missing_render(cache_path, str(cache_path)) is None and not _cache_has_real_render(cache_path, item_id):
                         missing.append(item_id)
                 if missing:
                     batch = missing[:_PRERENDER_BATCH]
@@ -299,22 +502,12 @@ async def run_prerender_forever() -> None:
                     fetched = 0
                     for item_id in batch:
                         cache_path = _CACHE_DIR / f"{quote(item_id, safe='')}_q0_s0.png"
-                        mkey = str(cache_path)
-                        if _mem_get(mkey) is not None or _cache_usable(cache_path):
-                            continue  # outro request preencheu enquanto esperávamos
                         try:
-                            async with _FETCH_SEM:
-                                url = f"https://render.albiononline.com/v1/item/{quote(item_id, safe='')}.png"
-                                async with httpx.AsyncClient(timeout=10) as client:
-                                    resp = await client.get(url)
-                            if resp.status_code == 200 and resp.content and not _is_placeholder(resp.content):
-                                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                                cache_path.write_bytes(resp.content)
-                                _mem_put(mkey, resp.content)
+                            await _cached_render("item", item_id, cache_path, {})
+                            if _missing_path(cache_path).exists():
+                                continue
+                            if _cache_has_real_render(cache_path, item_id):
                                 fetched += 1
-                            else:
-                                # sem render na CDN — placeholder vai ser gerado on-demand
-                                pass
                         except Exception:
                             pass  # erro individual não aborta o batch
                         await asyncio.sleep(_PRERENDER_DELAY)

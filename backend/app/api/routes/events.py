@@ -28,6 +28,7 @@ from app.services import event_escalation as esc_svc
 from app.services.prices import _AVG_SENTINEL, sync_5city_prices
 
 router = APIRouter(prefix="/guilds/{guild_id}/events", tags=["events"])
+public_router = APIRouter(prefix="/public/escalacao", tags=["events"])
 
 
 def _guild_db_user(
@@ -443,6 +444,17 @@ def remove_death(
 
 
 # ── Escalação (assentamento de inscritos nos slots da comp) ──────────────────
+
+@public_router.get("/{token}", response_model=EscalationOut)
+def get_public_escalacao(
+    token: str = Path(..., min_length=32, max_length=32, pattern=r"^[A-Za-z0-9_-]+$"),
+    db: Session = Depends(deps.db_session),
+):
+    """Escalação compartilhável, somente leitura, por token aleatório do evento."""
+    try:
+        return esc_svc.build_public_escalation(db, token)
+    except esc_svc.ServiceError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 @router.get("/{event_id}/escalacao", response_model=EscalationOut)
 def get_escalacao(

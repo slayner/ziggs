@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app.api.routes import render as render_module
 from app.api.routes.render import (
@@ -74,6 +75,72 @@ def test_cache_valida_conteudo_suspeito_e_remove_vazio():
         assert not _cache_usable(Path(d) / "nao_existe.png")
 
 
+def test_placeholder_antigo_entra_na_fila_de_recuperacao():
+    with TemporaryDirectory() as d:
+        cache_dir = Path(d)
+        key = "T8_HEAD_PLATE_SET1"
+        cache_path = cache_dir / "T8_HEAD_PLATE_SET1_q1_s128.png"
+        placeholder = render_module._generate_placeholder(key)
+        assert placeholder is not None
+        cache_path.write_bytes(placeholder)
+
+        misses = render_module.discover_cached_render_misses(cache_dir)
+
+        assert misses == [("item", key, 1, 128)]
+        assert render_module._missing_path(cache_path).exists()
+        assert not render_module._cache_has_real_render(cache_path, key)
+
+
+def test_retentar_render_usa_backoff_limitado():
+    assert render_module.retry_delay(1).total_seconds() == 6 * 3600
+    assert render_module.retry_delay(2).total_seconds() == 24 * 3600
+    assert render_module.retry_delay(3).total_seconds() == 7 * 24 * 3600
+    assert render_module.retry_delay(99).total_seconds() == 7 * 24 * 3600
+
+
+def test_placeholder_nao_fica_immutavel_no_navegador():
+    with TemporaryDirectory() as d:
+        cache_path = Path(d) / "T8_HEAD_PLATE_SET1_q1_s128.png"
+        placeholder = render_module._generate_placeholder("T8_HEAD_PLATE_SET1")
+        assert placeholder is not None
+        cache_path.write_bytes(placeholder)
+        render_module._missing_path(cache_path).touch()
+
+        with patch("app.api.routes.render._record_render_miss", AsyncMock()):
+            response = asyncio.run(render_module._cached_render("item", "T8_HEAD_PLATE_SET1", cache_path, {}))
+
+        assert response.headers["cache-control"] == "public, max-age=300"
+
+
+def test_retentativa_preserva_placeholder_pequeno():
+    async def run(cache_dir: Path):
+        old_cache_dir = render_module._CACHE_DIR
+        render_module._CACHE_DIR = cache_dir
+        try:
+            cache_path = cache_dir / "T1_TEST_q0_s0.png"
+            cache_path.write_bytes(b"x" * 500)
+            render_module._missing_path(cache_path).touch()
+            with patch("app.api.routes.render._fetch_render", AsyncMock(return_value=None)):
+                result = await render_module.recover_render_miss("item", "T1_TEST", 0, 0)
+            return result, cache_path
+        finally:
+            render_module._CACHE_DIR = old_cache_dir
+
+    with TemporaryDirectory() as d:
+        result, cache_path = asyncio.run(run(Path(d)))
+        assert result is False
+        assert cache_path.exists()
+
+
+def test_render_rejeita_tamanho_que_criaria_cache_sem_limite():
+    try:
+        asyncio.run(render_module.render_item("T8_HEAD_PLATE_SET1", size=1))
+    except render_module.HTTPException as exc:
+        assert exc.status_code == 400
+    else:
+        raise AssertionError("size arbitrário não deve criar uma chave de cache")
+
+
 def test_cache_frio_concorrente_baixa_uma_vez():
     calls = 0
 
@@ -109,5 +176,10 @@ if __name__ == "__main__":
     test_hash_do_placeholder_esta_bem_formado()
     test_fallback_por_nome_encontra_a_skill()
     test_cache_valida_conteudo_suspeito_e_remove_vazio()
+    test_placeholder_antigo_entra_na_fila_de_recuperacao()
+    test_retentar_render_usa_backoff_limitado()
+    test_placeholder_nao_fica_immutavel_no_navegador()
+    test_retentativa_preserva_placeholder_pequeno()
+    test_render_rejeita_tamanho_que_criaria_cache_sem_limite()
     test_cache_frio_concorrente_baixa_uma_vez()
     print("render OK")

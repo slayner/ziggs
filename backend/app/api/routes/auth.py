@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -453,6 +453,13 @@ class GuildSettingsIn(BaseModel):
     # Mínimo de jogadores numa batalha pra ser postada no feed (filtros por
     # guilda — default 10). Batalhas menores que isso são ignoradas.
     battle_feed_min_players: int | None = None
+    # ── Registro (/register): quando True (default), o /register exige que o
+    # personagem esteja na guilda Albion configurada e o registration_checker
+    # vigia os registros ativos, removendo o cargo de quem sair. Quando False,
+    # a checagem de guilda só acontece no /register que o próprio usuário faz
+    # (self-register); registrar um terceiro assume a identidade sem verificar
+    # e ninguém é vigiado — útil pra guildas que usam o cargo só como tag.
+    register_remove_role_on_leave: bool | None = None
     # ── Juicy kills: kills com silver_dropped >= min postadas numa sala do
     # Discord. O admin escolhe a sala, os servidores (regiões) pra monitorar,
     # e o threshold de prata (default 50M) e/ou fama. O worker precifica
@@ -519,6 +526,19 @@ async def update_guild_settings(
             settings["ally_allowed_guilds"] = body.ally_allowed_guilds
         else:
             settings.pop("ally_allowed_guilds", None)
+    if "register_remove_role_on_leave" in body.model_fields_set:
+        was_on = bool(settings.get("register_remove_role_on_leave", True))
+        if body.register_remove_role_on_leave is None:
+            settings.pop("register_remove_role_on_leave", None)  # volta ao default (True)
+        else:
+            settings["register_remove_role_on_leave"] = body.register_remove_role_on_leave
+        # Religar a vigilância (False→True) agenda a verificação retroativa dos
+        # registros "de confiança" criados enquanto ela estava desligada — o
+        # registration_checker resolve cada nick na API do Albion: encontrado →
+        # registro vira real (ID verdadeiro) e a membresia é checada na hora;
+        # não encontrado após algumas tentativas → perde registro e cargo.
+        if not was_on and bool(settings.get("register_remove_role_on_leave", True)):
+            settings["register_verify_pending"] = True
     if "bot_language" in body.model_fields_set:
         if body.bot_language in BOT_LANGUAGES:
             settings["bot_language"] = body.bot_language
@@ -1370,6 +1390,12 @@ async def bot_battle_feed_synced(
 class BotRegisterIn(BaseModel):
     discord_user_id: str
     albion_player_name: str
+    # True quando o comando usou o parâmetro `usuario` pra registrar outra
+    # pessoa (não o autor da interação). Com a vigilância desligada
+    # (register_remove_role_on_leave=False), esse registro é "de confiança":
+    # assume a identidade sem NENHUMA consulta à API do Albion e nunca é
+    # revalidado pelo registration_checker.
+    registering_other: bool = False
 
 
 @router.post("/bot/register/{guild_id}")
@@ -1381,12 +1407,21 @@ async def bot_register(
 ):
     """Chamado pelo /register do bot. Verifica se o personagem está na guilda
     Albion configurada e devolve o cargo a atribuir — quem efetivamente
-    atribui o cargo é o bot (já tem o Member da interação em mãos)."""
+    atribui o cargo é o bot (já tem o Member da interação em mãos). Exceção:
+    com register_remove_role_on_leave=False + registro de um terceiro
+    (registering_other), registra de confiança SEM consultar a API do Albion
+    — ID sintético "manual:<nick>", jamais revalidado."""
     _require_bot_secret(authorization)
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404, "servidor não encontrado")
-    if not g.albion_guild_id:
+    # Modo confiável: vigilância desligada + alguém registrando um terceiro —
+    # assume que aquele usuário é aquele jogador, sem checar guilda alguma.
+    trusted = (
+        not (g.settings or {}).get("register_remove_role_on_leave", True)
+        and body.registering_other
+    )
+    if not g.albion_guild_id and not trusted:
         return {"ok": False, "reason": "no_albion_guild"}
 
     name = body.albion_player_name.strip()
@@ -1406,6 +1441,60 @@ async def bot_register(
             "role_id": str(previous.role_id),
             "albion_player_name": previous.albion_player_name,
         }
+
+    settings = g.settings or {}
+
+    if trusted:
+        # Zero consultas à API do Albion: assume a identidade informada. O ID é
+        # sintético ("manual:<nick>", minúsculo, estável e único por nick) —
+        # nunca foi verificado, então o registration_checker pula esses: não há
+        # o que revalidar (a checagem consultaria um ID que não existe na API).
+        manual_id = f"manual:{nl}"
+        region = settings.get("albion_guild_region")
+        if region not in HOSTS:
+            region = "americas"
+        role_id = settings.get("register_role_id")
+        if not role_id:
+            return {"ok": False, "reason": "no_role_configured"}
+        # Linha do PRÓPRIO usuário apenas (por ID sintético OU nick, case-
+        # insensitive — cobre nick registrado antes pelo fluxo real, com ID
+        # verdadeiro): reusa em vez de acumular. Mesmo nick num OUTRO Discord
+        # é permitido — gente com main+alt no Discord registra o mesmo char
+        # duas vezes, cada linha com seu cargo (constraint por user).
+        existing = await db.scalar(select(BotRegistration).where(
+            BotRegistration.guild_id == guild_id,
+            BotRegistration.discord_user_id == int(body.discord_user_id),
+            or_(
+                BotRegistration.albion_player_id == manual_id,
+                func.lower(BotRegistration.albion_player_name) == nl,
+            ),
+        ))
+        if existing and existing.active:
+            return {
+                "ok": True,
+                "role_id": str(existing.role_id),
+                "albion_player_name": existing.albion_player_name,
+            }
+        if existing:
+            existing.albion_player_name = name
+            existing.region = region
+            existing.role_id = int(role_id)
+            existing.is_ally = False
+            existing.active = True
+        else:
+            db.add(BotRegistration(
+                guild_id=guild_id,
+                discord_user_id=int(body.discord_user_id),
+                albion_player_id=manual_id,
+                albion_player_name=name,
+                region=region,
+                role_id=int(role_id),
+                is_ally=False,
+                active=True,
+            ))
+        await db.commit()
+        return {"ok": True, "role_id": str(role_id), "albion_player_name": name}
+
     found: dict | None = None
     region: str | None = None
     any_host_ok = False
@@ -1452,7 +1541,6 @@ async def bot_register(
 
     player_guild_id = str(found.get("GuildId") or "")
     player_alliance_id = str(found.get("AllianceId") or "") or None
-    settings = g.settings or {}
     is_ally = False
 
     from app.services.guild_links import async_albion_guild_ids
@@ -1479,24 +1567,24 @@ async def bot_register(
         return {"ok": False, "reason": "no_role_configured"}
 
     albion_player_id = found["Id"]
+    # Upsert por (guild, personagem, discord) — mesmo char em outro Discord
+    # (main + alt da mesma pessoa) ganha linha própria em vez de erro.
     existing = await db.scalar(select(BotRegistration).where(
         BotRegistration.guild_id == guild_id,
         BotRegistration.albion_player_id == albion_player_id,
+        BotRegistration.discord_user_id == int(body.discord_user_id),
     ))
     if existing and existing.active:
         # Idempotente: se a resposta do primeiro registro se perdeu, a nova
         # tentativa precisa devolver os dados necessários para o bot aplicar o
-        # cargo no Discord. Outro usuário continua sem poder tomar o registro.
-        if existing.discord_user_id == int(body.discord_user_id):
-            return {
-                "ok": True,
-                "role_id": str(existing.role_id),
-                "albion_player_name": existing.albion_player_name,
-            }
-        return {"ok": False, "reason": "already_registered"}
+        # cargo no Discord.
+        return {
+            "ok": True,
+            "role_id": str(existing.role_id),
+            "albion_player_name": existing.albion_player_name,
+        }
 
     if existing:
-        existing.discord_user_id = int(body.discord_user_id)
         existing.albion_player_name = found["Name"]
         existing.region = region
         existing.role_id = int(role_id)
@@ -1551,6 +1639,47 @@ async def bot_unregister(
         r.active = False
     await db.commit()
     return {"ok": True, "role_ids": role_ids, "discord_user_ids": discord_user_ids}
+
+
+@router.get("/bot/registration-lookup/{guild_id}")
+async def bot_registration_lookup(
+    guild_id: int,
+    nick: str | None = None,
+    user_id: str | None = None,
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(deps.async_db_session),
+):
+    """Busca registro ATIVO por nick do jogo (case-insensitive) ou por
+    discord_user_id — o INVERSO do /register. Usado pelo bot LEGADO
+    (bot-legacy): o energy control casa o nick da log de energia com o
+    usuário Discord, e a mentoria resolve o nick do post de trial; o banco
+    deles (SQLite próprio) não tem mais a tabela registrations porque o
+    /register agora é do bot novo. Devolve TODOS os registros ativos que
+    casam (um usuário pode ter vários personagens)."""
+    _require_bot_secret(authorization)
+    if not nick and not user_id:
+        raise HTTPException(400, "informe nick ou user_id")
+    conditions = [
+        BotRegistration.guild_id == guild_id,
+        BotRegistration.active.is_(True),
+    ]
+    if nick:
+        conditions.append(func.lower(BotRegistration.albion_player_name) == nick.strip().lower())
+    else:
+        conditions.append(BotRegistration.discord_user_id == int(user_id))
+    regs = (await db.scalars(select(BotRegistration).where(*conditions))).all()
+    return {
+        "ok": True,
+        "registrations": [
+            {
+                "discord_user_id": str(r.discord_user_id),
+                "albion_player_name": r.albion_player_name,
+                "albion_player_id": r.albion_player_id,
+                "region": r.region,
+            }
+            for r in regs
+        ],
+    }
 
 
 class BotMemberGoneIn(BaseModel):
@@ -3571,3 +3700,138 @@ async def _require_admin_async(db: AsyncSession, user: User, guild_id: int) -> G
     if not m.is_guild_admin:
         raise HTTPException(403, "requer admin do servidor")
     return m
+
+
+# ── Sync de membros Discord (bot → backend) ──────────────────────────────────
+
+class BotMemberIn(BaseModel):
+    user_id: int
+    username: str
+    global_name: str | None = None
+    avatar: str | None = None
+    discord_role_ids: list[str] = []
+    is_guild_admin: bool = False
+
+
+class BotMemberSyncIn(BaseModel):
+    members: list[BotMemberIn]
+
+
+@router.post("/bot/guilds/{guild_id}/members-sync")
+def bot_members_sync(
+    guild_id: int,
+    body: BotMemberSyncIn,
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Bot envia a lista de membros do Discord (5min). O backend faz upsert de
+    User + GuildMember — popula a tabela com TODOS os membros, não só os que
+    logaram no site. O site usa isso pra autocomplete ao adicionar participante
+    a evento. Saídas (on_member_remove) já são marcadas pelo bot separadamente;
+    este sync só cuida de entradas e atualizações."""
+    _require_bot_secret(authorization)
+    if not body.members:
+        return {"ok": True, "synced": 0}
+    for m in body.members:
+        user = db.get(User, m.user_id)
+        if user is None:
+            db.add(User(
+                id=m.user_id, username=m.username,
+                global_name=m.global_name, avatar=m.avatar,
+            ))
+        else:
+            user.username = m.username
+            if m.global_name is not None:
+                user.global_name = m.global_name
+            if m.avatar is not None:
+                user.avatar = m.avatar
+        gm = db.scalar(select(GuildMember).where(
+            GuildMember.guild_id == guild_id, GuildMember.user_id == m.user_id,
+        ))
+        if gm is None:
+            db.add(GuildMember(
+                guild_id=guild_id, user_id=m.user_id,
+                discord_role_ids=m.discord_role_ids,
+                is_guild_admin=m.is_guild_admin,
+            ))
+        else:
+            gm.discord_role_ids = m.discord_role_ids
+            gm.is_guild_admin = m.is_guild_admin
+            gm.left_at = None
+    db.flush()
+    db.commit()
+    return {"ok": True, "synced": len(body.members)}
+
+
+@router.get("/guilds/{guild_id}/members/search")
+def search_guild_members(
+    guild_id: int,
+    q: str = Query("", max_length=100),
+    guild: Guild = Depends(deps.tenant_guild),
+    db: Session = Depends(deps.db_session),
+    _member: GuildMember = Depends(deps.require_guild_member),
+):
+    """Busca membros do server por nome (autocomplete do site). `q` vazio
+    retorna os primeiros 20 (listagem ao focar no campo). Com `q`, filtra
+    por username/global_name/in_game_name E por nick de personagem registrado
+    (BotRegistration.albion_player_name) — assim buscar "TankMaster" acha o
+    user do Discord que registrou aquele char, mesmo que o nome do Discord
+    seja completamente diferente."""
+    stmt = (
+        select(GuildMember, User)
+        .join(User, GuildMember.user_id == User.id)
+        .where(
+            GuildMember.guild_id == guild_id,
+            GuildMember.left_at.is_(None),
+        )
+    )
+    if q.strip():
+        pattern = f"%{q.strip()}%"
+        stmt = stmt.where(or_(
+            func.lower(User.username).like(func.lower(pattern)),
+            func.lower(User.global_name).like(func.lower(pattern)),
+            func.lower(GuildMember.in_game_name).like(func.lower(pattern)),
+            exists().where(
+                BotRegistration.guild_id == guild_id,
+                BotRegistration.discord_user_id == User.id,
+                BotRegistration.active.is_(True),
+                func.lower(BotRegistration.albion_player_name).like(func.lower(pattern)),
+            ),
+        ))
+    rows = db.execute(stmt.order_by(User.global_name, User.username).limit(20)).all()
+    # Busca nicks in-game ativos (BotRegistration) para os user_ids encontrados.
+    # Um user pode ter múltiplos chars registrados — pega o mais recente (id desc).
+    user_ids = [u.id for _gm, u in rows]
+    ign_map: dict[int, str] = {}
+    if user_ids:
+        ign_rows = db.execute(
+            select(BotRegistration.discord_user_id, BotRegistration.albion_player_name)
+            .where(
+                BotRegistration.guild_id == guild_id,
+                BotRegistration.discord_user_id.in_(user_ids),
+                BotRegistration.active.is_(True),
+            )
+            .order_by(BotRegistration.id.desc())
+        ).all()
+        for uid, name in ign_rows:
+            if uid not in ign_map:
+                ign_map[uid] = name
+    return [
+        {
+            "user_id": gm.user_id,
+            "username": u.username,
+            "global_name": u.global_name,
+            "avatar": _discord_avatar_url(u.id, u.avatar),
+            "in_game_name": ign_map.get(u.id) or gm.in_game_name,
+        }
+        for gm, u in rows
+    ]
+
+
+def _discord_avatar_url(user_id: int, avatar: str | None) -> str | None:
+    """Constrói a URL do avatar do Discord a partir do hash. O banco guarda
+    apenas o hash (padrão do OAuth), não a URL completa."""
+    if not avatar:
+        return None
+    ext = ".gif" if avatar.startswith("a_") else ".png"
+    return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar}{ext}"

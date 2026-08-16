@@ -37,7 +37,7 @@ from app.services.player_tracker import HOSTS, make_client
 
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL = 60  # 1 min — pedido explícito; deep-process é paralelo e compete no bg pool do albion_gate (6 slots), sobra folga
+POLL_INTERVAL = 50  # pedido explícito (ago/2026): check de batalhas novas a cada 50s; deep-process é paralelo e compete no bg pool do albion_gate (6 slots), sobra folga
 DEEP_PROCESS_MIN_PLAYERS = 10   # abaixo disto: nem armazena (upsert_battle_light devolve None).
 # Histórico: era 0 (toda batalha deep-processada, até 1v1/gank) pra alimentar
 # weapon_stats com toda aparição. Subiu pra 10 porque batalhas pequenas são a
@@ -130,7 +130,7 @@ async def fetch_battles(client: httpx.AsyncClient, host: str, limit: int = 51, o
     # numa página do feed descartava-a até o próximo ciclo de 60s.
     for attempt in range(2):
         try:
-            async with slot():
+            async with slot(host):
                 resp = await client.get(
                     f"https://{host}/api/gameinfo/battles",
                     params={"sort": "recent", "limit": limit, "offset": offset},
@@ -151,7 +151,7 @@ async def fetch_events(client: httpx.AsyncClient, host: str, albion_battle_id: s
         # a cada falha; retry isolado evita re-fetch e cobre o timeout transiente.
         for attempt in range(2):
             try:
-                async with slot():
+                async with slot(host):
                     resp = await client.get(
                         f"https://{host}/api/gameinfo/events/battle/{albion_battle_id}",
                         params={"offset": page * EVENTS_PAGE_LIMIT, "limit": EVENTS_PAGE_LIMIT},
@@ -623,7 +623,7 @@ async def deep_process(client: httpx.AsyncClient, db: AsyncSession, battle: Batt
 
 
 async def fetch_battle_detail(client: httpx.AsyncClient, host: str, albion_id: str) -> dict | None:
-    async with slot():
+    async with slot(host):
         resp = await client.get(f"https://{host}/api/gameinfo/battles/{albion_id}")
     if resp.status_code != 200:
         return None

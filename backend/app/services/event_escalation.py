@@ -100,6 +100,13 @@ def _get_event(db: Session, guild_id: int, event_id: int) -> Event:
     return ev
 
 
+def build_public_escalation(db: Session, token: str) -> dict:
+    ev = db.scalar(select(Event).where(Event.escalation_token == token))
+    if ev is None:
+        raise ServiceError("evento não encontrado")
+    return build_escalation(db, ev.guild_id, ev.id, None)
+
+
 def build_escalation(
     db: Session, guild_id: int, event_id: int, member: GuildMember | None,
 ) -> dict:
@@ -186,6 +193,7 @@ def build_escalation(
     return {
         "event": {
             "id": ev.id,
+            "guild_id": str(ev.guild_id),
             "title": ev.title,
             "scheduled_at": ev.scheduled_at,
             "seriousness": ev.seriousness.value,

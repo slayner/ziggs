@@ -190,47 +190,74 @@ class _RateLimiter:
 #   - Sobrecarga (429/502/503/504): recuo MULTIPLICATIVO (×RATE_DECREASE), no
 #     máx um por rodada (1/rate) — cascata de erros concorrentes = 1 backoff.
 # Sawtooth clássico (TCP): converge no rate sustentável logo abaixo do teto.
-RATE_MAX = 0.7        # teto: pico permitido (req/s agregado, todas as prioridades)
+RATE_MAX = 0.7        # teto: pico permitido (req/s, POR HOST — 3 hosts independentes)
 RATE_MIN = 0.1        # piso: nunca recua abaixo disso
 RATE_INCREASE = 0.01  # +req/s por resposta 2xx (recuperação gradual até o teto)
 RATE_DECREASE = 0.5   # ×req/s por rodada com sobrecarga (backoff)
 _RATE_ERROR_CODES = frozenset({429, 502, 503, 504})  # sinais de sobrecarga da Albion
 ALBION_RATE_BURST = 1  # sem rajada — cada request espaçado em 1/rate segundos
 
-_rate_limiter = _RateLimiter(RATE_MAX, ALBION_RATE_BURST)  # parte do teto, recua sob erro
+# O limitador é POR HOST, não global: os 3 gameinfo (americas/europe/asia) são
+# servidores independentes com saúde independente — 504 da americas não diz
+# nada sobre a europa. Incidente 14/ago/2026: o AIMD global deixou a americas
+# doente afogando TODAS as regiões no piso (0.1 req/s), e as batalhas de
+# europa/ásia ficaram 12h atrasadas enquanto só a americas 504ava. Teto por
+# host de 0.7 mantém a carga POR SERVIDOR igual à de antes (o pior caso
+# agregado 3×0.7 fica espalhado em 3 destinos diferentes, não num só).
+# Call site sem host à mão usa o limitador default compartilhado (comportamento
+# antigo) — ponytail: ok pra rotas user-facing de baixo volume.
+_host_limiters: dict[str, _RateLimiter] = {}
+_default_limiter = _RateLimiter(RATE_MAX, ALBION_RATE_BURST)
 
 
-def observe_response(status: int) -> None:
-    """Alimenta o rate limiter adaptativo com o status de UM response do
-    gameinfo. Chamado pelo response hook do make_client (player_tracker) — todo
-    request ao gameinfo passa por ele, então o feedback cobre o tráfego todo sem
-    nenhum call site precisar reportar nada."""
-    _rate_limiter.observe(status)
+def _limiters() -> list[_RateLimiter]:
+    return [_default_limiter, *_host_limiters.values()]
+
+
+def _limiter_for(host: str | None) -> _RateLimiter:
+    if not host:
+        return _default_limiter
+    lim = _host_limiters.get(host)
+    if lim is None:
+        lim = _RateLimiter(RATE_MAX, ALBION_RATE_BURST)
+        _host_limiters[host] = lim
+    return lim
+
+
+def observe_response(host: str | None, status: int) -> None:
+    """Alimenta o rate limiter adaptativo do HOST com o status de UM response
+    do gameinfo. Chamado pelo response hook do make_client (player_tracker) —
+    todo request ao gameinfo passa por ele, então o feedback cobre o tráfego
+    todo sem nenhum call site precisar reportar nada."""
+    _limiter_for(host).observe(status)
 
 
 def rate_status() -> dict:
-    """Estado corrente do rate limiter adaptativo — pro dashboard de ops (ele é
-    outro processo, lê isto via HTTP). Só leitura do estado em memória, sem
-    efeito colateral. `rate` sobe até `ceiling` e recua sob sobrecarga; `queue`
-    = requests bloqueados esperando slot/rate agora."""
+    """Estado corrente dos rate limiters adaptativos — pro dashboard de ops.
+    `rate` = pior host (o min) pra o card geral não otimista; detalhe por host
+    em `hosts`. `queue` = requests bloqueados esperando slot/rate agora."""
+    lims = _limiters()
     return {
-        "rate": round(_rate_limiter._rate, 3),
+        "rate": round(min(l._rate for l in lims), 3),
         "ceiling": RATE_MAX,
         "floor": RATE_MIN,
         "queue": queue_depth(OTHER),
+        "hosts": {h: round(l._rate, 3) for h, l in _host_limiters.items()},
     }
 
 
 @asynccontextmanager
-async def slot():
+async def slot(host: str | None = None):
     """Adquire um slot do pool correspondente à prioridade corrente e um
-    token do limitador de taxa agregado. Envolver CADA ``client.get`` contra
-    gameinfo com isto."""
+    token do limitador de taxa do HOST. Envolver CADA ``client.get`` contra
+    gameinfo com isto; passe o ``host`` pra isolar o backoff por região (504
+    da americas não estrangula europa/ásia). Sem host, usa o limitador
+    default compartilhado."""
     prio = _current.get()
     pool = _reserved if prio <= _HIGH_MAX else _bg
     await pool.acquire(prio)
     try:
-        await _rate_limiter.acquire(prio)
+        await _limiter_for(host).acquire(prio)
         yield
     finally:
         pool.release()
@@ -249,7 +276,7 @@ def queue_depth(prio: int = OTHER) -> int:
     def ahead(pool: _PriorityPool) -> int:
         return sum(1 for wp, _s, fut in pool._waiters if wp <= prio and not fut.done())
     own_pool = _reserved if prio <= _HIGH_MAX else _bg
-    return ahead(own_pool) + ahead(_rate_limiter._pool)
+    return ahead(own_pool) + sum(ahead(l._pool) for l in _limiters())
 
 
 def battle_priority(battle, *, is_new: bool) -> int:
@@ -268,11 +295,12 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         return cm
 
     async def _main():
-        # (a)-(c) testam só os pools de concorrência — troca o rate limiter
-        # global por um bem generoso pra essas asserções de timing não
-        # dependerem do burst/rate de produção (testado isolado no (e)).
-        global _rate_limiter
-        _rate_limiter = _RateLimiter(rate=1000, burst=1000)
+        # (a)-(c) testam só os pools de concorrência — troca os rate limiters
+        # por uns bem generosos pra essas asserções de timing não dependerem
+        # do burst/rate de produção (testado isoladamente no (e)).
+        global _default_limiter
+        _default_limiter = _RateLimiter(rate=1000, burst=1000)
+        _host_limiters.clear()
 
         # (a) bg pool cheio: 7º OTHER bloqueia
         holds = [await _hold(OTHER) for _ in range(_BG_SLOTS)]
@@ -384,6 +412,19 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
             rl2._last_decrease = float("-inf")            # fura o cooldown pra testar o clamp
             rl2.observe(504)
         assert rl2._rate == RATE_MIN, rl2._rate
+
+        # (h) isolamento por host: 504 da americas não recua o limiter da
+        # europa (o defeito do incidente 14/ago/2026), e observe_response
+        # roteia pro host certo.
+        observe_response("gameinfo.albiononline.com", 504)
+        observe_response("gameinfo.albiononline.com", 504)
+        am = _limiter_for("gameinfo.albiononline.com")
+        am._last_decrease = float("-inf")
+        observe_response("gameinfo.albiononline.com", 504)
+        eu = _limiter_for("gameinfo-ams.albiononline.com")
+        assert am._rate < RATE_MAX, am._rate
+        assert eu._rate == RATE_MAX, eu._rate
+        assert rate_status()["hosts"]["gameinfo.albiononline.com"] < RATE_MAX
 
         print("albion_gate OK")
 

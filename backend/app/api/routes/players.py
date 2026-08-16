@@ -85,7 +85,7 @@ async def _get_with_retry(
     decide o que fazer com o status (raise_for_status/checagem manual)."""
     for attempt in range(attempts):
         try:
-            async with slot():
+            async with slot(httpx.URL(url).host):
                 resp = await client.get(url, params=params)
         except (httpx.ReadTimeout, httpx.ConnectTimeout):
             if attempt == attempts - 1:
@@ -1049,7 +1049,7 @@ async def get_player_kills(albion_id: str, offset: int = 0, limit: int = 10):
     async with make_client() as c:
         async with albion_scope(PROFILE):
             try:
-                async with slot():
+                async with slot("gameinfo.albiononline.com"):
                     resp = await c.get(
                         f"https://gameinfo.albiononline.com/api/gameinfo/players/{albion_id}/kills",
                         params={"offset": offset, "limit": limit},
@@ -1065,7 +1065,7 @@ async def get_player_deaths(albion_id: str, offset: int = 0, limit: int = 10):
     async with make_client() as c:
         async with albion_scope(PROFILE):
             try:
-                async with slot():
+                async with slot("gameinfo.albiononline.com"):
                     resp = await c.get(
                         f"https://gameinfo.albiononline.com/api/gameinfo/players/{albion_id}/deaths",
                         params={"offset": offset, "limit": limit},

@@ -148,7 +148,7 @@ async def _probe_detail(client: httpx.AsyncClient, host: str, albion_id: str) ->
     url = f"https://{host}/api/gameinfo/battles/{albion_id}"
     for attempt in range(MAX_429_RETRIES):
         try:
-            async with slot():
+            async with slot(host):
                 resp = await client.get(url)
         except httpx.RequestError:
             return "error", None
@@ -246,6 +246,11 @@ async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
         active = await count_active_companions(db)
     except Exception:
         pass
+    # Fecha a read tx aberta pelo count ANTES da fase de HTTP: o ciclo inteiro
+    # (1200 sondagens atrás do rate limiter) pode levar 30min+, e o
+    # idle_in_transaction_session_timeout do Postgres (10min) derrubaria a
+    # conexão no meio — o resto do ciclo inteiro falharia com OperationalError.
+    await db.commit()
     candidates = await asyncio.to_thread(_generate_candidates_sync, active)
     if not candidates:
         log.info("battle_sweeper: sem candidatos novos (tudo sondado ou base vazia)")

@@ -21,7 +21,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
@@ -39,6 +39,36 @@ IDLE_INTERVAL = 300  # entre ciclos quando o backlog acabou
 # precificadas on-demand ao abrir o perfil. Sem isso o worker cava 600k de
 # backlog histórico antes de chegar na kill que acabou de acontecer.
 RECENT_WINDOW = timedelta(hours=6)
+# O timestamp do evento é o horário do JOGO, não o de ingestão. Quando a API
+# do Albion atrasa (americas já ficou 30h+), a kill chega aqui já "velha"
+# demais pra uma janela fixa — ficava NULL pra sempre e a juicy kill nunca
+# era postada. A janela é esticada POR REGIÃO pelo delay medido em
+# battle_tracker.publish_delay_status (mesma API, mesmo atraso), com folga
+# pra absorver deriva entre medições.
+DELAY_MARGIN = timedelta(hours=1)
+REGIONS = ("americas", "asia", "europe")
+_last_delay_log: dict[str, float] = {}
+
+
+def _recent_cutoffs() -> dict[str, datetime]:
+    """Cutoff de timestamp por região: agora - RECENT_WINDOW - delay(região)
+    - margem. Sem medição de delay (restart, 1º ciclo) fica só RECENT_WINDOW."""
+    # Import tardio: battle_tracker é módulo pesado e não precisa subir junto.
+    from app.services.battle_tracker import publish_delay_status
+    now = datetime.now(timezone.utc)
+    delays = publish_delay_status()
+    cutoffs: dict[str, datetime] = {}
+    for region in REGIONS:
+        delay_secs = (delays.get(region) or {}).get("delay_secs") or 0
+        cutoffs[region] = now - RECENT_WINDOW - timedelta(seconds=delay_secs) - DELAY_MARGIN
+        if delay_secs > 3600 and _last_delay_log.get(region) != delay_secs:
+            _last_delay_log[region] = delay_secs
+            log.info(
+                "silver_dropped: API %s com %.1fh de delay — janela de pricing estendida "
+                "pra %s (kills atrasadas continuam sendo precificadas)",
+                region, delay_secs / 3600, RECENT_WINDOW + timedelta(seconds=delay_secs),
+            )
+    return cutoffs
 
 # silver_dropped NULL = pendente (ainda não precificado). 0 = já precificado e
 # deu zero (vítima sem gear, ou gear sem cotação), >0 = prata real. O worker só
@@ -113,11 +143,13 @@ async def _process_batch(db: AsyncSession) -> int:
     # Lê o lote em ordem e marca rejeitados com zero: deixá-los NULL faria os
     # mesmos primeiros eventos bloquearem a fila para sempre. Histórico sem
     # group_member_count também passa pela estimativa conservadora.
+    cutoffs = _recent_cutoffs()
     rows = list((await db.scalars(
         select(PlayerKillEvent)
         .where(
             PlayerKillEvent.silver_dropped.is_(None),
-            PlayerKillEvent.timestamp > datetime.now(timezone.utc) - RECENT_WINDOW,
+            or_(*(and_(PlayerKillEvent.region == r, PlayerKillEvent.timestamp > c)
+                  for r, c in cutoffs.items())),
         )
         .order_by(PlayerKillEvent.id.desc())
         .limit(BATCH_SIZE)

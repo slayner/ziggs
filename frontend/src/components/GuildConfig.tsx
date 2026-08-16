@@ -172,6 +172,10 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [allyAllowedGuilds, setAllyAllowedGuilds] = useState<string[]>([NO_ALLIES]);
   const [allyGuilds, setAllyGuilds] = useState<AllyGuild[] | null>(null);
   const [registerOthersRoles, setRegisterOthersRoles] = useState<string[]>([ADMIN]);
+  // Vigilância de saída do /register: true (default) = checa guilda no register
+  // e revalida periodicamente, removendo o cargo de quem sair. False = checagem
+  // só no self-register; registrar terceiros é de confiança.
+  const [regKickOnLeave, setRegKickOnLeave] = useState(true);
   const [botLanguage, setBotLanguage] = useState<Lang>("pt");
   // Eventos: canal do mass-info + gates de funÃ§Ã£o por cargo (ver backend
   // app/services/event_gates.py). gates = {nome_funÃ§Ã£o_minusculo: [role_id, ...]}.
@@ -318,6 +322,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setRegisterRoleId((g.settings.register_role_id as string | undefined) ?? "");
       setAllyRoleId((g.settings.ally_role_id as string | undefined) ?? "");
       setAllyAllowedGuilds((g.settings.ally_allowed_guilds as string[] | undefined) ?? [NO_ALLIES]);
+      setRegKickOnLeave((g.settings.register_remove_role_on_leave as boolean | undefined) ?? true);
       setBotLanguage((g.settings.bot_language as Lang | undefined) ?? "pt");
       const evCh = (g.settings.events_channel_id as string | undefined) ?? "";
       setEventsChannelId(evCh);
@@ -896,6 +901,11 @@ async function saveJuicyKillMinSilver() {
     api.updateGuildSettings(guildId, { bot_logs_enabled: v });
   }
 
+  function toggleRegKickOnLeave(v: boolean) {
+    setRegKickOnLeave(v);
+    api.updateGuildSettings(guildId, { register_remove_role_on_leave: v });
+  }
+
   function saveGates(next: Record<string, string[]>) {
     setEventRoleGates(next);
     api.updateGuildSettings(guildId, { event_role_gates: next }).catch(() => setEventRoleGates(eventRoleGates));
@@ -1462,6 +1472,22 @@ async function saveJuicyKillMinSilver() {
                       </select>
                       {roleSaved && <span className="text-xs text-amber-400 self-center"><i className="ti ti-check" /> {t("saved")}</span>}
                     </div>
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-zinc-800/60">
+                    <p className="text-[11px] text-zinc-600 mb-1.5">{t("registerKickTitle")}</p>
+                    <p className="text-[11px] text-zinc-600 mb-2">{t("registerKickDesc")}</p>
+                    <button
+                      type="button"
+                      onClick={() => toggleRegKickOnLeave(!regKickOnLeave)}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                        regKickOnLeave
+                          ? "border-amber-500 bg-amber-500/15 text-amber-300"
+                          : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+                      }`}
+                    >
+                      {regKickOnLeave ? t("registerKickOn") : t("registerKickOff")}
+                    </button>
                   </div>
 
                   <div className="mt-3 pt-3 border-t border-zinc-800/60">

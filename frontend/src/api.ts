@@ -501,6 +501,7 @@ export interface BattleAbsentee {
 
 export interface EventDetail {
   id: number;
+  escalation_token: string;
   state: string;
   title: string | null;
   message: string | null;
@@ -628,6 +629,7 @@ export interface EscalationSignup {
 export interface EscalationOut {
   event: {
     id: number;
+    guild_id: string;
     title: string | null;
     scheduled_at: string | null;
     seriousness: string;
@@ -810,6 +812,10 @@ export const api = {
   updateGuildSettings: (guild_id: string, payload: {
     albion_guild_name?: string | null; albion_guild_region?: string | null; register_role_id?: string | null;
     ally_role_id?: string | null; ally_allowed_guilds?: string[] | null; bot_language?: string | null;
+    // Default (chave ausente) = true — /register exige guilda Albion e o bot
+    // vigia saídas removendo o cargo. False: checagem só no self-register;
+    // registrar terceiros é de confiança (sem vigilância).
+    register_remove_role_on_leave?: boolean | null;
     events_channel_id?: string | null; event_review_channel_id?: string | null; event_role_gates?: Record<string, string[]> | null;
     signup_min_builds?: number | null;
     nodes_calendar_channel_id?: string | null;
@@ -998,6 +1004,8 @@ export const api = {
   // ponytail: guildId é string — snowflake do Discord > 2^53 perde em number.
   escalacao: (guildId: string, eventId: number) =>
     req<EscalationOut>(`/guilds/${guildId}/events/${eventId}/escalacao`),
+  publicEscalacao: (token: string) =>
+    req<EscalationOut>(`/public/escalacao/${token}`),
   assignEscalacao: (guildId: string, eventId: number, payload: {
     slot_id: number; user_id: number; user_name?: string | null; game_role_id: number;
   }) =>
@@ -1040,6 +1048,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  searchMembers: (q: string) =>
+    req<{ user_id: number; username: string; global_name: string | null; avatar: string | null; in_game_name: string | null }[]>(
+      `/guilds/${g()}/members/search?q=${encodeURIComponent(q)}`,
+    ),
   updateParticipant: (id: number, participantId: number, payload: { game_role_id?: number | null; percent?: number; is_trial?: boolean; is_valid?: boolean }) =>
     req<EventDetail>(`/guilds/${g()}/events/${id}/participants/${participantId}`, {
       method: "PATCH", body: JSON.stringify(payload),

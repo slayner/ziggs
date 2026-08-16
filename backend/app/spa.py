@@ -25,6 +25,7 @@ _BATTLE_CODE_RE = re.compile(r"^[a-z0-9]{7}$")
 _BATTLE_IDS_RE = re.compile(r"^\d+(?:,\d+)*$")
 _PLAYER_RE = re.compile(r"^(am|as|eu)/([^/]+)$")
 _EVENT_RE = re.compile(r"^(?:eventos|events)/(\d+)/(\d+)(?:/(?:escalacao|escalation))?$")
+_PUBLIC_EVENT_RE = re.compile(r"^e/[A-Za-z0-9_-]{32}$")
 
 _REGION_NAME = {"am": "Americas", "as": "Asia", "eu": "Europe"}
 
@@ -46,6 +47,9 @@ async def _og_for_path(path: str) -> tuple[str, str, str | None]:
     if m:
         return (f"Evento #{m.group(2)} — Escalação",
                 "", None)
+
+    if _PUBLIC_EVENT_RE.match(path):
+        return ("Escalação", "", None)
 
     if _BATTLE_IDS_RE.match(path) or path == "multi":
         return ("Batalha", "", None)

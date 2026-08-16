@@ -68,7 +68,7 @@ import { findRoutes, transmuteOptions, baseCostFor, type TransmuteRoute, type Tr
 import AdBanner from "./AdBanner";
 
 const iconUrl = (id: string, size = 64, quality?: number) =>
-  `/render/item/${encodeURIComponent(id)}?size=${size}${quality ? `&quality=${quality}` : ""}`;
+  `/render/item/${encodeURIComponent(id)}?size=${size}${quality ? `&quality=${quality}` : ""}&v=2`;
 const EXCELLENT = 4;
 
 const selectAllText = (e: React.MouseEvent<HTMLElement>) => {

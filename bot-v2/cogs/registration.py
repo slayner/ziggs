@@ -59,10 +59,16 @@ _REASON_KEY = {
 }
 
 
-async def _post_register(guild_id: int, discord_user_id: int, nick: str) -> dict | None:
+async def _post_register(guild_id: int, discord_user_id: int, nick: str, registering_other: bool = False) -> dict | None:
+    # registering_other: com a vigilância de saída desligada no site, o backend
+    # pula a checagem de guilda pra registro de terceiros (confiança do admin).
     return await http_client.request_json(
         "POST", f"/bot/register/{guild_id}",
-        json={"discord_user_id": str(discord_user_id), "albion_player_name": nick},
+        json={
+            "discord_user_id": str(discord_user_id),
+            "albion_player_name": nick,
+            "registering_other": registering_other,
+        },
         timeout=10, attempts=2, queue_on_failure=False,
     )
 
@@ -133,7 +139,7 @@ async def _retry_in_background(guild: discord.Guild, lang: str, invoker: discord
     result: dict | None = None
     while (time.monotonic() - start) < _BACKGROUND_RETRY_CAP:
         await asyncio.sleep(_RETRY_INTERVAL)
-        result = await _post_register(guild_id, target.id, nick)
+        result = await _post_register(guild_id, target.id, nick, invoker.id != target.id)
         if not _is_transient(result):
             break
 
@@ -155,7 +161,7 @@ async def _do_register(interaction: Interaction, nick: str, target: discord.Memb
     nick = nick.strip()
     guild, invoker, guild_id = interaction.guild, interaction.user, interaction.guild_id
 
-    result = await _post_register(guild_id, target.id, nick)
+    result = await _post_register(guild_id, target.id, nick, invoker.id != target.id)
     start = time.monotonic()
     attempt = 0
     # API da Albion instável: em vez de devolver um erro que obriga o usuário
@@ -165,7 +171,7 @@ async def _do_register(interaction: Interaction, nick: str, target: discord.Memb
         attempt += 1
         await interaction.edit_original_response(content=t(lang, "register_retrying", attempt=attempt))
         await asyncio.sleep(_RETRY_INTERVAL)
-        result = await _post_register(guild_id, target.id, nick)
+        result = await _post_register(guild_id, target.id, nick, invoker.id != target.id)
 
     if not _is_transient(result):
         content = await _apply_result(guild, lang, invoker.id, target, result)

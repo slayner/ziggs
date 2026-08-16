@@ -221,7 +221,7 @@ const PRIVACY: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨UL¨
 ¨LI¨¨B¨Discord Inc.¨/B¨ — para autenticação (OAuth 2.0);¨/LI¨
 ¨LI¨¨B¨Sandbox Interactive GmbH (Albion Online API)¨/B¨ — para buscar dados públicos de jogo;¨/LI¨
-¨LI¨¨B¨Adsterra LLC¨/B¨ — para exibição de anúncios em iframes de terceiros. Consulte nossa ¨A¨/cookies¨/A¨.¨/LI¨
+¨LI¨¨B¨Google (AdSense)¨/B¨ — para exibição de anúncios. Consulte nossa ¨A¨/cookies¨/A¨.¨/LI¨
 ¨/UL¨
 
 ¨H2¨6. Cookies¨/H2¨
@@ -297,7 +297,7 @@ const PRIVACY: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨UL¨
 ¨LI¨¨B¨Discord Inc.¨/B¨ — for authentication (OAuth 2.0);¨/LI¨
 ¨LI¨¨B¨Sandbox Interactive GmbH (Albion Online API)¨/B¨ — to fetch public game data;¨/LI¨
-¨LI¨¨B¨Adsterra LLC¨/B¨ — for ad display in third-party iframes. See our ¨A¨/cookies¨/A¨.¨/LI¨
+¨LI¨¨B¨Google (AdSense)¨/B¨ — for ad display. See our ¨A¨/cookies¨/A¨.¨/LI¨
 ¨/UL¨
 
 ¨H2¨6. Cookies¨/H2¨
@@ -373,7 +373,7 @@ const PRIVACY: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨UL¨
 ¨LI¨¨B¨Discord Inc.¨/B¨ — para autenticación (OAuth 2.0);¨/LI¨
 ¨LI¨¨B¨Sandbox Interactive GmbH (API de Albion Online)¨/B¨ — para obtener datos públicos del juego;¨/LI¨
-¨LI¨¨B¨Adsterra LLC¨/B¨ — para mostrar anuncios en iframes de terceros. Consulta nuestra ¨A¨/cookies¨/A¨.¨/LI¨
+¨LI¨¨B¨Google (AdSense)¨/B¨ — para mostrar anuncios. Consulta nuestra ¨A¨/cookies¨/A¨.¨/LI¨
 ¨/UL¨
 
 ¨H2¨6. Cookies¨/H2¨
@@ -422,8 +422,8 @@ const COOKIES: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨LI¨¨B¨ziggs_session¨/B¨ — cookie de sessão assinado, necessário para manter você autenticado. Sem ele, você seria deslogado a cada navegação. Não pode ser desativado.¨/LI¨
 ¨/UL¨
 
-¨H3¨Anúncios de terceiros (Adsterra)¨/H3¨
-¨P¨Os anúncios são exibidos em iframes de terceiro (Adsterra). Esses iframes podem definir cookies próprios do domínio do Adsterra, fora do nosso controle. A maioria desses cookies é de sessão e não persiste entre visitas.¨/P¨
+¨H3¨Anúncios do Google (AdSense)¨/H3¨
+¨P¨Os anúncios são exibidos pelo Google AdSense, que pode definir cookies (incluindo o cookie DoubleClick) para veicular anúncios personalizados com base nas suas visitas a este e outros sites. Você pode desativar a personalização nas configurações de anúncios do Google.¨/P¨
 
 ¨H2¨3. Gerenciamento¨/H2¨
 ¨P¨Você pode gerenciar ou excluir cookies a qualquer momento nas configurações do seu navegador:¨/P¨
@@ -447,8 +447,8 @@ const COOKIES: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨LI¨¨B¨ziggs_session¨/B¨ — signed session cookie, necessary to keep you authenticated. Without it, you would be logged out on every navigation. Cannot be disabled.¨/LI¨
 ¨/UL¨
 
-¨H3¨Third-party ads (Adsterra)¨/H3¨
-¨P¨Ads are displayed in third-party iframes (Adsterra). These iframes may set their own cookies on the Adsterra domain, outside our control. Most of these cookies are session-scoped and do not persist between visits.¨/P¨
+¨H3¨Google ads (AdSense)¨/H3¨
+¨P¨Ads are served by Google AdSense, which may set cookies (including the DoubleClick cookie) to serve personalized ads based on your visits to this and other sites. You can opt out of personalization in your Google Ads settings.¨/P¨
 
 ¨H2¨3. Management¨/H2¨
 ¨P¨You can manage or delete cookies at any time in your browser settings:¨/P¨
@@ -472,8 +472,8 @@ const COOKIES: Record<Lang, { title: string; updated: string; body: string }> = 
 ¨LI¨¨B¨ziggs_session¨/B¨ — cookie de sesión firmado, necesario para mantener tu autenticación. Sin él, serías desconectado en cada navegación. No se puede desactivar.¨/LI¨
 ¨/UL¨
 
-¨H3¨Anuncios de terceros (Adsterra)¨/H3¨
-¨P¨Los anuncios se muestran en iframes de terceros (Adsterra). Estos iframes pueden establecer sus propias cookies en el dominio de Adsterra, fuera de nuestro control. La mayoría de estas cookies son de sesión y no persisten entre visitas.¨/P¨
+¨H3¨Anuncios de Google (AdSense)¨/H3¨
+¨P¨Los anuncios se muestran mediante Google AdSense, que puede establecer cookies (incluido el cookie DoubleClick) para mostrar anuncios personalizados según tus visitas a este y otros sitios. Puedes desactivar la personalización en la configuración de anuncios de Google.¨/P¨
 
 ¨H2¨3. Gestión¨/H2¨
 ¨P¨Puedes gestionar o eliminar cookies en cualquier momento en la configuración de tu navegador:¨/P¨

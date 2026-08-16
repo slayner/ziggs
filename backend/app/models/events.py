@@ -12,6 +12,7 @@ para marcar exatamente quem está no evento mais tarde, sem @everyone.
 """
 from __future__ import annotations
 
+import secrets
 from datetime import datetime
 
 from sqlalchemy import (
@@ -24,6 +25,10 @@ from app.models.base import Base, TimestampMixin, Snowflake, json_type, pk
 from app.domain.states import EventSeriousness, EventState, EventType, ParticipationMode, VerificationStep
 
 
+def new_escalation_token() -> str:
+    return secrets.token_urlsafe(24)
+
+
 class Event(Base, TimestampMixin):
     __tablename__ = "events"
 
@@ -31,6 +36,10 @@ class Event(Base, TimestampMixin):
     bot_request_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     guild_id: Mapped[int] = mapped_column(
         ForeignKey("guilds.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Link de leitura compartilhável: não autentica nem autoriza mutações.
+    escalation_token: Mapped[str] = mapped_column(
+        String(32), default=new_escalation_token, nullable=False, unique=True, index=True
     )
 
     state: Mapped[EventState] = mapped_column(

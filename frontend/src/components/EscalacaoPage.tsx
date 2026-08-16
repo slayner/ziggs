@@ -3,7 +3,12 @@ import { api, type Me, type EscalationOut, type EscalationRole, type RegearItem 
 import { useT, useLang, itemLocalName, type Lang } from "../i18n";
 import { itemRenderUrl, ITEM_BY_ID } from "../data/albion-items";
 
-interface Props { guildId: string; eventId: number; active?: boolean }
+interface Props {
+  token?: string;
+  guildId?: string;
+  eventId?: number;
+  active?: boolean;
+}
 
 interface FlexPick {
   slotId: number;
@@ -192,7 +197,7 @@ function SkillsDetail({ role, lang }: { role: EscalationRole; lang: Lang }) {
   );
 }
 
-export default function EscalacaoPage({ guildId, eventId, active = true }: Props) {
+export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: legacyEventId, active = true }: Props) {
   const t = useT();
   const { lang } = useLang();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
@@ -208,14 +213,23 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
   useEffect(() => { api.me().then(m => setMe(m)); }, []);
 
   const load = () => {
-    api.escalacao(guildId, eventId).then(d => { setData(d); setErr(null); })
+    const request = token
+      ? api.publicEscalacao(token)
+      : (legacyGuildId && legacyEventId ? api.escalacao(legacyGuildId, legacyEventId) : null);
+    if (!request) return;
+    request.then(d => {
+      setData(d);
+      setErr(null);
+      // O token só libera leitura; controles administrativos vêm da rota protegida.
+      if (token && me) api.escalacao(d.event.guild_id, d.event.id).then(setData).catch(() => {});
+    })
       .catch(async e => {
         const msg = String((e as Error)?.message ?? e);
-        if (!autoTried.current && /não encontrada|sem acesso/i.test(msg)) {
+        if (!token && !autoTried.current && /não encontrada|sem acesso/i.test(msg)) {
           autoTried.current = true;
           try {
             const dg = await api.myDiscordGuilds();
-            const found = dg.find(x => x.id === String(guildId));
+            const found = dg.find(x => x.id === String(legacyGuildId));
             if (found) {
               await api.selectGuild(found.id, found.name, found.icon);
               window.location.reload();
@@ -228,10 +242,10 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
   };
 
   useEffect(() => {
-    if (me === undefined || me === null) return;
+    if (!token && (me === undefined || me === null)) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [me, guildId, eventId]);
+  }, [me, token, legacyGuildId, legacyEventId]);
 
   // Polling: checa por novos signups a cada 4s e atualiza a lista de
   // inscritos ao vivo (sem precisar recarregar a página) — sempre ligado,
@@ -244,7 +258,13 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     // em background batendo no backend a cada 4s pra uma tela que ninguém vê.
     if (!data || !active) return;
     const iv = setInterval(() => {
-      api.escalacao(guildId, eventId).then(d => {
+      const request = token
+        ? api.publicEscalacao(token)
+        : api.escalacao(data.event.guild_id, data.event.id);
+      request.then(async d => {
+        if (token && me) {
+          try { d = await api.escalacao(d.event.guild_id, d.event.id); } catch { /* permanece somente leitura */ }
+        }
         const key = d.enlisted.map(s => `${s.user_id}:${s.functions.join(",")}`).sort().join("|")
           + `|comp:${d.event.comp_id ?? 0}|state:${d.event.state}`;
         if (key !== lastEnlistedKey.current) {
@@ -255,7 +275,7 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     }, 4000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guildId, eventId, !!data]);
+  }, [me, token, legacyGuildId, legacyEventId, !!data]);
 
   // ── Colapso responsivo por cobertura (painel overlay) ────────────────────────
   // Dois modos conforme a página cabe ou não:
@@ -347,10 +367,10 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   }, [data, hidden]);
 
-  if (me === undefined) return null;
+  if (!token && me === undefined) return null;
 
-  // Login gate: deslogado abre o link → pede Discord e volta pra esta página.
-  if (me === null) {
+  // Links antigos continuam autenticados; o novo link por token é público.
+  if (!token && me === null) {
     const next = encodeURIComponent(window.location.pathname + window.location.search);
     return (
       <div className="login-gate">
@@ -378,6 +398,8 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
     return <div className="login-gate"><p className="login-gate-sub">…</p></div>;
   }
 
+  const guildId = data.event.guild_id;
+  const eventId = data.event.id;
   const canManage = data.can_manage;
   const assignedBySlot = new Map(
     data.assignments.flatMap(a => a.slot_id == null ? [] : [[a.slot_id, a] as [number, typeof a]])
@@ -523,6 +545,11 @@ export default function EscalacaoPage({ guildId, eventId, active = true }: Props
                   <div className="esc-title">{data.event.title || t("escTitle")}</div>
                   <div className="hint">{data.event.comp_name || "—"} · {data.event.state} · {data.event.seriousness}</div>
                 </div>
+                {me === null && (
+                  <a className="btn btn-discord" href={`/auth/discord/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`}>
+                    <i className="ti ti-brand-discord" /> {t("loginDiscord")}
+                  </a>
+                )}
                 {!canManage && <span className="badge esc-readonly"><i className="ti ti-eye" /> {t("escReadonly")}</span>}
               </div>
               <div className="esc-enlisted-head">

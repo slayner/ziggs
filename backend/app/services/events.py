@@ -580,7 +580,7 @@ def _detail(ev: Event, db: Session) -> EventDetail:
     )
     regear_summary = _regear_summary(db, ev) if ev.regear_thread_id or ev.regear_thread_dirty else None
     return EventDetail(
-        id=ev.id, state=ev.state.value,
+        id=ev.id, escalation_token=ev.escalation_token, state=ev.state.value,
         type=ev.type.value if ev.type else None,
         title=ev.title, message=ev.message, comp_id=ev.comp_id,
         scheduled_at=ev.scheduled_at, started_at=ev.started_at,
@@ -1496,7 +1496,17 @@ def _freeze_voice_percentages(db: Session, ev: Event) -> None:
     depois do freeze são respeitados (update_participant escreve direto)."""
     total = ev.total_snapshots
     if total <= 0:
-        return  # evento de voz sem nenhum snapshot: mantém percents manuais
+        # Sem snapshots (bot caiu / sala de voz não configurada / evento
+        # nunca entrou em IN_PROGRESS com o loop vivo): não dá pra calcular %
+        # de presença. O default de criação é percent=100 — deixar assim
+        # premia ausência e mascara o problema (visto em produção 15/ago/26:
+        # evento inteiro com 100% sem ninguém ter pisado na voz). Zera; o
+        # admin vê total_snapshots=0 no DTO e ajusta manualmente se precisar.
+        for p in ev.participants:
+            p.base_percent = 0
+            p.percent = 0
+        db.flush()
+        return
     trial_pct = _trial_percent_for(db, ev)
     for p in ev.participants:
         base = round(p.snapshots_present * 100 / total)

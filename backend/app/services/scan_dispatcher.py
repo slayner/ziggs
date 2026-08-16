@@ -1420,7 +1420,7 @@ async def _fetch_task(task: ScanWorkTask) -> list[dict]:
     async with make_client() as client:
         if task.feed_type == "battles":
             return await fetch_battles(client, host, offset=task.page_offset)
-        async with slot():
+        async with slot(host):
             response = await client.get(
                 f"https://{host}/api/gameinfo/events",
                 params={"limit": FEED_PAGE_SIZE, "offset": task.page_offset},

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, g, type CatalogRole, type EventDetail, type EventSummary, type NodeEventLog, type Participant, type Permissions, type RegearEstimate, type RegearItemEstimate, type RegearRequest, type VerificationStep } from "../api";
+import { api, type CatalogRole, type EventDetail, type EventSummary, type NodeEventLog, type Participant, type Permissions, type RegearEstimate, type RegearItemEstimate, type RegearRequest, type VerificationStep } from "../api";
 import { useLang, useT, type TKey } from "../i18n";
 import { navigate } from "../router";
 import { RoleIcon } from "./RoleIcons";
@@ -655,7 +655,7 @@ function EventDetailCard({ detail, act, canManage }: { detail: EventDetail; act:
           {detail.comp_id && (
             <button className="btn ev-action-btn"
               title={t("rosterSignupCountTitle")}
-              onClick={() => navigate(`/events/${g()}/${detail.id}/escalation`)}>
+              onClick={() => navigate(`/e/${detail.escalation_token}`)}>
               <i className="ti ti-users" aria-hidden /> {t("escBtn")}
               {/* Inscritos (Discord), não escalados — o roster pode ter mais
                   gente esperando vaga do que slots preenchidos. */}
@@ -709,9 +709,10 @@ function TabValueStep({ v, eventId, act }: {
   const savedVal = v.data?.value as number | undefined;
 
   function save() {
-    const n = Number(String(val).replace(/\D/g, ""));
-    if (!n) return;
-    act(api.setStep(eventId, "tab_value", true, { value: n }));
+    // Aceita 0 (tab vazia/zerada é válida) — só bloqueia campo vazio.
+    const digits = String(val).replace(/\D/g, "");
+    if (!digits) return;
+    act(api.setStep(eventId, "tab_value", true, { value: Number(digits) }));
   }
 
   return (
@@ -1035,6 +1036,8 @@ function ParticipantsSection({ detail, act, canManage }: {
   const [regearPanel, setRegearPanel] = useState<{ pid: number; est: RegearEstimate | null; loading: boolean } | null>(null);
   const [newName, setNewName] = useState("");
   const [newPct, setNewPct] = useState("100");
+  const [memberResults, setMemberResults] = useState<{ user_id: number; username: string; global_name: string | null; avatar: string | null; in_game_name: string | null }[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const isActive = !["finalized", "cancelled", "deleted"].includes(detail.state);
   const roster = useMemo(() => partitionRoster(detail), [detail]);
   const roleFnById = useMemo(
@@ -1045,6 +1048,19 @@ function ParticipantsSection({ detail, act, canManage }: {
     (a.user_name || "").localeCompare(b.user_name || "", undefined, { sensitivity: "base" });
   const byPercent = (a: ParticipantRow, b: ParticipantRow) =>
     b.percent - a.percent || byName(a, b);
+
+  useEffect(() => {
+    if (!newName.trim() || newName.trim().length < 2) return;
+    setSelectedUserId(null);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const results = await api.searchMembers(newName.trim());
+        if (!cancelled) setMemberResults(results);
+      } catch { if (!cancelled) setMemberResults([]); }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [newName]);
 
   // Três populações. Ausentes = linhas virtuais (sem EventParticipant) —
   // editar o % as materializa. Intrusos/OK = participantes reais, separados
@@ -1097,9 +1113,10 @@ function ParticipantsSection({ detail, act, canManage }: {
   function submitAdd() {
     if (!newName.trim()) return;
     act(api.addParticipant(detail.id, {
-      user_id: Date.now(), user_name: newName.trim(), percent: Number(newPct) || 0, is_valid: true,
+      user_id: selectedUserId ?? Date.now(), user_name: newName.trim(), percent: Number(newPct) || 0, is_valid: true,
     }));
     setNewName(""); setNewPct("100");
+    setSelectedUserId(null); setMemberResults([]);
   }
 
   function renderRow(p: ParticipantRow) {
@@ -1254,9 +1271,48 @@ function ParticipantsSection({ detail, act, canManage }: {
       )}
       {isActive && canManage && (
         <div className="ev-part-add">
-          <input className="input" placeholder={t("nameWord")}
-            value={newName} onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submitAdd()} />
+          <div style={{ position: "relative", flex: 1 }}>
+            <input className="input" placeholder={t("nameWord")}
+              value={newName} onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()}
+              onFocus={async () => {
+                if (!newName.trim()) {
+                  try { setMemberResults(await api.searchMembers("")); } catch { /* ignore */ }
+                }
+              }}
+              onBlur={() => setTimeout(() => setMemberResults([]), 200)} />
+            {memberResults.length > 0 && (
+              <div style={{
+                position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50,
+                background: "var(--surface)", border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)", maxHeight: 200, overflowY: "auto",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+              }}>
+                {memberResults.map((m) => (
+                  <button key={m.user_id} type="button"
+                    style={{
+                      display: "flex", width: "100%", alignItems: "center", gap: 8,
+                      padding: "6px 10px", background: "none", border: "none",
+                      cursor: "pointer", textAlign: "left", color: "var(--text)",
+                      borderBottom: "1px solid var(--border)",
+                    }}
+                    onMouseDown={() => {
+                      setSelectedUserId(m.user_id);
+                      setNewName(m.global_name || m.username);
+                      setMemberResults([]);
+                    }}>
+                    <img src={m.avatar || ""} alt="" style={{ width: 20, height: 20, borderRadius: "50%", flexShrink: 0 }} />
+                    <span style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {m.global_name || m.username}
+                    </span>
+                    {m.in_game_name && (
+                      <span className="hint" style={{ fontSize: 11, flexShrink: 0 }}>{m.in_game_name}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <input className="input ev-part-add-pct" placeholder="%"
             value={newPct} onChange={(e) => setNewPct(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitAdd()} />

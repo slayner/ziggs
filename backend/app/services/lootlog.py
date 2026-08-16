@@ -329,8 +329,12 @@ def _compute_weights(events: list[tuple], subs: list[dict]) -> dict[int, int]:
     excluded, _notes = _detect_copies(events, subs)
     clean = [e for e in events if e[2] not in excluded]
     canonical = _reconcile(clean)
-    valid = {s["submitter_id"] for s in subs if s["submitter_id"] not in excluded}
-    single_logger = len(valid) == 1
+    # Logger = quem VIU coleta dentro da janela. Submissão vazia/fora da
+    # janela não é logger: não corrobora nada e não pode rebaixar o único
+    # logger real pro caminho 2+ (onde só overlap conta → peso 0 pra quem
+    # logou tudo sozinho).
+    seen_sids = {e[2] for e in clean}
+    single_logger = len(seen_sids) <= 1
     weights: dict[int, int] = defaultdict(int)
     for c in canonical:
         wids = c["witness_ids"]
@@ -563,6 +567,13 @@ def _demo() -> None:
                            ev(2, shared[2], A), ev(3, only_a[0], A)],
                           [{"submitter_id": A, "created_at": base_dt, "file_hash": "hA"}])
     assert w1 == {A: 4}, w1
+
+    # 2ª submissão VAZIA (sem evento na janela) não é logger: A continua
+    # single → conta todas as dele (não rebaixa pro caminho só-overlap).
+    w_empty = _compute_weights([ev(0, shared[0], A), ev(1, shared[1], A)],
+                               [{"submitter_id": A, "created_at": base_dt, "file_hash": "hA"},
+                                {"submitter_id": B, "created_at": base_dt, "file_hash": "hB"}])
+    assert w_empty == {A: 2}, w_empty
 
     # cópia: C manda as mesmas 3 coletas do A (mesmo file_hash) → C excluído.
     events_copy = (events + [ev(0, shared[0], C), ev(1, shared[1], C), ev(2, shared[2], C)])

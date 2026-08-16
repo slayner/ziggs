@@ -33,12 +33,13 @@ FEED_MAX_PAGES = 8  # até 8 páginas (408 events) por poll — cobre rajadas gr
 
 
 async def _observe_albion(response: httpx.Response) -> None:
-    """Response hook: alimenta o rate limiter adaptativo (albion_gate) com o
-    status de cada resposta do gameinfo — 2xx recupera a taxa, 429/504 recuam.
-    Todo request ao gameinfo usa este cliente, então o feedback é completo sem
-    call site reportar nada. Timeout (sem resposta) não passa por aqui — mas já
-    se auto-limita (o slot fica preso os 40s), então não precisa do sinal."""
-    observe_response(response.status_code)
+    """Response hook: alimenta o rate limiter adaptativo do HOST (albion_gate)
+    com o status de cada resposta do gameinfo — 2xx recupera a taxa,
+    429/504 recuam SÓ o host que respondeu. Todo request ao gameinfo usa este
+    cliente, então o feedback é completo sem call site reportar nada. Timeout
+    (sem resposta) não passa por aqui — mas já se auto-limita (o slot fica
+    preso os 40s), então não precisa do sinal."""
+    observe_response(response.request.url.host, response.status_code)
 
 
 def make_client() -> httpx.AsyncClient:
@@ -279,7 +280,7 @@ async def sync_player_kills(client: httpx.AsyncClient, db: AsyncSession, host: s
         events = None
         for attempt in range(2):  # ponytail: 1 retry, API do Albion dá ReadTimeout transiente com frequência
             try:
-                async with slot():
+                async with slot(host):
                     resp = await client.get(
                         f"https://{host}/api/gameinfo/players/{albion_id}/{kind}",
                         params={"limit": PLAYER_SYNC_LIMIT, "offset": 0},
@@ -338,7 +339,7 @@ async def poll_once() -> int:
                     offset = page * FEED_LIMIT
                     try:
                         async with albion_scope(NEW_ELIGIBLE):
-                            async with slot():
+                            async with slot(host):
                                 resp = await c.get(
                                     f"https://{host}/api/gameinfo/events",
                                     params={"limit": FEED_LIMIT, "offset": offset},
@@ -443,7 +444,7 @@ async def backfill_kills_step(client: httpx.AsyncClient, db: AsyncSession, regio
                 return
 
             try:
-                async with slot():
+                async with slot(host):
                     resp = await client.get(
                         f"https://{host}/api/gameinfo/events",
                         params={"limit": KILL_BACKFILL_PAGE_SIZE, "offset": cursor.next_offset},

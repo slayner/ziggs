@@ -648,6 +648,7 @@ T: dict[str, dict[str, str]] = {
     "ev_add_participant": {"pt": "➕ Adicionar", "en": "➕ Add", "es": "➕ Añadir"},
     "ev_pick_member": {"pt": "Selecione o membro para adicionar", "en": "Select the member to add", "es": "Selecciona el miembro a añadir"},
     "ev_no_candidates": {"pt": "Todos os membros já são participantes.", "en": "Every member is already a participant.", "es": "Todos los miembros ya son participantes."},
+    "ev_already_participant": {"pt": "Esse membro já é participante do evento.", "en": "That member is already a participant.", "es": "Ese miembro ya es participante del evento."},
     "ev_loggers": {"pt": "🪵 Loggers ({n})", "en": "🪵 Loggers ({n})", "es": "🪵 Loggers ({n})"},
     "ev_split_nodes_intro": {"pt": "Selecione os nodes que foram capturados; na próxima tela informe o valor vendido de cada um (até 5).", "en": "Select the captured nodes; next screen asks the sold value of each (up to 5).", "es": "Selecciona los nodos capturados; la próxima pantalla pide el valor vendido de cada uno (hasta 5)."},
     "ev_split_nodes_pick": {"pt": "Marque os nodes capturados", "en": "Mark captured nodes", "es": "Marca los nodos capturados"},

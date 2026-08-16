@@ -45,6 +45,10 @@ _CATEGORY_EMOJI = {"tank": "🛡️", "healer": "🕊️", "support": "✨", "dp
 _CATEGORY_ORDER = {"tank": 0, "healer": 1, "support": 2, "dps": 3, "pierce": 4, "battlemount": 5}
 
 
+def _roster_url(token: str | None) -> str | None:
+    return f"{PUBLIC_URL}/e/{token}" if PUBLIC_URL and token else None
+
+
 def _category_sort_key(cat: str) -> tuple:
     """Categorias conhecidas primeiro (na ordem de _CATEGORY_ORDER), depois
     alfabético, 'other' sempre por último."""
@@ -182,8 +186,8 @@ def _build_massinfo_embed(lang: str, guild_id: int, events: list[dict]) -> disco
         emoji = _STATUS_EMOJI.get(e["state"], "🗓️")
         time_str = _fmt_time(e["scheduled_at"])
         # Horário vira link pro roster (escalação) do evento — deep link do site.
-        if PUBLIC_URL:
-            time_disp = f"[**{time_str}**]({PUBLIC_URL}/events/{guild_id}/{e['event_id']}/escalation)"
+        if url := _roster_url(e.get("escalation_token")):
+            time_disp = f"[**{time_str}**]({url})"
         else:
             time_disp = f"**{time_str}**"
         comp = e.get("comp_name") or "—"
@@ -275,15 +279,16 @@ class EventDetailsButton(discord.ui.Button):
             custom_id=f"ziggs:details:{event['event_id']}",
         )
         self.event_id = event["event_id"]
+        self.escalation_token = event.get("escalation_token")
 
     async def callback(self, interaction: Interaction) -> None:
-        if PUBLIC_URL:
+        if url := _roster_url(self.escalation_token):
             await interaction.response.send_message(
-                f"{PUBLIC_URL}/events/{interaction.guild_id}/{self.event_id}/escalation",
+                url,
                 ephemeral=True,
             )
         else:
-            await interaction.response.send_message("Site URL is not configured.", ephemeral=True)
+            await interaction.response.send_message("Escalação indisponível.", ephemeral=True)
 
 
 class MoreEventsSelect(discord.ui.Select):
@@ -300,13 +305,13 @@ class MoreEventsSelect(discord.ui.Select):
 
     async def callback(self, interaction: Interaction) -> None:
         event = self.events[self.values[0]]
-        if PUBLIC_URL:
+        if url := _roster_url(event.get("escalation_token")):
             await interaction.response.send_message(
-                f"{PUBLIC_URL}/events/{interaction.guild_id}/{event['event_id']}/escalation",
+                url,
                 ephemeral=True,
             )
         else:
-            await interaction.response.send_message("Site URL is not configured.", ephemeral=True)
+            await interaction.response.send_message("Escalação indisponível.", ephemeral=True)
 
 
 class MassinfoView(discord.ui.View):

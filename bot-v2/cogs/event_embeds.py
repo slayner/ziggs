@@ -26,6 +26,13 @@ from i18n import t
 SITE_URL   = os.getenv("BOT_SITE_URL", "").rstrip("/")
 API_SECRET = os.getenv("BOT_API_SECRET", "")
 
+# Teto de tempo para UM trabalho de embed (postar/editar mensagem, criar
+# thread, arquivar). Chamadas REST do discord.py podem esperar rate limit sem
+# cap nenhum (_max_ratelimit_timeout=None) e o lock por evento é infinito —
+# sem este teto o loop trava em silêncio (não passa pelo .error handler,
+# task cancelada/presa não loga nada) e nenhuma thread de revisão nasce.
+_EMBED_WORK_TIMEOUT = 120  # segundos
+
 
 async def _get(path: str) -> Optional[dict]:
     return await http_client.get_json(path, tag="event_embeds")
@@ -541,33 +548,33 @@ def _build_remove_selects(lang: str, event_id: int, participants: list[dict]) ->
     return _build_selects(participants, lambda c, i, n: RemovePickSelect(lang, event_id, c, page=i, total_pages=n))
 
 
-# ── Adicionar participante (substitui o late-attend do bot-v1) ─────────────────
-# Sem late-attend nesta versão: o gestor adiciona manualmente pelo embed.
-# Select comum (não UserSelect: precisamos EXCLUIR quem já é participante,
-# e UserSelect sempre mostra o server inteiro sem filtro) → POST /participants
-# direto, sempre a 100% (sem modal perguntando % — quem quiser outro valor
-# usa "✏️ Change %" logo em seguida).
+# ── Adicionar participante ───────────────────────────────────────────────────
+# UserSelect nativo do Discord: tem busca integrada e mostra o server inteiro
+# (sem o limite de 5×25=125 opções dos Selects customizados, que não cabia em
+# guildas grandes). Validar "já é participante" no callback — UserSelect não
+# filtra opções, mas o POST /participants é idempotente (backend ignora
+# duplicado) e o aviso ephemeral cobre o caso.
 
-class AddParticipantUserSelect(discord.ui.Select):
-    def __init__(self, lang: str, event_id: int, members: list[discord.Member], *,
-                page: int = 0, total_pages: int = 1):
-        self.by_id = {str(m.id): m for m in members}
-        opts = [
-            discord.SelectOption(label=(m.display_name or m.name)[:100], value=str(m.id))
-            for m in members
-        ]
-        super().__init__(
-            placeholder=_placeholder_paged(t(lang, "ev_pick_member"), page, total_pages),
-            min_values=1, max_values=1,
-            options=opts or [discord.SelectOption(label="—", value="-1")],
-        )
+class AddParticipantView(discord.ui.View):
+    def __init__(self, lang: str, event_id: int, existing_ids: set[int]):
+        super().__init__(timeout=120)
         self.lang = lang
         self.event_id = event_id
+        self.existing_ids = existing_ids
+        self.select = discord.ui.UserSelect(
+            placeholder=t(lang, "ev_pick_member"),
+            min_values=1, max_values=1,
+        )
+        self.select.callback = self._on_pick
+        self.add_item(self.select)
 
-    async def callback(self, interaction: Interaction) -> None:
-        member = self.by_id.get(self.values[0])
+    async def _on_pick(self, interaction: Interaction) -> None:
+        member = self.select.values[0] if self.select.values else None
         if member is None:
-            await interaction.response.edit_message(content=t(self.lang, "ev_update_fail"), view=None)
+            return
+        if member.id in self.existing_ids:
+            await interaction.response.send_message(
+                t(self.lang, "ev_already_participant"), ephemeral=True)
             return
         # acka antes do POST pra não estourar o timeout de 3s do Discord.
         try:
@@ -576,21 +583,16 @@ class AddParticipantUserSelect(discord.ui.Select):
             pass
         res = await _post(
             f"/bot/events/{interaction.guild_id}/{self.event_id}/participants",
-            {"user_id": member.id, "user_name": member.display_name,
+            {"user_id": member.id, "user_name": getattr(member, "display_name", None) or member.name,
              "percent": 100, "base_percent": 100,
              "is_trial": False, "actor_id": interaction.user.id},
             interactive=True,
         )
         if res is None:
-            # 400 = já existe; 404 = evento. _post devolve None p/ qualquer não-200.
-            await interaction.edit_original_response(content=t(self.lang, "ev_update_fail"), view=None)
+            await interaction.followup.send(t(self.lang, "ev_update_fail"), ephemeral=True)
             return
         await _dismiss_ephemeral(interaction)
         asyncio.create_task(_trigger_embed_refresh(interaction.client, interaction.guild, self.event_id))
-
-
-def _build_add_selects(lang: str, event_id: int, members: list[discord.Member]) -> list[discord.ui.Select]:
-    return _build_selects(members, lambda c, i, n: AddParticipantUserSelect(lang, event_id, c, page=i, total_pages=n))
 
 
 # ── View do embed ─────────────────────────────────────────────────────────────
@@ -683,20 +685,15 @@ class EventEmbedView(discord.ui.View):
         if not _is_manager(interaction.user):
             await interaction.response.send_message(t(self.lang, "ev_only_manage"), ephemeral=True)
             return
-        # Exclui quem já é participante — UserSelect não tem como filtrar
-        # (mostra o server inteiro sempre), por isso o Add usa Select comum
-        # com a lista de membros já sem quem está escalado.
+        # UserSelect nativo: busca integrada do Discord, mostra o server inteiro
+        # (sem o limite de 125 opções dos selects paginados antigos). "Já é
+        # participante" é validado no callback — o picker não filtra, mas o
+        # POST é idempotente e o aviso ephemeral cobre o caso.
         existing_ids = {p["user_id"] for p in (self.ev.get("participants") or [])}
-        candidates = [m for m in (interaction.guild.members if interaction.guild else [])
-                     if not m.bot and m.id not in existing_ids]
-        if not candidates:
-            await interaction.response.send_message(t(self.lang, "ev_no_candidates"), ephemeral=True)
-            return
-        candidates.sort(key=lambda m: (m.display_name or m.name).lower())
-        view = discord.ui.View(timeout=120)
-        for sel in _build_add_selects(self.lang, self.event_id, candidates):
-            view.add_item(sel)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        await interaction.response.send_message(
+            view=AddParticipantView(self.lang, self.event_id, existing_ids),
+            ephemeral=True,
+        )
 
     async def _on_remove(self, interaction: Interaction) -> None:
         if not _is_manager(interaction.user):
@@ -782,7 +779,12 @@ class EventEmbeds(commands.Cog):
         # Arquivamento: terminais (finalizado/cancelado/excluído) com thread de
         # embed ainda não trancada — espelho do archive de regear_threads.py.
         for item in work.get("archive") or []:
-            await self._archive_thread(guild, item)
+            try:
+                async with asyncio.timeout(_EMBED_WORK_TIMEOUT):
+                    await self._archive_thread(guild, item)
+            except (TimeoutError, asyncio.TimeoutError):
+                print(f"[event_embeds] archive de {guild.id}/{item.get('event_id')} "
+                      f"passou de {_EMBED_WORK_TIMEOUT}s — cancelando wedge")
 
     async def _archive_thread(self, guild: discord.Guild, ev: dict) -> None:
         event_id = ev.get("event_id")
@@ -812,11 +814,24 @@ class EventEmbeds(commands.Cog):
         )
 
     async def _post_or_edit_embed(self, guild: discord.Guild, event_id: int,
-                                  dto: dict, ids: dict | None = None) -> None:
+                                   dto: dict, ids: dict | None = None) -> None:
         key = (guild.id, event_id)
         lock = self._locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            await self._post_or_edit_embed_unlocked(guild, event_id, dto, ids)
+        # wait_for com teto: o lock e as chamadas REST do discord.py têm esperas
+        # potencialmente INDETERMINADAS (lock órfão, rate limit sem cap com
+        # _max_ratelimit_timeout=None). Sem isso, um wedge (visto em produção
+        # 15/ago/26: backend caiu, conexões morreram, loop parou de tickar para
+        # sempre em silêncio e nenhum embed/thread de revisão foi mais criado)
+        # prende o embed_work_loop E o _catch_up do on_ready no mesmo lock.
+        # Cancelar aqui libera o lock (async with) e o próximo tick repete —
+        # postar/editar embed é idempotente.
+        try:
+            async with asyncio.timeout(_EMBED_WORK_TIMEOUT):
+                async with lock:
+                    await self._post_or_edit_embed_unlocked(guild, event_id, dto, ids)
+        except (TimeoutError, asyncio.TimeoutError):
+            print(f"[event_embeds] embed work de {guild.id}/{event_id} passou de "
+                  f"{_EMBED_WORK_TIMEOUT}s — cancelando wedge, próximo tick repete")
 
     async def _post_or_edit_embed_unlocked(
         self, guild: discord.Guild, event_id: int,

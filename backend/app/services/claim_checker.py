@@ -44,7 +44,7 @@ async def _sync_pending_players(db, pending: list[CharacterClaim]) -> None:
                 if not host:
                     continue
                 try:
-                    async with slot():
+                    async with slot(host):
                         resp = await client.get(f"https://{host}/api/gameinfo/players/{claim.albion_player_id}")
                     if resp.status_code != 200:
                         continue

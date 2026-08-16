@@ -1,0 +1,3 @@
+# ads.txt — declaração de publishers autorizados (Google AdSense)
+# Sem este arquivo no domínio raiz, o AdSense não serve anúncios em produção.
+google.com, pub-5616694158578299, DIRECT, f08c47fec0942fa0

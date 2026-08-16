@@ -429,6 +429,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    sem afetar o CompBuilder (que reusa .comp-layout com align-items flex-start).
    O painel imita a planilha: bordas retas (sem radius), cabeçalhos com
    --surface-2, linhas com borda inferior — pra se enturmar com a tabela. */
+/* Painel SEMPRE no tamanho máximo (100vh), independente do tamanho da lista
+   de inscritos — a lista rola lá dentro (.esc-enlisted-list overflow-y). */
 .esc-layout { align-items: stretch; justify-content: center; gap: 0; position: relative; overflow-x: clip; }
 /* WIDE: [planilha | painel] em fluxo, centrado, painel colado à direita de price
    (gap 0, sem cobertura). */
@@ -437,7 +439,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   flex: 0 0 320px;
   box-shadow: -8px 0 16px -8px rgba(0,0,0,.55);
   position: sticky; top: 0; align-self: flex-start;
-  max-height: 100vh; overflow: hidden;
+  height: 100vh; overflow: hidden;
   z-index: 10;
 }
 /* NARROW: o bloco não cabe → o painel vira overlay cobrindo as colunas da
@@ -447,7 +449,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .esc-layout.esc-narrow .comp-left { flex: 1 1 auto; }
 .esc-layout.esc-narrow .comp-right {
   position: fixed; top: 0; bottom: auto; width: 320px;
-  max-height: 100vh; align-self: flex-start; overflow: hidden;
+  height: 100vh; align-self: flex-start; overflow: hidden;
   z-index: 10;
 }
 .esc-panel {
@@ -496,8 +498,11 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   display: flex; flex-direction: column; overflow-y: auto; flex: 1; min-height: 0;
 }
 .esc-empty { margin: auto; text-align: center; }
+/* wrap: os chips de função (até ~300px num painel de 320px) não esmagam o
+   nome — quando não cabem na mesma linha, descem pra linha de baixo e o nome
+   fica sempre visível (também dentro do bracket, chips longos empilham). */
 .esc-signup {
-  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 6px 10px;
   border-left: 3px solid var(--border); border-bottom: 1px solid var(--border);
   background: var(--surface);
   transition: background .12s, border-color .12s, box-shadow .12s; cursor: default;
@@ -520,7 +525,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .esc-signup-fns { display: inline-flex; gap: 3px; flex-wrap: wrap; position: relative; }
 .esc-role-bracket {
-  display: inline-flex; gap: 3px; align-items: center;
+  display: inline-flex; gap: 3px; align-items: center; flex-wrap: wrap;
   border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px;
   background: rgba(255,255,255,.03);
 }
@@ -1713,7 +1718,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .ev-group.history .ev-card { opacity: .82; }
 .ev-card-list { display: flex; flex-direction: column; gap: 8px; }
 .ev-card {
-  --ev-accent: var(--gold); overflow: hidden; border: 1px solid var(--border);
+  --ev-accent: var(--gold); overflow: visible; border: 1px solid var(--border);
   background: linear-gradient(100deg, color-mix(in srgb, var(--ev-accent) 5%, transparent), transparent 38%), var(--surface);
   box-shadow: inset 2px 0 var(--ev-accent);
 }
@@ -2333,6 +2338,43 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .site-footer-disclaimer {
   color: var(--hint); font-size: 11px; margin: 0; text-align: center;
   max-width: 560px; line-height: 1.4;
+}
+
+/* ── Banner de consentimento de cookies ─────────────────────────────────── */
+.cookie-consent {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 1000;
+  background: var(--surface); border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 12px rgba(0,0,0,.25);
+  animation: cookieSlideUp .25s ease-out;
+}
+@keyframes cookieSlideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.cookie-consent-inner {
+  max-width: 980px; margin: 0 auto; padding: 12px 16px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.cookie-consent-text {
+  flex: 1; min-width: 240px;
+  display: flex; align-items: center; gap: 10px;
+  color: var(--text); font-size: 13px; line-height: 1.45;
+}
+.cookie-consent-text i { font-size: 20px; color: var(--gold); flex-shrink: 0; }
+.cookie-consent-link { color: var(--info); text-decoration: none; }
+.cookie-consent-link:hover { text-decoration: underline; }
+.cookie-consent-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.cookie-consent-nec {
+  background: transparent; color: var(--muted); border: 1px solid var(--border);
+  padding: 7px 14px; font-size: 12.5px;
+}
+.cookie-consent-nec:hover { color: var(--text); border-color: var(--border-strong); }
+.cookie-consent-all {
+  background: var(--gold); color: #1a1a1a; border: none;
+  padding: 7px 14px; font-size: 12.5px; font-weight: 600;
+}
+.cookie-consent-all:hover { filter: brightness(1.08); }
+@media (max-width: 600px) {
+  .cookie-consent-inner { flex-direction: column; align-items: stretch; }
+  .cookie-consent-actions { justify-content: stretch; }
+  .cookie-consent-nec, .cookie-consent-all { flex: 1; }
 }
 
 /* ── Páginas legais (Termos, Privacidade, etc.) ─────────────────────────── */

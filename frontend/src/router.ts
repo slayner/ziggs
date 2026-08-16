@@ -111,6 +111,14 @@ export function parseEventRoute(loc: string): EventRoute | null {
   return { guildId: m[1], eventId: Number(m[2]) };
 }
 
+export interface PublicEventRoute { token: string }
+const PUBLIC_EVENT_RE = /^\/e\/([A-Za-z0-9_-]{32})$/;
+export function parsePublicEventRoute(loc: string): PublicEventRoute | null {
+  const [path] = loc.split("?");
+  const m = path.match(PUBLIC_EVENT_RE);
+  return m ? { token: m[1] } : null;
+}
+
 // Filtro de regears por evento (deep link do review): /regears?event={eventId}.
 // Sem guildId na URL — usa a guilda corrente do cookie. Retorna só o eventId.
 export function parseRegearEventFilter(loc: string): number | null {

@@ -34,12 +34,21 @@ function isDefaultFnTypes(list: FnTypeDef[]): boolean {
     t.key === DEFAULT_FN_TYPES[i].key && t.label === DEFAULT_FN_TYPES[i].label && t.color === DEFAULT_FN_TYPES[i].color);
 }
 
-// Nome de arma sem tier/enchant: "T8_AXE_DEMONSCYTHE@2" -> "Demon Scythe".
+// Nome de arma sem o prefixo de tier: "6.3 Realmbreaker" → "Realmbreaker",
+// "6.3 Cajado de Gelo Elevado" → "Gelo Elevado". Battlemount (noTier, nome
+// próprio sem tier) guarda só a 1ª palavra: "Carruagem de Torre de Ouro" →
+// "Carruagem". Cajados ainda perdem a palavra "Cajado" + conector (de/da/do):
+// "Cajado Sagrado" → "Sagrado", "Cajado da Natureza Elevado" → "Natureza Elevado".
 // Usa o catálogo local (ITEM_BY_ID) pra resolver o nome localizado; se não achar,
 // deriva do id (uppercase first) — fallback raro.
 function weaponDisplayName(weaponId: string): string {
   const item = ITEM_BY_ID.get(weaponId);
-  if (item) return item.name.replace(/^T\d+\s*/, "");
+  if (item) {
+    const n = item.noTier
+      ? item.name.split(/\s+/)[0]
+      : item.name.replace(/^\d+\.\d+\s+/, "");
+    return n.replace(/^Cajado\s+(?:de\s+|da\s+|do\s+)?/, "");
+  }
   const base = wBase(weaponId);
   return base.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 }
@@ -336,7 +345,10 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
       q_spell: null, w_spell: null, passive_spell: null,
       // Auto-nome: só sobrescreve se o nome atual for vazio ou igual ao nome
       // automático da arma anterior (não sobrescreve nome custom do user).
-      name: (!r.name || r.name === weaponDisplayName(r.equip.weapon?.id ?? ""))
+      // Aceita também o nome cru do catálogo ("6.3 Realmbreaker") — default
+      // do formato antigo, pra roles antigas ainda renovarem o nome.
+      name: (!r.name || r.name === weaponDisplayName(r.equip.weapon?.id ?? "")
+        || r.name === ITEM_BY_ID.get(r.equip.weapon?.id ?? "")?.name)
         ? (id ? weaponDisplayName(id) : r.name) : r.name,
     }));
     if (base && id) loadSpells(base);

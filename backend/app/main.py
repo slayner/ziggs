@@ -43,7 +43,7 @@ from app.domain.states import EventState, allowed_targets
 from app.services import (
     battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, companion_scan, companion_kill_scan, dashboard_cache,
     gold_price, guild_verifier, highscores_cache, kill_sweeper, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
-    scan_dispatcher, search_index, silver_dropped, small_battle_discovery, weapon_stats,
+    render_recovery, scan_dispatcher, search_index, silver_dropped, small_battle_discovery, weapon_stats,
 )
 
 
@@ -99,6 +99,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(search_index.run_forever()),
             asyncio.create_task(guild_verifier.run_forever()),
             asyncio.create_task(run_prerender_forever()),
+            asyncio.create_task(render_recovery.run_forever()),
         ]
     yield
     for t in tasks:
@@ -173,6 +174,7 @@ app.include_router(scan.router)
 app.include_router(comps.router)
 app.include_router(craft.router)
 app.include_router(events.router)
+app.include_router(events.public_router)
 app.include_router(highscores.router)
 app.include_router(loot.router)
 app.include_router(lootlog.router)

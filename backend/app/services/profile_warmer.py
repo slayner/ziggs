@@ -86,7 +86,7 @@ async def _warm_player(client, db: AsyncSession, host: str, region: str, albion_
     await db.commit()
     try:
         _refresh_progress[albion_id] = "fetching"
-        async with slot():
+        async with slot(host):
             resp = await client.get(f"https://{host}/api/gameinfo/players/{albion_id}")
         if resp.status_code != 200:
             log.info("warm: player %s (%s) — HTTP %d", albion_id, region, resp.status_code)
@@ -196,7 +196,7 @@ async def _warm_guild(client, db: AsyncSession, host: str, region: str, albion_i
     True em sucesso, False em falha — mesmo contrato do _warm_player."""
     try:
         _refresh_progress[f"g:{albion_id}"] = "fetching"
-        async with slot():
+        async with slot(host):
             resp = await client.get(f"https://{host}/api/gameinfo/guilds/{albion_id}")
         if resp.status_code != 200:
             log.info("warm: guild %s (%s) — HTTP %d", albion_id, region, resp.status_code)
@@ -212,7 +212,7 @@ async def _warm_guild(client, db: AsyncSession, host: str, region: str, albion_i
         # próximo ciclo tentar de novo.
         members = None
         try:
-            async with slot():
+            async with slot(host):
                 mresp = await client.get(f"https://{host}/api/gameinfo/guilds/{albion_id}/members")
             if mresp.status_code == 200:
                 mraw = mresp.json()
@@ -236,7 +236,7 @@ async def _warm_alliance(client, db: AsyncSession, host: str, region: str, albio
     True em sucesso, False em falha — mesmo contrato do _warm_player."""
     try:
         _refresh_progress[f"a:{albion_id}"] = "fetching"
-        async with slot():
+        async with slot(host):
             resp = await client.get(f"https://{host}/api/gameinfo/alliances/{albion_id}")
         if resp.status_code != 200:
             log.info("warm: alliance %s (%s) — HTTP %d", albion_id, region, resp.status_code)
@@ -488,7 +488,7 @@ async def warm_by_name(name: str, region: str) -> dict:
             await db.commit()  # libera read tx antes do HTTP
             async with make_client() as client:
                 async with albion_scope(WARM):
-                    async with slot():
+                    async with slot(host):
                         resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
                     if resp.status_code != 200:
                         log.info("warm: %s (%s) — busca falhou HTTP %d", name, region, resp.status_code)
@@ -500,7 +500,7 @@ async def warm_by_name(name: str, region: str) -> dict:
                     if not match:
                         log.info("warm: %s (%s) — não encontrado na busca", name, region)
                         return {"status": "not_found"}
-                    async with slot():
+                    async with slot(host):
                         pr = await client.get(f"https://{host}/api/gameinfo/players/{match['Id']}")
                     if pr.status_code != 200:
                         log.info("warm: %s (%s) — perfil falhou HTTP %d", name, region, pr.status_code)

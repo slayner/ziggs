@@ -418,8 +418,8 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
         _draw_centered(draw, _silver_full(silver), info_x, info_y + int(56 * S), TEXT_COLOR, _FONT_STATS)
         _draw_centered(draw, "silver dropped", info_x, info_y + int(78 * S), DIM_COLOR, _FONT_STATS_LABEL)
 
-        if not ev.is_solo:
-            _draw_centered(draw, f"{ev.participant_count} participants", info_x, info_y + int(100 * S), DIM_COLOR, _FONT_STATS_LABEL)
+        participants_label = "solo" if ev.is_solo else f"{ev.participant_count} participants"
+        _draw_centered(draw, participants_label, info_x, info_y + int(100 * S), DIM_COLOR, _FONT_STATS_LABEL)
 
         # ── Sets de equipamento (grids 3×3) ──
         grid_y = header_y + int(44 * S)
@@ -454,8 +454,7 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
                 if icon is not None:
                     img.paste(icon, (ix, iy), icon)
 
-                if count > 1:
-                    _draw_qty(draw, str(count), ix + ICON_SIZE - int(8 * S), iy + ICON_SIZE - int(20 * S), TEXT_COLOR)
+                _draw_qty(draw, str(count), ix + ICON_SIZE - int(8 * S), iy + ICON_SIZE - int(17 * S), TEXT_COLOR)
 
                 ix += ICON_SIZE + SLOT_GAP
 

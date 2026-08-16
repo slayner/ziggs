@@ -121,6 +121,10 @@ const S = {
     albionPrimaryLock: "A guilda primária não pode ser removida",
     registerRoleTitle: "Cargo de Registro", registerRoleNone: "Nenhum (desativa o /register)",
     registerRoleDesc: "Cargo liberado automaticamente quando um membro usa /register e o personagem está na guilda Albion configurada acima. Veja a documentação do bot para detalhes.",
+    registerKickTitle: "Remover cargo ao sair da guilda",
+    registerKickDesc: "Ligado: o /register exige que o personagem esteja na guilda Albion e o bot vigia os registros, removendo o cargo de quem sair. Desligado: a checagem de guilda só acontece quando o próprio membro usa /register — registrar um terceiro assume a identidade sem verificar e ninguém é vigiado. Ao religar, todos os registros feitos sem checagem são verificados: nick não encontrado (após algumas tentativas) ou fora da guilda perde o cargo.",
+    registerKickOn: "Vigilância ativa",
+    registerKickOff: "Só checa no registro",
     registerOthersTitle: "Registrar Terceiros",
     registerOthersDesc: "Além de se registrar, esses cargos também podem usar /register pra vincular OUTRA pessoa (informando o nick e o usuário do Discord). Por padrão, só administradores podem fazer isso — mesmo que /register esteja liberado pra todos.",
     allianceTitle: "Aliança", allianceDetected: "Aliança detectada:",
@@ -804,6 +808,13 @@ const S = {
     footerTerms: "Termos", footerPrivacy: "Privacidade", footerCookies: "Cookies",
     footerAbout: "Sobre", footerContact: "Contato",
     footerNotAffiliated: "Não afiliado à Sandbox Interactive GmbH ou Discord Inc.",
+
+    // Consentimento de cookies (banner)
+    consentTitle: "Consentimento de cookies",
+    consentText: "Usamos cookies de sessão (necessários) e cookies do Google AdSense (opcional).",
+    consentLearn: "Saiba mais",
+    consentNec: "Só necessários",
+    consentAll: "Aceitar tudo",
   },
   en: {
     search: "Search item…",
@@ -909,6 +920,10 @@ const S = {
     albionPrimaryLock: "The primary guild cannot be removed",
     registerRoleTitle: "Register Role", registerRoleNone: "None (disables /register)",
     registerRoleDesc: "Role automatically granted when a member uses /register and the character is in the Albion guild configured above. See the bot documentation for details.",
+    registerKickTitle: "Remove role on guild leave",
+    registerKickDesc: "On: /register requires the character to be in the Albion guild and the bot watches registrations, removing the role from anyone who leaves. Off: the guild check only happens when the member runs /register themselves — registering someone else trusts the identity with no verification and nobody is watched. Turning it back on re-verifies every unverified registration: nickname not found (after a few attempts) or out of the guild loses the role.",
+    registerKickOn: "Surveillance on",
+    registerKickOff: "Check on register only",
     registerOthersTitle: "Register Others",
     registerOthersDesc: "Besides registering themselves, these roles can also use /register to link ANOTHER person (by providing the nick and the Discord user). By default, only administrators can do this — even if /register is open to everyone.",
     allianceTitle: "Alliance", allianceDetected: "Detected alliance:",
@@ -1590,6 +1605,13 @@ const S = {
     footerTerms: "Terms", footerPrivacy: "Privacy", footerCookies: "Cookies",
     footerAbout: "About", footerContact: "Contact",
     footerNotAffiliated: "Not affiliated with Sandbox Interactive GmbH or Discord Inc.",
+
+    // Cookie consent (banner)
+    consentTitle: "Cookie consent",
+    consentText: "We use session cookies (necessary) and Google AdSense cookies (optional).",
+    consentLearn: "Learn more",
+    consentNec: "Necessary only",
+    consentAll: "Accept all",
   },
   es: {
     search: "Buscar objeto…",
@@ -1694,6 +1716,10 @@ const S = {
     albionPrimaryLock: "El gremio principal no se puede eliminar",
     registerRoleTitle: "Rol de Registro", registerRoleNone: "Ninguno (desactiva /register)",
     registerRoleDesc: "Rol otorgado automáticamente cuando un miembro usa /register y el personaje está en el gremio de Albion configurado arriba. Vea la documentación del bot para más detalles.",
+    registerKickTitle: "Quitar rol al salir del gremio",
+    registerKickDesc: "Encendido: /register exige que el personaje esté en el gremio de Albion y el bot vigila los registros, quitando el rol de quien salga. Apagado: la comprobación de gremio solo ocurre cuando el propio miembro usa /register — registrar a un tercero asume la identidad sin verificar y nadie es vigilado. Al reencender, todos los registros sin verificar se comprueban: apodo no encontrado (tras algunos intentos) o fuera del gremio pierde el rol.",
+    registerKickOn: "Vigilancia activa",
+    registerKickOff: "Solo al registrarse",
     registerOthersTitle: "Registrar a Terceros",
     registerOthersDesc: "Además de registrarse, estos roles también pueden usar /register para vincular a OTRA persona (indicando el nick y el usuario de Discord). Por defecto, solo administradores pueden hacer esto — incluso si /register está abierto para todos.",
     allianceTitle: "Alianza", allianceDetected: "Alianza detectada:",
@@ -2375,6 +2401,13 @@ const S = {
     footerTerms: "Términos", footerPrivacy: "Privacidad", footerCookies: "Cookies",
     footerAbout: "Sobre", footerContact: "Contacto",
     footerNotAffiliated: "No afiliado a Sandbox Interactive GmbH ni Discord Inc.",
+
+    // Consentimiento de cookies (banner)
+    consentTitle: "Consentimiento de cookies",
+    consentText: "Usamos cookies de sesión (necesarias) y cookies de Google AdSense (opcional).",
+    consentLearn: "Saber más",
+    consentNec: "Solo necesarias",
+    consentAll: "Aceptar todo",
   },
 } as const;
 
@@ -2501,11 +2534,12 @@ function baseIdOf(id: string): string {
 
 // ponytail: ES item names fall back to PT; populate es-items.json to add them
 export function itemLocalName(item: AlbionItem, lang: Lang): string {
-  const prefix = tierDotEnchant(item.id);
-  if (lang === "en" && item.nameEn) return `${prefix} ${item.nameEn}`;
+  // noTier (battlemounts): sem prefixo numérico em nenhum idioma.
+  const prefix = item.noTier ? "" : tierDotEnchant(item.id);
+  if (lang === "en" && item.nameEn) return `${prefix} ${item.nameEn}`.trim();
   if (lang === "es") {
     const base = (ES_ITEMS as Record<string, string>)[baseIdOf(item.id)];
-    if (base) return `${prefix} ${base}`;
+    if (base) return `${prefix} ${base}`.trim();
   }
   return item.name;
 }

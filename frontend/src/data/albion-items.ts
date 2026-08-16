@@ -7,6 +7,8 @@ export interface AlbionItem {
   name: string;
   nameEn?: string;
   useEnRender?: true; // só crystal weapons (artAll) usam o render por nome EN
+  // Battlemounts não mostram prefixo "8.0" — tier é fixo no próprio nome do item
+  noTier?: true;
   slot: ItemSlot;
 }
 
@@ -57,10 +59,11 @@ function artAll(baseId: string, name: string, slot: ItemSlot, nameEn?: string): 
   return gen(T, E, baseId, name, slot, nameEn).map(i => ({ ...i, useEnRender: true as const }));
 }
 
-// Battle mount — tier fixo, sem variantes de tier/encant. ID próprio.
+// Battle mount — tier fixo, sem variantes de tier/encant. ID próprio. O nome
+// não leva prefixo numérico (noTier): "Mamute de Comando do Ancião", não
+// "8.0 Mamute de Comando do Ancião".
 function bm(id: string, namePt: string, nameEn: string): AlbionItem {
-  const tier = parseInt(id.match(/^T(\d+)_/)?.[1] ?? "8");
-  return { id, name: `${tier}.0 ${namePt}`, nameEn, slot: "weapon" };
+  return { id, name: namePt, nameEn, noTier: true, slot: "weapon" };
 }
 
 export const ALBION_ITEMS: AlbionItem[] = [
@@ -253,25 +256,25 @@ export const ALBION_ITEMS: AlbionItem[] = [
   // COMIDA
   // ═══════════════════════════════════════════════════════════
 
-  ...gen(T, [0,1,2,3], "MEAL_GRILLEDFISH",      "Peixe Grelhado",     "food"),
-  ...gen(T, [0,1,2,3], "MEAL_SEAWEEDSALAD",    "Salada de Algas",    "food"),
-  ...gen(T, [0,1,2,3], "MEAL_SOUP",            "Sopa",               "food"),
-  ...gen(T, [0,1,2,3], "MEAL_SOUP_FISH",       "Sopa de Peixe",      "food"),
-  ...gen(T, [0,1,2,3], "MEAL_SALAD",           "Salada",             "food"),
-  ...gen(T, [0,1,2,3], "MEAL_SALAD_FISH",      "Salada de Peixe",    "food"),
-  ...gen(T, [0,1,2,3], "MEAL_PIE",             "Torta",              "food"),
-  ...gen(T, [0,1,2,3], "MEAL_PIE_FISH",        "Torta de Peixe",     "food"),
-  ...gen(T, [0,1,2,3], "MEAL_OMELETTE",        "Omelete",            "food"),
-  ...gen(T, [0,1,2,3], "MEAL_OMELETTE_FISH",   "Omelete de Caranguejo", "food"),
-  ...gen(T, [0,1,2,3], "MEAL_OMELETTE_AVALON", "Omelete Avaloniana", "food"),
-  ...gen(T, [0,1,2,3], "MEAL_STEW",            "Ensopado",           "food"),
-  ...gen(T, [0,1,2,3], "MEAL_STEW_FISH",       "Ensopado de Enguia", "food"),
-  ...gen(T, [0,1,2,3], "MEAL_STEW_AVALON",     "Ensopado Avaloniano","food"),
-  ...gen(T, [0,1,2,3], "MEAL_SANDWICH",        "Sanduíche",          "food"),
-  ...gen(T, [0,1,2,3], "MEAL_SANDWICH_FISH",   "Sanduíche de Peixe", "food"),
-  ...gen(T, [0,1,2,3], "MEAL_SANDWICH_AVALON", "Sanduíche Avaloniano","food"),
-  ...gen(T, [0,1,2,3], "MEAL_ROAST",           "Assado",             "food"),
-  ...gen(T, [0,1,2,3], "MEAL_ROAST_FISH",      "Peixe Assado",       "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_GRILLEDFISH",      "Peixe Grelhado",     "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_SEAWEEDSALAD",    "Salada de Algas",    "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_SOUP",            "Sopa",               "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_SOUP_FISH",       "Sopa de Peixe",      "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_SALAD",           "Salada",             "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_SALAD_FISH",      "Salada de Peixe",    "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_PIE",             "Torta",              "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_PIE_FISH",        "Torta de Peixe",     "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_OMELETTE",        "Omelete",            "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_OMELETTE_FISH",   "Omelete de Caranguejo", "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_OMELETTE_AVALON", "Omelete Avaloniana", "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_STEW",            "Ensopado",           "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_STEW_FISH",       "Ensopado de Enguia", "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_STEW_AVALON",     "Ensopado Avaloniano","food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_SANDWICH",        "Sanduíche",          "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_SANDWICH_FISH",   "Sanduíche de Peixe", "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_SANDWICH_AVALON", "Sanduíche Avaloniano","food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_ROAST",           "Assado",             "food"),
+  ...gen([5,6,7,8], [0,1,2,3], "MEAL_ROAST_FISH",      "Peixe Assado",       "food"),
 
   // ═══════════════════════════════════════════════════════════
   // POÇÕES
@@ -518,10 +521,11 @@ export const ITEM_BY_ID = new Map<string, AlbionItem>(
 // O tamanho entra na chave do cache (backend `_s{size}.png` e cache do browser),
 // então trocar o default re-baixa 1× por ícone no novo tamanho.
 export const ICON_SIZE_SM = 64;   // listas de ícone pequeno (~32px de exibição)
+const RENDER_CACHE_VERSION = 2;
 
 export const RENDER_URL = (id: string, quality = 0, size = 128): string => {
   const q = quality ? `&quality=${quality}` : "";
-  return `/render/item/${encodeURIComponent(id)}?size=${size}${q}`;
+  return `/render/item/${encodeURIComponent(id)}?size=${size}${q}&v=${RENDER_CACHE_VERSION}`;
 };
 
 // Render URL usando nome em inglês (para crystal weapons)
@@ -530,7 +534,7 @@ export const RENDER_URL_EN = (nameEn: string, itemId: string, quality = 0, size 
   const tier = parseInt(itemId.match(/^T(\d+)_/)?.[1] ?? "8");
   const enchant = itemId.match(/@(\d+)$/)?.[1];
   const name = crystalRenderName(nameEn, tier, enchant ? +enchant : 0);
-  return `/render/item/${encodeURIComponent(name)}?size=${size}${q}`;
+  return `/render/item/${encodeURIComponent(name)}?size=${size}${q}&v=${RENDER_CACHE_VERSION}`;
 };
 
 // Escolhe o melhor render URL para um item

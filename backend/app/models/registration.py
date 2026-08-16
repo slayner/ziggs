@@ -13,15 +13,21 @@ from app.models.base import Base, Snowflake, pk
 class BotRegistration(Base):
     """Um personagem Albion vinculado a um membro Discord via /register.
 
-    Único por (guild_id, albion_player_id) — uma única linha por personagem,
-    reaproveitada entre ciclos de entrada/saída da guild (em vez de acumular
-    histórico). Enquanto `active`, um novo /register pro mesmo personagem é
-    ignorado (não importa quem peça) — é o "já existe um membro com esse nome
-    registrado" pedido. `active=False` libera o personagem pra um novo
-    registro (saiu da guild ou foi removido pelo check periódico).
+    Único por (guild_id, albion_player_id, discord_user_id) — a MESMA pessoa
+    pode registrar o mesmo personagem em vários Discords (main + alt), cada
+    linha com seu cargo. Enquanto `active`, um novo /register pro mesmo par é
+    idempotente. `active=False` libera o par pra um novo registro.
+
+    albion_player_id é o ID real da API, EXCETO em registros "de confiança"
+    (vigilância desligada + registro de terceiro): nesses é o sintético
+    "manual:<nick>" (+ sufixo "#<n>" contando falhas de verificação, ver
+    registration_checker), convertido pro ID real quando a vigilância é
+    (re)ligada e o nick é encontrado.
     """
     __tablename__ = "bot_registrations"
-    __table_args__ = (UniqueConstraint("guild_id", "albion_player_id", name="uq_bot_reg_character"),)
+    __table_args__ = (
+        UniqueConstraint("guild_id", "albion_player_id", "discord_user_id", name="uq_bot_reg_character_user"),
+    )
 
     id: Mapped[int] = pk()
     guild_id: Mapped[int] = mapped_column(

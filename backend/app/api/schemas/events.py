@@ -138,6 +138,7 @@ class PayoutPreview(BaseModel):
 
 class EventDetail(BaseModel):
     id: int
+    escalation_token: str
     state: str
     # LEGADO — só não-nulo em eventos criados antes do tipo sumir. Ver EventType.
     type: str | None = None
@@ -343,6 +344,7 @@ class EscalationSignupOut(BaseModel):
 
 class EscalationEventOut(BaseModel):
     id: int
+    guild_id: str
     title: str | None = None
     scheduled_at: datetime | None = None
     seriousness: str

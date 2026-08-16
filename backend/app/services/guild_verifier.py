@@ -37,7 +37,7 @@ async def _search_guild(client, host: str, name: str) -> dict | None:
     if not nl:
         return None
     try:
-        async with slot():
+        async with slot(host):
             resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": name})
     except Exception as e:
         log.debug("guild_verifier: search %s @ %s falhou: %s", name, host, e)
@@ -50,7 +50,7 @@ async def _search_guild(client, host: str, name: str) -> dict | None:
 
 async def _fetch_guild(client, host: str, guild_id: str) -> dict | None:
     try:
-        async with slot():
+        async with slot(host):
             resp = await client.get(f"https://{host}/api/gameinfo/guilds/{guild_id}")
     except Exception as e:
         log.debug("guild_verifier: guild %s @ %s falhou: %s", guild_id, host, e)
@@ -63,7 +63,7 @@ async def _fetch_guild(client, host: str, guild_id: str) -> dict | None:
 
 async def _fetch_alliance_members(client, host: str, alliance_id: str) -> list[dict] | None:
     try:
-        async with slot():
+        async with slot(host):
             resp = await client.get(f"https://{host}/api/gameinfo/alliances/{alliance_id}")
     except Exception as e:
         log.debug("guild_verifier: alliance %s @ %s falhou: %s", alliance_id, host, e)

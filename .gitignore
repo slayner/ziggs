@@ -24,8 +24,13 @@ backend/data/battle_preview_cache/
 
 # Bancos locais — dado de runtime, nunca versionado (o ziggs.db passa de 7 GB)
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
+bot-legacy/data/
+referencia/
+frontend/tsconfig.tsbuildinfo
 
 # Build do Rust/Tauri (o target/ do companion sozinho passa de 18 GB)
 target/

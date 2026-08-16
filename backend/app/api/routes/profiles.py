@@ -956,7 +956,7 @@ async def global_search_external(q: str, region: str | None = None, db: AsyncSes
 
     async def _search_region(client: httpx.AsyncClient, host: str, region: str) -> dict:
         try:
-            async with slot():
+            async with slot(host):
                 resp = await client.get(f"https://{host}/api/gameinfo/search", params={"q": q}, timeout=8.0)
             if resp.status_code != 200:
                 return {"players": [], "guilds": [], "alliances": []}
@@ -1599,7 +1599,7 @@ async def _check_albion_entity(entity_type: str, albion_id: str, path: str, db: 
         async with albion_scope(PROFILE):
             for host in HOSTS.values():
                 try:
-                    async with slot():
+                    async with slot(host):
                         resp = await c.get(f"https://{host}/api/gameinfo/{path}/{albion_id}", timeout=8.0)
                 except (httpx.TimeoutException, httpx.NetworkError):
                     inconclusive = True

@@ -121,7 +121,7 @@ async def _probe_kill_event(
     url = f"https://{host}/api/gameinfo/events/{event_id}"
     for attempt in range(MAX_429_RETRIES):
         try:
-            async with slot():
+            async with slot(host):
                 resp = await client.get(url)
         except httpx.RequestError:
             return "error", None
@@ -199,6 +199,12 @@ async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
     if not candidates:
         log.info("kill_sweeper: sem candidatos novos")
         return {"candidates": 0, "found": 0}
+
+    # Fecha a read tx aberta pelas queries de candidatos ANTES da fase de HTTP:
+    # o ciclo inteiro atrás do rate limiter pode passar dos 10min do
+    # idle_in_transaction_session_timeout, e o Postgres derrubaria a conexão
+    # no meio do ciclo (mesma higiene do battle_sweeper.sweep_cycle).
+    await db.commit()
 
     db_lock = asyncio.Lock()
 

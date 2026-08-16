@@ -489,12 +489,6 @@ export default function App() {
             />
           </nav>
 
-          {/* One vertical ad slot below the tabs. Sidebar is 240px wide;
-              300px creative loads with minor overflow, which is fine. */}
-          <div className="ck-side-ads">
-            <AdSlot variant="side" />
-          </div>
-
           {/* Npcap missing banner inside the sidebar. Manual install only. */}
           {npcapMissing && (
             <div className="ck-npcap ck-side-npcap">
@@ -540,7 +534,6 @@ export default function App() {
             <div className="ck-route-scroll">
               <TunnelHero config={config} tunnelStatus={tunnelStatus} hist={hist} />
             </div>
-            <AdSlot />
           </div>
 
           {tab === "damage" && (
@@ -550,13 +543,11 @@ export default function App() {
                 partyOnly={dmgPartyOnly} setPartyOnly={setDmgPartyOnly}
                 vsPlayers={dmgVsPlayers} setVsPlayers={setDmgVsPlayers}
               />
-              <AdSlot />
             </div>
           )}
           {tab === "loot" && (
             <div className="ck-full">
               <LootlogTab config={config} update={updateConfig} sniffStats={sniffStats} />
-              <AdSlot />
             </div>
           )}
         </main>
@@ -1066,42 +1057,11 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
 
 // ─── Hero: Route/Tunnel (main cockpit view) ──────────────────────────────────
 
-/// Ad slot — Adsterra injected via iframe srcdoc (same approach as the site's
-/// AdBanner). Each iframe gets its own window.atOptions, so multiple banners
-/// on the same page don't collide.
-const ADSTERRA_KEYS: Record<string, string> = {
-  "300x250": "67b53d8ceb5bbe360fbf869679d47b70",
-  "728x90": "349d923ad542f5d656d1fcfb46f22eb6",
-};
-function AdSlot({ variant = "strip" }: { variant?: "strip" | "side" } = {}) {
-  const t = useT();
-  const size = variant === "side" ? "300x250" : "728x90";
-  const w = variant === "side" ? 300 : 728;
-  const h = variant === "side" ? 250 : 90;
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.innerHTML = "";
-    const key = ADSTERRA_KEYS[size];
-    const bust = Date.now() + Math.random();
-    const html = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;overflow:hidden;width:${w}px;height:${h}px}</style></head><body><script>atOptions={'key':'${key}','format':'iframe','height':${h},'width':${w},'params':{}};<\/script><script src="https://www.highperformanceformat.com/${key}/invoke.js?z=${bust}" async><\/script></body></html>`;
-    const iframe = document.createElement("iframe");
-    iframe.srcdoc = html;
-    iframe.width = String(w);
-    iframe.height = String(h);
-    iframe.style.cssText = `border:0;width:100%;height:100%;max-width:${w}px;max-height:${h}px;overflow:hidden`;
-    iframe.setAttribute("loading", "eager");
-    iframe.setAttribute("scrolling", "no");
-    el.appendChild(iframe);
-  }, [size, w, h]);
-  return (
-    <div className={`ck-ad ck-ad-${variant}`} style={{ width: "100%", height: h, maxWidth: w, overflow: "hidden" }}>
-      <span className="ck-ad-tag">{t("ckAd")}</span>
-      <div ref={ref} style={{ width: "100%", height: h, display: "flex", justifyContent: "center", overflow: "hidden" }} />
-    </div>
-  );
-}
+// SEM anúncios no companion (desde ago/2026, troca Adsterra→AdSense): o AdSense
+// só veicula em páginas web do domínio aprovado com conteúdo — webview de app
+// desktop via iframe de página só de anúncio era justamente a violação que
+// negou a conta ("telas sem conteúdo ou com conteúdo de baixo valor"). Não
+// reintroduzir ad network aqui sem resolver isso.
 
 /// Route tab connection panel with tunnel operational details. VPS settings
 /// (endpoint, keys) are hardcoded in the binary, not exposed in the UI.

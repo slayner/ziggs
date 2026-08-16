@@ -55,7 +55,7 @@ async def _get_json(url: str) -> Any:
     for attempt in range(_ATTEMPTS):
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                async with slot():
+                async with slot(httpx.URL(url).host):
                     resp = await client.get(url)
             if resp.status_code == 404:
                 return None

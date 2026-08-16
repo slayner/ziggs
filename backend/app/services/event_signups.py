@@ -660,6 +660,7 @@ def build_pending_work(db: Session, guild_id: int, events: list[Event] | None = 
             ]
         out.append({
             "event_id": e.id,
+            "escalation_token": e.escalation_token,
             "state": e.state.value,
             "title": e.title,
             "message": e.message,

@@ -18,7 +18,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import case, select
+from sqlalchemy import case, select, update
 
 from app.db import AsyncSessionLocal
 from app.models.battles import Battle
@@ -99,12 +99,17 @@ async def _reprocess_batch(client, db) -> int:
             # batalha saía da fila mesmo sem nunca ter sido processada de
             # verdade, e ficava perdida pra sempre sem sinal de erro.
             if ok:
-                # Batalha não-lethal é deletada dentro de _write_deep_data.
-                # Não acesse o objeto expirado depois desse DELETE.
-                remaining = await db.get(Battle, battle_id)
-                if remaining is not None:
-                    remaining.reprocess_reason = None
-                    await db.commit()
+                # Batalha não-lethal é deletada dentro de _write_deep_data, e o
+                # ingest do scan-operator pode deletá-la (purge de batalha
+                # pequena) enquanto o deep-fetch rodava. db.get devolveria a
+                # instância CACHEADA da identity map (linha já deletada) e o
+                # commit explodia com StaleDataError ("0 rows matched") em toda
+                # corrida dessas. UPDATE Core: 0 linhas afetadas = só segue.
+                await db.execute(
+                    update(Battle).where(Battle.id == battle_id).values(reprocess_reason=None),
+                    execution_options={"synchronize_session": False},
+                )
+                await db.commit()
                 processed += 1
 
     return processed

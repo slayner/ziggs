@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, lazy, Suspense, Component, type ReactNode } from "react";
-import { useLocation, navigate, navigateReplace, goBack, parseBattleRoute, parsePlayerRoute, parseGuildRoute, parseEventRoute, parseRegearRoute, parseRegearEventFilter } from "./router";
+import { useLocation, navigate, navigateReplace, goBack, parseBattleRoute, parsePlayerRoute, parseGuildRoute, parseEventRoute, parsePublicEventRoute, parseRegearRoute, parseRegearEventFilter } from "./router";
 import { api, setGuild, onBackendDown, setBackendDown, NO_PERMS, type Me, type Permissions, type SiteGuild } from "./api";
 import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, REGION_LABELS, type Lang, type GameServer } from "./i18n";
 import AdBanner from "./components/AdBanner";
+import CookieConsent from "./components/CookieConsent";
 import { TermsPage, PrivacyPage, CookiesPage, AboutPage, ContactPage } from "./components/LegalPages";
 
 // code-split por página: cada view só baixa seu próprio JS quando é aberta
@@ -117,36 +118,6 @@ function SiteFooter({ t }: { t: (k: import("./i18n").TKey) => string }) {
   );
 }
 
-const ADSTERRA_KEYS: Record<string, string> = {
-  "300x250": "67b53d8ceb5bbe360fbf869679d47b70",
-  "728x90": "349d923ad542f5d656d1fcfb46f22eb6",
-};
-const AD_DIMS: Record<string, [number, number]> = {
-  "300x250": [300, 250],
-  "728x90": [728, 90],
-};
-
-// Fallback de dev: em prod o Caddy serve public/ad/*.html estático. Scripts
-// injetados via DOM porque dangerouslySetInnerHTML em <script> não executa.
-function AdPage({ size }: { size: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const key = ADSTERRA_KEYS[size];
-    const [w, h] = AD_DIMS[size] ?? [300, 250];
-    const s1 = document.createElement("script");
-    s1.text = `atOptions = { 'key' : '${key}', 'format' : 'iframe', 'height' : ${h}, 'width' : ${w}, 'params' : {} };`;
-    const s2 = document.createElement("script");
-    s2.src = `https://www.highperformanceformat.com/${key}/invoke.js`;
-    s2.async = true;
-    el.appendChild(s1);
-    el.appendChild(s2);
-  }, [size]);
-  const [w, h] = AD_DIMS[size] ?? [300, 250];
-  return <div ref={ref} style={{ width: w, height: h, margin: 0, padding: 0, overflow: "hidden" }} />;
-}
-
 export default function App() {
   const { lang, setLang } = useLang();
   const { server, setServer, servers, toggleServer } = useServer();
@@ -199,6 +170,7 @@ export default function App() {
   const playerRoute = parsePlayerRoute(loc);
   const guildRoute  = parseGuildRoute(loc);
   const eventRoute  = parseEventRoute(loc);
+  const publicEventRoute = parsePublicEventRoute(loc);
   const regearRoute = parseRegearRoute(loc);
   const regearEventFilter = parseRegearEventFilter(loc);
   // /download (não /companion — esse prefixo é da API do backend em prod).
@@ -211,13 +183,6 @@ export default function App() {
     legalPath === "/cookies" ? "cookies" :
     legalPath === "/about" ? "about" :
     legalPath === "/contact" ? "contact" : null;
-  // /ad/300x250 e /ad/728x90 — páginas de anúncio standalone pra embedar via
-  // iframe no companion (webview Tauri não serve o script de ad network direto).
-  // Só o loader, sem topbar/footer.
-  const adPath = loc.split("?")[0];
-  const adSize: "300x250" | "728x90" | null =
-    adPath === "/ad/300x250" ? "300x250" :
-    adPath === "/ad/728x90" ? "728x90" : null;
   // /highscores?kind=&player=&rank=&regions= — deep link do perfil. Detecta
   // aqui (não no router.ts) porque highscores é view em memória, não rota de
   // URL própria; o App seta a view e os params, e limpa a URL em seguida pra
@@ -355,7 +320,7 @@ export default function App() {
   // Keep-alive ativo quando estamos mostrando management ou config direto
   // (sem deep link de rota, sem picker aberto, logado com guilda). Fora disso
   // as duas continuam montadas mas escondidas (display:none), preservando estado.
-  const noRoute = !eventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive && !legalPage;
+  const noRoute = !eventRoute && !publicEventRoute && !regearRoute && !regearEventFilter && !battleRoute && !playerRoute && !guildRoute && !companionActive && !legalPage;
   const useKeepAlive = loggedIn && hasGuild && !needsSetup && !pickingGuild && noRoute && (view === "management" || view === "config");
   // Deep links escalacao/regear ativos no momento (definem qual keep-alive show).
   const escActive = !!eventRoute;
@@ -415,14 +380,6 @@ export default function App() {
   // ErrorBoundary acima (LangProvider embrulha o <App/> todo em main.tsx) —
   // era a causa da tela branca eterna.
   if (me === undefined) return null;
-
-  // /ad/:size — página de anúncio standalone (iframe alvo do companion e do
-  // AdBanner do site). Em prod o Caddy serve HTML estático (public/ad/*.html)
-  // direto; este handler é o fallback de dev (Vite SPA). Scripts precisam ser
-  // injetados via DOM (dangerouslySetInnerHTML em <script> não executa).
-  if (adSize) {
-    return <AdPage size={adSize} />;
-  }
 
   // Páginas legais/institucionais — standalone, sem topbar/nav. Renderizam
   // antes do fluxo principal (não precisam de login nem guilda).
@@ -633,7 +590,9 @@ export default function App() {
 
   let content: React.ReactNode;
 
-  if (eventRoute) {
+  if (publicEventRoute) {
+    content = <EscalacaoPage token={publicEventRoute.token} />;
+  } else if (eventRoute) {
     content = <EscalacaoPage guildId={eventRoute.guildId} eventId={eventRoute.eventId} />;
   } else if (regearRoute) {
     content = <RegearPage guildId={regearRoute.guildId} initialRequestId={regearRoute.requestId} />;
@@ -852,7 +811,10 @@ export default function App() {
           --bg liso atrás do próprio ad). O esquadramento em si é global no
           styles.css (não depende disso). */}
       <div className="dash-root">
-      {view !== "craft" && (
+      {/* Política do AdSense: sem anúncio em telas de navegação/fluxo
+          comportamental (seleção de guilda, login, setup inicial) — só em
+          páginas de conteúdo. "craft" tem o próprio banner na rail. */}
+      {view !== "craft" && !pickingGuild && !(view === "management" && (!loggedIn || needsSetup)) && !(view === "config" && (!loggedIn || needsSetup)) && (
         <div style={{ padding: "10px 16px 0" }}>
           <AdBanner key={`top-${view}`} slot={`top-${view}`} variant="leaderboard" mobileVariant="mobileBanner" />
         </div>
@@ -911,6 +873,7 @@ export default function App() {
       </ErrorBoundary>
       </div>
       <SiteFooter t={t} />
+      <CookieConsent />
     </div>
   );
 }
