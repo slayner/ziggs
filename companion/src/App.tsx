@@ -698,8 +698,6 @@ function DamageTimeline({ data }: { data: number[] }) {
   const t = useT();
   const peak = data.reduce((m, v) => Math.max(m, v), 0);
   if (peak <= 0) return <div className="dmg-tl-empty empty-inline">{t("dmgTimelineEmpty")}</div>;
-  const nowSec = Math.floor(Date.now() / 1000);
-  const last = data.length - 1;
   return (
     <div className="dmg-tl">
       <div className="dmg-tl-head">
@@ -707,10 +705,8 @@ function DamageTimeline({ data }: { data: number[] }) {
         <span className="dmg-tl-peak">{t("dmgPeak")}: {fmtC(peak)}/s</span>
       </div>
         <svg className="dmg-tl-svg" viewBox={`0 0 ${data.length} 40`} preserveAspectRatio="none">
-        {/* Key by absolute second, not array index. Backend aligns data[last]
-            to now; keying by time makes bars slide left smoothly between polls. */}
         {data.map((v, i) => v > 0 && (
-          <rect key={nowSec - (last - i)} x={i} y={40 - (v / peak) * 40} width={0.9} height={(v / peak) * 40} />
+          <rect key={i} x={i} y={40 - (v / peak) * 40} width={0.9} height={(v / peak) * 40} />
         ))}
       </svg>
       <div className="dmg-tl-axis">

@@ -166,11 +166,19 @@ def weapon_families(weapons: list[dict]) -> dict[str, str]:
 
 def apply_families(spells: list[dict], fam: dict[str, str]) -> int:
     """Marca `fam` em cada feitiço; sub-feitiço herda pelo prefixo mais longo."""
-    keys = sorted(fam, key=len, reverse=True)
+    prefixes = {
+        **fam,
+        **{
+            sid.removeprefix("SHAPESHIFT_"): family
+            for sid, family in fam.items()
+            if sid.startswith("SHAPESHIFT_")
+        },
+    }
+    keys = sorted(prefixes, key=len, reverse=True)
     hits = 0
     for s in spells:
         sid = s["id"]
-        f = fam.get(sid) or next((fam[k] for k in keys if sid.startswith(k + "_")), None)
+        f = fam.get(sid) or next((prefixes[k] for k in keys if sid.startswith(k + "_")), None)
         if f:
             s["fam"] = f
             hits += 1

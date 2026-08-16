@@ -178,6 +178,12 @@ def test_subfeitico_herda_familia_por_prefixo():
     assert "fam" not in spells[2], "feitiço de mob não tem arma"
 
 
+def test_forma_shapeshifter_herda_familia():
+    spells = [{"id": "ROCK_ELEMENTAL_STONE_THROW", "name": "Boulder Crash"}]
+    apply_families(spells, {"SHAPESHIFT_ROCK_ELEMENTAL": "shapeshifterstaff"})
+    assert spells[0]["fam"] == "shapeshifterstaff"
+
+
 def test_endpoint_serve_a_lista():
     r = TestClient(app).get("/companion/spells")
     assert r.status_code == 200
@@ -200,5 +206,6 @@ if __name__ == "__main__":
     test_heranca_pega_o_ancestral_mais_proximo()
     test_familia_resolve_referencia_e_deltas()
     test_subfeitico_herda_familia_por_prefixo()
+    test_forma_shapeshifter_herda_familia()
     test_endpoint_serve_a_lista()
     print("spell names OK")
