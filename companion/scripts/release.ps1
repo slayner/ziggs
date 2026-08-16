@@ -40,7 +40,11 @@ if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
 
 # --- 1. Bump version ---
 Write-Host "=== [1/3] Bump version ===" -ForegroundColor Cyan
-& powershell -ExecutionPolicy Bypass -File scripts/bump-version.ps1 -Kind $Kind -Set $Set
+if ($Set) {
+    & powershell -ExecutionPolicy Bypass -File scripts/bump-version.ps1 -Kind $Kind -Set $Set
+} else {
+    & powershell -ExecutionPolicy Bypass -File scripts/bump-version.ps1 -Kind $Kind
+}
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 # --- 2. Build ---
