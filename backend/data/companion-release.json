@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmVSdFRkaUI1U1NTdHBrQTdSS3Q2Sld0VnJzQkhrQmtYT3VyZXBkR2lJcSs3MzRYcHIxL3RoU2lYNENnWklCaEw2N1N0T3J5RWNxaEdRL1VvU21oVFFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTIxMTQ4CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4yX3g2NC1zZXR1cC5leGUKdmd6emdVSDIxYmtNcmVqRlRzTWFKaitZWTFKMVVWRmlTMEdVWXFSNHJCNmo5WGplMkY2L0VHS3NlR01hUTg2NU4xYlZaV3RqYXFOVjNhOGd1eGNiQ0E9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.2.2_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmNNeHdnbXdYK0lzaUcyR3FOaXFpQWhLaHcwM1h0NE9tZVB0eTZ0enpRZEpzaTcvOFlNcU0vT0poQU9uMDdzY2dVdmRaVGhKQ20rOTdrQXpKaS9yS0FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTIzNjc3CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4zX3g2NC1zZXR1cC5leGUKM3ZYY2ZBL0lJb0Q1WS8zYjlZcThONm05cThuN3M2VG90cGY4a0xJRkhHL3VncTk2d2M5MWRLUGo0d05hd0lSTmRrNjlwaGdMdmp1Rkw0U2FVUnAyQmc9PQo=",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.2.3_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-16T19:59:25Z",
-    "version":  "0.2.2",
-    "notes":  "Prevent startup crashes when Npcap is not installed."
+    "pub_date":  "2026-08-16T20:41:34Z",
+    "version":  "0.2.3",
+    "notes":  "Refresh skill names, icons, shapeshifter damage classification, and damage timeline."
 }
