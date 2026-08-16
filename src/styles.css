@@ -1076,8 +1076,6 @@ code {
 /* Last-3-minute bars use the player's weapon color inherited from .dmg-entry. */
 .dmg-tl-svg rect {
   fill: var(--wfam, var(--gold));
-  /* Each bar is keyed by absolute second so new polls slide the timeline left instead of growing in place. Height/value snap to keep motion focused on x. */
-  transition: x 2s linear;
 }
 .dmg-tl-axis {
   display: flex; justify-content: space-between;
