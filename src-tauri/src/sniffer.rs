@@ -405,6 +405,14 @@ impl Sniffer {
             if self.generation.load(Ordering::Acquire) != generation {
                 return;
             }
+            #[cfg(target_os = "windows")]
+            if !npcap_installed() {
+                let msg = "Npcap is not installed. Retrying in 15s…".to_string();
+                self.debug_log("err", &msg).await;
+                self.stats.lock().await.error = Some(msg);
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                continue;
+            }
             let devices = match pcap::Device::list() {
                 Ok(d) => d,
                 Err(e) => {
