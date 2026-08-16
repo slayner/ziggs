@@ -1626,8 +1626,7 @@ pub fn run() {
     let mut cfg = config::load();
     cfg.install_id = install_id;
 
-    // The companion ALWAYS runs as admin — sniffer (Npcap), tunnel (wintun) and
-    // DNS all require it. Without admin: re-launches with UAC (runas) and exits.
+    // Start normally without Npcap so the UI can offer the manual install.
     // In autostart, the Task Scheduler opens with HighestAvailable = no prompt.
     //
     // Anti-loop guard: we pass --ziggs-elev on re-launch. If the process was
@@ -1638,7 +1637,7 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     {
         let already_tried = std::env::args().any(|a| a == "--ziggs-elev");
-        if !is_windows_admin() {
+        if sniffer::npcap_installed() && !is_windows_admin() {
             if already_tried {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
                     MessageBoxW, MB_ICONERROR, MB_OK,
