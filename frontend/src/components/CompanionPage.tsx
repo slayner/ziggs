@@ -2,14 +2,28 @@ import { useEffect, useState } from "react";
 import { useT, useLang, REGION_LABELS, type TKey } from "../i18n";
 import { Panel } from "./Panel";
 
-const DOWNLOAD_URL_WINDOWS = "https://ziggs.xyz/companion/Ziggs-Companion_0.2.0_x64-setup.exe";
 const GITHUB_URL = "https://github.com/slayner/ziggs";
 const PINGS_URL = "/companion/vps-pings";
+const RELEASE_URL = "/companion/latest.json";
+const WINDOWS_FALLBACK_URL = "https://ziggs.xyz/companion/Ziggs-Companion_0.1.10_x64-setup.exe";
 
 const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
 
 type VpsPing = { americas: number; asia: number; europe: number };
 type VpsRow = { label: string; country: string; pings: VpsPing | null; loading: boolean; error: boolean };
+type Release = { platforms?: Record<string, { url?: string }> };
+
+const PLATFORM = {
+  "windows-x86_64": { icon: "ti-brand-windows", label: "Windows" },
+  "linux-x86_64": { icon: "ti-brand-linux", label: "Linux" },
+  "darwin-x86_64": { icon: "ti-brand-apple", label: "macOS (Intel)" },
+  "darwin-aarch64": { icon: "ti-brand-apple", label: "macOS (Apple Silicon)" },
+} as const;
+
+function platformOrder(): string[] {
+  const platform = navigator.userAgent.includes("Mac") ? "darwin" : navigator.userAgent.includes("Linux") ? "linux" : "windows";
+  return Object.keys(PLATFORM).sort((a, b) => Number(!a.startsWith(platform)) - Number(!b.startsWith(platform)));
+}
 
 const FEATURES: { icon: string; title: TKey; desc: TKey }[] = [
   { icon: "ti-swords",         title: "companionFeatDmgTitle",     desc: "companionFeatDmgDesc" },
@@ -115,6 +129,9 @@ function PingMatrix({ rows }: { rows: VpsRow[] }) {
 export default function CompanionPage() {
   const t = useT();
   const [vpsRows, setVpsRows] = useState<VpsRow[]>([]);
+  const [downloads, setDownloads] = useState<Record<string, string>>({
+    "windows-x86_64": WINDOWS_FALLBACK_URL,
+  });
 
   useEffect(() => {
     let alive = true;
@@ -139,6 +156,22 @@ export default function CompanionPage() {
     return () => { alive = false; };
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    fetch(RELEASE_URL, { cache: "no-store" })
+      .then(res => res.ok ? res.json() as Promise<Release> : null)
+      .then(release => {
+        if (!alive || !release?.platforms) return;
+        const urls: Record<string, string> = {};
+        for (const [platform, item] of Object.entries(release.platforms)) {
+          if (platform in PLATFORM && typeof item.url === "string") urls[platform] = item.url;
+        }
+        setDownloads(urls);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
   return (
     <div className="cp-page">
       {/* Hero */}
@@ -154,9 +187,13 @@ export default function CompanionPage() {
         <h1 className="cp-hero-title">Ziggs Companion</h1>
         <p className="cp-hero-tagline">{t("companionTagline")}</p>
         <div className="cp-hero-cta">
-          <a className="btn btn-lg" href={DOWNLOAD_URL_WINDOWS}>
-            <i className="ti ti-brand-windows" /> {t("companionDownloadWin")}
-          </a>
+          {platformOrder().map(platform => {
+            const item = PLATFORM[platform as keyof typeof PLATFORM];
+            const url = downloads[platform];
+            return url && <a key={platform} className="btn btn-lg" href={url}>
+              <i className={`ti ${item.icon}`} /> {t("companionDownload")} {item.label}
+            </a>;
+          })}
           <a className="cp-github-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
             <i className="ti ti-brand-github" /> {t("companionViewSource")}
           </a>
