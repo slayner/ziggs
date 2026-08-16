@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZllFb0I1WHBQL1F0VXNZdC9QVkpSeFh0b2ZmZzd6Nk9CYkpSbFdTa05hUnN5YkR5Vlp4U2NOalhCbStuTmp3THlqazNHQlhpLzlDb2hvRk9PSkpqU2c4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MDU3MDIwCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMS4xMF94NjQtc2V0dXAuZXhlCnY2UkkyWDdBT0dOc2s3ZGkxTURPTnA1UjFaUGZiNWVHb1BLQWQwQzJwemxzTHZwSUZPQTBjREg3Z2hEZWlFZGRndlZRTzlXOU9nVm9YQS9LQlRmNEJBPT0K",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.1.10_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZllsU2x0SWkwcm82QzRjdkx3WjR1eDBMejBuZk9tZVM2WnFGS3pnK20xeEk3UUZ6UHp2YjVmb1FPZS9ncG8wc1FQd0lyK3JsZmd3QTZvS21iSjB6WlFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTE4NDI4CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4xX3g2NC1zZXR1cC5leGUKYVZSTzlLTnBJc1FielRQSWQ1djJMUStGcmxRbVlOSkNIY0U0OXBDNGVONEFsVzhDclRnZVRLOGQ1NFVLS1NCU2lwclR2akZwcDRidFF1dXFUQUZMQmc9PQo=",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.2.1_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-06T19:57:28Z",
-    "version":  "0.1.10",
-    "notes":  "v0.1.10: Delay-load wpcap.dll — app abre sem Npcap instalado. Nova logo do site. Abas Damage/Loot locked com tutorial quando Npcap falta. Fix ms VPS reais. TunnelHero persistente."
+    "pub_date":  "2026-08-16T19:33:45Z",
+    "version":  "0.2.1",
+    "notes":  "Start without Npcap and prepare native release targets."
 }
