@@ -77,6 +77,8 @@ export type TKey = keyof typeof S.pt;
 const S = {
   pt: {
     splashText: "Ziggs Companion",
+    splashRoutes: "detectando rotas…",
+    splashOffline: "sem conexão - reconectando…",
     navScanner: "Scanner",
     navSniffer: "Sniffer",
     navLootlog: "Lootlog",
@@ -356,6 +358,8 @@ const S = {
 
   en: {
     splashText: "Ziggs Companion",
+    splashRoutes: "detecting routes…",
+    splashOffline: "offline - reconnecting…",
     navScanner: "Scanner",
     navSniffer: "Sniffer",
     navLootlog: "Lootlog",
@@ -635,6 +639,8 @@ const S = {
 
   es: {
     splashText: "Ziggs Companion",
+    splashRoutes: "detectando rutas…",
+    splashOffline: "sin conexión - reconectando…",
     navScanner: "Scanner",
     navSniffer: "Sniffer",
     navLootlog: "Lootlog",

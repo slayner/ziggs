@@ -373,8 +373,21 @@ export default function App() {
     return { kind: "ok" };
   })();
 
-  if (!config) {
-    return <div className="splash"><img className="splash-logo" src="/logo.png" alt="Ziggs" /><div className="splash-text">{t("splashText")}</div></div>;
+  // Reuse the routing matrix poll: any reachable route releases the splash.
+  const routesDetected = !!sideMatrix && sideMatrix.vps.some(
+    v => Object.values(v.cell_pings).some(p => p != null),
+  );
+
+  if (!config || !routesDetected) {
+    return (
+      <div className="splash">
+        <img className="splash-logo" src="/logo.png" alt="Ziggs" />
+        <div className="splash-text">{t("splashText")}</div>
+        <div className="splash-sub">
+          {!routesDetected && sideMatrix ? t("splashOffline") : t("splashRoutes")}
+        </div>
+      </div>
+    );
   }
 
   const npcapMissing = !!(sniffStats?.error && /npcap/i.test(sniffStats.error));

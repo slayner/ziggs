@@ -51,6 +51,7 @@ input, textarea, select { font-family: inherit; }
   animation: pulse-logo 1.8s ease-in-out infinite;
 }
 .splash-text { color: var(--muted); font-size: 14px; letter-spacing: 0.5px; }
+.splash-sub { color: var(--hint); font-size: 12px; letter-spacing: 0.5px; }
 
 @keyframes pulse-logo {
   0%, 100% { box-shadow: 0 0 0 0 rgba(212, 163, 56, 0.4); }
