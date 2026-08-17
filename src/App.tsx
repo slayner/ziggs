@@ -380,7 +380,12 @@ export default function App() {
 
   if (!config || !routesDetected) {
     return (
-      <div className="splash">
+      <div
+        className="splash"
+        onMouseDown={(e) => {
+          if (e.button === 0) getCurrentWindow().startDragging();
+        }}
+      >
         <img className="splash-logo" src="/logo.png" alt="Ziggs" />
         <div className="splash-text">{t("splashText")}</div>
         <div className="splash-sub">
