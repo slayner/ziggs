@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlNIS0daREtRUFozendjQjVrQ2hSNklXM3RkcENIblFiYTJpTytMaHJBaHVRVDJrQmFzN2t5anh6TmZVOVJOSVo5SUUyaEtQVnRZdjdKcDVubU9ZK1FVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTMxOTAyCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi42X3g2NC1zZXR1cC5leGUKTUFZMmVEdTU5ZjVlY3dJRkQ0dHdsUkRzMFNGWkQ2VC8rYnJwQTd1dTVxRmEwRFhVSDcxUCtxMlVXSng4QTJsVkZELzNzTmVmbHJPNWV5RTNTSWozQ2c9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.2.6_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmF5Z0xsMVk4Qkg2QnFNZ2o4TnVXTWdDMHFLS1NwQW9MTHprWlo3UWh2aG1pWjRZL3BteHpCYjlReC9pRkY1d2VaYzAwWG84UHhVeVE0SzVpVE5xblEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTMyNjgwCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi43X3g2NC1zZXR1cC5leGUKREw0SWxhM0ZzVlB4enpQOEZwQnpkTFc0a3B4THN6V1RhVktoQTZLSi9VQzEzcWhaV0s2RWlPZnU1MkJNVFVEK21DNGVuVlN5a0hURVQ2MHRFL0YyRHc9PQo=",
+                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.2.7_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-16T22:58:40Z",
-    "version":  "0.2.6",
-    "notes":  "Restore administrator elevation after silent updates."
+    "pub_date":  "2026-08-16T23:11:37Z",
+    "version":  "0.2.7",
+    "notes":  "Allow dragging the loading screen while connections are detected."
 }
