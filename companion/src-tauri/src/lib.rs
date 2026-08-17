@@ -1629,14 +1629,14 @@ pub fn run() {
     // Start normally without Npcap so the UI can offer the manual install.
     // In autostart, the Task Scheduler opens with HighestAvailable = no prompt.
     //
-    // Anti-loop guard: we pass --ziggs-elev on re-launch. If the process was
-    // re-launched by us and still doesn't appear as admin (user denied UAC,
+    // Anti-loop guard: the elevated child inherits this environment variable.
+    // If it still doesn't appear as admin (user denied UAC,
     // or rare bug in is_windows_admin), do NOT re-launch again — show a fatal
     // MessageBox and exit. Never continues without admin: the sniffer can't
     // open captures without Npcap+admin, and the user needs to know.
     #[cfg(target_os = "windows")]
     {
-        let already_tried = std::env::args().any(|a| a == "--ziggs-elev");
+        let already_tried = std::env::var_os("ZIGGS_ELEV_TRIED").is_some();
         if sniffer::npcap_installed() && !is_windows_admin() {
             if already_tried {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -1666,13 +1666,14 @@ pub fn run() {
                 use windows_sys::Win32::Foundation::HWND;
                 use windows_sys::Win32::UI::Shell::ShellExecuteW;
                 use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-                // Preserve args (--minimized) on elevated re-launch and mark
-                // that we already tried elevation (--ziggs-elev read by child).
-                let mut args = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
-                if !args.is_empty() {
-                    args.insert_str(0, " ");
-                }
-                args = format!("--ziggs-elev{args}");
+                // NSIS preserves process arguments after an update, so drop
+                // the old marker before the elevated relaunch.
+                let args = std::env::args()
+                    .skip(1)
+                    .filter(|arg| arg != "--ziggs-elev")
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                std::env::set_var("ZIGGS_ELEV_TRIED", "1");
                 let verb: Vec<u16> = "runas\0".encode_utf16().collect();
                 let file: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
                 let params: Vec<u16> = args.encode_utf16().chain(std::iter::once(0)).collect();
