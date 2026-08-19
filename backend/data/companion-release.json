@@ -1,11 +1,11 @@
 {
-    "platforms":  {
-                      "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmF5Z0xsMVk4Qkg2QnFNZ2o4TnVXTWdDMHFLS1NwQW9MTHprWlo3UWh2aG1pWjRZL3BteHpCYjlReC9pRkY1d2VaYzAwWG84UHhVeVE0SzVpVE5xblEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTMyNjgwCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi43X3g2NC1zZXR1cC5leGUKREw0SWxhM0ZzVlB4enpQOEZwQnpkTFc0a3B4THN6V1RhVktoQTZLSi9VQzEzcWhaV0s2RWlPZnU1MkJNVFVEK21DNGVuVlN5a0hURVQ2MHRFL0YyRHc9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.2.7_x64-setup.exe"
-                                         }
-                  },
-    "pub_date":  "2026-08-16T23:11:37Z",
-    "version":  "0.2.7",
-    "notes":  "Allow dragging the loading screen while connections are detected."
+  "version": "0.2.8",
+  "pub_date": "2026-08-19T23:15:00Z",
+  "notes": "Fix a crash that could occur during price/market history upload.",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlROYi81aittNC8wM0Z3WmowMmF5cE8wM0xhNDlMY3lHMnpSM3F3NU9tK293TjB2eXNOdHRTSGx1aWJTRkdLSjQwQnF3em9DSWI3ejRqbTVMaGZkMmd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MTgyNjAzCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi44X3g2NC1zZXR1cC5leGUKMnpjZXFJcUZOTzB5Y045Q3lmMHZPd3Y0U2tsbFZ6T3Y4dHcyMzZISXYwWGU1Q0hNT041UERxaElDZktSZFZyKzFuTE1pMWRYTGNSeFpqclBkY0QwQXc9PQo=",
+      "url": "https://ziggs.xyz/companion/Ziggs-Companion_0.2.8_x64-setup.exe"
+    }
+  }
 }

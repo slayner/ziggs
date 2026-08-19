@@ -39,13 +39,13 @@ use tokio::sync::Mutex;
 
 /// Pushes a line to the sniffer debug buffer (shown in the UI terminal).
 /// Cap at 500 lines.
-fn push_debug(debug: &Arc<Mutex<Vec<DebugLine>>>, level: &str, msg: &str) {
+async fn push_debug(debug: &Arc<Mutex<Vec<DebugLine>>>, level: &str, msg: &str) {
     let line = DebugLine {
         ts: photon_parser::now_iso_utc(),
         level: level.into(),
         msg: msg.into(),
     };
-    let mut d = debug.blocking_lock();
+    let mut d = debug.lock().await;
     d.push(line);
     if d.len() > 500 {
         let ex = d.len() - 500;
@@ -923,9 +923,15 @@ async fn auto_lootlog_worker(
 }
 
 fn single_review_event(events: &[api::ActiveEvent]) -> Option<&api::ActiveEvent> {
-    let mut review = events.iter().filter(|e| e.state == "review");
-    let event = review.next()?;
-    review.next().is_none().then_some(event)
+    // Antes exigia exatamente 1 evento em review (proteção contra ambiguidade),
+    // mas guildas ativas têm vários eventos em review ao mesmo tempo (SIGHT tem
+    // 4 hoje), e o auto-submit nunca disparava. Pega o de maior event_id (mais
+    // recente) — o auto-submit é idempotente (upsert por guild+event+submitter)
+    // e o `submitted` HashSet impede re-envio do mesmo evento.
+    events
+        .iter()
+        .filter(|e| e.state == "review")
+        .max_by_key(|e| e.event_id)
 }
 
 // ─── Autostart (Task Scheduler on Windows — admin without UAC prompt on boot) ──
@@ -2014,7 +2020,8 @@ pub fn run() {
                                 "prices: enqueued {n_rows} rows ({} chunks)",
                                 (n_rows + 1899) / 1900
                             ),
-                        );
+                        )
+                        .await;
                         // Enqueue only — the single uploader handles pacing.
                     }
                 });
@@ -2044,7 +2051,8 @@ pub fn run() {
                             &debug,
                             "info",
                             &format!("market_history: enqueued {n_rows} buckets"),
-                        );
+                        )
+                        .await;
                         // Enqueue only — see single uploader comment above.
                     }
                 });
@@ -2218,12 +2226,20 @@ mod policy_tests {
     }
 
     #[test]
-    fn auto_lootlog_requires_single_review_event() {
+    fn auto_lootlog_picks_most_recent_review_event() {
+        // Com 1 evento em review, envia pra ele.
         assert_eq!(
             single_review_event(&[event(1, "review")]).map(|e| e.event_id),
             Some(1)
         );
-        assert!(single_review_event(&[event(1, "review"), event(2, "review")]).is_none());
+        // Com vários em review, envia pro de maior ID (mais recente) — antes
+        // exigia exatamente 1 e nunca disparava em guildas ativas.
+        assert_eq!(
+            single_review_event(&[event(120, "review"), event(123, "review"), event(121, "review")])
+                .map(|e| e.event_id),
+            Some(123)
+        );
+        // Sem review, não envia.
         assert!(single_review_event(&[event(1, "in_progress")]).is_none());
     }
 }
