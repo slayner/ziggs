@@ -27,8 +27,10 @@ _ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
 
 
 async def _guild_command_config(guild_id: int) -> dict:
-    """{"disabled", "command_roles", "language", "events_channel_id",
-    "event_role_gates"} (cache 60s)."""
+    """Config de comandos por guild (cache 60s). Chaves principais: disabled,
+    command_roles, language, events_channel_id, event_weapon_gates,
+    register_role_id, massinfo_access_bypass_user_ids, massinfo_message_id,
+    logs_channel_id, bot_logs_enabled e por aí (ver rota /bot/guild-commands)."""
     now = time.monotonic()
     cached = _cmd_cache.get(guild_id)
     if cached and (now - cached[1]) < _CMD_TTL:
@@ -36,7 +38,7 @@ async def _guild_command_config(guild_id: int) -> dict:
     empty = {
         "disabled": frozenset(), "command_roles": {}, "language": "pt",
         "events_channel_id": None, "event_review_channel_id": None,
-        "event_role_gates": {}, "massinfo_message_id": None,
+        "event_weapon_gates": {}, "massinfo_message_id": None,
         "nodes_calendar_channel_id": None, "voice_cta_channel_id": None, "trial_percent": None,
         "trial_role_id": None, "logs_channel_id": None,
         "regear_thread_channel_id": None,
@@ -45,6 +47,8 @@ async def _guild_command_config(guild_id: int) -> dict:
         "battle_feed_channel_id": None, "battle_feed_min_players": 10,
         "juicy_kill_channel_id": None, "juicy_kill_min_silver": 50_000_000,
         "juicy_kill_min_fame": 0, "juicy_kill_regions": [],
+        "register_role_id": None,
+        "massinfo_access_bypass_user_ids": [],
     }
     if not SITE_URL or not API_SECRET:
         return empty
@@ -62,7 +66,7 @@ async def _guild_command_config(guild_id: int) -> dict:
                     "language": data.get("language") or "pt",
                     "events_channel_id": data.get("events_channel_id"),
                     "event_review_channel_id": data.get("event_review_channel_id"),
-                    "event_role_gates": data.get("event_role_gates", {}),
+                    "event_weapon_gates": data.get("event_weapon_gates", {}),
                     "massinfo_message_id": data.get("massinfo_message_id"),
                     "nodes_calendar_channel_id": data.get("nodes_calendar_channel_id"),
                     "voice_cta_channel_id": data.get("voice_cta_channel_id"),
@@ -78,12 +82,21 @@ async def _guild_command_config(guild_id: int) -> dict:
                     "juicy_kill_min_silver": data.get("juicy_kill_min_silver", 50_000_000),
                     "juicy_kill_min_fame": data.get("juicy_kill_min_fame", 0),
                     "juicy_kill_regions": data.get("juicy_kill_regions", []),
+                    "register_role_id": data.get("register_role_id"),
+                    "massinfo_access_bypass_user_ids": data.get("massinfo_access_bypass_user_ids", []),
                 }
                 _cmd_cache[guild_id] = (cfg, now)
                 return cfg
     except Exception:
-        pass
-    return empty
+        # Backend fora/timeout: NÃO retorna `empty` se já temos um cache
+        # válido (mesmo expirado). O `empty` carrega voice_cta_channel_id=None,
+        # que faz o voice_presence achar que o canal não está configurado e
+        # pular os snapshots — exatamente durante a queda do backend, quando
+        # mais precisamos acumular. Reusa o cache anterior mesmo que stale.
+        cached = _cmd_cache.get(guild_id)
+        if cached:
+            return cached[0]
+        return empty
 
 
 async def guild_lang_for(guild_id: int) -> str:

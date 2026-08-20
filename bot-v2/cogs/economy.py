@@ -16,8 +16,7 @@ from discord.ext import commands
 
 import http_client
 from cogs.general import (
-    _ROLE_MENTION_RE, check_command_access,
-    dedupe_members, extract_mention_targets, guild_lang, guild_lang_for, resolve_user_or_guild,
+    _access_status, extract_mention_targets, guild_lang, resolve_user_or_guild,
 )
 from i18n import t
 from localization import loc
@@ -74,17 +73,6 @@ def _format_target_list(members: list[discord.Member], limit: int = MAX_TARGETS_
     return ", ".join(mentions)
 
 
-def _set_tx_footer(embed: discord.Embed, lang: str, tx_ids: list[int]) -> None:
-    """ID(s) da transação no rodapé — é o que o /undo espera como argumento."""
-    ids = [i for i in tx_ids if i is not None]
-    if not ids:
-        return
-    if len(ids) == 1:
-        embed.set_footer(text=t(lang, "tx_footer", id=ids[0]))
-    else:
-        embed.set_footer(text=t(lang, "tx_footer_multi", ids=", ".join(str(i) for i in ids)))
-
-
 async def _get(path: str) -> Optional[dict]:
     return await http_client.get_json(path, tag="economy")
 
@@ -95,12 +83,28 @@ async def _post(path: str, body: dict) -> Optional[dict]:
     )
 
 
+async def _reply(interaction: Interaction, content: Optional[str] = None, **kwargs) -> None:
+    """Every economy command acknowledges first, so its response cannot expire."""
+    await interaction.edit_original_response(content=content, **kwargs)
+
+
+async def _check_access(interaction: Interaction, name: str) -> bool:
+    if not interaction.guild_id:
+        return True
+    status, lang = await _access_status(interaction.guild_id, interaction.user, name)
+    if status == "ok":
+        return True
+    key = "cmd_disabled" if status == "disabled" else "no_permission"
+    await _reply(interaction, t(lang, key))
+    return False
+
+
 async def _resolve_target(interaction: Interaction, raw: Optional[str], lang: str):
     """resolve_user_or_guild só devolve um Guild com allow_guild=True — aqui é
     sempre False, então o retorno é Member/User/None; guarda mesmo assim."""
     target = await resolve_user_or_guild(interaction, raw, allow_guild=False)
     if target is None or isinstance(target, discord.Guild):
-        await interaction.response.send_message(t(lang, "not_found_target", alvo=raw), ephemeral=True)
+        await _reply(interaction, t(lang, "not_found_target", alvo=raw))
         return None
     return target
 
@@ -113,54 +117,51 @@ class Economy(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(alvo=loc("@mention, ID, or name (default: yourself)", "opt_desc_balance_alvo"))
     @app_commands.rename(alvo=loc("user", "opt_name_alvo"))
-    async def balance(self, interaction: Interaction, alvo: Optional[str] = None) -> None:
-        if not await check_command_access(interaction, "balance"):
+    async def balance(self, interaction: Interaction, alvo: discord.Member | None = None) -> None:
+        await interaction.response.defer()
+        if not await _check_access(interaction, "balance"):
             return
         lang = await guild_lang(interaction)
-        target = await _resolve_target(interaction, alvo, lang)
-        if target is None:
-            return
+        target = alvo or interaction.user
         data = await _get(f"/bot/economy/balance/{interaction.guild_id}/{target.id}")
         if data is None:
-            await interaction.response.send_message(t(lang, "balance_fetch_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "balance_fetch_fail"))
             return
         embed = discord.Embed(color=discord.Color.blurple(), title=target.display_name,
                                description=t(lang, "balance_display", balance=format_silver(data["balance"])))
-        await interaction.response.send_message(embed=embed)
+        await _reply(interaction, embed=embed)
 
     @app_commands.command(name="pay", description=loc("Transfers silver from your balance to another user", "cmd_desc_pay"))
     @app_commands.guild_only()
     @app_commands.describe(alvo=loc("Who will receive it", "opt_desc_pay_alvo"),
                             quantia=loc("How much to send (e.g.: 100k, 1.5m, 2,500,000) or `all`/`tudo`", "opt_desc_pay_quantia"))
     @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"))
-    async def pay(self, interaction: Interaction, alvo: str, quantia: str) -> None:
-        if not await check_command_access(interaction, "pay"):
+    async def pay(self, interaction: Interaction, alvo: discord.Member, quantia: str) -> None:
+        await interaction.response.defer()
+        if not await _check_access(interaction, "pay"):
             return
         lang = await guild_lang(interaction)
-        target = await _resolve_target(interaction, alvo, lang)
-        if target is None:
-            return
+        target = alvo
         if target.id == interaction.user.id:
-            await interaction.response.send_message(t(lang, "pay_self"), ephemeral=True)
+            await _reply(interaction, t(lang, "pay_self"))
             return
         if target.bot:
-            await interaction.response.send_message(t(lang, "pay_bot"), ephemeral=True)
+            await _reply(interaction, t(lang, "pay_bot"))
             return
 
         if _is_all_keyword(quantia):
             own = await _get(f"/bot/economy/balance/{interaction.guild_id}/{interaction.user.id}")
             if own is None:
-                await interaction.response.send_message(t(lang, "balance_fetch_fail"), ephemeral=True)
+                await _reply(interaction, t(lang, "balance_fetch_fail"))
                 return
             if own["balance"] <= 0:
-                await interaction.response.send_message(
-                    t(lang, "pay_no_balance", balance=format_silver(own["balance"])), ephemeral=True)
+                await _reply(interaction, t(lang, "pay_no_balance", balance=format_silver(own["balance"])))
                 return
             amount = own["balance"]
         else:
             amount = parse_silver(quantia)
             if amount is None or amount <= 0:
-                await interaction.response.send_message(t(lang, "invalid_amount_full"), ephemeral=True)
+                await _reply(interaction, t(lang, "invalid_amount_full"))
                 return
 
         result = await _post(f"/bot/economy/pay/{interaction.guild_id}", {
@@ -168,18 +169,16 @@ class Economy(commands.Cog):
             "request_id": str(interaction.id),
         })
         if result is None:
-            await interaction.response.send_message(t(lang, "pay_process_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "pay_process_fail"))
             return
         if not result["ok"]:
-            await interaction.response.send_message(
-                t(lang, "pay_insufficient", balance=format_silver(result["from_balance"])), ephemeral=True)
+            await _reply(interaction, t(lang, "pay_insufficient", balance=format_silver(result["from_balance"])))
             return
         embed = discord.Embed(
             color=discord.Color.green(),
             description=t(lang, "pay_success", sender=interaction.user.mention,
                           amount=format_silver(amount), target=target.mention))
-        _set_tx_footer(embed, lang, [result.get("transaction_id")])
-        await interaction.response.send_message(embed=embed)
+        await _reply(interaction, embed=embed)
 
     @app_commands.command(name="addmoney", description=loc("Adds silver to a user's balance", "cmd_desc_addmoney"))
     @app_commands.guild_only()
@@ -187,12 +186,13 @@ class Economy(commands.Cog):
                             quantia=loc("How much to add (e.g.: 100k, 1.5m)", "opt_desc_addmoney_quantia"))
     @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"))
     async def addmoney(self, interaction: Interaction, alvo: str, quantia: str) -> None:
-        if not await check_command_access(interaction, "addmoney"):
+        await interaction.response.defer()
+        if not await _check_access(interaction, "addmoney"):
             return
         lang = await guild_lang(interaction)
         amount = parse_silver(quantia)
         if amount is None or amount <= 0:
-            await interaction.response.send_message(t(lang, "invalid_amount"), ephemeral=True)
+            await _reply(interaction, t(lang, "invalid_amount"))
             return
 
         # "alvo" aceita várias @menções e/ou @cargos (expandidos pra todos os
@@ -205,8 +205,7 @@ class Economy(commands.Cog):
                 return
             targets = [single]
 
-        await interaction.response.defer()
-        ok_targets, tx_ids = [], []
+        ok_targets = []
         for target in targets:
             result = await _post(f"/bot/economy/add/{interaction.guild_id}",
                                   {"discord_user_id": target.id, "amount": amount,
@@ -214,10 +213,9 @@ class Economy(commands.Cog):
                                    "request_id": f"{interaction.id}:{target.id}"})
             if result is not None:
                 ok_targets.append(target)
-                tx_ids.append(result.get("transaction_id"))
 
         if not ok_targets:
-            await interaction.followup.send(t(lang, "add_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "add_fail"))
             return
 
         if len(ok_targets) == 1:
@@ -228,61 +226,34 @@ class Economy(commands.Cog):
                              amount=format_silver(amount), count=len(ok_targets),
                              targets=_format_target_list(ok_targets))
         embed = discord.Embed(color=discord.Color.green(), description=description)
-        _set_tx_footer(embed, lang, tx_ids)
-        await interaction.followup.send(embed=embed)
+        await _reply(interaction, embed=embed)
 
     @app_commands.command(name="removemoney", description=loc("Removes silver from a user's balance (no value = removes everything)", "cmd_desc_removemoney"))
     @app_commands.guild_only()
     @app_commands.describe(alvo=loc("Target user", "opt_desc_removemoney_alvo"),
                             quantia=loc("How much to remove (blank or `all`/`tudo` = removes everything)", "opt_desc_removemoney_quantia"))
     @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"))
-    async def removemoney(self, interaction: Interaction, alvo: str, quantia: Optional[str] = None) -> None:
-        if not await check_command_access(interaction, "removemoney"):
+    async def removemoney(self, interaction: Interaction, alvo: discord.Member, quantia: Optional[str] = None) -> None:
+        await interaction.response.defer()
+        if not await _check_access(interaction, "removemoney"):
             return
         lang = await guild_lang(interaction)
-
-        # @cargo entre os alvos pode afetar muita gente de uma vez — pede
-        # confirmação em vez de já executar (@menções soltas de usuário, sem
-        # cargo, seguem o fluxo de alvo único de sempre, sem confirmação).
-        if _ROLE_MENTION_RE.search(alvo):
-            targets = extract_mention_targets(interaction.guild, alvo)
-            if not targets:
-                await interaction.response.send_message(t(lang, "prefix_no_targets"), ephemeral=True)
-                return
-            if quantia is None or _is_all_keyword(quantia):
-                desc = t(lang, "confirm_removemoney_desc_all", count=len(targets), targets=_format_target_list(targets))
-            else:
-                amt = parse_silver(quantia)
-                if amt is None or amt <= 0:
-                    await interaction.response.send_message(t(lang, "invalid_amount"), ephemeral=True)
-                    return
-                desc = t(lang, "confirm_removemoney_desc", amount=format_silver(amt),
-                         count=len(targets), targets=_format_target_list(targets))
-            embed = discord.Embed(color=discord.Color.gold(), title=t(lang, "confirm_removemoney_title"), description=desc)
-            view = ConfirmRemoveMoneyView(author_id=interaction.user.id, guild_id=interaction.guild_id,
-                                           targets=targets, quantia=quantia, lang=lang)
-            await interaction.response.send_message(embed=embed, view=view)
-            return
-
-        target = await _resolve_target(interaction, alvo, lang)
-        if target is None:
-            return
+        target = alvo
 
         if quantia is None or _is_all_keyword(quantia):
             current = await _get(f"/bot/economy/balance/{interaction.guild_id}/{target.id}")
             if current is None:
-                await interaction.response.send_message(t(lang, "balance_fetch_fail"), ephemeral=True)
+                await _reply(interaction, t(lang, "balance_fetch_fail"))
                 return
             if current["balance"] <= 0:
-                await interaction.response.send_message(
-                    t(lang, "remove_no_balance", target=target.mention,
-                      balance=format_silver(current["balance"])), ephemeral=True)
+                await _reply(interaction, t(lang, "remove_no_balance", target=target.mention,
+                                            balance=format_silver(current["balance"])))
                 return
             amount, allow_negative = current["balance"], False
         else:
             amount = parse_silver(quantia)
             if amount is None or amount <= 0:
-                await interaction.response.send_message(t(lang, "invalid_amount"), ephemeral=True)
+                await _reply(interaction, t(lang, "invalid_amount"))
                 return
             # Valor EXPLÍCITO pode deixar o saldo negativo (punição/empréstimo)
             # — só o "remove tudo" acima é clampeado ao saldo disponível.
@@ -294,21 +265,21 @@ class Economy(commands.Cog):
             "request_id": str(interaction.id),
         })
         if result is None:
-            await interaction.response.send_message(t(lang, "remove_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "remove_fail"))
             return
         desc = t(lang, "remove_success", actor=interaction.user.mention, target=target.mention,
                  amount=format_silver(result["removed"]))
         if result["balance"] < 0:
             desc += t(lang, "remove_negative_warn")
         embed = discord.Embed(color=discord.Color.red(), description=desc)
-        _set_tx_footer(embed, lang, [result.get("transaction_id")])
-        await interaction.response.send_message(embed=embed)
+        await _reply(interaction, embed=embed)
 
     @app_commands.command(name="undo", description=loc("Reverts an economy transaction by its ID", "cmd_desc_undo"))
     @app_commands.guild_only()
     @app_commands.describe(id=loc("Transaction ID to revert (see the original embed's footer)", "opt_desc_undo_id"))
     async def undo(self, interaction: Interaction, id: int) -> None:
-        if not await check_command_access(interaction, "undo"):
+        await interaction.response.defer()
+        if not await _check_access(interaction, "undo"):
             return
         lang = await guild_lang(interaction)
         result = await _post(
@@ -316,30 +287,31 @@ class Economy(commands.Cog):
             {"request_id": str(interaction.id)},
         )
         if result is None:
-            await interaction.response.send_message(t(lang, "undo_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "undo_fail"))
             return
         if not result.get("ok"):
             key = "undo_not_found" if result.get("reason") == "not_found" else "undo_already_undone"
-            await interaction.response.send_message(t(lang, key, id=id), ephemeral=True)
+            await _reply(interaction, t(lang, key, id=id))
             return
-        await interaction.response.send_message(embed=discord.Embed(
+        await _reply(interaction, embed=discord.Embed(
             color=discord.Color.orange(),
             description=t(lang, "undo_success", id=id, amount=format_silver(result["amount"]))))
 
     @app_commands.command(name="economystats", description=loc("Shows a snapshot of the server's economy", "cmd_desc_economystats"))
     @app_commands.guild_only()
     async def economystats(self, interaction: Interaction) -> None:
-        if not await check_command_access(interaction, "economystats"):
+        await interaction.response.defer()
+        if not await _check_access(interaction, "economystats"):
             return
         lang = await guild_lang(interaction)
         stats = await _get(f"/bot/economy/stats/{interaction.guild_id}")
         if stats is None:
-            await interaction.response.send_message(t(lang, "stats_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "stats_fail"))
             return
         embed = discord.Embed(color=discord.Color.blurple(), title=t(lang, "stats_title"))
         embed.add_field(name=t(lang, "stats_users_field"), value=f"`{stats['user_count']}`", inline=False)
         embed.add_field(name=t(lang, "stats_total_field"), value=f"`{format_silver(stats['balances_sum'])}`", inline=False)
-        await interaction.response.send_message(embed=embed)
+        await _reply(interaction, embed=embed)
 
     @app_commands.command(name="guildbank", description=loc("Shows the guild bank balance", "cmd_desc_guildbank"))
     @app_commands.guild_only()
@@ -357,18 +329,19 @@ class Economy(commands.Cog):
         await self._show_guild_bank(interaction)
 
     async def _show_guild_bank(self, interaction: Interaction) -> None:
-        if not await check_command_access(interaction, "guildbank"):
+        await interaction.response.defer()
+        if not await _check_access(interaction, "guildbank"):
             return
         lang = await guild_lang(interaction)
         data = await _get(f"/bot/guilds/{interaction.guild_id}/bank")
         if data is None:
-            await interaction.response.send_message(t(lang, "bank_fetch_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "bank_fetch_fail"))
             return
         embed = discord.Embed(
             color=discord.Color.blurple(), title=t(lang, "bank_title"),
             description=t(lang, "bank_balance_display", balance=format_silver(data["balance"])),
         )
-        await interaction.response.send_message(embed=embed)
+        await _reply(interaction, embed=embed)
 
     @app_commands.command(name="addguildmoney", description=loc("Adds silver to the guild bank", "cmd_desc_addguildmoney"))
     @app_commands.guild_only()
@@ -378,12 +351,13 @@ class Economy(commands.Cog):
     )
     @app_commands.rename(quantia=loc("amount", "opt_name_quantia"), motivo=loc("reason", "opt_name_motivo"))
     async def addguildmoney(self, interaction: Interaction, quantia: str, motivo: Optional[str] = None) -> None:
-        if not await check_command_access(interaction, "addguildmoney"):
+        await interaction.response.defer()
+        if not await _check_access(interaction, "addguildmoney"):
             return
         lang = await guild_lang(interaction)
         amount = parse_silver(quantia)
         if amount is None or amount <= 0:
-            await interaction.response.send_message(t(lang, "invalid_amount"), ephemeral=True)
+            await _reply(interaction, t(lang, "invalid_amount"))
             return
         result = await _post(f"/bot/guilds/{interaction.guild_id}/bank/adjust", {
             "amount": amount, "reason": (motivo or None),
@@ -391,15 +365,14 @@ class Economy(commands.Cog):
             "request_id": str(interaction.id),
         })
         if result is None:
-            await interaction.response.send_message(t(lang, "bank_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "bank_fail"))
             return
         embed = discord.Embed(
             color=discord.Color.green(),
             description=t(lang, "bank_add_success", actor=interaction.user.mention,
                           amount=format_silver(amount), balance=format_silver(result["balance"])),
         )
-        _set_tx_footer(embed, lang, [result.get("transaction_id")])
-        await interaction.response.send_message(embed=embed)
+        await _reply(interaction, embed=embed)
 
     @app_commands.command(name="removeguildmoney", description=loc("Removes silver from the guild bank", "cmd_desc_removeguildmoney"))
     @app_commands.guild_only()
@@ -409,12 +382,13 @@ class Economy(commands.Cog):
     )
     @app_commands.rename(quantia=loc("amount", "opt_name_quantia"), motivo=loc("reason", "opt_name_motivo"))
     async def removeguildmoney(self, interaction: Interaction, quantia: str, motivo: Optional[str] = None) -> None:
-        if not await check_command_access(interaction, "removeguildmoney"):
+        await interaction.response.defer()
+        if not await _check_access(interaction, "removeguildmoney"):
             return
         lang = await guild_lang(interaction)
         amount = parse_silver(quantia)
         if amount is None or amount <= 0:
-            await interaction.response.send_message(t(lang, "invalid_amount"), ephemeral=True)
+            await _reply(interaction, t(lang, "invalid_amount"))
             return
         result = await _post(f"/bot/guilds/{interaction.guild_id}/bank/adjust", {
             "amount": -amount, "reason": (motivo or None),
@@ -422,117 +396,32 @@ class Economy(commands.Cog):
             "request_id": str(interaction.id),
         })
         if result is None:
-            await interaction.response.send_message(t(lang, "bank_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "bank_fail"))
             return
         embed = discord.Embed(
             color=discord.Color.red(),
             description=t(lang, "bank_remove_success", actor=interaction.user.mention,
                           amount=format_silver(amount), balance=format_silver(result["balance"])),
         )
-        _set_tx_footer(embed, lang, [result.get("transaction_id")])
-        await interaction.response.send_message(embed=embed)
+        await _reply(interaction, embed=embed)
 
     @app_commands.command(name="leaderboard", description=loc("Ranking of users by current silver balance", "cmd_desc_leaderboard"))
     @app_commands.guild_only()
     async def leaderboard(self, interaction: Interaction) -> None:
-        if not await check_command_access(interaction, "leaderboard"):
+        await interaction.response.defer()
+        if not await _check_access(interaction, "leaderboard"):
             return
         lang = await guild_lang(interaction)
         data = await _get(f"/bot/economy/leaderboard/{interaction.guild_id}?limit={LEADERBOARD_PAGE_SIZE}&offset=0")
         if data is None:
-            await interaction.response.send_message(t(lang, "leaderboard_fail"), ephemeral=True)
+            await _reply(interaction, t(lang, "leaderboard_fail"))
             return
         if data["total"] == 0:
-            await interaction.response.send_message(t(lang, "leaderboard_empty"), ephemeral=True)
+            await _reply(interaction, t(lang, "leaderboard_empty"))
             return
         view = LeaderboardView(guild_id=interaction.guild_id, author_id=interaction.user.id, total=data["total"], lang=lang)
         view.update_buttons()
-        await interaction.response.send_message(embed=view.build_embed(data["rows"], offset=0), view=view)
-
-
-class ConfirmRemoveMoneyView(discord.ui.View):
-    """Botões Confirmar/Cancelar pro /removemoney com @cargo entre os alvos —
-    `quantia` já validada (se explícita) antes de a view ser criada; "all"/tudo
-    fica sem validar aqui porque cada alvo usa o PRÓPRIO saldo, resolvido só na
-    hora de confirmar (não dá pra pré-calcular sem uma chamada por alvo)."""
-
-    def __init__(self, *, author_id: int, guild_id: int, targets: list[discord.Member],
-                 quantia: Optional[str], lang: str):
-        super().__init__(timeout=60)
-        self.author_id = author_id
-        self.guild_id = guild_id
-        self.targets = targets
-        self.quantia = quantia
-        self.lang = lang
-
-        confirm_btn = discord.ui.Button(label=t(lang, "confirm_btn"), style=discord.ButtonStyle.danger)
-        confirm_btn.callback = self._on_confirm
-        cancel_btn = discord.ui.Button(label=t(lang, "cancel_btn"), style=discord.ButtonStyle.secondary)
-        cancel_btn.callback = self._on_cancel
-        self.add_item(confirm_btn)
-        self.add_item(cancel_btn)
-
-    async def interaction_check(self, interaction: Interaction) -> bool:
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message(t(self.lang, "confirm_only_author"), ephemeral=True)
-            return False
-        return True
-
-    def _disable_all(self) -> None:
-        for item in self.children:
-            item.disabled = True
-
-    async def _on_confirm(self, interaction: Interaction) -> None:
-        await interaction.response.defer()
-        self._disable_all()
-
-        is_all = self.quantia is None or _is_all_keyword(self.quantia)
-        explicit_amount = None if is_all else parse_silver(self.quantia)
-
-        # "all"/tudo só tem o que remover se o saldo ATUAL for positivo — saldo
-        # negativo é um estado normal (empréstimo/punição anterior), não um
-        # erro, então esses membros são listados como pulados em vez de
-        # somem sem explicação do resultado.
-        ok_targets, tx_ids, skipped_targets, total_removed = [], [], [], 0
-        for member in self.targets:
-            if is_all:
-                current = await _get(f"/bot/economy/balance/{self.guild_id}/{member.id}")
-                balance = current["balance"] if current else 0
-                if balance <= 0:
-                    skipped_targets.append(member)
-                    continue
-                amount, allow_negative = balance, False
-            else:
-                amount, allow_negative = explicit_amount, True
-
-            result = await _post(f"/bot/economy/remove/{self.guild_id}", {
-                "discord_user_id": member.id, "amount": amount, "allow_negative": allow_negative,
-                "actor_discord_id": self.author_id,
-                "request_id": f"{interaction.id}:{member.id}",
-            })
-            if result is not None and result.get("transaction_id") is not None:
-                ok_targets.append(member)
-                tx_ids.append(result["transaction_id"])
-                total_removed += result["removed"]
-
-        if not ok_targets:
-            content = (t(self.lang, "remove_multi_all_skipped") if skipped_targets
-                       else t(self.lang, "remove_fail"))
-            await interaction.edit_original_response(content=content, embed=None, view=self)
-            return
-
-        description = t(self.lang, "remove_success_multi", actor=f"<@{self.author_id}>",
-                         amount=format_silver(total_removed), count=len(ok_targets),
-                         targets=_format_target_list(ok_targets))
-        if skipped_targets:
-            description += t(self.lang, "remove_multi_skipped", targets=_format_target_list(skipped_targets))
-        embed = discord.Embed(color=discord.Color.red(), description=description)
-        _set_tx_footer(embed, self.lang, tx_ids)
-        await interaction.edit_original_response(content=None, embed=embed, view=self)
-
-    async def _on_cancel(self, interaction: Interaction) -> None:
-        self._disable_all()
-        await interaction.response.edit_message(content=t(self.lang, "prefix_cancelled"), embed=None, view=self)
+        await _reply(interaction, embed=view.build_embed(data["rows"], offset=0), view=view)
 
 
 class LeaderboardView(discord.ui.View):
@@ -569,12 +458,13 @@ class LeaderboardView(discord.ui.View):
         return embed
 
     async def _goto(self, interaction: Interaction, page: int):
+        await interaction.response.defer()
         self.page = max(0, min(page, self.max_page))
         offset = self.page * LEADERBOARD_PAGE_SIZE
         data = await _get(f"/bot/economy/leaderboard/{self.guild_id}?limit={LEADERBOARD_PAGE_SIZE}&offset={offset}")
         rows = data["rows"] if data else []
         self.update_buttons()
-        await interaction.response.edit_message(embed=self.build_embed(rows, offset), view=self)
+        await interaction.edit_original_response(embed=self.build_embed(rows, offset), view=self)
 
     @discord.ui.button(emoji="⏮️", style=discord.ButtonStyle.secondary)
     async def first_btn(self, interaction: Interaction, _button: discord.ui.Button):

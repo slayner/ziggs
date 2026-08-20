@@ -24,9 +24,18 @@ SITE_URL   = os.getenv("BOT_SITE_URL", "").rstrip("/")
 API_SECRET = os.getenv("BOT_API_SECRET", "")
 
 _CHANNEL_NAME = "logs-bot"
+# Discord API calls (fetch_channel, create_text_channel, channel.send) podem
+# pendurar indefinidamente sem timeout — um único travamento paralisa o loop
+# inteiro pra sempre (a guilda atual nunca termina, as próximas nunca rodam).
+# wait_for com teto transforma o travamento num skip; próximo tick tenta de novo.
+_API_TIMEOUT = 15  # segundos — discord.py default é ~10s no HTTP, 15 dá margem
 _SOURCE_COLOR = {
     "site": discord.Color.blurple(), "bot": discord.Color.green(), "system": discord.Color.greyple(),
 }
+
+# Exceções que significam "falha de rede/Discord" (incl. timeout) — o loop
+# skipa a guilda atual e segue pra próxima em vez de morrer.
+_SKIP_EXC = (discord.NotFound, discord.Forbidden, discord.HTTPException, asyncio.TimeoutError)
 
 
 async def _get(path: str) -> Optional[dict]:
@@ -78,7 +87,6 @@ _cog_ref: "BotAuditLog | None" = None
 class BotAuditLog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._sent: dict[int, int] = {}
         self._locks: dict[int, asyncio.Lock] = {}
 
     async def cog_load(self) -> None:
@@ -98,38 +106,48 @@ class BotAuditLog(commands.Cog):
             try:
                 cid = int(channel_id)
             except (ValueError, TypeError):
-                cid = None
-            if cid is not None:
-                # get_channel só vê cache local; canais que o bot nunca acessou
-                # não estão lá. fetch_channel bate na API — custa 1 request mas
-                # garante que o canal configurado é encontrado em vez de criar
-                # um logs-bot duplicado só porque a cache não tinha o canal.
-                channel = guild.get_channel(cid)
-                if channel is None:
-                    try:
-                        ch = await guild.fetch_channel(cid)
-                        if isinstance(ch, discord.TextChannel):
-                            return ch
-                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                        pass  # canal foi deletado de verdade — recria abaixo
-                else:
-                    return channel
+                return None
+            # get_channel só vê cache local; canais que o bot nunca acessou não
+            # estão nela. Se o canal configurado não servir, segura a fila para
+            # retry em vez de vazar logs para o fallback auto-criado.
+            channel = guild.get_channel(cid)
+            if channel is None:
+                try:
+                    channel = await asyncio.wait_for(
+                        guild.fetch_channel(cid), timeout=_API_TIMEOUT,
+                    )
+                except _SKIP_EXC:
+                    return None
+            return channel if isinstance(channel, discord.TextChannel) else None
         # Idempotência por nome: se já existe um logs-bot (ex.: criado num tick
         # anterior cujo POST de persistência ainda não refluiu pelo cache de 60s
         # de _guild_command_config, ou o site perdeu o id), reusa em vez de
         # criar outro. Sem isso, on_ready + audit_log_loop (8s) + reconexões
         # criavam um canal a cada tick enquanto logs_channel_id estava None.
+        # Importante: guild.text_channels é CACHE — no startup o cache pode não
+        # ter populado ainda, e o bot criava uma sala duplicada sem saber que já
+        # existia uma. fetch_channels bate a API do Discord e vê tudo.
         existing = discord.utils.get(guild.text_channels, name=_CHANNEL_NAME)
+        if existing is None:
+            # Cache miss no startup — consulta a API antes de criar.
+            try:
+                await asyncio.wait_for(guild.fetch_channels(), timeout=_API_TIMEOUT)
+            except _SKIP_EXC:
+                return None
+            existing = discord.utils.get(guild.text_channels, name=_CHANNEL_NAME)
         if existing is not None:
             await _post(f"/bot/guilds/{guild.id}/logs-channel", {"channel_id": str(existing.id)})
             return existing
         overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
         try:
-            channel = await guild.create_text_channel(
-                _CHANNEL_NAME, overwrites=overwrites,
-                reason="Canal de logs do bot (auto-criado, admin-only)",
+            channel = await asyncio.wait_for(
+                guild.create_text_channel(
+                    _CHANNEL_NAME, overwrites=overwrites,
+                    reason="Canal de logs do bot (auto-criado, admin-only)",
+                ),
+                timeout=_API_TIMEOUT,
             )
-        except (discord.Forbidden, discord.HTTPException):
+        except _SKIP_EXC:
             return None
         await _post(f"/bot/guilds/{guild.id}/logs-channel", {"channel_id": str(channel.id)})
         return channel
@@ -147,22 +165,23 @@ class BotAuditLog(commands.Cog):
         if channel is None:
             return
         data = await _get(f"/bot/guilds/{guild.id}/audit-log")
-        entries = [
-            entry for entry in ((data or {}).get("entries") or [])
-            if entry["id"] > self._sent.get(guild.id, 0)
-        ]
+        entries = (data or {}).get("entries") or []
         if not entries:
             return
         lang = await guild_lang_for(guild.id)
         last_id = None
         for entry in entries:
             try:
-                await channel.send(embed=_build_log_embed(lang, entry))
-            except (discord.Forbidden, discord.HTTPException):
+                await asyncio.wait_for(
+                    channel.send(embed=_build_log_embed(lang, entry)),
+                    timeout=_API_TIMEOUT,
+                )
+            except _SKIP_EXC:
                 break  # para no primeiro erro — ack só até o último enviado com sucesso
             last_id = entry["id"]
-            self._sent[guild.id] = last_id
         if last_id is not None:
+            # Sem ack, o cursor no backend não avança e o próximo tick reenvia.
+            # Duplicata é preferível a perder um log financeiro.
             await _post(f"/bot/guilds/{guild.id}/audit-log-synced", {"last_id": last_id})
 
 

@@ -63,9 +63,9 @@ T: dict[str, dict[str, str]] = {
         "es": "El rol de registro aún no fue configurado en el sitio (Config → Rol de Registro).",
     },
     "reason_not_found": {
-        "pt": "Personagem não encontrado no Albion Online. Verifique o nick exato.",
-        "en": "Character not found on Albion Online. Check the exact nickname.",
-        "es": "Personaje no encontrado en Albion Online. Verifica el nick exacto.",
+        "pt": "Personagem não encontrado no Albion Online. Verifique o nick exato — se o nick foi renomeado pela SBI, tente o nick antigo.",
+        "en": "Character not found on Albion Online. Check the exact nickname — if the nick was renamed by SBI, try the old nickname.",
+        "es": "Personaje no encontrado en Albion Online. Verifica el nick exacto — si el nick fue renomeado por SBI, intenta el nick antiguo.",
     },
     "reason_not_in_guild": {
         "pt": "Esse personagem não está na guilda configurada (nem numa guilda aliada permitida) para este servidor.",
@@ -81,6 +81,11 @@ T: dict[str, dict[str, str]] = {
         "pt": "Esse personagem já está registrado por outra pessoa neste servidor.",
         "en": "This character is already registered by someone else on this server.",
         "es": "Ese personaje ya está registrado por otra persona en este servidor.",
+    },
+    "reason_human_revoked": {
+        "pt": "O registro foi removido por uma decisão no Discord. Execute /register novamente para reativá-lo.",
+        "en": "The registration was removed by a Discord decision. Run /register again to reactivate it.",
+        "es": "El registro fue eliminado por una decisión en Discord. Ejecuta /register de nuevo para reactivarlo.",
     },
     "register_generic_fail": {
         "pt": "Não foi possível concluir o registro.",
@@ -132,15 +137,15 @@ T: dict[str, dict[str, str]] = {
         "en": "⏳ Processing…",
         "es": "⏳ Procesando…",
     },
-    "register_retrying": {
-        "pt": "🔄 A API do Albion Online está instável — colocamos sua verificação na fila e vamos tentar de novo automaticamente (tentativa {attempt})…",
-        "en": "🔄 Albion Online's API is unstable — your verification was queued and we'll automatically try again (attempt {attempt})…",
-        "es": "🔄 La API de Albion Online está inestable — pusimos tu verificación en cola y vamos a intentar de nuevo automáticamente (intento {attempt})…",
+    "register_queued": {
+        "pt": "⏳ {who} na fila de verificação — {nick}. Assim que a API do Albion responder, você recebe uma mensagem direta com o resultado.",
+        "en": "⏳ {who} queued for verification — {nick}. As soon as the Albion API responds, you'll get a DM with the result.",
+        "es": "⏳ {who} en cola de verificación — {nick}. En cuanto la API de Albion responda, recibirás un mensaje directo con el resultado.",
     },
-    "register_queued_background": {
-        "pt": "⏳ A API do Albion Online continua instável. Seu registro segue na fila em segundo plano — assim que resolver, você recebe uma mensagem direta com o resultado, sem precisar rodar o comando de novo.",
-        "en": "⏳ Albion Online's API is still unstable. Your registration stays queued in the background — once it resolves, you'll get a DM with the result, no need to run the command again.",
-        "es": "⏳ La API de Albion Online sigue inestable. Tu registro sigue en cola en segundo plano — en cuanto se resuelva, recibirás un mensaje directo con el resultado, sin necesidad de ejecutar el comando de nuevo.",
+    "register_background_giveup": {
+        "pt": "⚠️ O registro de {nick} ({target}) não foi concluído — a API do Albion seguiu instável por tempo demais. Tente /register novamente mais tarde.",
+        "en": "⚠️ The registration for {nick} ({target}) couldn't be completed — the Albion API stayed unstable for too long. Try /register again later.",
+        "es": "⚠️ El registro de {nick} ({target}) no se completó — la API de Albion siguió inestable por demasiado tiempo. Intenta /register de nuevo más tarde.",
     },
     "unregister_success": {
         "pt": "✅ Registro de `{alvo}` removido — a tag é removida imediatamente.",
@@ -256,50 +261,10 @@ T: dict[str, dict[str, str]] = {
         "en": "{actor} removed **{amount}** from {target}'s balance",
         "es": "{actor} removió **{amount}** del saldo de {target}",
     },
-    "remove_success_multi": {
-        "pt": "{actor} removeu um total de **{amount}** de {count} usuário(s): {targets}",
-        "en": "{actor} removed a total of **{amount}** from {count} user(s): {targets}",
-        "es": "{actor} removió un total de **{amount}** de {count} usuario(s): {targets}",
-    },
-    "remove_multi_skipped": {
-        "pt": "\n⚠️ Sem saldo positivo pra remover (pulado): {targets}",
-        "en": "\n⚠️ No positive balance to remove (skipped): {targets}",
-        "es": "\n⚠️ Sin saldo positivo para remover (omitido): {targets}",
-    },
-    "remove_multi_all_skipped": {
-        "pt": "⚠️ Nenhum dos alvos tinha saldo positivo pra remover.",
-        "en": "⚠️ None of the targets had a positive balance to remove.",
-        "es": "⚠️ Ninguno de los objetivos tenía saldo positivo para remover.",
-    },
-    "confirm_removemoney_title": {
-        "pt": "Confirmar remoção em massa?",
-        "en": "Confirm bulk removal?",
-        "es": "¿Confirmar remoción masiva?",
-    },
-    "confirm_removemoney_desc": {
-        "pt": "Remover **{amount}** do saldo de {count} usuário(s):\n{targets}",
-        "en": "Remove **{amount}** from {count} user(s)' balance:\n{targets}",
-        "es": "Remover **{amount}** del saldo de {count} usuario(s):\n{targets}",
-    },
-    "confirm_removemoney_desc_all": {
-        "pt": "Remover TODO o saldo de {count} usuário(s):\n{targets}",
-        "en": "Remove ALL balance from {count} user(s):\n{targets}",
-        "es": "Remover TODO el saldo de {count} usuario(s):\n{targets}",
-    },
     "remove_negative_warn": {
         "pt": "\n⚠️ Saldo negativo (empréstimo/punição)",
         "en": "\n⚠️ Negative balance (loan/penalty)",
         "es": "\n⚠️ Saldo negativo (préstamo/penalización)",
-    },
-    "tx_footer": {
-        "pt": "{id}",
-        "en": "{id}",
-        "es": "{id}",
-    },
-    "tx_footer_multi": {
-        "pt": "{ids}",
-        "en": "{ids}",
-        "es": "{ids}",
     },
     "undo_fail": {
         "pt": "⚠️ Não consegui reverter a transação agora.",
@@ -820,6 +785,53 @@ T: dict[str, dict[str, str]] = {
     },
     "lowatt_empty": {"pt": "*Nenhum membro elegível para análise.*", "en": "*No eligible members to analyze.*", "es": "*Ningún miembro elegible para analizar.*"},
     "lowatt_ranking": {"pt": "Ranking", "en": "Ranking", "es": "Ranking"},
+
+    # cogs/massinfo_access.py — verificação recorrente de acesso ao mass-info
+    "massinfo_access_title": {
+        "pt": "Acesso ao mass-info sem registro",
+        "en": "Mass-info access without registration",
+        "es": "Acceso al mass-info sin registro",
+    },
+    "massinfo_access_empty": {
+        "pt": "Todos os usuários com acesso ao canal mass-info estão registrados.",
+        "en": "Everyone with access to the mass-info channel is registered.",
+        "es": "Todos los usuarios con acceso al canal mass-info están registrados.",
+    },
+    "massinfo_access_desc": {
+        "pt": "{count} usuário(s) com acesso ao canal mass-info **não** estão registrados:",
+        "en": "{count} user(s) with access to the mass-info channel are **not** registered:",
+        "es": "{count} usuario(s) con acceso al canal mass-info **no** están registrados:",
+    },
+    "massinfo_access_field": {
+        "pt": "Não registrados",
+        "en": "Unregistered",
+        "es": "No registrados",
+    },
+    "massinfo_access_actions_title": {
+        "pt": "O que fazer",
+        "en": "What to do",
+        "es": "Qué hacer",
+    },
+    "massinfo_access_actions_body": {
+        "pt": "Use `/register usuario:<pessoa>` para registrar cada um, ou `/bypass usuario:<pessoa>` para remover alguém deste anúncio sem registrar.",
+        "en": "Use `/register user:<person>` to register each one, or `/bypass user:<person>` to remove someone from this announcement without registering.",
+        "es": "Usa `/register usuario:<persona>` para registrar a cada uno, o `/bypass usuario:<persona>` para quitar a alguien de este anuncio sin registrarlo.",
+    },
+    "bypass_added": {
+        "pt": "✅ {mention} foi removido do anúncio recorrente de não-registrados.",
+        "en": "✅ {mention} was removed from the unregistered access announcement.",
+        "es": "✅ {mention} fue quitado del anuncio recurrente de no registrados.",
+    },
+    "ev_no_in_progress": {
+        "pt": "Nenhum evento em andamento.",
+        "en": "No in-progress events.",
+        "es": "Ningún evento en curso.",
+    },
+    "ev_finalize_done": {
+        "pt": "✅ Evento **{ev}** finalizado — movido para revisão.",
+        "en": "✅ Event **{ev}** finalized — moved to review.",
+        "es": "✅ Evento **{ev}** finalizado — movido a revisión.",
+    },
 }
 
 
@@ -881,10 +893,10 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "en": "Shows a user's balance (yours, if none given)",
         "es": "Muestra el saldo de un usuario (el tuyo, si no se indica ninguno)",
     },
-    "opt_desc_balance_alvo": {"pt": "@menção, ID ou nome (padrão: você mesmo)", "en": "@mention, ID, or name (default: yourself)", "es": "@mención, ID o nombre (por defecto: tú mismo)"},
+    "opt_desc_balance_alvo": {"pt": "Membro do Discord (padrão: você mesmo)", "en": "Discord member (default: yourself)", "es": "Miembro de Discord (por defecto: tú mismo)"},
 
     "cmd_desc_pay": {"pt": "Transfere prata do seu saldo para outro usuário", "en": "Transfers silver from your balance to another user", "es": "Transfiere plata de tu saldo a otro usuario"},
-    "opt_desc_pay_alvo": {"pt": "Quem vai receber", "en": "Who will receive it", "es": "Quién va a recibir"},
+    "opt_desc_pay_alvo": {"pt": "Membro do Discord que vai receber", "en": "Discord member who will receive it", "es": "Miembro de Discord que recibirá"},
     "opt_desc_pay_quantia": {
         "pt": "Quanto enviar (ex: 100k, 1.5m, 2,500,000) ou `all`/`tudo`",
         "en": "How much to send (e.g.: 100k, 1.5m, 2,500,000) or `all`/`tudo`",
@@ -892,7 +904,7 @@ CMD_I18N: dict[str, dict[str, str]] = {
     },
 
     "cmd_desc_addmoney": {"pt": "Adiciona prata ao saldo de um usuário", "en": "Adds silver to a user's balance", "es": "Agrega plata al saldo de un usuario"},
-    "opt_desc_addmoney_alvo": {"pt": "Usuário alvo", "en": "Target user", "es": "Usuario objetivo"},
+    "opt_desc_addmoney_alvo": {"pt": "Menções de usuários/cargos ou nick", "en": "User/role mentions or nickname", "es": "Menciones de usuarios/roles o apodo"},
     "opt_desc_addmoney_quantia": {"pt": "Quanto adicionar (ex: 100k, 1.5m)", "en": "How much to add (e.g.: 100k, 1.5m)", "es": "Cuánto agregar (ej: 100k, 1.5m)"},
 
     "cmd_desc_removemoney": {
@@ -900,7 +912,7 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "en": "Removes silver from a user's balance (no value = removes everything)",
         "es": "Remueve plata del saldo de un usuario (sin valor = remueve todo)",
     },
-    "opt_desc_removemoney_alvo": {"pt": "Usuário alvo", "en": "Target user", "es": "Usuario objetivo"},
+    "opt_desc_removemoney_alvo": {"pt": "Membro do Discord", "en": "Discord member", "es": "Miembro de Discord"},
     "opt_desc_removemoney_quantia": {
         "pt": "Quanto remover (em branco ou `all`/`tudo` = remove tudo)",
         "en": "How much to remove (blank or `all`/`tudo` = removes everything)",
@@ -967,16 +979,6 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "en": "Finalize an in-progress event (moves to review)",
         "es": "Finaliza un evento en curso (pasa a revisión)",
     },
-    "ev_no_in_progress": {
-        "pt": "Nenhum evento em andamento.",
-        "en": "No in-progress events.",
-        "es": "Ningún evento en curso.",
-    },
-    "ev_finalize_done": {
-        "pt": "✅ Evento **{ev}** finalizado — movido para revisão.",
-        "en": "✅ Event **{ev}** finalized — moved to review.",
-        "es": "✅ Evento **{ev}** finalizado — movido a revisión.",
-    },
     "opt_name_event_objetivo": {"pt": "objetivo", "en": "objective", "es": "objetivo"},
     "opt_desc_event_objetivo": {
         "pt": "Objetivo do evento (o nome/título dele)",
@@ -1023,5 +1025,16 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "pt": "Lista membros com menor participação nos últimos 7 dias",
         "en": "Lists members with lowest attendance in the last 7 days",
         "es": "Lista miembros con menor participación en los últimos 7 días",
+    },
+
+    "cmd_desc_bypass": {
+        "pt": "Remove um usuário do anúncio recorrente de não-registrados com acesso ao mass-info",
+        "en": "Removes a user from the recurring unregistered-access announcement",
+        "es": "Quita un usuario del anuncio recurrente de no registrados con acceso al mass-info",
+    },
+    "opt_desc_bypass_usuario": {
+        "pt": "Usuário a remover do anúncio (menção, ID ou nome)",
+        "en": "User to remove from the announcement (mention, ID, or name)",
+        "es": "Usuario a quitar del anuncio (mención, ID o nombre)",
     },
 }

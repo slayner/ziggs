@@ -8,16 +8,23 @@ O link é a própria URL pública da batalha (/{public_id}). O serving da SPA
 injeta nela as OG tags com a imagem de resumo, então qualquer pessoa colando
 o mesmo link recebe o embed — não só o bot. Nenhum texto além do link é enviado.
 
+Checkpoint por timestamp (battle_feed_last_ts), não por id interno — uma
+batalha descoberta tardiamente (sweeper, backfill) tem id maior mas start_time
+menor; no cursor por id seria postada fora de ordem cronológica. Por
+start_time, posta em ordem do jogo.
+
 Mesma estrutura de cogs/audit_log.py: @tasks.loop, _cog_ref global, before_loop
 espera wait_until_ready, .error auto-reinicia via call_soon."""
 import asyncio
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 import discord
 from discord.ext import commands, tasks
 
 import http_client
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config
 
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
@@ -32,13 +39,47 @@ async def _post(path: str, body: dict) -> Optional[dict]:
     return await http_client.post_json(path, body, tag="battle_feed", attempts=2)
 
 
+def _parse_ts(ts: str | None) -> datetime | None:
+    """ISO string -> datetime aware UTC, ou None."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+async def _history_posted_ids(channel, bot_id: int) -> set[str]:
+    """Lê os public_ids já postados no canal (cross-restart dedup). O bot posta
+    só o link (PUBLIC_URL/{public_id}), então extrai o public_id do conteúdo
+    das últimas mensagens dele mesmo. Usado no 1º poll após restart, quando o
+    watermark local (memória) está vazio — sem isso, batalhas postadas mas não
+    ackadas (bot caiu antes de chamar /synced) seriam re-postadas."""
+    posted: set[str] = set()
+    try:
+        async for message in channel.history(limit=200):
+            if message.author.id != bot_id or not message.content:
+                continue
+            # Link: https://ziggs.example/{public_id} — pega o último segmento.
+            content = message.content.strip()
+            for token in content.split():
+                if "/" in token and not token.startswith("<"):
+                    pid = token.rstrip("/").rsplit("/", 1)[-1]
+                    if pid and pid != token:
+                        posted.add(pid)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    return posted
+
+
 _cog_ref: "BattleFeed | None" = None
 
 
 class BattleFeed(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._sent: dict[int, int] = {}
+        self._watermarks: dict[int, datetime] = {}
         self._locks: dict[int, asyncio.Lock] = {}
 
     async def cog_load(self) -> None:
@@ -68,25 +109,42 @@ class BattleFeed(commands.Cog):
         data = await _get(f"/bot/guilds/{guild.id}/battle-feed")
         if data is None:
             return  # site fora do ar — próximo tick cobre
-        battles = [
-            battle for battle in (data.get("battles") or [])
-            if battle["id"] > self._sent.get(guild.id, 0)
-        ]
-        if not battles:
-            return
+        battles = (data.get("battles") or [])
 
-        last_id = None
+        # Watermark local: mata batalhas já postadas (dedup cross-restart).
+        wm = self._watermarks.get(guild.id)
+        # 1º poll após restart: watermark local vazio. Lê o histórico do canal
+        # pra descobrir quais public_ids já foram postados e pular eles — sem
+        # isso, batalhas postadas mas não ackadas (bot caiu antes de /synced)
+        # seriam re-postadas no próximo ciclo.
+        posted_ids: set[str] | None = None
+        if wm is None:
+            bot_user = getattr(self.bot, "user", None)
+            bot_id = bot_user.id if bot_user else 0
+            posted_ids = await _history_posted_ids(channel, bot_id)
+        last_ts = None
         for b in battles:
+            ts = _parse_ts(b.get("start_time"))
+            if ts is None:
+                continue
+            if wm is not None and ts <= wm:
+                continue
+            if posted_ids is not None and b.get("public_id") in posted_ids:
+                # Já postada (histórico do canal) — só avança o watermark se for
+                # mais novo, pra o backend não re-enviar no próximo poll.
+                if ts > (wm or datetime.min.replace(tzinfo=timezone.utc)):
+                    self._watermarks[guild.id] = ts
+                continue
             link = f"{PUBLIC_URL}/{b['public_id']}"
             try:
-                await channel.send(content=link)
-            except (discord.Forbidden, discord.HTTPException):
+                await dtimeout(channel.send(content=link))
+            except SKIP_EXC:
                 break  # para no primeiro erro — ack só até o último enviado
-            last_id = b["id"]
-            self._sent[guild.id] = last_id
+            last_ts = ts
+            self._watermarks[guild.id] = ts
 
-        if last_id is not None:
-            await _post(f"/bot/guilds/{guild.id}/battle-feed-synced", {"last_id": last_id})
+        if last_ts is not None:
+            await _post(f"/bot/guilds/{guild.id}/battle-feed-synced", {"last_ts": last_ts.isoformat()})
 
 
 @tasks.loop(seconds=30)

@@ -309,6 +309,7 @@ async def main() -> None:
         await bot.load_extension("cogs.members")
         await bot.load_extension("cogs.forfeit")
         await bot.load_extension("cogs.member_sync")
+        await bot.load_extension("cogs.massinfo_access")
         try:
             await bot.start(TOKEN)
         finally:

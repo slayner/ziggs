@@ -17,6 +17,7 @@ import discord
 from discord.ext import commands, tasks
 
 import http_client
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -111,9 +112,9 @@ class LootlogThreads(commands.Cog):
         if thread is None:
             print(f"[lootlog_threads] criando thread '{name}' p/ evento {event_id} no canal {channel.id}")
             try:
-                thread = await channel.create_thread(
+                thread = await dtimeout(channel.create_thread(
                     name=name, type=discord.ChannelType.public_thread,
-                )
+                ))
             except Exception as e:
                 print(f"[lootlog_threads] falhou criar thread p/ evento {event_id} "
                       f"em {channel.id}: {type(e).__name__}: {e}")
@@ -127,8 +128,8 @@ class LootlogThreads(commands.Cog):
                 color=0x2b2d31,
             )
             try:
-                await thread.send(embed=embed, view=LootlogSubmitView(lang))
-            except (discord.Forbidden, discord.HTTPException) as e:
+                await dtimeout(thread.send(embed=embed, view=LootlogSubmitView(lang)))
+            except SKIP_EXC as e:
                 print(f"[lootlog_threads] falhou postar embed-botão na thread "
                       f"{thread.id}: {type(e).__name__}: {e}")
         self._thread_ids[key] = thread.id
@@ -145,16 +146,16 @@ class LootlogThreads(commands.Cog):
         try:
             thread = guild.get_thread(int(tid))
             if thread is None:
-                thread = await guild.fetch_channel(int(tid))
-        except (TypeError, ValueError, discord.NotFound, discord.Forbidden, discord.HTTPException):
+                thread = await dtimeout(guild.fetch_channel(int(tid)))
+        except (TypeError, ValueError, *SKIP_EXC):
             thread = None
         if thread is None:
             await _post(
                 f"/bot/events/{guild.id}/{event_id}/lootlog-thread-archived", {})
             return
         try:
-            await thread.edit(archived=True, locked=True)
-        except (discord.Forbidden, discord.HTTPException):
+            await dtimeout(thread.edit(archived=True, locked=True))
+        except SKIP_EXC:
             return
         await _post(
             f"/bot/events/{guild.id}/{event_id}/lootlog-thread-archived", {})

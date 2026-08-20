@@ -6,32 +6,45 @@ from cogs.events import FunctionPickView, _build_function_prompt_embed, _signup_
 
 
 async def main() -> None:
-    roles = [f"Role {index}" for index in range(30)]
-    categories = {role: "dps" if index % 2 else "support" for index, role in enumerate(roles)}
+    # 30 opções de par (weapon, fn): 15 armas × dps/support — mesmo weapon em
+    # fns diferentes é opção DISTINTA.
+    options = []
+    for index in range(30):
+        fn = "dps" if index % 2 else "support"
+        weapon_id = index // 2 + 1
+        options.append({
+            "key": f"w{weapon_id}:{fn}",
+            "weapon_id": weapon_id,
+            "weapon_name": f"Weapon {weapon_id}",
+            "fn": fn,
+        })
+    keys = [o["key"] for o in options]
     view = FunctionPickView(
         event_id=9,
         guild_id=1,
         lang="pt",
-        functions=roles,
-        categories=categories,
-        initial_functions=roles,
+        options=options,
+        initial_options=keys,
         min_builds=2,
         discord_role_ids=[11, 22],
     )
     embed = view._review_embed()
     rendered = "\n".join(field.value for field in embed.fields)
-    assert all(role in rendered for role in roles)
+    assert all(f"Weapon {o['weapon_id']}" in rendered for o in options)
     assert len(embed.fields) == 3
     assert all(field.name == "\u200b" and field.inline for field in embed.fields)
     lines = rendered.splitlines()
     assert all(line.startswith(("✨ ", "⚔️ ")) for line in lines)
-    assert lines.index("✨ Role 28") < lines.index("⚔️ Role 1")
+    support_first = next(i for i, line in enumerate(lines) if line.startswith("✨"))
+    dps_first = next(i for i, line in enumerate(lines) if line.startswith("⚔️"))
+    assert support_first < dps_first
     assert "/30" not in embed.title
     assert view._minimum_error() is None
     assert view.discord_role_ids == [11, 22]
-    assert _signup_matches({"ok": True, "functions": roles}, roles)
-    assert _signup_matches({"exists": True, "functions": roles}, roles)
-    assert not _signup_matches({"ok": True, "functions": []}, roles)
+    assert _signup_matches({"ok": True, "options": keys}, keys)
+    assert _signup_matches({"exists": True, "options": keys}, keys)
+    assert not _signup_matches({"ok": True, "options": []}, keys)
+    assert not _signup_matches({"ok": True, "functions": keys}, keys)  # legado não é identidade
 
     dm = _build_function_prompt_embed("pt", {
         "event_id": 9,

@@ -20,6 +20,7 @@ from discord.ext import commands, tasks
 
 import http_client
 import ephemeral_guard
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -32,6 +33,9 @@ API_SECRET = os.getenv("BOT_API_SECRET", "")
 # sem este teto o loop trava em silêncio (não passa pelo .error handler,
 # task cancelada/presa não loga nada) e nenhuma thread de revisão nasce.
 _EMBED_WORK_TIMEOUT = 120  # segundos
+_EMBED_CONCURRENCY = 8  # embeds processados em paralelo por tick do loop — 112
+                        # embeds em série × 120s de timeout = 3.7h por tick, wedge
+                        # o loop de 10s; em paralelo com 8 de uma vez cai pra ~15x.
 
 
 async def _get(path: str) -> Optional[dict]:
@@ -142,7 +146,7 @@ def _build_event_embed(lang: str, guild_id: int, eid: int, dto: dict) -> discord
     embed.add_field(name=f"💰 {_fmt_silver(tab)}", value="​", inline=True)
 
     # Participantes em 3 colunas com badge ⚠️<50%.
-    parts = ev.get("participants") or []
+    parts = sorted(ev.get("participants") or [], key=lambda p: p.get("percent") or 0, reverse=True)
     if parts:
         n = len(parts)
         per_col = (n + 2) // 3
@@ -200,6 +204,17 @@ def _build_event_embed(lang: str, guild_id: int, eid: int, dto: dict) -> discord
         if lines:
             embed.add_field(name=t(lang, "ev_loggers", n=len(lines)),
                             value=_fit_field(lines), inline=False)
+    else:
+        # Sem split definido ainda (tab_value=0 → logger_payouts vazio), mas
+        # já há submissions: mostra quem enviou e quantas linhas, pra o gestor
+        # saber que o log chegou antes do finalize.
+        subs = dto.get("lootlog_submissions") or []
+        if subs:
+            lines = [f"<@{s.get('submitter_user_id')}> ({s.get('row_count') or 0} linhas)"
+                     for s in subs if s.get("submitter_user_id")]
+            if lines:
+                embed.add_field(name=t(lang, "ev_loggers", n=len(lines)),
+                                value=_fit_field(lines), inline=False)
 
     return embed
 
@@ -627,11 +642,10 @@ class EventEmbedView(discord.ui.View):
         # Sem emoji= (ícone próprio do botão) — o emoji já está no label
         # (i18n), ícone + texto duplicava o mesmo emoji no botão.
         if state == "review":
-            parts = ev.get("participants") or []
             add_btn = discord.ui.Button(label=t(lang, "ev_add_participant"), style=discord.ButtonStyle.secondary)
             add_btn.callback = self._on_add
             self.add_item(add_btn)
-            if parts:
+            if self.ev.get("participants"):
                 edit_btn = discord.ui.Button(label=t(lang, "ev_edit_pct"), style=discord.ButtonStyle.secondary)
                 edit_btn.callback = self._on_edit_pct
                 self.add_item(edit_btn)
@@ -773,8 +787,18 @@ class EventEmbeds(commands.Cog):
         if events:
             print(f"[event_embeds] {guild.id}: {len(events)} embed(s) pra (re)editar "
                   f"→ {[(e['event_id'], e.get('event_message_id') is not None) for e in events]}")
-            for item in events:
-                await self._post_or_edit_embed(guild, item["event_id"], item)
+            # Paralelo com concorrência limitada — antes era serial (for item:
+            # await), e 112 embeds × 120s de timeout cada = 3.7h por tick do
+            # loop de 10s. O loop nunca terminava um tick entre restarts, e o
+            # evento novo (que acabou de ir pra REVIEW) ficava esperando no
+            # fim da fila — thread de revisão só nascia no catch-up de restart.
+            sem = asyncio.Semaphore(_EMBED_CONCURRENCY)
+
+            async def _one(item: dict) -> None:
+                async with sem:
+                    await self._post_or_edit_embed(guild, item["event_id"], item)
+
+            await asyncio.gather(*(_one(i) for i in events), return_exceptions=True)
 
         # Arquivamento: terminais (finalizado/cancelado/excluído) com thread de
         # embed ainda não trancada — espelho do archive de regear_threads.py.
@@ -864,13 +888,13 @@ class EventEmbeds(commands.Cog):
             ch = guild.get_channel(int(channel_id))
             if ch is None:
                 try:
-                    ch = await guild.fetch_channel(int(channel_id))
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError):
+                    ch = await dtimeout(guild.fetch_channel(int(channel_id)))
+                except (SKIP_EXC, ValueError):
                     ch = None
             if ch is not None:
                 try:
-                    message = await ch.fetch_message(int(message_id))
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError):
+                    message = await dtimeout(ch.fetch_message(int(message_id)))
+                except SKIP_EXC:
                     message = None
 
         if message is None:
@@ -883,8 +907,8 @@ class EventEmbeds(commands.Cog):
                 return
         else:
             try:
-                await message.edit(embed=embed, view=view)
-            except (discord.Forbidden, discord.HTTPException):
+                await dtimeout(message.edit(embed=embed, view=view))
+            except SKIP_EXC:
                 return
 
         self._message_ids[(guild.id, event_id)] = (message.channel.id, message.id)
@@ -913,8 +937,8 @@ class EventEmbeds(commands.Cog):
                 # cache evictido). Sem isto, miss de cache = skip silencioso e
                 # a thread de evento nunca abre.
                 try:
-                    room = await guild.fetch_channel(int(cfg["event_review_channel_id"]))
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError):
+                    room = await dtimeout(guild.fetch_channel(int(cfg["event_review_channel_id"])))
+                except (SKIP_EXC, ValueError):
                     print(f"[event_embeds] sala de revisão {cfg.get('event_review_channel_id')} "
                           f"não encontrada em {guild.id}")
                     return None
@@ -926,19 +950,19 @@ class EventEmbeds(commands.Cog):
                         print(f"[event_embeds] criando thread p/ evento {event_id} na sala {room.id}")
                         # Thread pública sem mensagem-inicial
                         # (start_thread_without_message); o embed vai dentro.
-                        thread = await room.create_thread(
+                        thread = await dtimeout(room.create_thread(
                             name=thread_name,
                             type=discord.ChannelType.public_thread,
-                        )
+                        ))
                     msg = None
                     async for candidate in thread.history(limit=20, oldest_first=True):
                         if candidate.author.id == bot_id and _is_event_message(candidate, event_id):
                             msg = candidate
                             break
                     if msg is None:
-                        msg = await thread.send(embed=embed, view=view)
+                        msg = await dtimeout(thread.send(embed=embed, view=view))
                     else:
-                        await msg.edit(embed=embed, view=view)
+                        await dtimeout(msg.edit(embed=embed, view=view))
                     print(f"[event_embeds] ✓ thread {thread.id} + msg {msg.id} p/ evento {event_id}")
                     return msg
                 except Exception as e:
@@ -955,8 +979,8 @@ class EventEmbeds(commands.Cog):
             channel = guild.get_channel(int(cfg["events_channel_id"]))
             if channel is None:
                 try:
-                    channel = await guild.fetch_channel(int(cfg["events_channel_id"]))
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError):
+                    channel = await dtimeout(guild.fetch_channel(int(cfg["events_channel_id"])))
+                except (SKIP_EXC, ValueError):
                     return None
             if not isinstance(channel, discord.TextChannel):
                 return None
@@ -966,10 +990,10 @@ class EventEmbeds(commands.Cog):
                         candidate.author.id == bot_id
                         and _is_event_message(candidate, event_id)
                     ):
-                        await candidate.edit(embed=embed, view=view)
+                        await dtimeout(candidate.edit(embed=embed, view=view))
                         return candidate
-                return await channel.send(embed=embed, view=view)
-            except (discord.Forbidden, discord.HTTPException):
+                return await dtimeout(channel.send(embed=embed, view=view))
+            except SKIP_EXC:
                 return None
         return None  # skip
 

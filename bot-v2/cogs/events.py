@@ -16,6 +16,7 @@ from discord import Interaction
 from discord.ext import commands
 
 import http_client
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -39,7 +40,7 @@ CAT_PER_PAGE = 23
 _STATUS_EMOJI = {"scheduled": "🗓️", "in_progress": "🟢"}
 # Emojis conhecidos para categorias que o CompBuilder já usa. Categorias novas
 # (custom fn types que o usuário inventar) ganham ❔ — o nome aparece do lado.
-_CATEGORY_EMOJI = {"tank": "🛡️", "healer": "🕊️", "support": "✨", "dps": "⚔️", "pierce": "🏹", "battlemount": "🐲", "other": "❔"}
+_CATEGORY_EMOJI = {"tank": "🛡️", "healer": "🕊️", "support": "✨", "dps": "⚔️", "pierce": "🏹", "battlemount": "🐴", "other": "❔"}
 # Ordem preferida das categorias conhecidas; categorias desconhecidas vão pro
 # final em ordem alfabética (other por último de qualquer jeito).
 _CATEGORY_ORDER = {"tank": 0, "healer": 1, "support": 2, "dps": 3, "pierce": 4, "battlemount": 5}
@@ -57,6 +58,24 @@ def _category_sort_key(cat: str) -> tuple:
     if cat in _CATEGORY_ORDER:
         return (0, str(_CATEGORY_ORDER[cat]))
     return (1, cat)
+
+
+def _fn_key_norm(fn: str | None) -> str:
+    """Mesma normalização do backend (event_gates.fn_key): casefold/strip,
+    vazio vira 'other'."""
+    return " ".join((fn or "").casefold().split()) or "other"
+
+
+def _fn_of(option: dict) -> str:
+    """Categoria de uma opção = o fn do par."""
+    return _fn_key_norm(option.get("fn"))
+
+
+def _pair_display(option: dict | None, key: str) -> str:
+    """Nome da arma de uma opção — a categoria vem pelo emoji."""
+    if not option:
+        return key
+    return option.get("weapon_name") or key.partition(":")[0]
 
 
 async def _get(path: str, *, interactive: bool = False) -> Optional[dict]:
@@ -87,16 +106,17 @@ def _member_role_ids(user) -> list[int]:
     return [r.id for r in user.roles] if isinstance(user, discord.Member) else []
 
 
-def _signup_matches(data: dict | None, functions: list[str]) -> bool:
+def _signup_matches(data: dict | None, options: list[str]) -> bool:
+    """Compara pela IDENTIDADE do signup: pair keys (weapon, fn)."""
     return bool(
         data
         and data.get("exists", data.get("ok", False))
-        and set(data.get("functions") or []) == set(functions)
+        and set(data.get("options") or []) == set(options)
     )
 
 
 async def _save_signup(
-    guild_id: int, event_id: int, user, functions: list[str],
+    guild_id: int, event_id: int, user, options: list[str],
     discord_role_ids: list[int],
 ) -> Optional[dict]:
     """Grava e confirma a inscrição. POST é um upsert, então repetir após uma
@@ -108,15 +128,15 @@ async def _save_signup(
         {
             "user_id": user.id,
             "user_name": user.display_name or str(user),
-            "functions": functions,
+            "options": options,
             "discord_role_ids": discord_role_ids,
         },
         timeout=20, tag="signup", attempts=2, queue_on_failure=False,
     )
-    if result is not None and result.get("ok") and _signup_matches(result, functions):
+    if result is not None and result.get("ok") and _signup_matches(result, options):
         return result
     saved = await _get(f"{path}/{user.id}", interactive=True)
-    return saved if _signup_matches(saved, functions) else None
+    return saved if _signup_matches(saved, options) else None
 
 
 async def _purge_bot_messages(channel: discord.TextChannel, *, keep_id: int | None = None) -> int:
@@ -137,12 +157,12 @@ async def _purge_bot_messages(channel: discord.TextChannel, *, keep_id: int | No
             if keep_id is not None and m.id == keep_id:
                 continue
             try:
-                await m.delete()
+                await dtimeout(m.delete())
                 deleted += 1
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass  # best-effort — já apagada / sem permissão
-    except (discord.Forbidden, discord.HTTPException):
-        pass  # sem read_history_history → não dá pra varrer; melhor sorte na próxima
+            except SKIP_EXC:
+                pass  # best-effort — já apagada / sem permissão / timeout
+    except SKIP_EXC:
+        pass  # sem read_history → não dá pra varrer; melhor sorte na próxima
     return deleted
 
 
@@ -414,7 +434,7 @@ async def _open_signup_flow(
     role_ids = ",".join(str(i) for i in _member_role_ids(member))
     data = await _get(
         f"/bot/events/{target_guild_id}/{event_id}/eligible-functions"
-        f"?discord_user_id={interaction.user.id}&discord_role_ids={role_ids}",
+        f"?discord_user_id={interaction.user.id}&discord_role_ids={role_ids}&lang={lang}",
         interactive=True,
     )
     if data is None:
@@ -424,15 +444,17 @@ async def _open_signup_flow(
 
     current = data.get("current_signup")
     if current:
-        if data.get("functions_released") and not current.get("functions"):
+        has_choice = bool(current.get("options") or current.get("functions"))
+        if data.get("functions_released") and not has_choice:
             await _send_function_pick(
                 interaction, event_id, lang, data,
                 replace_prev=False, guild_id=target_guild_id,
             )
             return
         view = AlreadyRegisteredView(event_id=event_id, guild_id=target_guild_id, lang=lang)
+        shown = current.get("labels") or current.get("functions") or []
         await interaction.response.send_message(
-            t(lang, "signup_already_registered", functions=", ".join(current["functions"]) or "—"),
+            t(lang, "signup_already_registered", functions=", ".join(shown) or "—"),
             view=view, ephemeral=True,
         )
         return
@@ -455,9 +477,9 @@ async def _send_function_pick(
     interaction: Interaction, event_id: int, lang: str, data: dict, *,
     replace_prev: bool, guild_id: int,
 ) -> None:
-    functions = data.get("functions") or []
+    options = data.get("options") or []
     reason = data.get("denial_reason")
-    if not functions:
+    if not options:
         key = "signup_no_slots" if reason == "no_slots" else "signup_no_role"
         content = t(lang, key)
         if replace_prev:
@@ -466,10 +488,10 @@ async def _send_function_pick(
             await interaction.response.send_message(content, ephemeral=True)
         return
 
-    categories = data.get("categories") or {}
     view = FunctionPickView(
-        event_id=event_id, guild_id=guild_id, lang=lang, functions=functions, categories=categories,
-        initial_functions=data.get("profile_functions") or [],
+        event_id=event_id, guild_id=guild_id, lang=lang, options=options,
+        category_types=data.get("category_types") or {},
+        initial_options=data.get("profile_options") or [],
         min_builds=data.get("signup_min_builds"),
         discord_role_ids=data.get("_discord_role_ids") or [],
     )
@@ -543,7 +565,7 @@ class AlreadyRegisteredView(discord.ui.View):
         role_ids = ",".join(str(i) for i in _member_role_ids(member))
         data = await _get(
             f"/bot/events/{self.guild_id}/{self.event_id}/eligible-functions"
-            f"?discord_user_id={interaction.user.id}&discord_role_ids={role_ids}",
+            f"?discord_user_id={interaction.user.id}&discord_role_ids={role_ids}&lang={self.lang}",
             interactive=True,
         )
         if data is None:
@@ -572,38 +594,53 @@ class AlreadyRegisteredView(discord.ui.View):
 
 class FunctionPickView(discord.ui.View):
     """Wizard de inscrição em etapas, espelhando o bot-v1 (massinfo): categoria
-    → função (uma por vez) → revisão ('adicionar mais' ou 'confirmar').
+    (fn do slot) → opção (uma por vez) → revisão ('adicionar mais' ou
+    'confirmar').
+
+    A identidade de cada opção é o PAR (arma, fn) — `key` = "w<weapon_id>:<fn>",
+    vindo do backend (`options` do /eligible-functions). Longbow+DPS e
+    Longbow+Support são opções distintas; a pré-seleção vem das preferências
+    globais do jogador (`profile_options`).
 
     Diferenças do bot-v1: cada passo REENVIA o ephemeral (delete + novo) em vez
     de editar — contorna o problema do usuário deixar a mensagem aberta até a
     interação expirar. E o dropdown pagina com ◀️/▶️ quando a categoria (ou a
     lista de categorias) passa de 25 opções (limite do Discord).
 
-    Não há limite de roles: o usuário declara tudo que sabe fazer."""
+    Não há limite de pares: o usuário declara tudo que sabe fazer."""
 
     def __init__(
-        self, *, event_id: int, guild_id: int, lang: str, functions: list[str],
-        categories: dict[str, str], initial_functions: Optional[list[str]] = None,
+        self, *, event_id: int, guild_id: int, lang: str, options: list[dict],
+        initial_options: Optional[list[str]] = None,
         min_builds: int | None = None, discord_role_ids: Optional[list[int]] = None,
+        category_types: Optional[dict[str, dict]] = None,
     ):
         super().__init__(timeout=600)
         self.event_id = event_id
         self.guild_id = guild_id
         self.lang = lang
-        self.functions = list(dict.fromkeys(functions))
-        self.categories = categories
+        # dedup por key, ordem preservada
+        self.options: list[dict] = []
+        seen: set[str] = set()
+        for opt in options:
+            key = opt.get("key")
+            if key and key not in seen:
+                seen.add(key)
+                self.options.append(opt)
+        self.category_types = category_types or {}
         self.min_builds = min_builds
         self.discord_role_ids = discord_role_ids or []
-        allowed = set(self.functions)
-        self.chosen: list[str] = [f for f in (initial_functions or []) if f in allowed]
+        allowed = {o["key"] for o in self.options}
+        self.chosen: list[str] = [k for k in (initial_options or []) if k in allowed]
         self._remove_page = 0
         self._active_category: str = ""
         self._cat_page = 0
         self._fn_page = 0
 
-        self.by_category: dict[str, list[str]] = {}
-        for fn in functions:
-            self.by_category.setdefault(categories.get(fn, "other"), []).append(fn)
+        # fn da opção -> opções dessa categoria (o fn É a categoria agora).
+        self.by_category: dict[str, list[dict]] = {}
+        for opt in self.options:
+            self.by_category.setdefault(_fn_of(opt), []).append(opt)
 
         if self.chosen:
             self._build_review_step()
@@ -613,10 +650,18 @@ class FunctionPickView(discord.ui.View):
         else:
             self._build_category_step()
 
-    def _available(self, cat: str) -> list[str]:
-        """Funções da categoria que ainda não foram escolhidas (dedup)."""
-        chosen = {c.lower() for c in self.chosen}
-        return [f for f in self.by_category.get(cat, []) if f.lower() not in chosen]
+    def _cat_meta(self, cat: str) -> dict:
+        meta = self.category_types.get(cat) or self.category_types.get(_fn_key_norm(cat)) or {}
+        return {
+            "emoji": meta.get("emoji") or _CATEGORY_EMOJI.get(cat, "❔"),
+            "label": meta.get("label") or cat,
+            "position": meta.get("position", 999),
+        }
+
+    def _available(self, cat: str) -> list[dict]:
+        """Opções da categoria que ainda não foram escolhidas (dedup)."""
+        chosen = set(self.chosen)
+        return [o for o in self.by_category.get(cat, []) if o["key"] not in chosen]
 
     def _initial_content(self) -> str:
         if len(self.by_category) > 1:
@@ -629,7 +674,7 @@ class FunctionPickView(discord.ui.View):
         self.clear_items()
         cats = sorted(
             (c for c in self.by_category if self._available(c)),
-            key=_category_sort_key,
+            key=lambda category: (self._cat_meta(category)["position"], _category_sort_key(category)),
         )
         if not cats:
             return
@@ -641,7 +686,8 @@ class FunctionPickView(discord.ui.View):
         if pages > 1 and self._cat_page > 0:
             options.append(discord.SelectOption(label=t(self.lang, "signup_fn_prev"), value="__prev__"))
         for cat in chunk:
-            options.append(discord.SelectOption(label=f"{_CATEGORY_EMOJI.get(cat, '❔')} {cat}", value=cat))
+            meta = self._cat_meta(cat)
+            options.append(discord.SelectOption(label=f"{meta['emoji']} {meta['label']}", value=cat))
         if pages > 1 and self._cat_page < pages - 1:
             options.append(discord.SelectOption(label=t(self.lang, "signup_fn_next"), value="__next__"))
         select = discord.ui.Select(
@@ -650,6 +696,10 @@ class FunctionPickView(discord.ui.View):
         )
         select.callback = self._on_category
         self.add_item(select)
+        if self.chosen:
+            back = discord.ui.Button(label=t(self.lang, "signup_back_to_review"), style=discord.ButtonStyle.secondary)
+            back.callback = self._on_remove_back
+            self.add_item(back)
         cancel = discord.ui.Button(label=t(self.lang, "cancel_btn"), style=discord.ButtonStyle.secondary)
         cancel.callback = self._on_cancel
         self.add_item(cancel)
@@ -664,11 +714,13 @@ class FunctionPickView(discord.ui.View):
         options: list[discord.SelectOption] = []
         if pages > 1 and self._fn_page > 0:
             options.append(discord.SelectOption(label=t(self.lang, "signup_fn_prev"), value="__prev__"))
-        for fn in chunk:
-            options.append(discord.SelectOption(label=fn[:100], value=fn))
+        for opt in chunk:
+            # Dentro da categoria o que varia é a arma — o par é único por (arma, fn).
+            options.append(discord.SelectOption(label=str(opt.get("weapon_name") or opt.get("key"))[:100], value=opt["key"]))
         if pages > 1 and self._fn_page < pages - 1:
             options.append(discord.SelectOption(label=t(self.lang, "signup_fn_next"), value="__next__"))
-        ph = t(self.lang, "signup_pick_function_ph", cat=self._active_category)
+        meta = self._cat_meta(self._active_category)
+        ph = t(self.lang, "signup_pick_function_ph", cat=meta["label"])
         if pages > 1:
             ph = f"{ph}  ({self._fn_page + 1}/{pages})"
         select = discord.ui.Select(placeholder=ph[:150], min_values=1, max_values=1, options=options)
@@ -678,13 +730,17 @@ class FunctionPickView(discord.ui.View):
             back = discord.ui.Button(label=t(self.lang, "signup_back_to_categories"), style=discord.ButtonStyle.secondary)
             back.callback = self._on_back_to_categories
             self.add_item(back)
+        elif self.chosen:
+            back = discord.ui.Button(label=t(self.lang, "signup_back_to_review"), style=discord.ButtonStyle.secondary)
+            back.callback = self._on_remove_back
+            self.add_item(back)
         cancel = discord.ui.Button(label=t(self.lang, "cancel_btn"), style=discord.ButtonStyle.secondary)
         cancel.callback = self._on_cancel
         self.add_item(cancel)
 
     def _build_review_step(self) -> None:
         self.clear_items()
-        if len(self.chosen) < len(self.functions):
+        if len(self.chosen) < len(self.options):
             add_btn = discord.ui.Button(label=t(self.lang, "signup_add_more"), style=discord.ButtonStyle.primary)
             add_btn.callback = self._on_add_more
             self.add_item(add_btn)
@@ -705,10 +761,11 @@ class FunctionPickView(discord.ui.View):
         self._remove_page %= pages
         start = self._remove_page * 25
         chunk = self.chosen[start:start + 25]
+        by_key = {o["key"]: o for o in self.options}
         select = discord.ui.Select(
             placeholder=t(self.lang, "signup_remove_roles_ph"),
             min_values=1, max_values=len(chunk),
-            options=[discord.SelectOption(label=f[:100], value=f) for f in chunk],
+            options=[discord.SelectOption(label=_pair_display(by_key.get(k), k)[:100], value=k) for k in chunk],
         )
         select.callback = self._on_remove_roles
         self.add_item(select)
@@ -739,14 +796,20 @@ class FunctionPickView(discord.ui.View):
                 value=f"*{t(self.lang, 'signup_none_yet')}*",
                 inline=False,
             )
+        by_key = {o["key"]: o for o in self.options}
         ordered = sorted(
             self.chosen,
-            key=lambda function: _category_sort_key(self.categories.get(function, "other")),
+            key=lambda key: (
+                self._cat_meta(_fn_of(by_key.get(key) or {}))["position"],
+                _category_sort_key(_fn_of(by_key.get(key) or {})),
+                str((by_key.get(key) or {}).get("weapon_name") or key),
+            ),
         )
-        lines = [
-            f"{_CATEGORY_EMOJI.get(self.categories.get(function, 'other'), '❔')} {function}"
-            for function in ordered
-        ]
+        lines = []
+        for key in ordered:
+            opt = by_key.get(key) or {}
+            meta = self._cat_meta(_fn_of(opt))
+            lines.append(f"{meta['emoji']} {_pair_display(opt, key)}")
         column_count = min(3, max(1, -(-len(lines) // 8)))
         rows_per_column = max(1, -(-len(lines) // column_count))
         chunks: list[list[str]] = [[]]
@@ -809,7 +872,7 @@ class FunctionPickView(discord.ui.View):
             self._build_function_step()
             await _replace_ephemeral(interaction, t(self.lang, "signup_pick_function_prompt"), self)
             return
-        # escolheu UMA função → vai pra revisão (adicionar mais ou confirmar).
+        # escolheu UM par → vai pra revisão (adicionar mais ou confirmar).
         if val not in self.chosen:
             self.chosen.append(val)
         self._build_review_step()
@@ -871,7 +934,10 @@ class FunctionPickView(discord.ui.View):
         if result is None:
             await _replace_ephemeral(interaction, t(self.lang, "signup_fail"), None)
             return
-        applied = result["functions"] if "functions" in result else self.chosen
+        by_key = {o["key"]: o for o in self.options}
+        applied = result.get("labels") or [
+            _pair_display(by_key.get(k), k) for k in (result.get("options") or self.chosen)
+        ]
         mode = result.get("assignment_mode")
         key = "signup_success_self" if mode == "self_select" else "signup_success_hybrid"
         await _replace_ephemeral(
@@ -963,31 +1029,31 @@ class Events(commands.Cog):
             user = guild.get_member(int(prompt["user_id"]))
             if user is None:
                 try:
-                    user = await self.bot.fetch_user(int(prompt["user_id"]))
-                except (discord.NotFound, discord.HTTPException):
+                    user = await dtimeout(self.bot.fetch_user(int(prompt["user_id"])))
+                except SKIP_EXC:
                     continue
             if cached:
                 try:
-                    dm = user.dm_channel or await user.create_dm()
-                    old_message = await dm.fetch_message(int(cached[0]))
-                    await old_message.delete()
+                    dm = user.dm_channel or await dtimeout(user.create_dm())
+                    old_message = await dtimeout(dm.fetch_message(int(cached[0])))
+                    await dtimeout(old_message.delete())
                 except discord.NotFound:
                     pass
-                except (discord.Forbidden, discord.HTTPException):
+                except SKIP_EXC:
                     continue
                 self._function_prompt_sent.pop(key, None)
             try:
-                message = await user.send(
+                message = await dtimeout(user.send(
                     embed=_build_function_prompt_embed(lang, prompt),
                     view=FunctionPromptView(guild.id, int(prompt["event_id"]), lang),
-                )
+                ))
                 sent.append({
                     "event_id": int(prompt["event_id"]),
                     "user_id": int(prompt["user_id"]),
                     "message_id": str(message.id),
                 })
                 self._function_prompt_sent[key] = (str(message.id), signature)
-            except (discord.Forbidden, discord.HTTPException):
+            except SKIP_EXC:
                 pass
         return sent
 
@@ -996,14 +1062,14 @@ class Events(commands.Cog):
         deleted: list[str] = []
         for record in records:
             try:
-                user = await self.bot.fetch_user(int(record["user_id"]))
-                dm = user.dm_channel or await user.create_dm()
-                message = await dm.fetch_message(int(record["message_id"]))
-                await message.delete()
+                user = await dtimeout(self.bot.fetch_user(int(record["user_id"])))
+                dm = user.dm_channel or await dtimeout(user.create_dm())
+                message = await dtimeout(dm.fetch_message(int(record["message_id"])))
+                await dtimeout(message.delete())
                 deleted.append(str(record["message_id"]))
             except (discord.NotFound, discord.Forbidden):
                 deleted.append(str(record["message_id"]))
-            except discord.HTTPException:
+            except SKIP_EXC:
                 pass
             event_user = (int(record["event_id"]), int(record["user_id"]))
             for key in [key for key in self._function_prompt_sent if key[1:] == event_user]:
@@ -1069,8 +1135,8 @@ class Events(commands.Cog):
         message = None
         if message_id:
             try:
-                message = await channel.fetch_message(message_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                message = await dtimeout(channel.fetch_message(message_id))
+            except SKIP_EXC:
                 message = None
 
         sent = False
@@ -1083,23 +1149,23 @@ class Events(commands.Cog):
             mentions = discord.AllowedMentions(everyone=should_ping, roles=False, users=False)
             await _purge_bot_messages(channel)
             try:
-                message = await channel.send(content=content, embed=embed, view=view,
-                                             allowed_mentions=mentions)
+                message = await dtimeout(channel.send(content=content, embed=embed, view=view,
+                                                      allowed_mentions=mentions))
                 sent = True
-            except (discord.Forbidden, discord.HTTPException):
+            except SKIP_EXC:
                 # Falhou o reenvio — tenta cair no edit in-place abaixo como fallback.
                 message = None
 
         if not sent:
             if message is None:
                 try:
-                    message = await channel.send(embed=embed, view=view)
-                except (discord.Forbidden, discord.HTTPException):
+                    message = await dtimeout(channel.send(embed=embed, view=view))
+                except SKIP_EXC:
                     return
             else:
                 try:
-                    await message.edit(embed=embed, view=view)
-                except (discord.Forbidden, discord.HTTPException):
+                    await dtimeout(message.edit(embed=embed, view=view))
+                except SKIP_EXC:
                     return
 
         _massinfo_message_ids[guild.id] = message.id

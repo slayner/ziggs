@@ -22,6 +22,7 @@ import discord
 from discord.ext import commands
 
 import http_client
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -193,8 +194,8 @@ class Lootlogs(commands.Cog):
         if lootlog_chan is None or parent_id != lootlog_chan:
             return
         try:
-            await message.delete()
-        except (discord.Forbidden, discord.HTTPException):
+            await dtimeout(message.delete())
+        except SKIP_EXC:
             pass
 
 

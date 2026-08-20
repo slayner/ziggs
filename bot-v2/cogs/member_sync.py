@@ -23,7 +23,7 @@ _SYNC_TIMEOUT = 120  # segundos por guilda (fetch members + POST)
 
 async def _post(path: str, body: dict) -> Optional[dict]:
     return await http_client.post_json(
-        path, body, tag="member_sync", attempts=2, queue_on_failure=False,
+        path, body, tag="member_sync", attempts=2, queue_on_failure=True,
     )
 
 

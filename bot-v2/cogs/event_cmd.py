@@ -10,6 +10,7 @@ refinável por cargo no painel de permissões.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -687,6 +688,12 @@ class EventCmd(commands.Cog):
                 return
             await inter.followup.send(
                 t(lang, "ev_finalize_done", ev=_event_label(ev, lang)), ephemeral=True)
+            # Dispara a criação do embed/thread de revisão imediatamente — sem
+            # depender do embed_work_loop (que pode estar wedge processando
+            # dezenas de embeds em série). O loop cobre no próximo tick se isto
+            # falhar; isto cobre o caso comum (evento novo, loop ocupado).
+            from cogs.event_embeds import _trigger_embed_refresh
+            asyncio.create_task(_trigger_embed_refresh(inter.client, inter.guild, ev["id"]))
 
         await interaction.response.send_message(
             t(lang, "ev_pick_event"),

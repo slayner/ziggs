@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands, tasks
 
 import http_client
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 
 
 GUILD_ID = int(os.getenv("PROFILE_MODERATION_GUILD_ID", "0") or 0)
@@ -56,11 +57,11 @@ class ProfileModerationView(discord.ui.View):
             )
         for attempt in range(3):
             try:
-                await message.edit(embed=embed, view=None)
+                await dtimeout(message.edit(embed=embed, view=None))
                 return
             except discord.NotFound:
                 return
-            except (discord.Forbidden, discord.HTTPException) as error:
+            except SKIP_EXC as error:
                 if attempt == 2:
                     print(f"[profile_moderation] não consegui finalizar mensagem {message.id}: {error}")
                     return
@@ -97,9 +98,9 @@ class ProfileModerationView(discord.ui.View):
                 if int(message_id) == interaction.message.id:
                     continue
                 try:
-                    sibling = await interaction.channel.fetch_message(int(message_id))
+                    sibling = await dtimeout(interaction.channel.fetch_message(int(message_id)))
                     await self._finalize(sibling, False, member)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                except SKIP_EXC:
                     pass
         await interaction.followup.send("Decisão aplicada.", ephemeral=True)
 
@@ -155,18 +156,18 @@ class ProfileModeration(commands.Cog):
         )
         embed.set_image(url=f"attachment://{filename}")
         embed.set_footer(text=f"submission:{item['id']}")
-        message = await channel.send(
+        message = await dtimeout(channel.send(
             embed=embed,
             file=discord.File(io.BytesIO(data), filename=filename),
             view=ProfileModerationView(),
-        )
+        ))
         bound = await http_client.post_json(
             f"/bot/profile-moderation/{item['id']}/message",
             {"message_id": message.id}, tag="profile_moderation",
             attempts=2, queue_on_failure=False,
         )
         if bound is None:
-            await message.delete()
+            await dtimeout(message.delete())
 
     @tasks.loop(seconds=10)
     async def poll(self) -> None:
@@ -181,7 +182,7 @@ class ProfileModeration(commands.Cog):
             try:
                 message_id = item.get("discord_message_id")
                 if message_id:
-                    await channel.fetch_message(int(message_id))
+                    await dtimeout(channel.fetch_message(int(message_id)))
                     continue
                 await self._post(channel, item)
             except discord.NotFound:
@@ -190,7 +191,7 @@ class ProfileModeration(commands.Cog):
                     {"message_id": None}, tag="profile_moderation",
                     queue_on_failure=False,
                 )
-            except (discord.Forbidden, discord.HTTPException) as error:
+            except SKIP_EXC as error:
                 print(f"[profile_moderation] Discord: {type(error).__name__}: {error}")
 
     @poll.before_loop

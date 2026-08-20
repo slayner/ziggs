@@ -17,6 +17,7 @@ from discord import app_commands, Interaction
 from discord.ext import commands, tasks
 
 import http_client
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config, guild_lang_for
 from i18n import t
 
@@ -488,19 +489,19 @@ class Nodes(commands.Cog):
         message = None
         if message_id:
             try:
-                message = await channel.fetch_message(message_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                message = await dtimeout(channel.fetch_message(message_id))
+            except SKIP_EXC:
                 message = None
 
         if message is None:
             try:
-                message = await channel.send(embed=embed, view=view)
-            except (discord.Forbidden, discord.HTTPException):
+                message = await dtimeout(channel.send(embed=embed, view=view))
+            except SKIP_EXC:
                 return
         else:
             try:
-                await message.edit(embed=embed, view=view)
-            except (discord.Forbidden, discord.HTTPException):
+                await dtimeout(message.edit(embed=embed, view=view))
+            except SKIP_EXC:
                 return
 
         self._calendar_msg[guild.id] = message.id

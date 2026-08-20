@@ -44,7 +44,7 @@ async def forfeit_loop(cog: ForfeitCog) -> None:
         try:
             data = await http_client.post_json(
                 f"/bot/economy/forfeit-due/{guild.id}",
-                {}, tag="forfeit", attempts=2, queue_on_failure=False,
+                {}, tag="forfeit", attempts=2, queue_on_failure=True,
             )
             forfeited = data.get("forfeited") or [] if data else []
             if not forfeited:

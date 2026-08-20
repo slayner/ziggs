@@ -2,12 +2,14 @@
 import asyncio
 import io
 import os
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 import discord
 from discord.ext import commands, tasks
 
 import http_client
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config
 
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
@@ -104,13 +106,49 @@ async def _history_kill_ids(channel, bot_id: int) -> set[int]:
     return found
 
 
+async def _history_last_kill_ts(channel, bot_id: int) -> datetime | None:
+    """Lê o timestamp da kill mais recente já postada no canal (cross-restart
+    dedup). Procura o footer marker (ziggs:juicy-kill:N) nas últimas 200
+    mensagens e devolve o timestamp da mais nova. Usado no 1º poll após o bot
+    subir, quando o watermark local (memória) está vazio."""
+    try:
+        async for message in channel.history(limit=200):
+            if message.author.id != bot_id:
+                continue
+            if not message.embeds or not message.embeds[0].footer.text:
+                continue
+            # Footer: "SITE_URL · ziggs:juicy-kill:N [· API delay ...]"
+            footer = message.embeds[0].footer.text
+            _, sep, marker = footer.rpartition(JUICY_MARKER)
+            if not sep or not marker.isdigit():
+                continue
+            # O timestamp do post ≈ timestamp da kill (postamos em ordem cronológica).
+            # Usar message.created_at (UTC) como proxy do watermark é conservador:
+            # mata tudo postado até aquele instante, evitando re-post no restart.
+            return message.created_at or None
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    return None
+
+
+def _parse_ts(ts: str | None) -> datetime | None:
+    """ISO string -> datetime aware UTC, ou None."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 _cog_ref: "JuicyKills | None" = None
 
 
 class JuicyKills(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._sent: dict[int, int] = {}
+        self._watermarks: dict[int, datetime] = {}
         self._locks: dict[int, asyncio.Lock] = {}
 
     async def cog_load(self) -> None:
@@ -125,44 +163,70 @@ class JuicyKills(commands.Cog):
     async def sync_guild(self, guild: discord.Guild) -> None:
         lock = self._locks.setdefault(guild.id, asyncio.Lock())
         async with lock:
-            cfg = await _guild_command_config(guild.id)
-            channel_id = cfg.get("juicy_kill_channel_id")
-            channel = guild.get_channel(int(channel_id)) if channel_id else None
-            if channel is None:
-                return
-            data = await http_client.get_json(
-                f"/bot/guilds/{guild.id}/juicy-kill/queue", tag="juicy_kills",
-            )
-            kills = (data or {}).get("kills") or []
-            last_id = None
-            for kill in kills:
-                if kill["id"] <= self._sent.get(guild.id, 0):
-                    last_id = kill["id"]
-                    self._sent[guild.id] = last_id
-                    continue
-                image = await http_client.get_bytes(
-                    f"/bot/guilds/{guild.id}/juicy-kill/{kill['id']}/image",
-                    timeout=30, tag="juicy_kills",
-                )
-                if image is None or len(image) > guild.filesize_limit:
-                    break
-                filename = f"juicy-kill-{kill['id']}.png"
-                try:
-                    await channel.send(
-                        embed=_build_embed(kill, filename),
-                        file=discord.File(io.BytesIO(image), filename=filename),
-                    )
-                except (discord.Forbidden, discord.HTTPException):
-                    break
-                last_id = kill["id"]
-                self._sent[guild.id] = last_id
+            await self._sync_guild_unlocked(guild)
 
-            if last_id is not None:
-                await http_client.post_json(
-                    f"/bot/guilds/{guild.id}/juicy-kill/synced",
-                    {"last_id": last_id}, tag="juicy_kills", attempts=2,
-                    queue_on_failure=False,
-                )
+    async def _sync_guild_unlocked(self, guild: discord.Guild) -> None:
+        cfg = await _guild_command_config(guild.id)
+        channel_id = cfg.get("juicy_kill_channel_id")
+        if not channel_id:
+            return
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            return
+
+        data = await http_client.get_json(
+            f"/bot/guilds/{guild.id}/juicy-kill/queue", tag="juicy_kills",
+        )
+        kills = (data or {}).get("kills") or []
+        if not kills:
+            return
+
+        # Watermark local: mata kills já postadas (dedup cross-restart).
+        # Backend já filtra por watermark, mas mantemos um local também pra
+        # tolerar race (poll pegou kills, bot reinicia antes de ackar, próximo
+        # poll rebusca as mesmas — o watermark local evita re-post duplo).
+        wm = self._watermarks.get(guild.id)
+        if wm is None:
+            # 1º poll após restart: watermark local está vazio. Lê o histórico
+            # do canal pra descobrir o último timestamp postado e usar como
+            # watermark — sem isso, kills postadas mas não ackadas (bot caiu
+            # antes de chamar /synced) seriam re-postadas no próximo ciclo.
+            bot_user = getattr(self.bot, "user", None)
+            bot_id = bot_user.id if bot_user else 0
+            hist_ts = await _history_last_kill_ts(channel, bot_id)
+            if hist_ts is not None:
+                self._watermarks[guild.id] = hist_ts
+                wm = hist_ts
+        last_ts = None
+        for kill in kills:
+            ts = _parse_ts(kill.get("timestamp"))
+            if ts is None:
+                continue
+            if wm is not None and ts <= wm:
+                continue
+            image = await http_client.get_bytes(
+                f"/bot/guilds/{guild.id}/juicy-kill/{kill['id']}/image",
+                timeout=30, tag="juicy_kills",
+            )
+            if image is None or len(image) > guild.filesize_limit:
+                break
+            filename = f"juicy-kill-{kill['id']}.png"
+            try:
+                await dtimeout(channel.send(
+                    embed=_build_embed(kill, filename),
+                    file=discord.File(io.BytesIO(image), filename=filename),
+                ))
+            except SKIP_EXC:
+                break
+            last_ts = ts
+            self._watermarks[guild.id] = ts
+
+        if last_ts is not None:
+            await http_client.post_json(
+                f"/bot/guilds/{guild.id}/juicy-kill/synced",
+                {"last_ts": last_ts.isoformat()}, tag="juicy_kills", attempts=2,
+                queue_on_failure=True,
+            )
 
 
 @tasks.loop(seconds=30)

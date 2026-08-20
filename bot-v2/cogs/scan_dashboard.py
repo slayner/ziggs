@@ -13,6 +13,7 @@ import discord
 from discord.ext import commands, tasks
 
 import http_client
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 
 DASH_CHANNEL_ID = 1535135345874567279
 REFRESH_SECS = 30
@@ -59,6 +60,7 @@ def _build_embed(data: dict) -> discord.Embed:
     workers = data.get("workers") or []
     tasks_d = data.get("tasks") or {}
     alerts = data.get("alerts") or []
+    processing = data.get("processing") or {}
 
     any_critical = any(v.get("status") == "critical" for v in sla.values())
     any_warn = any(v.get("status") == "at_risk" for v in sla.values())
@@ -85,6 +87,24 @@ def _build_embed(data: dict) -> discord.Embed:
             ckt = circuits.get(key) or {}
             lines.append(f"**{label}** {_stream_line(s, ckt)}")
         embed.add_field(name=f"{flag} {region.title()}", value="\n".join(lines), inline=True)
+
+    # ── Processamento de batalhas (light vs deep) ──
+    proc_lines: list[str] = []
+    total_light = 0
+    total_deep = 0
+    for region, flag in (("americas", "🌎"), ("europe", "🌍"), ("asia", "🌏")):
+        p = processing.get(region) or {}
+        light = p.get("light", 0)
+        deep = p.get("deep", 0)
+        total_light += light
+        total_deep += deep
+        pct = round(deep / (light + deep) * 100) if (light + deep) > 0 else 100
+        proc_lines.append(f"{flag} `{deep}` deep · `{light}` light · {pct}%")
+    embed.add_field(
+        name=f"⚙️ Processamento ({total_deep} prontas · {total_light} pendentes)",
+        value="\n".join(proc_lines),
+        inline=False,
+    )
 
     # ── Incidentes ──
     incident_lines: list[str] = []
@@ -174,14 +194,14 @@ class ScanDashboard(commands.Cog):
     async def _find_dashboard(self, channel: discord.TextChannel) -> Optional[discord.Message]:
         if self._dashboard_msg_id is not None:
             try:
-                return await channel.fetch_message(self._dashboard_msg_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return await dtimeout(channel.fetch_message(self._dashboard_msg_id))
+            except SKIP_EXC:
                 pass
         try:
             async for m in channel.history(limit=20):
                 if m.author.id == self.bot.user.id and m.embeds and m.embeds[0].title == EMBED_TITLE:
                     return m
-        except (discord.Forbidden, discord.HTTPException):
+        except SKIP_EXC:
             pass
         return None
 
@@ -190,10 +210,10 @@ class ScanDashboard(commands.Cog):
         old = await self._find_dashboard(channel)
         if old is not None:
             try:
-                await old.delete()
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                await dtimeout(old.delete())
+            except SKIP_EXC:
                 pass
-        msg = await channel.send(content=content, embed=embed)
+        msg = await dtimeout(channel.send(content=content, embed=embed))
         self._dashboard_msg_id = msg.id
         self._msg_is_ping = bool(content)
 
@@ -211,12 +231,12 @@ class ScanDashboard(commands.Cog):
         try:
             msg = await self._find_dashboard(channel)
             if msg is None:
-                msg = await channel.send(embed=embed)
+                msg = await dtimeout(channel.send(embed=embed))
                 self._dashboard_msg_id = msg.id
                 self._msg_is_ping = False
             else:
-                await msg.edit(embed=embed)
-        except (discord.Forbidden, discord.HTTPException) as e:
+                await dtimeout(msg.edit(embed=embed))
+        except SKIP_EXC as e:
             print(f"[scan_dashboard] erro: {e}")
 
 

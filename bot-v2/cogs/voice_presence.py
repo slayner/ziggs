@@ -40,8 +40,12 @@ async def _get(path: str) -> Optional[dict]:
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:
+    # queue_on_failure=True: o payload já carrega o timestamp `at`, então um
+    # replay tardio registra o momento correto do snapshot, não "agora". Sem
+    # isso, snapshots perdidos durante queda do backend somem pra sempre e o
+    # total_snapshots fica baixo, inflando a % de presença de todo mundo.
     return await http_client.post_json(
-        path, body, tag="voice_presence", attempts=2, queue_on_failure=False,
+        path, body, tag="voice_presence", attempts=2, queue_on_failure=True,
     )
 
 
@@ -118,7 +122,10 @@ class VoicePresence(commands.Cog):
 
 @tasks.loop(seconds=30)
 async def snapshot_loop(cog: "VoicePresence") -> None:
-    for guild in cog.bot.guilds:
+    # Paralelo como event_work_loop e heartbeat_loop: guilds independentes,
+    # e o fetch_channel de uma não pode wedged a outra. return_exceptions
+    # garante que uma exceção não mata as outras.
+    async def _one(guild: discord.Guild) -> None:
         try:
             async with asyncio.timeout(_SNAPSHOT_TIMEOUT):
                 await cog._snapshot_guild(guild)
@@ -127,6 +134,7 @@ async def snapshot_loop(cog: "VoicePresence") -> None:
                   f"{_SNAPSHOT_TIMEOUT}s — cancelando wedge, próximo tick repete")
         except Exception as e:
             print(f"[voice_presence] erro no loop ({guild.id}): {type(e).__name__}: {e}")
+    await asyncio.gather(*(_one(g) for g in cog.bot.guilds), return_exceptions=True)
 
 
 @snapshot_loop.before_loop
