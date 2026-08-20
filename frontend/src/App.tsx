@@ -398,7 +398,7 @@ export default function App() {
           </div>
           {page}
         </div>
-        <SiteFooter t={t} />
+      {!eventRoute && !publicEventRoute && <SiteFooter t={t} />}
       </div>
     );
   }
@@ -432,7 +432,7 @@ export default function App() {
 
   const URL_VIEWS: Set<string> = new Set(["battles", "highscores", "craft"]);
   const nb = (v: View, icon: string, label: string) => (
-    <button className={!battleRoute && !playerRoute && !guildRoute && view === v ? "active" : ""} onClick={() => { if (companionActive) navigate("/"); setView(v); if (URL_VIEWS.has(v)) navigateReplace(`/?view=${v}`); }}>
+    <button className={!battleRoute && !playerRoute && !guildRoute && !eventRoute && !publicEventRoute && !regearRoute && view === v ? "active" : ""} onClick={() => { navigate("/"); setView(v); if (URL_VIEWS.has(v)) navigateReplace(`/?view=${v}`); }}>
       <i className={`ti ${icon}`} aria-hidden="true" /> {label}
     </button>
   );
@@ -800,7 +800,11 @@ export default function App() {
             </div>
           )}
           {serverQuickSwitch}
-          {userMenu}
+          {publicEventRoute && !loggedIn ? (
+            <a className="btn btn-discord" href={`/auth/discord/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`}>
+              <i className="ti ti-brand-discord" /> {t("loginDiscord")}
+            </a>
+          ) : userMenu}
         </div>
       </div>
 
@@ -814,7 +818,7 @@ export default function App() {
       {/* Política do AdSense: sem anúncio em telas de navegação/fluxo
           comportamental (seleção de guilda, login, setup inicial) — só em
           páginas de conteúdo. "craft" tem o próprio banner na rail. */}
-      {view !== "craft" && !pickingGuild && !(view === "management" && (!loggedIn || needsSetup)) && !(view === "config" && (!loggedIn || needsSetup)) && (
+      {view !== "craft" && !pickingGuild && !(view === "management" && (!loggedIn || needsSetup)) && !(view === "config" && (!loggedIn || needsSetup)) && !eventRoute && !publicEventRoute && (
         <div style={{ padding: "10px 16px 0" }}>
           <AdBanner key={`top-${view}`} slot={`top-${view}`} variant="leaderboard" mobileVariant="mobileBanner" />
         </div>
@@ -872,7 +876,7 @@ export default function App() {
       </Suspense>
       </ErrorBoundary>
       </div>
-      <SiteFooter t={t} />
+      {!eventRoute && !publicEventRoute && <SiteFooter t={t} />}
       <CookieConsent />
     </div>
   );

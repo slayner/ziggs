@@ -8,18 +8,31 @@ const CompBuilder = lazy(() => import("./CompBuilder"));
 const EventsPage = lazy(() => import("./EventsPage"));
 const RegearPage = lazy(() => import("./RegearPage"));
 const ReconcileSection = lazy(() => import("./ReconcileSection"));
+const AuditLogConsole = lazy(() => import("./AuditLogConsole"));
+const MemberPanel = lazy(() => import("./MemberPanel"));
+const MemberEvents = lazy(() => import("./MemberEvents"));
+const MemberComps = lazy(() => import("./MemberComps"));
+const EnergyAdmin = lazy(() => import("./EnergyAdmin"));
 
 interface Props { guildId?: string; perms: Permissions; active?: boolean; empty?: ReactNode }
 
-type Tab = "comps" | "events" | "regear" | "reconcile";
+type Tab = "meu" | "m_events" | "m_comps" | "comps" | "events" | "regear" | "reconcile" | "logs" | "energy";
 
-// "comps" sempre aparece (comps.view) — pode ser configurado antes do bot/events
-// estarem ativos. events/regear/reconcile dependem de eventsActive.
+// Abas member-facing ("meu", "m_events", "m_comps") são visíveis a qualquer
+// membro logado, MAS as de eventos/comps read-only são escondidas quando o
+// usuário já tem a permissão admin correspondente (events.view ou comps.view)
+// — pra ele a versão admin é a certa, não a duplicata read-only. "meu" sempre
+// aparece. "energy" exige energy.manage. As abas admin legadas mantêm gates.
 const TABS: { id: Tab; icon: string; label: TKey; desc: TKey; show: (p: Permissions, eventsActive: boolean) => boolean }[] = [
+  { id: "meu",       icon: "ti-user",            label: "memberPanel", desc: "managementMeDesc", show: () => true },
+  { id: "m_events",  icon: "ti-calendar-event",  label: "memberEventsLabel", desc: "managementMemberEventsDesc", show: p => !p["events.view"] },
+  { id: "m_comps",   icon: "ti-layout-grid",     label: "memberCompsLabel", desc: "managementMemberCompsDesc", show: p => !p["comps.view"] },
   { id: "comps",     icon: "ti-layout-grid",     label: "comps",  desc: "managementCompsDesc", show: p => p["comps.view"] },
   { id: "events",    icon: "ti-calendar-event",  label: "events", desc: "managementEventsDesc", show: p => p["events.view"] },
   { id: "regear",    icon: "ti-receipt-refund",  label: "regear", desc: "managementRegearDesc", show: (p, ev) => p["events.manage"] && ev },
   { id: "reconcile", icon: "ti-scale",           label: "rec",    desc: "managementReconcileDesc", show: (p, ev) => p["events.manage"] && ev },
+  { id: "energy",   icon: "ti-bolt",             label: "energyAdminLabel", desc: "managementEnergyDesc", show: p => !!p["energy.manage"] },
+  { id: "logs",      icon: "ti-terminal-2",      label: "managementLogs", desc: "managementLogsDesc", show: p => p["guild.admin"] },
 ];
 
 export default function ManagementPage({ guildId, perms, active = true, empty }: Props) {
@@ -110,7 +123,8 @@ export default function ManagementPage({ guildId, perms, active = true, empty }:
           </div>
         )}
         <div className="management-workspace">
-          {!hideTabs && activeMeta && (
+          {/* Logs: o console já tem header próprio — sem quadrante de título redundante */}
+          {!hideTabs && activeMeta && activeTab !== "logs" && (
             <div className="management-workspace-head">
               <span><i className={`ti ${activeMeta.icon}`} aria-hidden="true" /></span>
               <div><small>{t("managementWorkspace")}</small><h2>{t(activeMeta.label)}</h2></div>
@@ -123,10 +137,15 @@ export default function ManagementPage({ guildId, perms, active = true, empty }:
             if (!(activeTab === tb.id || visited.has(tb.id))) return null;
             return (
               <div key={tb.id} style={activeTab === tb.id ? undefined : { display: "none" }}>
+                {tb.id === "meu" && <MemberPanel guildId={guildId!} />}
+                {tb.id === "m_events" && <MemberEvents guildId={guildId!} />}
+                {tb.id === "m_comps" && <MemberComps guildId={guildId!} />}
                 {tb.id === "comps" && <CompBuilder perms={perms} onOpenChange={setCompOpen} />}
                 {tb.id === "events" && <EventsPage perms={perms} active={active && activeTab === tb.id} />}
                 {tb.id === "regear" && <RegearPage guildId={guildId!} active={active && activeTab === tb.id} />}
                 {tb.id === "reconcile" && <ReconcileSection guildId={guildId!} />}
+                {tb.id === "energy" && <EnergyAdmin guildId={guildId!} />}
+                {tb.id === "logs" && <AuditLogConsole guildId={guildId!} active={active && activeTab === tb.id} />}
               </div>
             );
           })}

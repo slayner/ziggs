@@ -445,18 +445,35 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
   const isKill = ev.kind === "kill";
   const color = isKill ? "text-blue-400" : "text-red-400";
   const borderColor = isKill ? "#60a5fa" : "#f87171";
-  const ownWeapon = ev.equipment.MainHand;
-  const otherWeapon = ev.other_equipment.MainHand;
-  const ownWeaponId = ownWeapon?.Type ?? NO_WEAPON_ICON_ID;
-  const otherWeaponId = otherWeapon?.Type ?? NO_WEAPON_ICON_ID;
+
+  // Killer sempre à esquerda, vítima sempre à direita — independente de quem
+  // é o dono do perfil. Num kill, o dono é o killer; numa death, o dono é a
+  // vítima. Swap dos lados quando é death.
+  const killerName = isKill ? profileName : (ev.other_name ?? "?");
+  const killerGuild = isKill ? profileGuild : ev.other_guild_name;
+  const killerAlliance = isKill ? null : ev.other_alliance_name;
+  const killerEquipment = isKill ? ev.equipment : ev.other_equipment;
+  const victimName = isKill ? (ev.other_name ?? "?") : profileName;
+  const victimGuild = isKill ? ev.other_guild_name : profileGuild;
+  const victimAlliance = isKill ? ev.other_alliance_name : null;
+  const victimEquipment = isKill ? ev.other_equipment : ev.equipment;
+
+  const killerWeapon = killerEquipment.MainHand;
+  const victimWeapon = victimEquipment.MainHand;
+  const killerWeaponId = killerWeapon?.Type ?? NO_WEAPON_ICON_ID;
+  const victimWeaponId = victimWeapon?.Type ?? NO_WEAPON_ICON_ID;
   const [time, date] = timeOverDate(ev.timestamp);
   const silverDropped = ev.silver_dropped ?? 0;
   const isJuicy = silverDropped >= JUICY_SILVER_THRESHOLD;
 
   const prefix = REGION_PREFIX[region];
+  // O "outro" (não-dono do perfil) é quem tem link de navegação
   const goToOther = ev.other_name && prefix
     ? (e: React.MouseEvent) => { e.stopPropagation(); navigate(`/${prefix}/${encodeURIComponent(ev.other_name!)}`); }
     : undefined;
+  // O link vai no nome do "other" — que pode ser killer (death) ou victim (kill)
+  const killerOnClick = isKill ? undefined : goToOther;
+  const victimOnClick = isKill ? goToOther : undefined;
 
   return (
     <div
@@ -467,9 +484,9 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
     >
       {/* div (não button) porque o nome do oponente já é um botão clicável aninhado */}
       <div role="button" tabIndex={0} onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-3 px-3 py-2.5 text-left cursor-pointer">
-        <img src={itemRenderUrl(ownWeaponId, ownWeapon?.Quality ?? 0)} alt="" title={ownWeapon ? ownWeapon.Type : t("noWeaponEquipped")} width={28} height={28} className="shrink-0" />
+        <img src={itemRenderUrl(killerWeaponId, killerWeapon?.Quality ?? 0)} alt="" title={killerWeapon ? killerWeapon.Type : t("noWeaponEquipped")} width={28} height={28} className="shrink-0" />
 
-        <NameGuildBlock name={profileName} guild={profileGuild} />
+        <NameGuildBlock name={killerName} guild={killerGuild} alliance={killerAlliance} onClick={killerOnClick} />
 
         <span className="w-12 shrink-0 flex flex-col items-center leading-tight">
           <span className="text-[11px] font-medium text-zinc-300 tabular-nums">{time}</span>
@@ -477,23 +494,27 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
         </span>
 
         <NameGuildBlock
-          name={ev.other_name ?? "?"}
-          guild={ev.other_guild_name}
-          alliance={ev.other_alliance_name}
-          onClick={goToOther}
+          name={victimName}
+          guild={victimGuild}
+          alliance={victimAlliance}
+          onClick={victimOnClick}
         />
 
-        <img src={itemRenderUrl(otherWeaponId, otherWeapon?.Quality ?? 0)} alt="" title={otherWeapon ? otherWeapon.Type : t("noWeaponEquipped")} width={28} height={28} className="shrink-0" />
+        <img src={itemRenderUrl(victimWeaponId, victimWeapon?.Quality ?? 0)} alt="" title={victimWeapon ? victimWeapon.Type : t("noWeaponEquipped")} width={28} height={28} className="shrink-0" />
       </div>
       {open && (
         <div className="flex items-center justify-between gap-4 border-t border-zinc-800 px-3 py-3">
-          <EquipMini equipment={ev.equipment} />
+          <EquipMini equipment={killerEquipment} />
           <div className="flex shrink-0 flex-col items-center gap-1.5 text-center">
             <div className={`text-sm font-semibold tabular-nums ${color}`}>{silver(ev.fame)}</div>
+            <div className="text-[10px] text-zinc-600">fame</div>
             {silverDropped > 0 && (
-              <div className={`text-xs tabular-nums ${isJuicy ? "text-amber-400 font-bold" : "text-zinc-500"}`}>
-                {silver(silverDropped)} <span className="text-[10px] text-zinc-600">prata</span>
-              </div>
+              <>
+                <div className={`text-xs tabular-nums ${isJuicy ? "text-amber-400 font-bold" : "text-zinc-500"}`}>
+                  {silver(silverDropped)}
+                </div>
+                <div className="text-[10px] text-zinc-600">prata dropada</div>
+              </>
             )}
             {ev.battle_public_id ? (
               <button onClick={() => navigate(`/${ev.battle_public_id}`)} className="hover:opacity-80 transition-opacity">
@@ -508,7 +529,7 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
             ) : null}
 
           </div>
-          <EquipMini equipment={ev.other_equipment} />
+          <EquipMini equipment={victimEquipment} />
         </div>
       )}
     </div>

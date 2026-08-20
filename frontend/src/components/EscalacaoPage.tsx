@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, Fragment } from "react";
-import { api, type Me, type EscalationOut, type EscalationRole, type RegearItem } from "../api";
-import { useT, useLang, itemLocalName, type Lang } from "../i18n";
-import { itemRenderUrl, ITEM_BY_ID } from "../data/albion-items";
+import { api, type Me, type EscalationOut, type EscalationRole, type EscalationSlot, type EscalationSignup, type RegearItem } from "../api";
+import { useT, useLang, itemLocalName, type Lang, type TKey } from "../i18n";
+import { itemRenderUrl, ITEM_BY_ID, is2H } from "../data/albion-items";
+import { EquipGrid } from "./comp/EquipGrid";
+import { buildItemsToEquip, itemUrl } from "./comp/helpers";
+import AdBanner from "./AdBanner";
 
 interface Props {
   token?: string;
@@ -15,6 +18,12 @@ interface FlexPick {
   userId: number;
   userName: string | null;
   roles: EscalationRole[];
+}
+
+// Detalhe aberto pelo bracket do jogador escalado (manager e read-only).
+interface Detail {
+  userName: string | null;
+  role: EscalationRole;
 }
 
 const NA = "—";
@@ -38,15 +47,6 @@ function parseDragPayload(raw: string): { origin: DragOrigin; userId: number } |
 
 // Ordem dos tipos de equipamento na coluna Build (arma primeiro).
 const BUILD_ORDER = ["weapon", "offhand", "helmet", "armor", "boots", "cape", "food"];
-
-// Colapso responsivo por cobertura: a página é centrada com o painel colado à
-// direita de price (sem gap). Quando a página encolhe e o bloco não cabe, o
-// painel vira overlay e "cobre" as colunas da direita; uma coluna só colapsa
-// quando está 100% coberta (left da coluna >= left do painel). build é a parede:
-// o painel nunca passa da direita de build. Índice 0-based do <th>: #(0) role(1)
-// player(2) build(3) style(4) obs(5) price(6).
-const COLLAPSE_ORDER = ["obs", "style"] as const;
-const TH_INDEX: Record<string, number> = { build: 3, style: 4, obs: 5 };
 
 type BuildImg = { item_id: string; name: string; quality: number; alt: boolean; slot: string };
 type BuildGroup = { slotType: string; items: BuildImg[] };
@@ -86,57 +86,19 @@ function localName(bi: { item_id: string; name: string }, lang: Lang): string {
   return it ? itemLocalName(it, lang) : bi.name;
 }
 
-// --- Skills (expansão da bracket de jogador escalado) ---
+// --- Skills (bloco do modal de detalhe) ---
 function spellUrl(id: string): string {
   return `/render/spell/${encodeURIComponent(id)}`;
 }
 
-const GEAR_GROUP_ORDER = ["helmet", "armor", "boots", "cape", "offhand", "food"];
-const SLOT_ORDER = ["Q", "W", "E", "R", "passive", "active"];
-const slotRank = (s: string) => { const i = SLOT_ORDER.indexOf(s); return i < 0 ? 99 : i; };
-
-// Agrupa gear_spells por item (helmet, helmet_alt_0, ...). Cada grupo vira um
-// bloco com as skills escolhidas daquele item (incluindo alternativos).
-function gearSpellGroups(role: EscalationRole): { groupKey: string; spells: { slotName: string; spellId: string }[] }[] {
-  const map = new Map<string, { slotName: string; spellId: string }[]>();
-  for (const [key, val] of Object.entries(role.gear_spells ?? {})) {
-    if (!val) continue;
-    const idx = key.lastIndexOf("_");
-    if (idx <= 0) continue;
-    const groupKey = key.slice(0, idx);
-    const slotName = key.slice(idx + 1);
-    (map.get(groupKey) ?? map.set(groupKey, []).get(groupKey)!).push({ slotName, spellId: val });
-  }
-  return [...map.entries()].map(([groupKey, spells]) => {
-    spells.sort((a, b) => slotRank(a.slotName) - slotRank(b.slotName));
-    return { groupKey, spells };
-  }).sort((a, b) => {
-    const baseA = a.groupKey.split("_alt_")[0], baseB = b.groupKey.split("_alt_")[0];
-    const ca = GEAR_GROUP_ORDER.indexOf(baseA), cb = GEAR_GROUP_ORDER.indexOf(baseB);
-    if ((ca < 0 ? 99 : ca) !== (cb < 0 ? 99 : cb)) return (ca < 0 ? 99 : ca) - (cb < 0 ? 99 : cb);
-    return a.groupKey.localeCompare(b.groupKey);
-  });
-}
-
-function weaponSpellsOf(role: EscalationRole): { slotName: string; spellId: string }[] {
-  const out: { slotName: string; spellId: string }[] = [];
-  if (role.q_spell) out.push({ slotName: "Q", spellId: role.q_spell });
-  if (role.w_spell) out.push({ slotName: "W", spellId: role.w_spell });
-  if (role.passive_spell) out.push({ slotName: "passive", spellId: role.passive_spell });
-  return out;
-}
-
 // Render único da build (grupos por tipo, imagens, alts menores). Reusado na
-// célula Build (slot de 1 role ou flex já escolhida) e no modal flex (uma build
-// por botão) e na pilha "OU" (slot flex sem ninguém escalado).
+// pilha "OU" do slot flex vazio.
 function BuildImgs({ r, lang }: { r: EscalationRole; lang: Lang }) {
   const groups = buildGroups(r);
   if (groups.length === 0) return <span className="cs-empty">{NA}</span>;
   return (
     <div className="cs-build">
       {groups.map((g, i) => {
-        // Sem separador entre arma e offhand — formam uma unidade (mão principal
-        // + secundária). Nos demais pares mantém o divisor vertical.
         const prev = groups[i - 1];
         const showSep = i > 0 && !(prev.slotType === "weapon" && g.slotType === "offhand");
         return (
@@ -155,46 +117,34 @@ function BuildImgs({ r, lang }: { r: EscalationRole; lang: Lang }) {
   );
 }
 
-function SpellImg({ spellId, slotName }: { spellId: string; slotName: string }) {
-  return (
-    <img
-      className="esc-spell-img"
-      src={spellUrl(spellId)}
-      title={`${slotName}: ${spellId}`}
-      alt={spellId}
-      onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }}
-    />
-  );
+
+
+// fn_key espelha o backend (event_gates.fn_key) — casefold + collapse whitespace,
+// fallback "other". Usado só pra casar pair keys do signup com pair keys do slot.
+function fnKey(fn: string | null | undefined): string {
+  const parts = (fn ?? "").toLowerCase().trim().split(/\s+/).filter(Boolean);
+  return parts.length ? parts.join(" ") : "other";
+}
+function pairKey(weaponId: number, fn: string | null | undefined): string {
+  return `w${weaponId}:${fnKey(fn)}`;
 }
 
-// Bloco de skills renderizado inline (na expansão da linha do próprio usuário).
-function SkillsDetail({ role, lang }: { role: EscalationRole; lang: Lang }) {
-  const weapon = weaponSpellsOf(role);
-  const gear = gearSpellGroups(role);
-  return (
-    <div>
-      <div className="cs-detail-skill-group">
-        <span className="cs-detail-skill-sub">{role.weapon_name || "Arma"}</span>
-        <div className="esc-skills-row">
-          {weapon.length === 0 ? <span className="hint">{NA}</span>
-            : weapon.map(s => <SpellImg key={s.spellId} spellId={s.spellId} slotName={s.slotName} />)}
-        </div>
-      </div>
-      {gear.map(g => {
-        const item = role.build_items.find(bi => bi.slot === g.groupKey);
-        const label = item ? localName(item, lang) : g.groupKey;
-        const isAlt = g.groupKey.includes("_alt_");
-        return (
-          <div key={g.groupKey} className="cs-detail-skill-group">
-            <span className="cs-detail-skill-sub">{label}{isAlt ? " · alt" : ""}</span>
-            <div className="esc-skills-row">
-              {g.spells.map(s => <SpellImg key={g.groupKey + s.spellId + s.slotName} spellId={s.spellId} slotName={s.slotName} />)}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+// weapon_id -> item_id: deriva das roles da comp (cada role com weapon_id tem
+// build_items contendo o slot "weapon" com o item_id canônico do Albion).
+// Sem backend novo — a UI monta o mapa uma vez por render.
+function buildWeaponItemIdMap(data: EscalationOut): Map<number, string> {
+  const m = new Map<number, string>();
+  for (const p of data.parties) {
+    for (const s of p.slots) {
+      for (const r of s.roles) {
+        if (r.weapon_id != null) {
+          const w = r.build_items.find(bi => bi.slot === "weapon");
+          if (w && !m.has(r.weapon_id)) m.set(r.weapon_id, w.item_id);
+        }
+      }
+    }
+  }
+  return m;
 }
 
 export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: legacyEventId, active = true }: Props) {
@@ -204,6 +154,7 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
   const [data, setData] = useState<EscalationOut | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [flexPick, setFlexPick] = useState<FlexPick | null>(null);
+  const [detail, setDetail] = useState<Detail | null>(null);
   const [popoverSlot, setPopoverSlot] = useState<number | null>(null);
   const [autoFillBusy, setAutoFillBusy] = useState(false);
   const [undoRunId, setUndoRunId] = useState<string | null>(null);
@@ -217,11 +168,14 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
       ? api.publicEscalacao(token)
       : (legacyGuildId && legacyEventId ? api.escalacao(legacyGuildId, legacyEventId) : null);
     if (!request) return;
-    request.then(d => {
+    request.then(async d => {
+      // O token só libera leitura; controles administrativos vêm da rota protegida.
+      // Não aplica a resposta pública antes dela, ou a rail some brevemente.
+      if (token && me) {
+        try { d = await api.escalacao(d.event.guild_id, d.event.id); } catch { /* fallback público */ }
+      }
       setData(d);
       setErr(null);
-      // O token só libera leitura; controles administrativos vêm da rota protegida.
-      if (token && me) api.escalacao(d.event.guild_id, d.event.id).then(setData).catch(() => {});
     })
       .catch(async e => {
         const msg = String((e as Error)?.message ?? e);
@@ -265,7 +219,8 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
         if (token && me) {
           try { d = await api.escalacao(d.event.guild_id, d.event.id); } catch { /* permanece somente leitura */ }
         }
-        const key = d.enlisted.map(s => `${s.user_id}:${s.functions.join(",")}`).sort().join("|")
+        const key = d.enlisted.map(s => `${s.user_id}:${s.functions.join(",")}:${(s.keys ?? []).join(",")}`).sort().join("|")
+          + `|assignments:${d.assignments.map(a => `${a.slot_id}:${a.user_id}:${a.game_role_id}:${a.locked}`).sort().join(",")}`
           + `|comp:${d.event.comp_id ?? 0}|state:${d.event.state}`;
         if (key !== lastEnlistedKey.current) {
           lastEnlistedKey.current = key;
@@ -276,96 +231,6 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, token, legacyGuildId, legacyEventId, !!data]);
-
-  // ── Colapso responsivo por cobertura (painel overlay) ────────────────────────
-  // Dois modos conforme a página cabe ou não:
-  //  • WIDE  (cabe): [planilha | painel] em fluxo, centrado, painel colado à direita
-  //    de price — gap 0, sem cobertura, sem colapso. Painel é position: sticky.
-  //  • NARROW (não cabe): painel vira position: fixed cobrindo da direita. Uma
-  //    coluna só colapsa quando está 100% coberta (left da coluna >= left do painel).
-  //    build é a parede: o painel nunca passa da direita de build (clamp).
-  // Hooks antes dos early-returns (Rules of Hooks).
-  const tableRef = useRef<HTMLTableElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    const tbl = tableRef.current;            // .comp-sheet
-    const wrap = tbl?.parentElement;          // .sheet-wrap
-    const leftCol = wrap?.parentElement;      // .comp-left
-    const row = leftCol?.parentElement;       // .esc-layout
-    const panel = panelRef.current;           // .comp-right
-    if (!tbl || !row || !panel) return;
-    let raf = 0;
-    const PANEL_W = 320;
-    const recompute = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const avail = row.clientWidth;
-        const fits = tbl.offsetWidth + PANEL_W <= avail + 1;
-        row.classList.toggle("esc-narrow", !fits);
-        // Posiciona o painel direto no DOM (sem flash ao trocar de modo).
-        if (fits) {
-          panel.style.left = ""; panel.style.right = "";     // WIDE: flex posiciona
-        } else {
-          // NARROW: painel é position: fixed (viewport-relative).
-          const ths = tbl.tHead?.rows[0]?.cells;
-          const buildRight = ths && ths[TH_INDEX.build]
-            ? ths[TH_INDEX.build].getBoundingClientRect().right : 0;
-          // Parede: painel nunca passa da direita de build.
-          const panelLeft = Math.max(window.innerWidth - PANEL_W, buildRight);
-          panel.style.left = panelLeft + "px"; panel.style.right = "auto";
-        }
-        setHidden(prev => {
-          if (fits) {
-            // WIDE: sem cobertura. Restaura colunas ocultas se ainda couberem.
-            if (prev.size === 0) return prev;
-            const restore = COLLAPSE_ORDER.filter(k => prev.has(k)).slice(-1)[0];
-            if (restore) {
-              tbl.classList.remove(`hide-${restore}`);
-              if (tbl.offsetWidth + PANEL_W <= avail + 1) {
-                const t = new Set(prev); t.delete(restore); return t;
-              }
-              tbl.classList.add(`hide-${restore}`);
-            }
-            return prev;
-          }
-          // NARROW: colapso por 100% de cobertura (coordenadas viewport).
-          const ths = tbl.tHead?.rows[0]?.cells;
-          if (!ths) return prev;
-          const colLeft = (key: string) => {
-            const th = ths[TH_INDEX[key]];
-            return th ? th.getBoundingClientRect().left : Infinity;
-          };
-          const buildRight = ths[TH_INDEX.build]
-            ? ths[TH_INDEX.build].getBoundingClientRect().right : 0;
-          const panelLeft = Math.max(window.innerWidth - PANEL_W, buildRight);
-          // Colapso: primeira coluna (da direita) ainda visível e 100% coberta.
-          for (const k of COLLAPSE_ORDER) {
-            if (prev.has(k)) continue;
-            if (colLeft(k) >= panelLeft) return new Set(prev).add(k);
-            break;
-          }
-          // Restauro: a mais à esquerda das ocultas deixou de ser 100% coberta.
-          if (prev.size > 0) {
-            const restore = COLLAPSE_ORDER.filter(k => prev.has(k)).slice(-1)[0];
-            if (restore) {
-              tbl.classList.remove(`hide-${restore}`);
-              if (colLeft(restore) < panelLeft) {
-                const t = new Set(prev); t.delete(restore); return t;
-              }
-              tbl.classList.add(`hide-${restore}`);
-            }
-          }
-          return prev;
-        });
-      });
-    };
-    recompute();
-    const ro = new ResizeObserver(recompute);
-    ro.observe(row); ro.observe(tbl);
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
-  }, [data, hidden]);
 
   if (!token && me === undefined) return null;
 
@@ -404,55 +269,30 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
   const assignedBySlot = new Map(
     data.assignments.flatMap(a => a.slot_id == null ? [] : [[a.slot_id, a] as [number, typeof a]])
   );
-  // Slot onde o próprio usuário logado foi escalado (só ele vê a linha destacar
-  // e expandir com a build/skills que precisa usar).
-  const mySlotId = me ? (data.assignments.find(a => a.slot_id != null && String(a.user_id) === me.id)?.slot_id ?? null) : null;
-
-  const tableCls = "comp-sheet" + [...hidden].map(k => ` hide-${k}`).join("");
   const assignedUserIds = new Set(data.assignments.map(a => a.user_id));
-  // user_id -> functions escolhidas (pra avisar bypass)
-  const enlistedMap = new Map(data.enlisted.map(s => [s.user_id, s]));
-  // Slots vazios (sem assignment) — usado pra saber se um escalado ainda pode
-  // preencher outro role (amarelo) ou se está "completo" (verde).
-  const emptySlots = data.parties.flatMap(p => p.slots).filter(s => !assignedBySlot.get(s.id));
-  const emptySlotRoleNames = new Set(emptySlots.flatMap(s => s.roles.map(r => r.name)));
-  // user_id -> slot_id atual (pra arrastar de dentro do slot)
-  const slotByUserId = new Map<number, number>();
-  for (const a of data.assignments) { if (a.slot_id != null) slotByUserId.set(a.user_id, a.slot_id); }
+  const weaponItemId = buildWeaponItemIdMap(data);
+  // Slot onde o próprio usuário logado foi escalado (destaca a linha).
+  const mySlotId = me ? (data.assignments.find(a => a.slot_id != null && String(a.user_id) === me.id)?.slot_id ?? null) : null;
 
   // Candidatos por slot: inscritos NÃO escalados cujas funções batem com alguma
   // role do slot. Já pré-computado uma vez por render — o popover só filtra por
   // slot_id. Slot flex (várias roles) lista quem bate com qualquer uma.
-  const candidatesBySlot = new Map<number, typeof data.enlisted>();
+  const candidatesBySlot = new Map<number, EscalationSignup[]>();
   for (const slot of data.parties.flatMap(p => p.slots)) {
     const roleNames = new Set(slot.roles.map(r => r.name));
+    // Pair keys que o slot aceita (weapon_id, fn de cada role).
+    const slotPairs = new Set<string>();
+    for (const r of slot.roles) {
+      if (r.weapon_id != null) slotPairs.add(pairKey(r.weapon_id, slot.fn));
+    }
     const cands = data.enlisted.filter(s =>
-      !assignedUserIds.has(s.user_id) && s.functions.some(f => roleNames.has(f))
+      !assignedUserIds.has(s.user_id) && (
+        s.functions.some(f => roleNames.has(f)) ||
+        (s.keys ?? []).some(k => slotPairs.has(k))
+      )
     );
     if (cands.length) candidatesBySlot.set(slot.id, cands);
   }
-
-  // Um escalado é "flexível" (amarelo) se alguma das suas funções casa com
-  // um role de algum slot vazio. Senão é "completo" (verde). Declarado ANTES
-  // do enlistedRank (que o chama) — const arrow fica em TDZ até aqui.
-  const isFlexible = (userId: number): boolean => {
-    const sig = enlistedMap.get(userId);
-    if (!sig || sig.functions.length === 0) return false;
-    return sig.functions.some(f => emptySlotRoleNames.has(f));
-  };
-
-  // Ordem da lista de inscritos: não escalados > amarelos (flex) > verdes
-  // (completos) > tiraram o signup. O 4º grupo não vem de EventSignup —
-  // remove_signup apaga a inscrição mas deixa o EventAssignment, então são
-  // assignments órfãos (escalados sem inscrição); dedup por user_id.
-  const enlistedRank = (uid: number): number =>
-    !assignedUserIds.has(uid) ? 0 : isFlexible(uid) ? 1 : 2;
-  const sortedEnlisted = [...data.enlisted].sort(
-    (a, b) => enlistedRank(a.user_id) - enlistedRank(b.user_id)
-  );
-  const withdrawn = data.assignments
-    .filter(a => !enlistedMap.has(a.user_id))
-    .filter((a, i, arr) => arr.findIndex(x => x.user_id === a.user_id) === i);
 
   const doAssign = (slotId: number, userId: number, userName: string | null, gameRoleId: number) => {
     api.assignEscalacao(guildId, eventId, { slot_id: slotId, user_id: userId, user_name: userName, game_role_id: gameRoleId })
@@ -463,7 +303,7 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
   // abre o modal de escolha já existente. Reusado pelo drag&drop e pelo popover
   // de candidatos por slot (clicar = atribuir, sem precisar arrastar).
   const assignSignupToSlot = (slotId: number, userId: number) => {
-    const signup = enlistedMap.get(userId);
+    const signup = data.enlisted.find(s => s.user_id === userId);
     const slot = data.parties.flatMap(p => p.slots).find(s => s.id === slotId);
     if (!slot) return;
     if (slot.roles.length === 1) {
@@ -482,7 +322,7 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
   };
 
   return (
-    <div style={{ padding: "16px 20px" }}>
+    <div className="esc-page">
       {data.parties.length === 0 && (
         <div className="login-gate">
           <i className="ti ti-layout-grid-off login-gate-icon" />
@@ -491,215 +331,77 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
       )}
 
       {data.parties.length > 0 && (
-        <div className="comp-layout esc-layout">
-          <div className="comp-left">
-            <div className="sheet-wrap">
-              <table ref={tableRef} className={tableCls}>
-                <colgroup>
-                  <col style={{ width: 36 }} />
-                  <col style={{ minWidth: 150 }} />
-                  <col style={{ minWidth: 130 }} />
-                  <col style={{ minWidth: 200 }} />
-                  <col style={{ minWidth: 130 }} />
-                  <col style={{ minWidth: 140 }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th className="cs-rn">#</th>
-                    <th className="cs-ph">{t("colRoleName")}</th>
-                    <th className="cs-ph">{t("colPlayer")}</th>
-                    <th className="cs-ph">{t("colBuild")}</th>
-                    <th className="cs-ph">{t("colCombatStyle")}</th>
-                    <th className="cs-ph">{t("colObs")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.parties.map(p => (
-                    <PartyRows
-                      key={p.id}
-                      name={p.name || `Party ${p.position + 1}`}
-                      slots={p.slots}
-                      assignedBySlot={assignedBySlot}
-                      canManage={canManage}
-                      onDropSlot={onDropSlot}
-                      onUnassignUser={(userId) => api.unassignUser(guildId, eventId, userId).then(load)}
-                      mySlotId={mySlotId}
-                      t={t}
-                      lang={lang}
-                      candidatesBySlot={candidatesBySlot}
-                      popoverSlot={popoverSlot}
-                      setPopoverSlot={setPopoverSlot}
-                      onPickCandidate={(slotId, userId) => { setPopoverSlot(null); assignSignupToSlot(slotId, userId); }}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="comp-right" ref={panelRef}>
-            <div className="card esc-panel">
-              <div className="esc-header">
-                <i className="ti ti-users esc-header-icon" />
-                <div className="esc-header-text">
-                  <div className="esc-title">{data.event.title || t("escTitle")}</div>
-                  <div className="hint">{data.event.comp_name || "—"} · {data.event.state} · {data.event.seriousness}</div>
-                </div>
-                {me === null && (
-                  <a className="btn btn-discord" href={`/auth/discord/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`}>
-                    <i className="ti ti-brand-discord" /> {t("loginDiscord")}
-                  </a>
-                )}
-                {!canManage && <span className="badge esc-readonly"><i className="ti ti-eye" /> {t("escReadonly")}</span>}
-              </div>
-              <div className="esc-enlisted-head">
-                <i className="ti ti-list-check" /> {t("escEnlisted")} <span className="esc-count">{data.enlisted.length}</span>
-                {canManage && (
-                  <button
-                    className="btn esc-autofill"
-                    disabled={autoFillBusy}
-                    onClick={async () => {
-                      setAutoFillBusy(true);
-                      try {
-                        const preview = await api.previewAutofillEscalacao(guildId, eventId);
-                        if (!preview.assignments.length) {
-                          alert(t("escAutofillEmpty"));
-                          return;
-                        }
-                        const lines = preview.assignments.map(a => `${a.user_name || "—"} → ${a.game_role_name}`).join("\n");
-                        if (confirm(`${t("escAutofillPreview")}\n\n${lines}`)) {
-                          const result = await api.autofillEscalacao(guildId, eventId);
-                          setUndoRunId(result.run_id);
-                          load();
-                        }
-                      } catch (e) {
-                        alert(String((e as Error)?.message ?? e));
-                      } finally {
-                        setAutoFillBusy(false);
-                      }
-                    }}
-                    title={t("escAutofill")}
-                  >
-                    <i className="ti ti-wand" />
-                    {t("escAutofill")}
-                  </button>
-                )}
-                {canManage && undoRunId && (
-                  <button
-                    className="btn"
-                    disabled={autoFillBusy}
-                    onClick={async () => {
-                      setAutoFillBusy(true);
-                      try {
-                        await api.undoAutofillEscalacao(guildId, eventId, undoRunId);
-                        setUndoRunId(null);
-                        load();
-                      } catch (e) {
-                        alert(String((e as Error)?.message ?? e));
-                      } finally {
-                        setAutoFillBusy(false);
-                      }
-                    }}
-                  >
-                    <i className="ti ti-arrow-back-up" /> {t("escAutofillUndo")}
-                  </button>
-                )}
-                {canManage && ["scheduled", "in_progress"].includes(data.event.state) && (
-                  <button
-                    className={"btn esc-gatelock" + (data.event.functions_released ? " esc-gatelock-on" : "")}
-                    onClick={() => api.releaseFunctions(eventId, !data.event.functions_released, guildId)
-                      .then(load)
-                      .catch(e => alert(String((e as Error)?.message ?? e)))}
-                    title={data.event.functions_released ? t("functionsReleasedOn" as never) : t("releaseFunctionsBtn" as never)}
-                  >
-                    <i className={"ti " + (data.event.functions_released ? "ti-lock-open" : "ti-lock")} />
-                    {data.event.functions_released ? t("functionsReleasedOn" as never) : t("releaseFunctionsBtn" as never)}
-                  </button>
-                )}
-              </div>
-              <div
-                className="esc-enlisted-list"
-                onDragOver={canManage ? (e) => e.preventDefault() : undefined}
-                onDrop={canManage ? (e) => {
-                  const parsed = parseDragPayload(e.dataTransfer.getData("text/plain"));
-                  // Só desaloca quando a origem é um SLOT (devolver pro pool é
-                  // deliberado). Arrastar um flexível da própria lista de inscritos
-                  // e soltar aqui de novo (sem acertar um slot) não faz nada.
-                  if (parsed && parsed.origin === "slot") api.unassignUser(guildId, eventId, parsed.userId).then(load);
-                } : undefined}
-              >
-                {data.enlisted.length === 0 && withdrawn.length === 0 && <div className="hint esc-empty">{t("escEmpty")}</div>}
-                {sortedEnlisted.map(s => {
-                  const placed = assignedUserIds.has(s.user_id);
-                  const flexible = placed && isFlexible(s.user_id);
-                  const cls = placed
-                    ? (flexible ? " esc-signup-flexible" : " esc-signup-complete")
-                    : "";
-                  return (
-                    <div
-                      key={s.user_id}
-                      className={"esc-signup" + cls}
-                      draggable={canManage && (!placed || flexible)}
-                      onDragStart={(e) => { if (canManage && (!placed || flexible)) { e.dataTransfer.setData("text/plain", dragPayload("enlisted", s.user_id)); e.dataTransfer.effectAllowed = "move"; } }}
-                      // Amarelos (flex) são arrastáveis — um drag mal-disparado vira
-                      // clique comum e removia sem querer. Verdes não são arrastáveis;
-                      // antes saíam com clique único, o que removia ao clicar pra "ver".
-                      // Agora ambos saem só no duplo clique (intencional).
-                      onDoubleClick={placed && canManage ? () => api.unassignUser(guildId, eventId, s.user_id).then(load) : undefined}
-                      title={placed ? t("escUnassignDblClick") : (canManage ? t("escDragHint") : "")}
-                    >
-                      {canManage && (!placed || flexible) && <i className="ti ti-grip-horizontal esc-signup-grip" />}
-                      <span className="esc-signup-name">{s.user_name || String(s.user_id)}</span>
-                      {s.functions.length > 0 && (
-                        <span
-                          className="esc-signup-fns"
-                          title={s.functions.join(", ")}
-                        >
-                          <span className="esc-role-bracket">
-                            {s.functions.slice(0, 2).map(f => (
-                              <span key={f} className="esc-role-chip">{f}</span>
-                            ))}
-                            {s.functions.length > 2 && <span className="esc-role-more">+{s.functions.length - 2}</span>}
-                          </span>
-                          {s.functions.length > 2 && (
-                            <span className="esc-role-tooltip">{s.functions.map(f => <span key={f} className="esc-role-chip">{f}</span>)}</span>
-                          )}
-                        </span>
-                      )}
-                      {placed && <i className={"ti " + (flexible ? "ti-alert-circle" : "ti-check") + " esc-signup-check"} />}
-                    </div>
-                  );
-                })}
-                {withdrawn.map(a => (
-                  <div
-                    key={`w-${a.user_id}`}
-                    className="esc-signup esc-signup-withdrawn"
-                    onDoubleClick={canManage ? () => api.unassignUser(guildId, eventId, a.user_id).then(load) : undefined}
-                    title={canManage ? t("escWithdrewHint") : ""}
-                  >
-                    <span className="esc-signup-name">{a.user_name || String(a.user_id)}</span>
-                    <span className="badge esc-signup-wbadge">{t("escWithdrew")}</span>
-                    {canManage && <i className="ti ti-user-minus esc-signup-check" />}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <EscalationBoard
+          data={data}
+          canManage={canManage}
+          mySlotId={mySlotId}
+          weaponItemId={weaponItemId}
+          assignedBySlot={assignedBySlot}
+          candidatesBySlot={candidatesBySlot}
+          popoverSlot={popoverSlot}
+          setPopoverSlot={setPopoverSlot}
+          onDropSlot={onDropSlot}
+          onPickCandidate={(slotId, userId) => { setPopoverSlot(null); assignSignupToSlot(slotId, userId); }}
+          onUnassignUser={(userId) => api.unassignUser(guildId, eventId, userId).then(load)}
+          onOpenDetail={setDetail}
+          onAutofill={async () => {
+            setAutoFillBusy(true);
+            try {
+              const preview = await api.previewAutofillEscalacao(guildId, eventId);
+              if (!preview.assignments.length) {
+                alert(t("escAutofillEmpty"));
+                return;
+              }
+              const lines = preview.assignments.map(a => `${a.user_name || "—"} → ${a.game_role_name}`).join("\n");
+              if (confirm(`${t("escAutofillPreview")}\n\n${lines}`)) {
+                const result = await api.autofillEscalacao(guildId, eventId);
+                setUndoRunId(result.run_id);
+                load();
+              }
+            } catch (e) {
+              alert(String((e as Error)?.message ?? e));
+            } finally {
+              setAutoFillBusy(false);
+            }
+          }}
+          autoFillBusy={autoFillBusy}
+          undoRunId={undoRunId}
+          onUndoAutofill={async () => {
+            setAutoFillBusy(true);
+            try {
+              await api.undoAutofillEscalacao(guildId, eventId, undoRunId!);
+              setUndoRunId(null);
+              load();
+            } catch (e) {
+              alert(String((e as Error)?.message ?? e));
+            } finally {
+              setAutoFillBusy(false);
+            }
+          }}
+          onToggleRelease={() => api.releaseFunctions(eventId, !data.event.functions_released, guildId)
+            .then(load)
+            .catch(e => alert(String((e as Error)?.message ?? e)))}
+          onEnlistedDrop={(raw) => {
+            const parsed = parseDragPayload(raw);
+            // Só desaloca quando a origem é um SLOT (devolver pro pool é
+            // deliberado). Arrastar um flexível da própria lista de inscritos
+            // e soltar aqui de novo (sem acertar um slot) não faz nada.
+            if (parsed && parsed.origin === "slot") api.unassignUser(guildId, eventId, parsed.userId).then(load);
+          }}
+          t={t}
+          lang={lang}
+        />
       )}
 
       {flexPick && (
-        <div onClick={() => setFlexPick(null)} style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 50,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
-          <div className="card" onClick={e => e.stopPropagation()} style={{ width: 320 }}>
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>{t("escFlexPick")}</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div onClick={() => setFlexPick(null)} className="esc-modal-overlay">
+          <div className="card esc-modal-card" onClick={e => e.stopPropagation()}>
+            <div className="esc-modal-title">{t("escFlexPick")}</div>
+            <div className="esc-flexpick-list">
               {flexPick.roles.map(r => (
-                <button key={r.id} className="btn flexpick-btn" style={{ justifyContent: "flex-start", alignItems: "stretch", flexDirection: "column", gap: 4 }}
+                <button key={r.id} className="btn flexpick-btn"
                   onClick={() => { doAssign(flexPick.slotId, flexPick.userId, flexPick.userName, r.id); setFlexPick(null); }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span className="flexpick-btn-head">
                     <span className="badge" style={{ background: r.color || "var(--surface-2)", color: r.color ? "#fff" : "var(--muted)", fontSize: 10 }}>●</span>
                     {r.name}
                   </span>
@@ -710,141 +412,582 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
           </div>
         </div>
       )}
+
+      {detail && (
+        <DetailModal detail={detail} t={t} lang={lang} onClose={() => setDetail(null)} />
+      )}
     </div>
   );
 }
 
-interface PartyRowsProps {
-  name: string;
-  slots: EscalationOut["parties"][number]["slots"];
-  assignedBySlot: Map<number, EscalationOut["assignments"][number]>;
+// ── Board: rail (manager) + faixa horizontal de colunas de party ──────────────
+interface BoardProps {
+  data: EscalationOut;
   canManage: boolean;
-  onDropSlot: (slotId: number, e: React.DragEvent) => void;
-  onUnassignUser: (userId: number) => void;
   mySlotId: number | null;
-  t: (k: never) => string;
-  lang: Lang;
-  candidatesBySlot: Map<number, EscalationOut["enlisted"]>;
+  weaponItemId: Map<number, string>;
+  assignedBySlot: Map<number, EscalationOut["assignments"][number]>;
+  candidatesBySlot: Map<number, EscalationSignup[]>;
   popoverSlot: number | null;
   setPopoverSlot: (id: number | null) => void;
+  onDropSlot: (slotId: number, e: React.DragEvent) => void;
   onPickCandidate: (slotId: number, userId: number) => void;
+  onUnassignUser: (userId: number) => void;
+  onOpenDetail: (d: Detail) => void;
+  onAutofill: () => void;
+  autoFillBusy: boolean;
+  undoRunId: string | null;
+  onUndoAutofill: () => void;
+  onToggleRelease: () => void;
+  onEnlistedDrop: (raw: string) => void;
+  t: (k: TKey) => string;
+  lang: Lang;
 }
 
-function PartyRows({
-  name, slots, assignedBySlot, canManage,
-  onDropSlot, onUnassignUser, mySlotId, t, lang,
-  candidatesBySlot, popoverSlot, setPopoverSlot, onPickCandidate,
-}: PartyRowsProps) {
-  const rows: React.ReactNode[] = [];
-  let n = 0;
-  for (const slot of slots) {
-    n++;
-    const a = assignedBySlot.get(slot.id);
-    const chosen = a?.game_role_id ? slot.roles.find(r => r.id === a.game_role_id) : undefined;
-    // Build/style/notes: slot de 1 role mostra preview sempre; slot flex (várias
-    // roles) só mostra depois de atribuído e escolhida a função flex (chosen).
-    const previewRole = slot.roles.length === 1 ? slot.roles[0] : chosen;
-    const dropProps = canManage
-      ? { onDragOver: (e: React.DragEvent) => e.preventDefault(), onDrop: (e: React.DragEvent) => onDropSlot(slot.id, e) }
-      : {};
-    const wItem = weaponOf(previewRole);
-    const groups = buildGroups(previewRole);
-    // Slot flex (>1 role) sem ninguém escalado: empilha todas as builds com
-    // divisor "OU" no meio. Com jogador escalado, só a build escolhida.
-    const isFlex = slot.roles.length > 1;
-    const showAllFlex = isFlex && !chosen;
-    // Linha do próprio usuário escalado — destaca e expande a build/skills.
-    const isMine = mySlotId === slot.id;
-    rows.push(
-      <tr key={slot.id} {...dropProps} className={isMine ? "cs-myrow" : undefined}
-        style={{ background: a ? (isMine ? "var(--gold-soft)" : "var(--info-soft)") : "var(--surface)" }}>
-        <td className="cs-rn">{n}</td>
-        <td className="cs-cell cs-role-cell">
-          {wItem && (
-            <img className="cs-role-weapon" src={itemRenderUrl(wItem.item_id, wItem.quality || 1)}
-              title={localName(wItem, lang)} alt="" />
-          )}
-          {chosen
-            ? <span className="ct" style={{ color: chosen.color || "var(--text)" }}>{chosen.name}</span>
-            : slot.roles.length > 1
-              ? <span>{slot.roles.map(r => <span key={r.id} className="ct" style={{ color: r.color || "var(--muted)" }}>{r.name}</span>)}</span>
-              : <span className="cs-lbl">{slot.label || slot.fn || slot.roles[0]?.name || NA}</span>}
-        </td>
-        <td className={"cs-cell" + (popoverSlot === slot.id ? " cs-cell-open" : "")}>
-          {a ? (
-            <span
-              className="ct cs-player-drag"
-              draggable={canManage}
-              onDragStart={(e) => { if (canManage) { e.dataTransfer.setData("text/plain", dragPayload("slot", a.user_id)); e.dataTransfer.effectAllowed = "move"; } }}
-              onDoubleClick={canManage ? () => onUnassignUser(a.user_id) : undefined}
-              title={canManage ? t("escDragMove" as never) : ""}
+function EscalationBoard(p: BoardProps) {
+  const { data, canManage, t } = p;
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  // Edge-driven horizontal autoscroll enquanto arrasta sobre a faixa de
+  // parties. O scroll nativo por elemento não leva o cursor além da borda
+  // direita/esquerda do viewport; sem isso, soltar um jogador numa party
+  // distante exige rolar manualmente antes de começar a arrastar.
+  const autoScrollRaf = useRef(0);
+  const dragOverX = useRef<number | null>(null);
+  const startEdgeScroll = (dir: number) => {
+    cancelAnimationFrame(autoScrollRaf.current);
+    const tick = () => {
+      const vp = viewportRef.current;
+      if (!vp || dragOverX.current === null) return;
+      vp.scrollLeft += dir * 12;
+      autoScrollRaf.current = requestAnimationFrame(tick);
+    };
+    autoScrollRaf.current = requestAnimationFrame(tick);
+  };
+  const stopEdgeScroll = () => { cancelAnimationFrame(autoScrollRaf.current); };
+
+  return (
+    <div className="esc-page-wrap">
+      <div className={"esc-board-layout" + (canManage ? "" : " esc-board-readonly")}>
+        <SignupRail
+          data={data}
+          weaponItemId={p.weaponItemId}
+          assignedUserIds={new Set(data.assignments.map(a => a.user_id))}
+          canManage={canManage}
+          autoFillBusy={p.autoFillBusy}
+          undoRunId={p.undoRunId}
+          onAutofill={p.onAutofill}
+          onUndoAutofill={p.onUndoAutofill}
+          onToggleRelease={p.onToggleRelease}
+          t={t}
+          lang={p.lang}
+          onDrop={(raw) => p.onEnlistedDrop(raw)}
+        />
+        <div className="esc-board-col">
+          <div
+            className="esc-board-viewport"
+            ref={viewportRef}
+          onDragOver={(e) => {
+            // Só rola nas bordas se houver drag ativo (dataTransfer pode lançar
+            // em alguns browsers quando não é drag válido — guardamos só o X).
+            if (!canManage) return;
+            e.preventDefault();
+            const vp = viewportRef.current!;
+            const r = vp.getBoundingClientRect();
+            const x = e.clientX - r.left;
+            dragOverX.current = x;
+            const EDGE = 48;
+            if (x < EDGE && vp.scrollLeft > 0) startEdgeScroll(-1);
+            else if (x > r.width - EDGE && vp.scrollLeft < vp.scrollWidth - vp.clientWidth) startEdgeScroll(1);
+            else stopEdgeScroll();
+          }}
+          onDragLeave={(e) => {
+            // Só para ao sair da viewport inteira; cruzar entre slots também
+            // dispara dragleave e interromperia o auto-scroll na borda.
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              dragOverX.current = null;
+              stopEdgeScroll();
+            }
+          }}
+          onDrop={() => { dragOverX.current = null; stopEdgeScroll(); }}
+          onDragEnd={() => { dragOverX.current = null; stopEdgeScroll(); }}
+        >
+          <div className="esc-board-strip">
+            {data.parties.map((party, pi) => (
+              <PartyColumn
+                key={party.id}
+                party={party}
+                index={pi}
+                assignedBySlot={p.assignedBySlot}
+                canManage={canManage}
+                mySlotId={p.mySlotId}
+                candidatesBySlot={p.candidatesBySlot}
+                popoverSlot={p.popoverSlot}
+                setPopoverSlot={p.setPopoverSlot}
+                onDropSlot={p.onDropSlot}
+                onPickCandidate={p.onPickCandidate}
+                onUnassignUser={p.onUnassignUser}
+                onOpenDetail={p.onOpenDetail}
+                t={t}
+                lang={p.lang}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+  );
+}
+
+// ── Rail de inscritos (manager) — colado à esquerda, fora do scroll horizontal.
+// Cabeça do rail carrega o menu do evento (título, comp · estado, autofill,
+// release) — morava numa barra própria acima do board; agora fica limitado ao
+// quadrante da lista de inscritos.
+// Mostra nome + até 5 renders de arma (não chips de texto). Extras viram uma
+// reticência discreta (não +N). Clique expande/recolapse a lista completa.
+// Identidade por par (weapon_id, fn): armas iguais com fn diferente (Longbow
+// DPS vs Longbow Support) são renders distintos só quando a fn desambigua —
+// o title/aria-label carrega o nome da role concreta. Escalados sempre verdes.
+function SignupRail({
+  data, weaponItemId, assignedUserIds, canManage, autoFillBusy, undoRunId,
+  onAutofill, onUndoAutofill, onToggleRelease, t, lang, onDrop,
+}: {
+  data: EscalationOut;
+  weaponItemId: Map<number, string>;
+  assignedUserIds: Set<number>;
+  canManage: boolean;
+  autoFillBusy: boolean;
+  undoRunId: string | null;
+  onAutofill: () => void;
+  onUndoAutofill: () => void;
+  onToggleRelease: () => void;
+  t: (k: TKey) => string;
+  lang: Lang;
+  onDrop: (raw: string) => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  // Ordenação: não escalados primeiro, depois escalados (verdes) — sem amarelo.
+  const sorted = [...data.enlisted].sort((a, b) => {
+    const pa = assignedUserIds.has(a.user_id) ? 1 : 0;
+    const pb = assignedUserIds.has(b.user_id) ? 1 : 0;
+    return pa - pb;
+  });
+  // Assignments órfãos (escalados sem signup) — liberam o slot, ficam no fim.
+  const enlistedIds = new Set(data.enlisted.map(s => s.user_id));
+  const withdrawn = data.assignments
+    .filter(a => !enlistedIds.has(a.user_id))
+    .filter((a, i, arr) => arr.findIndex(x => x.user_id === a.user_id) === i);
+
+  const toggle = (uid: number) => setExpanded(prev => {
+    const n = new Set(prev); n.has(uid) ? n.delete(uid) : n.add(uid); return n;
+  });
+
+  return (
+    <aside
+      className="esc-rail"
+      onDragOver={canManage ? (e) => e.preventDefault() : undefined}
+      onDrop={canManage ? (e) => onDrop(e.dataTransfer.getData("text/plain")) : undefined}
+    >
+      <div className="esc-rail-event">
+        <div className="esc-rail-event-title">{data.event.title || t("escTitle")}</div>
+        <div className="hint esc-rail-event-sub">{data.event.comp_name || "—"} · {data.event.state}</div>
+        {canManage && (
+          <div className="esc-rail-event-actions">
+            <button
+              className="btn esc-autofill"
+              disabled={autoFillBusy}
+              onClick={onAutofill}
+              title={t("escAutofill")}
             >
-              <i className="ti ti-grip-horizontal" style={{ fontSize: 12, opacity: .6 }} />
-              <span className="cs-player-name">{a.user_name || String(a.user_id)}</span>
-            </span>
-          ) : canManage ? (
-            <SlotCandidatePicker
-              candidates={candidatesBySlot.get(slot.id) ?? []}
-              open={popoverSlot === slot.id}
-              onToggle={() => setPopoverSlot(popoverSlot === slot.id ? null : slot.id)}
-              onPick={(uid) => onPickCandidate(slot.id, uid)}
-              dropHint={t("escDropHint" as never)}
-            />
-          ) : <span className="cs-empty">{NA}</span>}
-        </td>
-        <td className="cs-cell cs-build-cell">
-          {showAllFlex
-            ? (
-              <div className="cs-build-stack">
-                {slot.roles.map((r, i) => (
-                  <Fragment key={r.id}>
-                    <BuildImgs r={r} lang={lang} />
-                    {i < slot.roles.length - 1 && (
-                      <div className="cs-build-or">
-                        <span className="cs-build-or-line" />
-                        <span className="cs-build-or-label">{t("escOr" as never)}</span>
-                        <span className="cs-build-or-line" />
-                      </div>
-                    )}
-                  </Fragment>
+              <i className="ti ti-wand" />
+              {t("escAutofill")}
+            </button>
+            {undoRunId && (
+              <button className="btn esc-rail-event-btn" disabled={autoFillBusy} onClick={onUndoAutofill}>
+                <i className="ti ti-arrow-back-up" /> {t("escAutofillUndo")}
+              </button>
+            )}
+            {["scheduled", "in_progress"].includes(data.event.state) && (
+              <button
+                className={"btn esc-gatelock" + (data.event.functions_released ? " esc-gatelock-on" : "")}
+                onClick={onToggleRelease}
+                title={data.event.functions_released ? t("functionsReleasedOn") : t("releaseFunctionsBtn")}
+              >
+                <i className={"ti " + (data.event.functions_released ? "ti-lock-open" : "ti-lock")} />
+                {data.event.functions_released ? t("functionsReleasedOn") : t("releaseFunctionsBtn")}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="esc-rail-head">
+        <i className="ti ti-list-check" /> {t("escEnlisted")} <span className="esc-count">{data.enlisted.length}</span>
+      </div>
+      <div className="esc-rail-list">
+        {data.enlisted.length === 0 && withdrawn.length === 0 && <div className="hint esc-empty">{t("escEmpty")}</div>}
+        {sorted.map(s => {
+          const placed = assignedUserIds.has(s.user_id);
+          const opts = signupWeaponOptions(s, weaponItemId, lang);
+          const isExpanded = expanded.has(s.user_id);
+          const shown = isExpanded ? opts : opts.slice(0, 5);
+          const extra = opts.length - shown.length;
+          const draggable = !placed;
+          return (
+            <div
+              // O estado entra no key de propósito: ao ser desalocado (ou
+              // alocado), o card remonta e a animação CSS de entrada roda —
+              // é o "reaparecer" no pool de inscritos, sem timer nem JS.
+              key={`${s.user_id}:${placed ? "p" : "u"}`}
+              className={"esc-rail-card" + (placed ? " esc-rail-placed" : "")}
+              draggable={canManage && !placed}
+              onDragStart={(e) => { if (canManage && draggable) { e.dataTransfer.setData("text/plain", dragPayload("enlisted", s.user_id)); e.dataTransfer.effectAllowed = "move"; } }}
+              onClick={canManage && opts.length > 5 ? () => toggle(s.user_id) : undefined}
+              title={placed ? t("escUnassignDblClick") : (canManage && draggable ? t("escDragHint") : "")}
+              onDoubleClick={canManage && placed ? () => onDrop(dragPayload("slot", s.user_id)) : undefined}
+            >
+              {draggable && <i className="ti ti-grip-horizontal esc-rail-grip" />}
+              <span className="esc-rail-name">{s.user_name || String(s.user_id)}</span>
+              <div className="esc-rail-weapons">
+                {shown.map((o, i) => (
+                  <img
+                    key={i}
+                    className="esc-rail-weapon"
+                    src={itemRenderUrl(o.itemId, 1)}
+                    title={o.label}
+                    alt={o.label}
+                    aria-label={o.label}
+                  />
                 ))}
+                {extra > 0 && <span className="esc-rail-more" title={t("escMoreWeapons")}>…</span>}
               </div>
-            )
-            : (groups.length === 0
-              ? <span className="cs-empty">{NA}</span>
-              : <BuildImgs r={previewRole!} lang={lang} />)}
-        </td>
-        <td className="cs-cell">{previewRole?.play_style || NA}</td>
-        <td className="cs-cell">{previewRole?.obs || NA}</td>
-      </tr>
-    );
-    if (isMine) {
-      const detailRole = chosen ?? slot.roles[0];
-      if (detailRole) {
-        rows.push(
-          <tr key={slot.id + "-detail"} className="cs-myrow-detail">
-            <td colSpan={6}>
-              <div className="cs-detail-inner">
-                <div className="cs-detail-section">
-                  <div className="cs-detail-label">{t("colBuild" as never)}</div>
-                  <BuildImgs r={detailRole} lang={lang} />
-                </div>
-                <div className="cs-detail-section">
-                  <div className="cs-detail-label">Skills</div>
-                  <SkillsDetail role={detailRole} lang={lang} />
-                </div>
-              </div>
-            </td>
-          </tr>
-        );
+            </div>
+          );
+        })}
+        {withdrawn.map(a => (
+          <div
+            key={`w-${a.user_id}`}
+            className="esc-rail-card esc-rail-withdrawn"
+            onDoubleClick={canManage ? () => onDrop(dragPayload("slot", a.user_id)) : undefined}
+            title={t("escWithdrewHint")}
+          >
+            <span className="esc-rail-name">{a.user_name || String(a.user_id)}</span>
+            <span className="badge esc-signup-wbadge">{t("escWithdrew")}</span>
+          </div>
+        ))}
+      </div>
+      <div className="esc-rail-ad">
+        <AdBanner slot="escalacao-rail" variant="mediumRectangle" />
+      </div>
+    </aside>
+  );
+}
+
+// Opções de arma de um signup — uma por par (weapon_id, fn). Mesma arma com
+// fn diferente vira duas entradas (Longbow DPS e Longbow Support). O label
+// carrega o nome localizado da arma + fn pra desambiguar pares de mesma arma.
+function signupWeaponOptions(s: EscalationSignup, weaponItemId: Map<number, string>, lang: Lang): { itemId: string; label: string }[] {
+  const out: { itemId: string; label: string }[] = [];
+  const seen = new Set<string>();
+  for (const wf of s.weapon_fns ?? []) {
+    if (wf.weapon_id == null) continue;
+    const itemId = weaponItemId.get(wf.weapon_id);
+    if (!itemId) continue;
+    const key = pairKey(wf.weapon_id, wf.fn);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const item = ITEM_BY_ID.get(itemId);
+    const weaponLabel = item ? itemLocalName(item, lang) : itemId;
+    const fnLabel = wf.fn || "—";
+    const label = `${weaponLabel} · ${fnLabel}`;
+    out.push({ itemId, label });
+  }
+  // Fallback legado: sem weapon_fns (evento finalizado sem backfill). Sem
+  // como mapear nome->weapon_id confiável aqui, ficamos sem renders e o nome
+  // da role aparece só no title do card. ponytail: cobertura parcial é melhor
+  // que render errado.
+  return out;
+}
+
+// ── Coluna de party: slots verticais + célula final "PARTY N" (metade da
+// altura de um slot) que limita a lista — a borda direita da coluna para
+// ali em vez de esticar até o fim da faixa. Nunca quebra em grid.
+function PartyColumn(p: {
+  party: EscalationOut["parties"][number];
+  index: number;
+  assignedBySlot: Map<number, EscalationOut["assignments"][number]>;
+  canManage: boolean;
+  mySlotId: number | null;
+  candidatesBySlot: Map<number, EscalationSignup[]>;
+  popoverSlot: number | null;
+  setPopoverSlot: (id: number | null) => void;
+  onDropSlot: (slotId: number, e: React.DragEvent) => void;
+  onPickCandidate: (slotId: number, userId: number) => void;
+  onUnassignUser: (userId: number) => void;
+  onOpenDetail: (d: Detail) => void;
+  t: (k: TKey) => string;
+  lang: Lang;
+}) {
+  const { party, index, t } = p;
+  return (
+    <section className="esc-party">
+      <div className="esc-party-slots">
+        {party.slots.map(slot => (
+          <SlotRow
+            key={slot.id}
+            slot={slot}
+            isMine={p.mySlotId === slot.id}
+            assignedBySlot={p.assignedBySlot}
+            canManage={p.canManage}
+            candidatesBySlot={p.candidatesBySlot}
+            popoverSlot={p.popoverSlot}
+            setPopoverSlot={p.setPopoverSlot}
+            onDropSlot={p.onDropSlot}
+            onPickCandidate={p.onPickCandidate}
+            onUnassignUser={p.onUnassignUser}
+            onOpenDetail={p.onOpenDetail}
+            t={t}
+            lang={p.lang}
+          />
+        ))}
+      </div>
+      <div className="esc-party-foot">{t("escPartyLabel")} {index + 1}</div>
+    </section>
+  );
+}
+
+// ── Slot: render da arma E bracket do jogador NA MESMA LINHA. Slot flex vazio
+// sem ninguém escalado mostra cluster compacto dos renders de todas as roles.
+function SlotRow(p: {
+  slot: EscalationSlot;
+  isMine: boolean;
+  assignedBySlot: Map<number, EscalationOut["assignments"][number]>;
+  canManage: boolean;
+  candidatesBySlot: Map<number, EscalationSignup[]>;
+  popoverSlot: number | null;
+  setPopoverSlot: (id: number | null) => void;
+  onDropSlot: (slotId: number, e: React.DragEvent) => void;
+  onPickCandidate: (slotId: number, userId: number) => void;
+  onUnassignUser: (userId: number) => void;
+  onOpenDetail: (d: Detail) => void;
+  t: (k: TKey) => string;
+  lang: Lang;
+}) {
+  const { slot, isMine, t, lang } = p;
+  const a = p.assignedBySlot.get(slot.id);
+  const chosen = a?.game_role_id ? slot.roles.find(r => r.id === a.game_role_id) : undefined;
+  // Slot de 1 role: previewRole é a única role. Slot flex: chosen (depois de
+  // atribuído) ou todas (vazio, mostra cluster compacto).
+  const isFlex = slot.roles.length > 1;
+  const previewRole = slot.roles.length === 1 ? slot.roles[0] : chosen;
+  const dropProps = p.canManage
+    ? { onDragOver: (e: React.DragEvent) => e.preventDefault(), onDrop: (e: React.DragEvent) => p.onDropSlot(slot.id, e) }
+    : {};
+
+  // Arma: a do chosen (se escalado), senão a da role única, senão cluster das
+  // roles do flex vazio. Cluster compacto = só os renders das armas, lado a lado.
+  const weaponImgs = chosen
+    ? [weaponOf(chosen)].filter(Boolean)
+    : isFlex && !chosen
+      ? slot.roles.map(r => weaponOf(r)).filter(Boolean)
+      : [weaponOf(previewRole)].filter(Boolean);
+
+  const onBracketClick = () => {
+    if (!p.canManage && a && chosen) {
+      p.onOpenDetail({ userName: a.user_name, role: chosen });
+    }
+  };
+  // Read-only: clicar na célula da função (slot) abre o modal de detalhe da
+  // role — mesmo sem ninguém escalado, mostra a build da função.
+  const onSlotClick = () => {
+    if (!p.canManage) {
+      const role = chosen ?? previewRole ?? slot.roles[0];
+      if (role) {
+        p.onOpenDetail({ userName: a?.user_name ?? null, role });
       }
     }
-  }
+  };
+
   return (
-    <>
-      <tr className="cs-party-header"><td colSpan={6} className="cs-ph"><div className="cs-ph-inner"><span className="cs-pname">{name}</span></div></td></tr>
-      {rows}
-    </>
+    <div className={"esc-slot" + (a ? " esc-slot-filled" : "") + (isMine ? " esc-slot-mine" : "") + (!p.canManage ? " esc-slot-readonly" : "")} {...dropProps} onClick={!p.canManage ? onSlotClick : undefined} style={!p.canManage ? { cursor: "pointer" } : undefined}>
+      <span className="esc-slot-weapons">
+        {weaponImgs.map((w, i) => {
+          const role = chosen ?? previewRole ?? slot.roles[i];
+          const wi = w as RegearItem;
+          const title = role ? role.name : localName(wi, lang);
+          return (
+            <img
+              key={i}
+              className="esc-slot-weapon"
+              src={itemRenderUrl(wi.item_id, wi.quality || 1)}
+              title={title}
+              alt={title}
+            />
+          );
+        })}
+        {weaponImgs.length === 0 && <span className="esc-slot-empty-weapons">{NA}</span>}
+      </span>
+      <span className="esc-slot-player">
+        {a ? (
+          <button
+            type="button"
+            className="esc-bracket"
+            draggable={p.canManage}
+            onDragStart={(e) => { if (p.canManage) { e.dataTransfer.setData("text/plain", dragPayload("slot", a.user_id)); e.dataTransfer.effectAllowed = "move"; } }}
+            onClick={p.canManage ? undefined : onBracketClick}
+            onDoubleClick={p.canManage ? () => p.onUnassignUser(a.user_id) : undefined}
+            title={p.canManage ? t("escDragMove") : ""}
+          >
+            <i className="ti ti-grip-horizontal esc-bracket-grip" />
+            <span className="esc-bracket-name">{a.user_name || String(a.user_id)}</span>
+          </button>
+        ) : p.canManage ? (
+          <SlotCandidatePicker
+            candidates={p.candidatesBySlot.get(slot.id) ?? []}
+            open={p.popoverSlot === slot.id}
+            onToggle={() => p.setPopoverSlot(p.popoverSlot === slot.id ? null : slot.id)}
+            onPick={(uid) => p.onPickCandidate(slot.id, uid)}
+            dropHint={t("escDropHint")}
+          />
+        ) : (
+          <span className="esc-bracket esc-bracket-empty">{NA}</span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+// ── Modal de detalhe: jogador + role concreta + build completa + swaps +
+// skills + estilo + notas. Manager e read-only abrem igual.
+function DetailModal({ detail, t, lang, onClose }: { detail: Detail; t: (k: TKey) => string; lang: Lang; onClose: () => void }) {
+  const { userName, role } = detail;
+  const equip = buildItemsToEquip(role.build_items ?? []);
+  const weaponIs2H = is2H(equip.weapon?.id);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Lista de itens da build principal com seus swaps e skills
+  const buildSlots = ["weapon", "offhand", "helmet", "armor", "boots", "cape", "food", "potion"];
+  const slotItems = buildSlots
+    .map(slot => {
+      const primary = role.build_items?.find(bi => bi.slot === slot);
+      if (!primary) return null;
+      const swaps = (role.build_items ?? []).filter(bi => bi.slot.startsWith(`${slot}_alt_`));
+      const gearIds = Object.entries(role.gear_spells ?? {})
+        .filter(([k]) => k.startsWith(`${slot}_`) && !k.startsWith(`${slot}_alt_`))
+        .map(([, v]) => v)
+        .filter(Boolean) as string[];
+      // weapon tem Q/W/passive em vez de gear_spells
+      const weaponSpells = slot === "weapon"
+        ? [role.q_spell, role.w_spell, role.passive_spell].filter(Boolean) as string[]
+        : [];
+      const allSpells = slot === "weapon" ? weaponSpells : gearIds;
+      return { slot, primary, swaps, allSpells };
+    })
+    .filter(Boolean) as { slot: string; primary: RegearItem; swaps: RegearItem[]; allSpells: string[] }[];
+
+  // Filtra offhand se for 2H
+  const visibleSlots = slotItems.filter(s => !(s.slot === "offhand" && weaponIs2H));
+
+  return (
+    <div className="esc-modal-overlay" onClick={onClose}>
+      <div className="card esc-modal-card esc-detail-card" onClick={e => e.stopPropagation()}>
+        <div className="esc-detail-head">
+          <div className="esc-detail-id">
+            <span className="esc-detail-label">{t("escDetailPlayer")}</span>
+            <span className="esc-detail-value">{userName || "—"}</span>
+          </div>
+          <div className="esc-detail-id">
+            <span className="esc-detail-label">{t("escDetailRole")}</span>
+            <span className="esc-detail-value" style={{ color: role.color || "var(--text)" }}>{role.name}</span>
+          </div>
+          <button className="btn esc-detail-close" onClick={onClose}><i className="ti ti-x" /></button>
+        </div>
+        <div className="esc-detail-body">
+          <div className="esc-detail-main">
+            <div className="cs-detail-label">{t("escDetailBuild")}</div>
+            <div className="esc-detail-equipgrid-wrap">
+              <EquipGrid
+                equip={equip}
+                weaponIs2H={weaponIs2H}
+                selectedQ={role.q_spell}
+                selectedW={role.w_spell}
+                selectedPassive={role.passive_spell}
+                gearSpells={role.gear_spells}
+                potionQty={role.build_items?.find(bi => bi.slot === "potion")?.quantity ?? 10}
+                foodQty={role.build_items?.find(bi => bi.slot === "food")?.quantity ?? 1}
+              />
+            </div>
+          </div>
+          <div className="esc-detail-items-col">
+            <div className="cs-detail-label">{t("escDetailItems")}</div>
+            <div className="esc-detail-items-list">
+              {visibleSlots.map(({ slot: slotName, primary, swaps, allSpells }) => {
+                const name = localName(primary, lang);
+                const hasSwaps = swaps.length > 0;
+                return (
+                  <div key={slotName} className={"esc-detail-item-row" + (hasSwaps ? " esc-detail-item-has-swaps" : "")}>
+                    <img className="esc-detail-item-render" src={itemUrl(primary.item_id, primary.quality || 1)} alt={name} title={name} />
+                    <div className="esc-detail-item-info">
+                      <div className="esc-detail-item-name">
+                        <span className="esc-detail-item-label">{name}</span>
+                        {allSpells.length > 0 && (
+                          <div className="esc-detail-item-spells">
+                            {allSpells.map(sid => (
+                              <img key={sid} src={spellUrl(sid)} alt="" className="esc-detail-spell-img" onError={e => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      {hasSwaps && (
+                        <div className="esc-detail-item-swaps">
+                          {swaps.map((sw, j) => {
+                            const altIdx = parseInt(sw.slot.match(/_alt_(\d+)$/)?.[1] ?? "0", 10);
+                            const altGearIds = Object.entries(role.gear_spells ?? {})
+                              .filter(([k]) => k.startsWith(`${slotName}_alt_${altIdx}_`))
+                              .map(([, v]) => v)
+                              .filter(Boolean) as string[];
+                            const swName = localName(sw, lang);
+                            return (
+                              <div key={sw.item_id + j} className="esc-detail-swap-inline">
+                                <img src={itemUrl(sw.item_id, sw.quality || 1)} alt={swName} title={swName} className="esc-detail-swap-render" />
+                                <span className="esc-detail-swap-name">{swName}</span>
+                                {altGearIds.length > 0 && (
+                                  <div className="esc-detail-swap-spells">
+                                    {altGearIds.map(sid => (
+                                      <img key={sid} src={spellUrl(sid)} alt="" className="esc-detail-spell-img" onError={e => { (e.currentTarget as HTMLImageElement).style.visibility = "hidden"; }} />
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+        {role.play_style && (
+          <div className="esc-detail-footer">
+            <span className="cs-detail-label">{t("escDetailStyle")}</span>
+            <span className="esc-detail-text">{role.play_style}</span>
+          </div>
+        )}
+        {role.obs && (
+          <div className="esc-detail-footer">
+            <span className="cs-detail-label">{t("escDetailObs")}</span>
+            <span className="esc-detail-text">{role.obs}</span>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -855,12 +998,36 @@ function PartyRows({
 function SlotCandidatePicker({
   candidates, open, onToggle, onPick, dropHint,
 }: {
-  candidates: EscalationOut["enlisted"];
+  candidates: EscalationSignup[];
   open: boolean;
   onToggle: () => void;
   onPick: (userId: number) => void;
   dropHint: string;
 }) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  // Coords do menu em position:fixed — escapa de qualquer overflow ancestral
+  // (party-slots, board-viewport) que cortava o menu. Só renderiza com coords.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  useEffect(() => {
+    if (!open) { setMenuPos(null); return; }
+    const r = btnRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const MW = 280, MH = 280;
+    let left = r.left;
+    if (left + MW > window.innerWidth - 8) left = Math.max(8, window.innerWidth - MW - 8);
+    let top = r.bottom + 4;
+    if (top + MH > window.innerHeight - 8) top = Math.max(8, r.top - 4 - MH);
+    setMenuPos({ top, left });
+  }, [open]);
+  // Rolar a faixa horizontal ou redimensionar desloca o botão: fecha o menu em
+  // vez de tentar reposicionar (menu é curto, reabrir é barato).
+  useEffect(() => {
+    if (!open) return;
+    const close = () => onToggle();
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => { window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
+  }, [open, onToggle]);
   useEffect(() => {
     if (!open) return;
     const close = (e: KeyboardEvent) => { if (e.key === "Escape") onToggle(); };
@@ -871,6 +1038,7 @@ function SlotCandidatePicker({
   return (
     <div className="cs-slot-pick">
       <button
+        ref={btnRef}
         type="button"
         className={"cs-slot-pick-btn" + (open ? " cs-slot-pick-open" : "")}
         onClick={(e) => { e.stopPropagation(); onToggle(); }}
@@ -882,10 +1050,10 @@ function SlotCandidatePicker({
           <span className="cs-empty">{dropHint}</span>
         )}
       </button>
-      {open && (
+      {open && menuPos && (
         <>
           <div className="cs-slot-pick-overlay" onClick={onToggle} />
-          <div className="cs-slot-pick-menu" onClick={(e) => e.stopPropagation()}>
+          <div className="cs-slot-pick-menu" style={{ position: "fixed", top: menuPos.top, left: menuPos.left }} onClick={(e) => e.stopPropagation()}>
             {count === 0
               ? <div className="hint cs-slot-pick-empty">Nenhum inscrito compatível</div>
               : candidates.map(s => (

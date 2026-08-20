@@ -3,7 +3,7 @@
 import { type ApiComp, type ApiRole, type RegearItem } from "../../api";
 import { RENDER_URL, ITEM_BY_ID, itemRenderUrl, type ItemSlot } from "../../data/albion-items";
 import { useT } from "../../i18n";
-import type { CompCode, CompCodeParty, CompCodeRole, Draft, DraftEquip, DraftRole, EquipItem, FnTypeDef } from "./types";
+import type { CompCode, CompCodeParty, CompCodeRole, Draft, DraftEquip, DraftRole, DraftSlot, EquipItem, FnTypeDef } from "./types";
 
 export const MAX_SLOTS = 20;
 
@@ -12,9 +12,18 @@ export const DEFAULT_FN_TYPES: FnTypeDef[] = [
   { key: "healer",      label: "Healer",      color: "#43B80E", emoji: "🕊️" },
   { key: "support",     label: "Suporte",     color: "#FFE04D", emoji: "✨" },
   { key: "dps",         label: "DPS",         color: "#FF2025", emoji: "🏹" },
-  { key: "pierce",      label: "Pierce",      color: "#06b6d4", emoji: "🎯" },
-  { key: "battlemount", label: "Battle Mount", color: "#a855f7", emoji: "🐲" },
+  { key: "battlemount", label: "Battlemount", color: "#a855f7", emoji: "🐴" },
 ];
+
+export function sortPartySlots(slots: DraftSlot[], types: FnTypeDef[]): DraftSlot[] {
+  const order = new Map(types.map((type, index) => [type.key, index]));
+  return [...slots].sort((a, b) =>
+    (order.get(a.fn ?? "") ?? types.length) - (order.get(b.fn ?? "") ?? types.length));
+}
+
+export function sortDraftSlots(draft: Draft, types: FnTypeDef[]): Draft {
+  return { ...draft, parties: draft.parties.map(party => ({ ...party, slots: sortPartySlots(party.slots, types) })) };
+}
 
 export function getFnDef(fn: string | null, types: FnTypeDef[]): FnTypeDef | undefined {
   if (!fn) return undefined;
@@ -103,6 +112,7 @@ export function compToDraft(c: ApiComp): Draft {
     parties: c.parties.map(p => ({
       name: p.name ?? "",
       slots: p.slots.map(s => ({
+        id: s.id,
         fn: s.fn ?? null,
         // flex removed: take first role only (silently drop rest on legacy data)
         role: s.roles.length ? apiRoleToDraft(s.roles[0]) : emptyRole(),

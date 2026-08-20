@@ -189,8 +189,9 @@ function SearchCard({ onClick, left, title, sub, meta, delay, region }: {
 // antes viviam numa barra separada (Multi, período, jogadores, kills) agora
 // entram como `extraFilters`, dentro da MESMA caixa — pedido explícito pra
 // não ter duas barras.
-export default function GlobalSearch({ onQueryChange, extraFilters }: {
+export default function GlobalSearch({ onQueryChange, extraFilters, battlesOnly }: {
   onQueryChange?: (q: string) => void; extraFilters?: React.ReactNode;
+  battlesOnly?: boolean;
 } = {}) {
   const t = useT();
   const [query, setQuery]   = useState("");
@@ -241,6 +242,9 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
           // Loading local desliga (a 1ª resposta já chegou); extLoading cuida
           // do spinner restante enquanto a busca externa roda.
           setLoading(false);
+          // Busca externa (Albion API) só faz sentido pra players/guilds/alliances
+          // — na página de Batalhas (battlesOnly), batalhas são tudo que importa.
+          if (battlesOnly) { setExtLoading(false); return; }
           setExtLoading(true);
           extTimer.current = setTimeout(() => {
             const ec = new AbortController();
@@ -285,7 +289,7 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
   }
 
   const active  = query.trim().length >= 2;
-  const total   = results ? results.players.length + results.guilds.length + results.alliances.length + results.battles.length : 0;
+  const total   = results ? (battlesOnly ? results.battles.length : results.players.length + results.guilds.length + results.alliances.length + results.battles.length) : 0;
   const anyLoading = loading || extLoading;
 
   // índice global para delay de stagger entre todas as linhas
@@ -334,7 +338,7 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
             )
           ) : (
             <>
-              {results.players.length > 0 && (
+              {!battlesOnly && results.players.length > 0 && (
                 <div>
                   <SectionHeader label={t("players")} count={results.players.length} />
                   <div className="space-y-2">
@@ -351,7 +355,7 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
                 </div>
               )}
 
-              {results.guilds.length > 0 && (
+              {!battlesOnly && results.guilds.length > 0 && (
                 <div>
                   <SectionHeader label={t("guildsLabel")} count={results.guilds.length} />
                   <div className="space-y-2">
@@ -368,7 +372,7 @@ export default function GlobalSearch({ onQueryChange, extraFilters }: {
                 </div>
               )}
 
-              {results.alliances.length > 0 && (
+              {!battlesOnly && results.alliances.length > 0 && (
                 <div>
                   <SectionHeader label={t("alliancesLabel")} count={results.alliances.length} />
                   <div className="space-y-2">

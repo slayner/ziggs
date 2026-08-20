@@ -118,56 +118,10 @@ a { color: var(--info); text-decoration: none; }
 .comp-name-input:focus { outline: none; background: var(--surface-2); }
 
 .sheet-wrap { overflow-x: auto; margin: 0; }
-.comp-sheet {
-  border-collapse: separate; border-spacing: 0; font-size: 13px; width: auto;
-}
-.comp-sheet th, .comp-sheet td { border-width: 0; }
-.comp-sheet thead th + th { border-left: 1px solid var(--border); }
-.comp-sheet tbody td + td { border-left: 1px solid var(--border); }
-.comp-sheet tbody tr td:first-child, .comp-sheet thead tr th:first-child { border-left: 1px solid var(--border); }
-.comp-sheet tbody tr { border-top: 1px solid var(--border); }
-.comp-sheet tbody td { border-top: 1px solid var(--border); }
-.comp-sheet thead th { border-top: 1px solid var(--border); }
-/* Sticky header da planilha: cola no topo ao rolar. Party header cola
-   abaixo do header. background cobre o conteúdo que passa por trás. */
-.comp-sheet thead th {
-  position: sticky; top: 0; z-index: 3; background: var(--surface-2);
-  padding: 5px 8px; white-space: nowrap; text-align: left;
-}
-.comp-sheet .cs-party-header {
-  position: sticky; top: 28px; z-index: 2;
-}
-.comp-sheet .cs-party-header td { background: var(--surface-2); }
-/* Colapso responsivo: hide-style(5) / hide-obs(6) / hide-price(7) escondem a
-   col + o th/td daquela posição. Linhas colSpan=7 (cabeçalho de party e detalhe
-   do meu slot) são nth-child(1), então não são afetadas. */
-.comp-sheet.hide-style col:nth-child(5),
-.comp-sheet.hide-style th:nth-child(5),
-.comp-sheet.hide-style td:nth-child(5),
-.comp-sheet.hide-obs col:nth-child(6),
-.comp-sheet.hide-obs th:nth-child(6),
-.comp-sheet.hide-obs td:nth-child(6) { display: none !important; }
-.comp-sheet th, .comp-sheet td {
-  border: 1px solid var(--border); vertical-align: middle; white-space: nowrap;
-}
+/* comp-sheet (planilha de escalação legada) removida na redesign ago/2026 —
+   a faixa horizontal de colunas de party substituiu a tabela. */
 
-/* Coluna de números de linha / botões de controle */
-.cs-rn {
-  width: 36px; min-width: 36px; background: var(--surface-2);
-  text-align: center; color: var(--hint); font-size: 11px;
-  padding: 0 4px; user-select: none;
-}
-
-/* Cabeçalho de party (coluna) */
-.cs-ph { background: var(--surface-2); min-width: 170px; }
-.cs-ph-inner { display: flex; align-items: center; padding: 5px 8px; gap: 4px; }
-.cs-pname {
-  flex: 1; background: transparent; border: none; color: var(--text);
-  font-size: 12px; font-weight: 600; min-width: 0; padding: 0;
-}
-.cs-pname:focus { outline: none; }
-
-/* Botão × (remover party / linha / função) */
+/* Botão × (remover party / linha / função) — reusado pelo CompEditor/CompList. */
 .cs-xbtn {
   background: transparent; border: none; color: var(--hint);
   cursor: pointer; padding: 2px 5px; font-size: 12px; border-radius: 4px;
@@ -175,7 +129,7 @@ a { color: var(--info); text-decoration: none; }
 }
 .cs-xbtn:hover { background: #2c1618; color: #e07a7a; }
 
-/* Botão + (adicionar party / vaga) */
+/* Botão + (adicionar party / vaga) — reusado pelo CompEditor. */
 .cs-addbtn {
   background: transparent; border: none; color: var(--hint);
   cursor: pointer; padding: 5px 10px; font-size: 12px;
@@ -183,37 +137,10 @@ a { color: var(--info); text-decoration: none; }
 }
 .cs-addbtn:hover { background: var(--surface-2); color: var(--text); }
 
-/* Células de dados */
-.cs-cell {
-  padding: 7px 12px; cursor: pointer; height: 38px;
-  max-width: 220px; overflow: hidden; text-overflow: ellipsis;
-}
-.cs-cell:hover:not(.sel) { background: rgba(91,141,239,.07); }
-.cs-cell.sel { outline: 2px solid var(--info); outline-offset: -2px; background: var(--info-soft); }
-.cs-cell.flex { color: var(--info); }
-.cs-cell .ct { font-size: 13px; }
-.cs-cell .ct + .ct::before { content: " / "; color: var(--hint); font-size: 11px; }
-.cs-cell .cs-lbl { color: var(--hint); font-style: italic; font-size: 12px; }
-.cs-cell .cs-empty { color: var(--border-strong); }
-/* Célula com popover de candidatos aberto — overflow visible pro menu
-   não ser cortado pela próxima linha da tabela. */
-.cs-cell-open { overflow: visible !important; }
-
-/* Linha de adicionar vaga */
-.cs-addrow { padding: 3px 8px !important; border-top: 1px dashed var(--border) !important; }
-
-/* Painel de edição */
-.cs-panel {
-  margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);
-}
-.cs-panel-hd {
-  font-size: 12px; color: var(--muted); margin-bottom: 12px;
-  display: flex; align-items: center; gap: 6px;
-}
+/* Campos de formulário — reusados por RolesPage/EventsPage. */
 .cs-panel-row { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
 .cs-field { display: flex; flex-direction: column; gap: 5px; }
 .cs-field-lbl { font-size: 11px; color: var(--hint); }
-.cs-role-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .cs-select {
   background: var(--surface-2); border: 1px solid var(--border-strong);
   color: var(--text); border-radius: var(--radius-sm); padding: 6px 10px;
@@ -424,59 +351,19 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .detail-section-title .ti { font-size: 13px; color: var(--hint); }
 
-/* ── Escalação: painel direito (título do evento + inscritos) ──────────── */
-/* esc-layout estica o painel direito pra acompanhar a altura da planilha,
-   sem afetar o CompBuilder (que reusa .comp-layout com align-items flex-start).
-   O painel imita a planilha: bordas retas (sem radius), cabeçalhos com
-   --surface-2, linhas com borda inferior — pra se enturmar com a tabela. */
-/* Painel SEMPRE no tamanho máximo (100vh), independente do tamanho da lista
-   de inscritos — a lista rola lá dentro (.esc-enlisted-list overflow-y). */
-.esc-layout { align-items: stretch; justify-content: center; gap: 0; position: relative; overflow-x: clip; }
-/* WIDE: [planilha | painel] em fluxo, centrado, painel colado à direita de price
-   (gap 0, sem cobertura). */
-.esc-layout .comp-left { flex: 0 0 auto; min-width: 0; }
-.esc-layout .comp-right {
-  flex: 0 0 320px;
-  box-shadow: -8px 0 16px -8px rgba(0,0,0,.55);
-  position: sticky; top: 0; align-self: flex-start;
-  height: 100vh; overflow: hidden;
-  z-index: 10;
-}
-/* NARROW: o bloco não cabe → o painel vira overlay cobrindo as colunas da
-   direita. A planilha fica alinhada à esquerda (role/player/build visíveis); o
-   painel é posicionado via JS (left) e nunca passa da direita de build (parede).
-   Se ainda assim não couber, .sheet-wrap rola horizontal — build nunca é escondida. */
-.esc-layout.esc-narrow .comp-left { flex: 1 1 auto; }
-.esc-layout.esc-narrow .comp-right {
-  position: fixed; top: 0; bottom: auto; width: 320px;
-  height: 100vh; align-self: flex-start; overflow: hidden;
-  z-index: 10;
-}
-.esc-panel {
-  display: flex; flex-direction: column; width: 100%; height: 100%;
-  padding: 0; overflow: hidden;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 0;
-}
-.esc-header {
-  display: flex; align-items: flex-start; gap: 10px;
-  padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--surface-2);
-}
-.esc-header-icon { font-size: 18px; color: var(--gold); margin-top: 1px; }
-.esc-header-text { flex: 1; min-width: 0; }
-.esc-title { font-size: 13px; font-weight: 600; line-height: 1.25; word-break: break-word; }
-.esc-readonly { margin-left: auto; flex-shrink: 0; }
-.esc-enlisted-head {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface-2);
-  font-weight: 600; font-size: 12px; color: var(--text);
-}
+/* ── Escalação (redesign ago/2026): rail de inscritos à esquerda + faixa
+   horizontal de colunas de party. As classes legadas da planilha/painel
+   direito (esc-layout, esc-panel, esc-signup*, cs-player-drag, cs-myrow,
+   cs-build-stack, cs-build-or, cs-party-header, cs-role-cell, cs-build-cell,
+   cs-role-weapon) foram removidas — substituídas por .esc-board-layout,
+   .esc-rail, .esc-party, .esc-slot. */
 .esc-count {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
   background: var(--gold-soft); color: var(--gold); font-size: 11px; font-weight: 700;
 }
 .esc-autofill {
-  margin-left: auto; padding: 2px 8px; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; font-size: 11px; font-weight: 600;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .esc-autofill:hover { border-color: var(--gold); color: var(--gold); }
@@ -486,7 +373,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .esc-autofill-on:hover { background: var(--gold); color: #1a1303; opacity: .9; }
 .esc-gatelock {
-  margin-left: 6px; padding: 2px 8px; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; font-size: 11px; font-weight: 600;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .esc-gatelock:hover { border-color: var(--gold); color: var(--gold); }
@@ -494,96 +381,16 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   background: var(--gold); border-color: var(--gold); color: #1a1303;
 }
 .esc-gatelock-on:hover { opacity: .9; }
-.esc-enlisted-list {
-  display: flex; flex-direction: column; overflow-y: auto; flex: 1; min-height: 0;
-}
 .esc-empty { margin: auto; text-align: center; }
-/* wrap: os chips de função (até ~300px num painel de 320px) não esmagam o
-   nome — quando não cabem na mesma linha, descem pra linha de baixo e o nome
-   fica sempre visível (também dentro do bracket, chips longos empilham). */
-.esc-signup {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 6px 10px;
-  border-left: 3px solid var(--border); border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  transition: background .12s, border-color .12s, box-shadow .12s; cursor: default;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-.esc-signup[draggable="true"] { cursor: grab; }
-.esc-signup[draggable="true"]:hover {
-  border-left-color: var(--gold); background: var(--surface-2);
-  box-shadow: 0 1px 3px rgba(0,0,0,.18);
-}
-.esc-signup[draggable="true"]:active { cursor: grabbing; }
-.esc-signup-grip {
-  font-size: 12px; color: var(--muted); flex-shrink: 0; opacity: .5;
-  transition: opacity .12s;
-}
-.esc-signup[draggable="true"]:hover .esc-signup-grip { opacity: 1; color: var(--hint); }
-.esc-signup-name {
-  font-size: 13px; font-weight: 600; min-width: 0; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap;
-}
-.esc-signup-fns { display: inline-flex; gap: 3px; flex-wrap: wrap; position: relative; }
-.esc-role-bracket {
-  display: inline-flex; gap: 3px; align-items: center; flex-wrap: wrap;
-  border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px;
-  background: rgba(255,255,255,.03);
-}
-.esc-role-bracket .esc-role-chip { border: 0; padding: 0; background: transparent; }
-.esc-role-tooltip {
-  display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 10;
-  gap: 3px; flex-wrap: wrap; max-width: 200px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 6px; box-shadow: 0 4px 12px rgba(0,0,0,.4);
-}
-.esc-signup-fns:hover .esc-role-tooltip { display: inline-flex; }
+.esc-signup-wbadge { background: var(--surface); color: var(--muted); font-size: 9px; padding: 1px 6px; }
 .esc-role-chip {
   display: inline-block; max-width: 150px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; border: 1px solid var(--border); border-radius: 999px;
   padding: 1px 6px; font-size: 10px; line-height: 15px; color: var(--hint);
   background: rgba(255,255,255,.03);
 }
-.esc-role-more {
-  border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px;
-  font-size: 10px; line-height: 15px; color: var(--gold); background: transparent;
-  cursor: pointer;
-}
-.esc-role-more:hover { border-color: var(--gold); }
-.esc-signup-check { color: var(--green); font-size: 12px; margin-left: auto; }
-/* Amarelo: escalado mas ainda pode preencher outro role vazio (arrastável) */
-.esc-signup-flexible {
-  border-left-color: var(--gold); background: var(--gold-soft);
-}
-.esc-signup-flexible:hover { background: var(--gold-soft); border-left-color: var(--gold); }
-.esc-signup-flexible .esc-signup-check { color: var(--gold); }
-/* Verde: escalado e não pode preencher mais nada (não arrastável da lista) */
-.esc-signup-complete {
-  border-left-color: var(--green); background: rgba(34,197,94,.08);
-}
-.esc-signup-complete:hover { background: rgba(34,197,94,.08); border-left-color: var(--green); }
-/* Cinza: escalado mas removeu o signup (assignment órfão) — libera o slot */
-.esc-signup-withdrawn {
-  border-left-color: var(--muted); background: var(--surface-2); opacity: .7;
-}
-.esc-signup-withdrawn:hover { background: var(--surface-2); border-left-color: var(--muted); }
-.esc-signup-withdrawn .esc-signup-check { color: var(--muted); }
-.esc-signup-wbadge { background: var(--surface); color: var(--muted); font-size: 9px; padding: 1px 6px; }
-
-/* Jogador arrastável de dentro do slot da tabela */
-.cs-player-drag {
-  cursor: grab; transition: background .12s, border-color .12s;
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 8px; border-radius: var(--radius-sm);
-  background: transparent; border: 1px solid rgba(91,141,239,.28);
-  font-size: 12px; line-height: 1; white-space: nowrap;
-}
-.cs-player-drag:hover { border-color: var(--gold); color: var(--gold); }
-.cs-player-drag:active { cursor: grabbing; }
-.cs-player-drag .cs-player-name { font-weight: 600; }
-.cs-player-drag .cs-xbtn { margin: 0 -4px 0 0; }
 
 /* ── Escalação: popover de candidatos por slot (vazio clicável) ──────────── */
-/* Botão no slot vazio: mostra nº de compatíveis ou hint de drag. Clic abre o menu. */
 .cs-slot-pick { position: relative; display: inline-flex; }
 .cs-slot-pick-btn {
   display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px;
@@ -617,10 +424,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .cs-slot-pick-fns { display: inline-flex; gap: 3px; flex-wrap: wrap; align-items: center; }
 .cs-slot-pick-more { font-size: 10px; color: var(--gold); padding: 0 2px; }
 
-/* Linha do próprio usuário (sua escalação) — destaque + expansão de build/skills */
-.cs-myrow { box-shadow: inset 3px 0 0 var(--gold); }
-.cs-myrow-detail td { background: var(--gold-soft) !important; padding: 10px 12px; border-top: 1px solid rgba(212,163,56,.25); }
-.cs-detail-inner { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+/* ── Detalhe (modal) — build, skills, swaps. Reusado pelo modal de detalhe. */
 .cs-detail-section { display: flex; flex-direction: column; gap: 5px; }
 .cs-detail-label { font-size: 10px; font-weight: 700; color: var(--gold); text-transform: uppercase; letter-spacing: .05em; }
 .cs-detail-skill-group { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
@@ -628,34 +432,247 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .esc-skills-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .esc-spell-img { width: 32px; height: 32px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); }
 
-/* ── Escalação: coluna Build (renders de itens) ────────────────────────── */
-.cs-role-cell { white-space: nowrap; }
-/* Build fica numa linha só — a célula cresce pra caber os tiles sem clipar
-   (herda max-width/overflow do .cs-cell; a planilha rola horizontal se precisar). */
-.cs-build-cell { max-width: none; overflow: visible; white-space: nowrap; }
-.cs-role-weapon {
-  display: inline-block; vertical-align: middle; width: 36px; height: 36px;
-  object-fit: contain; margin-right: 6px;
-}
+/* ── Build (renders de itens) — reusado no modal de detalhe e no flexPick. */
 .cs-build { display: flex; align-items: center; gap: 4px; }
 .cs-build-group { display: inline-flex; align-items: center; gap: 2px; }
-.cs-build-img {
-  width: 40px; height: 40px; object-fit: contain;
-}
+.cs-build-img { width: 40px; height: 40px; object-fit: contain; }
 .cs-build-img.alt { width: 32px; height: 32px; opacity: .85; }
 .cs-build-sep { width: 1px; height: 34px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
-
-/* Pilha de builds de um slot flex sem ninguém escalado — cada build numa linha,
-   separadas por um divisor "OU" (linha contínua atravessando a palavra). */
-.cs-build-stack { display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 2px 0; }
-.cs-build-or { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
-.cs-build-or-line { flex: 1; height: 1px; background: var(--border); }
-.cs-build-or-label {
-  font-size: 9px; font-weight: 700; letter-spacing: .08em; color: var(--muted);
-  text-transform: uppercase; flex-shrink: 0;
-}
+.cs-empty { color: var(--border-strong); }
 /* Modal flex: cada botão vira coluna (nome em cima, build embaixo). */
 .flexpick-btn .cs-build { flex-wrap: wrap; }
+
+/* ── Escalacao board (redesign ago/2026): rail de inscritos à esquerda +
+   faixa horizontal de colunas de party que NUNCA quebra em grid. ───────── */
+.esc-page { padding: 14px 16px; }
+/* Wrapper: board ocupa a tela inteira (o menu do evento mora na cabeça do rail). */
+.esc-page-wrap { display: flex; flex-direction: column; height: calc(100vh - 56px); min-height: 400px; }
+.esc-page-wrap .esc-board-layout { flex: 1 1 auto; height: auto; min-height: 0; }
+.esc-board-layout {
+  display: flex; align-items: stretch; gap: 0;
+  /* viewport-height: o rail e a faixa ocupam a altura disponível; a faixa
+     rola horizontal só dentro dela, o rail rola vertical só dentro dele.
+     Slots que excedem a altura scrollam dentro da coluna
+     (esc-party-slots overflow-y: auto). */
+  height: calc(100vh - 56px); min-height: 360px;
+}
+/* Manager: [rail fixo | faixa que rola horizontal]. Read-only: só a faixa. */
+.esc-board-readonly .esc-board-col { flex: 1 1 auto; }
+
+/* ── Rail de inscritos (manager) — fora do container de scroll horizontal. */
+.esc-rail {
+  flex: 0 0 280px; width: 280px; min-width: 280px; max-width: 280px;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); background: var(--surface);
+  overflow: hidden; position: sticky; left: 0; z-index: 5;
+}
+/* Menu do evento: título + comp · estado + ações de gestor — limitado ao
+   quadrante do rail (morava numa barra própria acima do board). */
+.esc-rail-event {
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  background: var(--surface-2); flex-shrink: 0;
+}
+.esc-rail-event-title {
+  font-size: 13px; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.esc-rail-event-sub {
+  font-size: 11px; margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.esc-rail-event-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.esc-rail-event-actions .btn { padding: 2px 8px; font-size: 11px; font-weight: 600; }
+.esc-rail-event-btn {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.esc-rail-event-btn:hover { border-color: var(--gold); color: var(--gold); }
+.esc-rail-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--surface-2);
+  font-weight: 600; font-size: 12px; color: var(--text); flex-shrink: 0;
+}
+.esc-rail-list { display: flex; flex-direction: column; overflow-y: auto; flex: 1; min-height: 0; }
+.esc-rail-ad { padding: 8px; flex-shrink: 0; border-top: 1px solid var(--border); }
+.esc-rail-card {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+  padding: 6px 10px; border-left: 3px solid var(--border); border-bottom: 1px solid var(--border);
+  background: var(--surface); transition: background .12s, border-color .12s, box-shadow .12s;
+  cursor: default; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.esc-rail-card[draggable="true"] { cursor: grab; }
+.esc-rail-card[draggable="true"]:hover {
+  border-left-color: var(--gold); background: var(--surface-2);
+  box-shadow: 0 1px 3px rgba(0,0,0,.18);
+}
+.esc-rail-card[draggable="true"]:active { cursor: grabbing; }
+.esc-rail-grip { font-size: 12px; color: var(--muted); flex-shrink: 0; opacity: .5; transition: opacity .12s; }
+.esc-rail-card[draggable="true"]:hover .esc-rail-grip { opacity: 1; color: var(--hint); }
+/* Re-entry no rail: card recém-montado anima a entrada. Cobertura completa
+   vem do key no TSX, que inclui o estado placed — desalocar alguém remonta
+   o card (volta do fim verde pro pool) e roda a animação. Reusa o keyframes
+   fade-in global; reduced-motion fica estático. */
+@media (prefers-reduced-motion: no-preference) {
+  .esc-rail-card { animation: fade-in .18s ease-out; }
+}
+.esc-rail-name {
+  font-size: 13px; font-weight: 600; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto;
+}
+.esc-rail-weapons { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.esc-rail-weapon {
+  width: 28px; height: 28px; object-fit: contain; border-radius: 3px;
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.esc-rail-more {
+  font-size: 14px; color: var(--hint); padding: 0 4px; line-height: 28px;
+  user-select: none; cursor: pointer;
+}
+.esc-rail-more:hover { color: var(--gold); }
+/* Verde: escalado (sempre — sem amarelo flex). */
+.esc-rail-placed {
+  border-left-color: var(--green); background: rgba(34,197,94,.08);
+}
+.esc-rail-placed:hover { background: rgba(34,197,94,.08); border-left-color: var(--green); }
+/* Cinza: escalado mas removeu o signup (assignment órfão) — libera o slot */
+.esc-rail-withdrawn { border-left-color: var(--muted); background: var(--surface-2); opacity: .7; }
+.esc-rail-withdrawn:hover { background: var(--surface-2); border-left-color: var(--muted); }
+
+/* ── Coluna da faixa: viewport que rola horizontal. */
+.esc-board-col { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.esc-board-viewport { flex: 1 1 auto; overflow-x: auto; overflow-y: auto; min-height: 0; }
+.esc-board-strip {
+  display: flex; align-items: stretch; gap: 0; width: max-content; min-height: 100%;
+}
+
+/* ── Coluna de party: slots verticais + célula final "PARTY N".
+   align-self:flex-start pra a coluna NÃO esticar até a altura da faixa —
+   assim a borda direita (separador entre parties) para no final do rodapé
+   em vez de extrapolobar a altura dos slots. */
+.esc-party {
+  display: flex; flex-direction: column; flex: 0 0 200px; align-self: flex-start;
+  border-right: 1px solid var(--border); min-height: 0;
+}
+.esc-party:last-child { border-right: 0; }
+.esc-party-slots { display: flex; flex-direction: column; flex: 0 0 auto; min-height: 0; overflow-y: auto; }
+/* Célula final: metade da altura de um slot (slot = 44px → 22px), texto
+   uppercase centralizado. Limita a lista e a borda direita da coluna. */
+.esc-party-foot {
+  display: flex; align-items: center; justify-content: center;
+  height: 22px; border-top: 1px solid var(--border); background: var(--surface-2);
+  font-size: 10px; font-weight: 700; color: var(--gold);
+  text-transform: uppercase; letter-spacing: .06em;
+  font-variant-numeric: tabular-nums; user-select: none;
+}
+
+/* ── Slot: arma E bracket do jogador na mesma linha. */
+.esc-slot {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; border-bottom: 1px solid var(--border);
+  background: var(--surface); transition: background .12s;
+  min-height: 44px;
+}
+.esc-slot:hover { background: var(--surface-2); }
+.esc-slot-filled { background: rgba(34,197,94,.08); }
+.esc-slot-filled:hover { background: rgba(34,197,94,.08); }
+.esc-slot-filled .esc-bracket { border-color: var(--green); }
+.esc-slot-mine { box-shadow: inset 3px 0 0 var(--gold); background: var(--gold-soft); }
+.esc-slot-mine:hover { background: var(--gold-soft); }
+.esc-slot-weapons { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.esc-slot-weapon { width: 32px; height: 32px; object-fit: contain; }
+/* Slot flex vazio: cluster de renders de todas as roles — compacto. */
+.esc-slot-weapons .esc-slot-weapon + .esc-slot-weapon { margin-left: -4px; }
+.esc-slot-empty-weapons { font-size: 12px; color: var(--border-strong); width: 32px; text-align: center; }
+.esc-slot-player { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
+
+/* Bracket do jogador escalado — clicável abre modal, arrastável move. */
+.esc-bracket {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: var(--radius-sm);
+  background: transparent; border: 1px solid var(--info);
+  font-size: 12px; line-height: 1; white-space: nowrap; color: var(--text);
+  cursor: pointer; font-family: inherit; transition: border-color .12s, color .12s, background .12s;
+  max-width: 100%; overflow: hidden;
+}
+.esc-bracket:hover { border-color: var(--gold); color: var(--gold); background: var(--gold-soft); }
+.esc-bracket:active { cursor: grabbing; }
+.esc-bracket-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.esc-bracket-grip { font-size: 11px; opacity: .5; flex-shrink: 0; }
+.esc-bracket-empty { border-color: var(--border); color: var(--border-strong); cursor: default; }
+
+/* ── Modal (flexPick + detalhe) — overlay escuro centrado. */
+.esc-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 50;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.esc-modal-card { width: 360px; max-width: 100%; max-height: 90vh; overflow-y: auto; padding: 14px; }
+.esc-modal-title { font-weight: 600; margin-bottom: 10px; }
+.esc-flexpick-list { display: flex; flex-direction: column; gap: 6px; }
+.flexpick-btn { justify-content: flex-start; align-items: stretch; flex-direction: column; gap: 4px; }
+.flexpick-btn-head { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ── Modal de detalhe. */
+.esc-detail-card { width: 820px; max-width: 96vw; }
+.esc-detail-head {
+  display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 10px;
+}
+.esc-detail-id { display: flex; flex-direction: column; gap: 2px; }
+.esc-detail-label {
+  font-size: 10px; font-weight: 700; color: var(--gold-soft);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.esc-detail-value { font-size: 14px; font-weight: 600; }
+.esc-detail-close {
+  margin-left: auto; padding: 2px 6px; background: transparent;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--muted); cursor: pointer;
+}
+.esc-detail-close:hover { border-color: var(--gold); color: var(--gold); }
+.esc-detail-body { display: flex; gap: 20px; align-items: flex-start; }
+.esc-detail-main { flex: 0 0 auto; }
+/* EquipGrid com células maiores dentro do modal */
+.esc-detail-equipgrid-wrap .rc-equip-cell { width: 88px; height: 88px; }
+.esc-detail-equipgrid-wrap .rc-equip-spell-overlay { gap: 3px; }
+.esc-detail-equipgrid-wrap .rc-equip-spell-dot { width: 22px; height: 22px; }
+.esc-detail-equipgrid-wrap .rc-equip-spell-dot img { width: 22px; height: 22px; }
+
+/* Coluna de itens à direita: nome + skills inline; swaps abaixo, lado a lado */
+.esc-detail-items-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.esc-detail-items-list { display: flex; flex-direction: column; gap: 6px; }
+/* Sem swap: nome centralizado verticalmente em relação ao render */
+.esc-detail-item-row { display: flex; align-items: center; gap: 8px; }
+/* Com swap: render e nome no topo, swaps abaixo */
+.esc-detail-item-row.esc-detail-item-has-swaps { align-items: flex-start; }
+.esc-detail-item-has-swaps .esc-detail-item-render { align-self: center; }
+.esc-detail-item-render { width: 48px; height: 48px; object-fit: contain; flex-shrink: 0; }
+.esc-detail-item-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+/* Com swap: info ocupa a linha toda abaixo do par render+nome */
+.esc-detail-item-has-swaps .esc-detail-item-info { flex-direction: column; }
+.esc-detail-item-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.esc-detail-item-label { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.esc-detail-item-spells { display: flex; gap: 3px; margin-left: 6px; flex-shrink: 0; }
+.esc-detail-spell-img { width: 20px; height: 20px; object-fit: contain; }
+/* Swaps: até 2 lado a lado, ocupando a linha */
+.esc-detail-item-swaps { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 2px; }
+.esc-detail-swap-inline { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; min-width: 0; }
+.esc-detail-swap-render { width: 28px; height: 28px; object-fit: contain; flex-shrink: 0; }
+.esc-detail-swap-name { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.esc-detail-swap-spells { display: flex; gap: 2px; flex-shrink: 0; }
+.esc-detail-swap-spells .esc-detail-spell-img { width: 16px; height: 16px; }
+.esc-detail-footer { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.esc-detail-text { font-size: 13px; color: var(--text); white-space: pre-wrap; }
+
+/* ── Responsivo: telas estreitas (mobile) — rail vira painel horizontal
+   acima da faixa, faixa continua horizontal e nunca quebra em grid. */
+@media (max-width: 720px) {
+  .esc-board-layout { flex-direction: column; height: auto; min-height: 0; }
+  .esc-rail {
+    flex: 0 0 auto; max-height: 180px; border-right: 0; border-bottom: 1px solid var(--border);
+    position: static;
+  }
+  .esc-board-viewport { overflow-x: auto; }
+  .esc-board-strip { width: max-content; }
+}
 
 /* ── Party card (ocupa largura total, empilhado verticalmente) */
 .party-card {
@@ -1183,10 +1200,11 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 /* Botão de remover slot — no header, à direita. Não absoluto, pra não
    sobrepor conteúdo no card expandido. Sutil por padrão, aparece no hover. */
 .rc-card-remove {
-  margin-left: auto; padding: 3px 6px; opacity: 0.5; transition: opacity 0.1s;
+  padding: 3px 6px; opacity: 0.5; transition: opacity 0.1s;
   flex-shrink: 0;
 }
-.rc-card-remove:hover { opacity: 1; }
+.rc-card-remove:hover, .rc-card-move:hover:not(:disabled) { opacity: 1; }
+.rc-card-move { padding: 3px 4px; opacity: 0.5; flex-shrink: 0; }
 
 .rc-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; position: relative; }
 /* Emoji da função — substitui o fn-dot. Clicável, abre fn-dropdown.
@@ -1224,8 +1242,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .rc-name-input:focus { outline: none; border-color: var(--info); }
 
 /* Big renders — todos os equipamentos + alts, mesmo tamanho, lado a lado. */
-.rc-head-renders { flex: 1; min-width: 0; display: flex; align-items: center; overflow: hidden; gap: 6px; }
-.rc-big-renders { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.rc-head-renders { flex: 1; min-width: 0; display: flex; justify-content: flex-end; align-items: center; overflow: hidden; gap: 6px; margin-left: auto; }
+.rc-big-renders { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; align-items: center; }
 .rc-big-render-slot { display: flex; flex-direction: row; gap: 3px; align-items: center; }
 .rc-big-render { width: 48px; height: 48px; object-fit: contain; border-radius: 4px; background: var(--surface-2); }
 .rc-big-render-alt { width: 48px; height: 48px; opacity: 1; }
@@ -1367,16 +1385,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   display: inline-flex; align-items: center; border-radius: 4px; flex-shrink: 0;
 }
 .party-collapse-btn:hover { background: var(--surface); color: var(--text); }
-
-/* Weapon icon in rc-head — os renders de item do Albion desenham o ícone
-   deslocado pro topo do canvas (sombra ocupa a faixa de baixo), então mesmo
-   centralizado pelo flex ele parece "subido" perto do texto; empurra alguns
-   px pra baixo pra compensar visualmente. */
-.rc-weapon-icon {
-  width: 48px; height: 48px; object-fit: contain; flex-shrink: 0;
-  border-radius: 4px; background: var(--surface-2);
-  transform: translateY(2px);
-}
 
 /* Fn type select in edit mode */
 .fn-type-select {
@@ -1529,6 +1537,75 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .management-workspace-head > span { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--border-strong); color: var(--gold); }
 .management-workspace-head h2 { margin: 1px 0 0; font-size: 16px; }
 .management-workspace-head p { margin: 0 0 0 auto; max-width: 290px; color: var(--hint); font-size: 11px; text-align: right; }
+.audit-console { border: 1px solid var(--border); background: #0b0d12; }
+.audit-console-head { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--gold); font: 700 10px ui-monospace, monospace; letter-spacing: .08em; }
+.audit-console-head small { color: var(--hint); font: 500 10px ui-monospace, monospace; }
+.audit-console-body { max-height: 620px; overflow: auto; padding: 8px; }
+.audit-console-entry { padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,.06); }
+.audit-console-entry:last-child { border-bottom: 0; }
+.audit-console-meta { display: flex; flex-wrap: wrap; gap: 5px 12px; color: var(--hint); font: 11px ui-monospace, monospace; }
+.audit-console-meta strong { color: #8dd4ff; }
+.audit-console-meta em { color: var(--muted); font-style: normal; }
+.audit-console-meta time { color: var(--gold); }
+.audit-console-entry pre { margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #b8c3cc; font: 10px/1.5 ui-monospace, monospace; }
+.audit-console-error { margin: 8px; color: #ff8e8e; font-size: 12px; }
+.audit-console-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.audit-filter-chip { background: none; border: 1px solid var(--border); color: var(--hint); padding: 3px 10px; border-radius: 999px; font: 600 10px ui-monospace, monospace; letter-spacing: .04em; cursor: pointer; transition: all .12s; }
+.audit-filter-chip:hover { color: var(--text); border-color: var(--border-strong); }
+.audit-filter-chip.active { color: var(--gold); border-color: var(--gold-soft); background: rgba(212,175,55,.08); }
+
+/* ── Portal do membro ("Meu painel") — reusa .card/.state-pill/.cs-select ── */
+.mp { display: flex; flex-direction: column; gap: 16px; }
+.mp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.mp-head .ti { color: var(--gold); font-size: 18px; }
+.mp-head h3 { margin: 0; font-size: 15px; }
+.mp-head .hint { margin: 1px 0 0; }
+.mp-balance-row { display: flex; gap: 28px; margin-bottom: 14px; }
+.mp-balance-row small { display: block; color: var(--hint); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.mp-balance { display: block; font-size: 26px; font-weight: 700; color: var(--gold); }
+.mp-sub { display: block; font-size: 15px; font-weight: 600; color: var(--muted); }
+.mp-error { color: #e07a7a; font-size: 12px; margin: 0 0 8px; }
+.mp-more { align-self: flex-start; margin-top: 10px; font-size: 12px; padding: 6px 12px; }
+/* Ledger de prata: data • kind (pill) • valor direcionado • contraparte. */
+.mp-ledger { width: 100%; border-collapse: collapse; font-size: 12px; }
+.mp-ledger td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.mp-ledger tr:last-child td { border-bottom: 0; }
+.mp-ledger .state-pill + .state-pill { margin-left: 4px; }
+.mp-undone td { opacity: .5; }
+.mp-date { color: var(--hint); white-space: nowrap; font-size: 11px; }
+.mp-amt { font-weight: 600; white-space: nowrap; text-align: right; }
+.mp-amt.in { color: var(--green); }
+.mp-amt.out { color: #e07a7a; }
+.mp-amt.neutral { color: var(--muted); }
+.mp-cp { color: var(--muted); }
+/* Energia: lista em linha (ts como vem do backend). */
+.mp-erow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 7px 2px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.mp-erow:last-of-type { border-bottom: 0; }
+.mp-erow .mp-amt { margin-left: auto; }
+.mp-player { font-weight: 600; }
+.mp-reason { color: var(--muted); }
+/* Roles arma+fn: chips agrupadas por arma. */
+.mp-wgroup { margin-bottom: 10px; }
+.mp-wgroup:last-of-type { margin-bottom: 0; }
+.mp-wname { display: block; color: var(--gold); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 5px; }
+.mp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mp-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 8px; font-size: 11px; }
+.mp-chip .chip-remove { background: none; border: none; cursor: pointer; padding: 0; font-family: inherit; }
+.mp-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-top: 12px; }
+.mp-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+/* ── Portal do membro — comps read-only + energy admin ─────────────────── */
+.mc-parties { display: flex; flex-direction: column; gap: 14px; }
+.mc-party { }
+.mc-slots { display: flex; flex-direction: column; gap: 8px; }
+.mc-slot { display: flex; align-items: flex-start; gap: 8px; }
+.mc-slot-fn { flex: 0 0 auto; }
+.mc-slot-roles { display: flex; flex-wrap: wrap; gap: 6px; }
+.mp-chip.selected { border-color: var(--gold); background: var(--gold-soft); }
+.mc-low td { background: rgba(224, 122, 122, .06); }
+.audit-load-more { display: block; width: 100%; margin-top: 8px; padding: 7px; border: 1px dashed var(--border-strong); background: transparent; color: var(--gold); font: 600 10px ui-monospace, monospace; cursor: pointer; }
+.audit-load-more:hover:not(:disabled) { border-color: var(--gold); }
+.audit-load-more:disabled { opacity: .5; cursor: wait; }
 
 @media (max-width: 1180px) {
   .discord-mini-promo :is(button, a) { min-width: 40px; }

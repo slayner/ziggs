@@ -10,7 +10,7 @@ import { ColorPicker } from "./ColorPicker";
 import { EquipStrip } from "./EquipStrip";
 import {
   ALT_CAPABLE, DEFAULT_FN_TYPES, MAX_SLOTS, buildItemsToEquip, emptyRole,
-  fnLabel, getFnDef, itemUrl, roleToPayload, safeAltArr, useEquipSlots,
+  fnLabel, getFnDef, itemUrl, roleToPayload, safeAltArr, sortDraftSlots, useEquipSlots,
 } from "./helpers";
 import { SpellPicker } from "./SpellPicker";
 import type {
@@ -32,6 +32,17 @@ function isDefaultFnTypes(list: FnTypeDef[]): boolean {
   if (list.length !== DEFAULT_FN_TYPES.length) return false;
   return list.every((t, i) =>
     t.key === DEFAULT_FN_TYPES[i].key && t.label === DEFAULT_FN_TYPES[i].label && t.color === DEFAULT_FN_TYPES[i].color);
+}
+
+function isLegacyDefaultFnTypes(list: FnTypeDef[]): boolean {
+  const legacy = [
+    ["tank", "Tank", "#1399FF", "🛡️"], ["healer", "Healer", "#43B80E", "🕊️"],
+    ["support", "Suporte", "#FFE04D", "✨"], ["dps", "DPS", "#FF2025", "🏹"],
+    ["pierce", "Pierce", "#06b6d4", "🎯"], ["battlemount", "Battle Mount", "#a855f7", "🐲"],
+  ];
+  return list.length === legacy.length && list.every((type, index) =>
+    type.key === legacy[index][0] && type.label === legacy[index][1]
+    && type.color === legacy[index][2] && type.emoji === legacy[index][3]);
 }
 
 // Nome de arma sem o prefixo de tier: "6.3 Realmbreaker" → "Realmbreaker",
@@ -102,7 +113,7 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
 }) {
   const t = useT();
   const EQUIP_SLOTS = useEquipSlots();
-  const [draft,            setDraft]            = useState<Draft | null>(initialDraft);
+  const [draft,            setDraft]            = useState<Draft | null>(() => sortDraftSlots(initialDraft, DEFAULT_FN_TYPES));
   const [openCard,         setOpenCard]         = useState<[number, number] | null>(null);
   const [dirty,            setDirty]            = useState(false);
   const [saving,           setSaving]           = useState(false);
@@ -126,9 +137,15 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
   useEffect(() => {
     api.getCompFnTypes()
       .then(({ fn_types }) => {
-        if (fn_types.length > 0) { setFnTypes(fn_types); return; }
+        if (fn_types.length > 0) {
+          const types = isLegacyDefaultFnTypes(fn_types) ? DEFAULT_FN_TYPES : fn_types;
+          setFnTypes(types);
+          setDraft(prev => prev ? sortDraftSlots(prev, types) : prev);
+          if (types !== fn_types && perms["comps.manage"]) api.putCompFnTypes(types).catch(() => {});
+          return;
+        }
         const local = readLocalFnTypes();
-        if (local && perms["comps.manage"] && !isDefaultFnTypes(local)) {
+        if (local && perms["comps.manage"] && !isDefaultFnTypes(local) && !isLegacyDefaultFnTypes(local)) {
           api.putCompFnTypes(local)
             .then(({ fn_types: saved }) => { setFnTypes(saved); localStorage.removeItem("hideout_fn_types"); })
             .catch(() => {});
@@ -144,12 +161,12 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
     setDraft(prev => {
       if (!prev) return prev;
       setHistory(h => [...h, prev]);
-      return fn(prev);
+      return sortDraftSlots(fn(prev), fnTypes);
     });
     setDirty(true); setSaveOk(false); setError(null);
   }
   function updQuiet(fn: (d: Draft) => Draft) {
-    setDraft(prev => prev ? fn(prev) : prev);
+    setDraft(prev => prev ? sortDraftSlots(fn(prev), fnTypes) : prev);
     setDirty(true); setSaveOk(false); setError(null);
   }
   function captureHistory() {
@@ -200,6 +217,8 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
   }
   function saveFnTypes(next: FnTypeDef[]) {
     setFnTypes(next);
+    setDraft(prev => prev ? sortDraftSlots(prev, next) : prev);
+    setDirty(true); setSaveOk(false);
     api.putCompFnTypes(next).catch(() => {});
   }
 
@@ -415,11 +434,20 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
     setWizFn(fnKey);
     setWizStep("weapon");
   }
+  function newSlotIndex(pi: number, fn: string | null): number {
+    const slots = draft?.parties[pi]?.slots ?? [];
+    const rank = (key: string | null) => {
+      const index = fnTypes.findIndex(type => type.key === key);
+      return index < 0 ? fnTypes.length : index;
+    };
+    const index = slots.findIndex(slot => rank(slot.fn) > rank(fn));
+    return index < 0 ? slots.length : index;
+  }
   // Wizard: selecionou arma → cria a role com fn + weapon, auto-nome, abre o card
   function wizardSelectWeapon(pi: number, weaponId: string, weaponName: string) {
     const base = wBase(weaponId);
     const dbWeapon = weapons.find(w => wBase(w.item_id) === base);
-    const idx = draft?.parties[pi].slots.length ?? 0;
+    const idx = newSlotIndex(pi, wizFn);
     const role = emptyRole();
     role.fn = wizFn;
     role.equip.weapon = { id: weaponId, name: weaponName };
@@ -437,13 +465,14 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
   }
   // Wizard: copiar build existente (mesma fn) → cria role copiada
   function wizardCopyRole(pi: number, src: DraftRole, srcFn: string | null) {
-    const idx = draft?.parties[pi].slots.length ?? 0;
+    const fn = srcFn ?? wizFn;
+    const idx = newSlotIndex(pi, fn);
     const copied: DraftRole = JSON.parse(JSON.stringify(src));
     copied.catalog_id = null;
     upd(d => ({
       ...d,
       parties: d.parties.map((p, i) =>
-        i !== pi ? p : { ...p, slots: [...p.slots, { fn: srcFn ?? wizFn, role: copied }] }
+        i !== pi ? p : { ...p, slots: [...p.slots, { fn, role: copied }] }
       ),
     }));
     setOpenCard([pi, idx]);
@@ -460,6 +489,23 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
       return pruneEmptyParties(next);
     });
     if (openCard?.[0] === pi && openCard?.[1] === si) setOpenCard(null);
+  }
+  function moveSlot(pi: number, si: number, direction: -1 | 1) {
+    if (!draft) return;
+    const slots = draft.parties[pi]?.slots;
+    const other = slots?.[si + direction];
+    if (!slots || !other || slots[si].fn !== other.fn) return;
+    upd(d => ({
+      ...d,
+      parties: d.parties.map((party, index) => {
+        if (index !== pi) return party;
+        const next = [...party.slots];
+        [next[si], next[si + direction]] = [next[si + direction], next[si]];
+        return { ...party, slots: next };
+      }),
+    }));
+    setOpenCard(null);
+    setEditingName(null);
   }
   async function deleteFromCatalog(catalogId: number, pi: number, si: number) {
     try {
@@ -498,8 +544,9 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
         name: draft.name,
         parties: newParties.map(p => ({
           name: p.name || null,
-          slots: p.slots.map(s => ({
-            label: s.role.name || null,
+            slots: p.slots.map(s => ({
+              id: s.id,
+              label: s.role.name || null,
             fn: s.fn,
             role_ids: s.role.catalog_id !== null ? [s.role.catalog_id] : [],
           })),
@@ -881,7 +928,7 @@ if (!draft) return <div className="container"><p className="muted">{t("loading")
                           className={`role-card${isSelected ? " rc-open" : ""}`}
                           onClick={() => toggleCard(pi, si)}>
 
-                          {/* Card head — emoji fn (clicável) + weapon icon + name (botão editar) + big renders + remove. */}
+                          {/* Card head — emoji fn (clicável) + name (botão editar) + renders + ações. */}
                           <div className="rc-head">
                             {/* Emoji da função (clicável, abre dropdown). Some quando expandido. */}
                             <span className={"rc-fn-emoji" + (slot.fn ? "" : " rc-fn-empty")}
@@ -909,11 +956,6 @@ if (!draft) return <div className="container"><p className="muted">{t("loading")
                                 ))}
                               </div>
                             )}
-                            {role.equip.weapon?.id && (
-                              <img className="rc-weapon-icon"
-                                src={itemUrl(role.equip.weapon.id)} alt=""
-                                onError={imgRetry(img => { img.style.opacity = "0.15"; })} />
-                            )}
                             {/* Nome: botão editar (não input). Clica → vira input. */}
                             {isEditingName ? (
                               <input className="rc-name-input" autoFocus
@@ -931,12 +973,20 @@ if (!draft) return <div className="container"><p className="muted">{t("loading")
                                 <i className="ti ti-pencil rc-name-edit-icon" aria-hidden />
                               </button>
                             )}
-                            {/* Big renders (todos os equipamentos + alts) — ocupa espaço do nome. */}
+                            {/* Big renders ficam ancorados no fim da bracket. */}
                             {!isSelected && role.equip_loaded && (
                               <div className="rc-head-renders">
                                 <BigRenders equip={role.equip} weaponIs2H={is2H(role.equip.weapon?.id)} />
                               </div>
                             )}
+                            <button className="cs-xbtn rc-card-move" disabled={si === 0 || party.slots[si - 1].fn !== slot.fn}
+                              onClick={e => { e.stopPropagation(); moveSlot(pi, si, -1); }} title={t("moveUpTitle")}>
+                              <i className="ti ti-chevron-up" aria-hidden />
+                            </button>
+                            <button className="cs-xbtn rc-card-move" disabled={si === party.slots.length - 1 || party.slots[si + 1].fn !== slot.fn}
+                              onClick={e => { e.stopPropagation(); moveSlot(pi, si, 1); }} title={t("moveDownTitle")}>
+                              <i className="ti ti-chevron-down" aria-hidden />
+                            </button>
                             <button className="cs-xbtn rc-card-remove"
                               onClick={e => { e.stopPropagation(); removeSlot(pi, si); }}
                               title={t("removeFromCompTitle")}>

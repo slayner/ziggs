@@ -260,6 +260,9 @@ export interface Permissions {
   "nodes.manage": boolean;
   "guild.admin": boolean;
   "escalacao.manage": boolean;
+  // Opcional: backends antigos (pré-energy-admin) não devolvem a chave —
+  // a aba Energia só aparece quando presente E true.
+  "energy.manage"?: boolean;
 }
 
 export const NO_PERMS: Permissions = {
@@ -274,6 +277,156 @@ export interface DiscordRole {
   name: string;
   color: number;
   permissions: Partial<Permissions>;
+}
+
+export interface AuditLogEntry {
+  id: number;
+  actor_id: string | null;
+  actor_name: string | null;
+  actor_type: string;
+  source: string;
+  action: string;
+  entity: string;
+  entity_id: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  note: string | null;
+  created_at: string;
+}
+
+// ── Portal do membro (/guilds/{guild_id}/member/*) ──────────────────────────
+// Rotas member-facing: exigem apenas membresia ativa (403 caso contrário),
+// não perms admin. Ver backend app/api/routes/member.py.
+export interface MemberWalletTx {
+  id: number;
+  kind: string;      // event_payout|event_deficit|pay|add|remove|forfeit|bank_adjust
+  direction: "in" | "out" | "neutral";  // derivada server-side, nunca do client
+  amount: number;
+  counterparty_name: string | null;
+  undone: boolean;
+  created_at: string;
+}
+export interface MemberWallet {
+  balance: number;
+  total_earned: number;
+  transactions: MemberWalletTx[];
+  total: number;
+}
+export interface MemberEnergyEntry {
+  id: number;
+  kind: string;  // log | adjustment | baseline
+  ts: string;
+  player: string;
+  reason: string | null;
+  amount: number;
+  created_at: string;
+}
+export interface MemberEnergy {
+  balance: number;
+  entries: MemberEnergyEntry[];
+  total: number;
+}
+export interface WeaponFnPref {
+  weapon_id: number;
+  fn: string;
+  weapon_name: string;
+}
+export interface WeaponFnValidPair {
+  weapon_id: number;
+  fn: string;
+  weapon_name: string;
+}
+
+// ── Portal do membro: eventos + inscrições + comps read-only ────────────────
+export interface MemberEventSummary {
+  id: number;
+  state: string; // scheduled | in_progress | review | finalized
+  type: string | null;
+  title: string | null;
+  caller_name: string | null;
+  scheduled_at: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  comp_id: number | null;
+  // True em scheduled/in_progress — a UI mostra signup. False em review/finalized.
+  can_signup: boolean;
+}
+export interface MemberPayoutRow {
+  user_id: number;
+  display_name: string;
+  silver_received: number;
+}
+export interface MemberSettlement {
+  tab_value: number;
+  total_paid: number;
+  participants: MemberPayoutRow[];
+}
+export interface MemberEventDetail {
+  id: number;
+  state: string;
+  type: string | null;
+  title: string | null;
+  message: string | null;
+  scheduled_at: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  comp: { id: number; name: string; description: string | null } | null;
+  settlement: MemberSettlement | null;
+}
+export interface MemberSignupOption {
+  key: string;
+  weapon_id: number;
+  weapon_name: string;
+  fn: string;
+  role_names: string[];
+}
+// Inscrição atual (signup): weapon_fns = [{weapon_id, fn}] na ordem de
+// preferência — casa com as options por (weapon_id, fn), não por string key.
+export interface MemberSignup {
+  id: number;
+  functions: string[];
+  weapon_fns: { weapon_id: number; fn: string | null }[];
+  created_at: string;
+}
+export interface MemberSignupOptions {
+  eligible: MemberSignupOption[];
+  block_reason: string | null;
+  preselected: string[];
+  min_builds: number | null;
+  current: MemberSignup | null;
+}
+export interface MemberCompSummary {
+  id: number;
+  name: string;
+  description: string | null;
+  archived: boolean;
+  party_count: number;
+}
+export interface MemberCompDetail {
+  id: number;
+  name: string;
+  description: string | null;
+  archived: boolean;
+  parties: ApiParty[];
+}
+
+// ── Admin de energia (/energy-admin/*; perm energy.manage) ──────────────────
+export interface EnergyAdminMember {
+  user_id: number;
+  display_name: string;
+  balance: number;
+  whitelisted: boolean;
+  low_energy: boolean;
+}
+export interface EnergyAdminOverview {
+  threshold: number;
+  members: EnergyAdminMember[];
+}
+export interface EnergyImportResult {
+  applied: number;
+  duplicates: number;
+  whitelisted_applied: number;
+  unregistered: Record<string, number>;
 }
 
 export interface SiteGuild {
@@ -293,7 +446,6 @@ export interface EventSummary {
   started_at: string | null;
   ended_at: string | null;
   comp_id: number | null;
-  seriousness: string;
   participation_mode: string;
   signup_mode: string;
   assignment_mode: string;
@@ -514,7 +666,6 @@ export interface EventDetail {
   tab_value: number;
   tab_image_url: string | null;
   battleboard_url: string | null;
-  seriousness: string;
   participation_mode: string;
   signup_mode: string;
   assignment_mode: string;
@@ -584,6 +735,7 @@ export interface EscalationRole {
   id: number;
   name: string;
   invisible_function: string | null;
+  weapon_id: number | null;
   weapon_name: string | null;
   offhand: string | null;
   helmet: string | null;
@@ -625,6 +777,11 @@ export interface EscalationSignup {
   user_id: number;
   user_name: string | null;
   functions: string[];
+  // Identidade do signup (ago/2026): pares (weapon_id, fn) + chaves prontas
+  // pra casar com os pares de cada slot. `functions` (nomes de GameRole) é
+  // legado — eventos finalizados sem backfill ficam só com functions.
+  weapon_fns: { weapon_id: number; fn: string | null }[];
+  keys: string[];
 }
 export interface EscalationOut {
   event: {
@@ -632,7 +789,6 @@ export interface EscalationOut {
     guild_id: string;
     title: string | null;
     scheduled_at: string | null;
-    seriousness: string;
     state: string;
     comp_id: number | null;
     comp_name: string | null;
@@ -809,6 +965,14 @@ export const api = {
     req<{ guild_id: string; bot_present: boolean }>(`/auth/switch-guild/${guild_id}`, { method: "POST" }),
   mySiteGuilds: () => req<SiteGuild[]>("/auth/my-site-guilds"),
   guildInfo: (guild_id: string) => req<SiteGuild & { albion_alliance_id: string | null; albion_alliance_name: string | null; settings: Record<string, unknown>; bank_balance: number }>(`/auth/guild-info/${guild_id}`),
+  guildAuditLog: (guild_id: string, params: { before_id?: number; after_id?: number; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.before_id) query.set("before_id", String(params.before_id));
+    if (params.after_id) query.set("after_id", String(params.after_id));
+    if (params.limit) query.set("limit", String(params.limit));
+    const suffix = query.size ? `?${query}` : "";
+    return req<{ entries: AuditLogEntry[]; has_more: boolean }>(`/auth/guilds/${guild_id}/audit-log${suffix}`);
+  },
   updateGuildSettings: (guild_id: string, payload: {
     albion_guild_name?: string | null; albion_guild_region?: string | null; register_role_id?: string | null;
     ally_role_id?: string | null; ally_allowed_guilds?: string[] | null; bot_language?: string | null;
@@ -816,7 +980,7 @@ export const api = {
     // vigia saídas removendo o cargo. False: checagem só no self-register;
     // registrar terceiros é de confiança (sem vigilância).
     register_remove_role_on_leave?: boolean | null;
-    events_channel_id?: string | null; event_review_channel_id?: string | null; event_role_gates?: Record<string, string[]> | null;
+    events_channel_id?: string | null; event_review_channel_id?: string | null; event_weapon_gates?: Record<string, string[]> | null;
     signup_min_builds?: number | null;
     nodes_calendar_channel_id?: string | null;
     voice_cta_channel_id?: string | null; trial_percent?: number | null;
@@ -1138,4 +1302,58 @@ export const api = {
   // evento pra perguntar se capturamos cada node e o valor vendido.
   nearNodes: (ts?: string) =>
     req<NearNodesOut>(`/guilds/${g()}/nodes/near${ts ? `?ts=${encodeURIComponent(ts)}` : ""}`),
+
+  // ── Portal do membro (/member/*) — carteira, energia, roles arma+fn ──────
+  // Guilda pelo prefixo g() (padrão dos tabs; o componente sincroniza com
+  // setGuild, ver RegearPage).
+  memberWallet: (limit = 50, offset = 0) =>
+    req<MemberWallet>(`/guilds/${g()}/member/wallet?limit=${limit}&offset=${offset}`),
+  memberEnergy: (limit = 50, offset = 0) =>
+    req<MemberEnergy>(`/guilds/${g()}/member/energy?limit=${limit}&offset=${offset}`),
+  memberWeaponFnPrefs: () =>
+    req<{ preferences: WeaponFnPref[]; valid_pairs: WeaponFnValidPair[] }>(`/guilds/${g()}/member/weapon-fn-preferences`),
+  memberWeaponFnPrefsPut: (preferences: { weapon_id: number; fn: string }[]) =>
+    req<{ preferences: WeaponFnPref[]; valid_pairs: WeaponFnValidPair[] }>(`/guilds/${g()}/member/weapon-fn-preferences`, {
+      method: "PUT",
+      body: JSON.stringify({ preferences }),
+    }),
+
+  // ── Portal do membro: eventos publicados + self-signup ────────────────────
+  memberEvents: () =>
+    req<MemberEventSummary[]>(`/guilds/${g()}/member/events`),
+  memberEvent: (eventId: number) =>
+    req<MemberEventDetail>(`/guilds/${g()}/member/events/${eventId}`),
+  memberSignupOptions: (eventId: number) =>
+    req<MemberSignupOptions>(`/guilds/${g()}/member/events/${eventId}/signup-options`),
+  memberSignup: (eventId: number, options: string[]) =>
+    req<MemberSignup>(`/guilds/${g()}/member/events/${eventId}/signup`, {
+      method: "POST",
+      body: JSON.stringify({ options }),
+    }),
+  memberSignupDelete: (eventId: number) =>
+    req<void>(`/guilds/${g()}/member/events/${eventId}/signup`, { method: "DELETE" }),
+
+  // ── Portal do membro: comps read-only ─────────────────────────────────────
+  memberComps: () =>
+    req<MemberCompSummary[]>(`/guilds/${g()}/member/comps`),
+  memberComp: (compId: number) =>
+    req<MemberCompDetail>(`/guilds/${g()}/member/comps/${compId}`),
+
+  // ── Admin de energia (perm energy.manage) ─────────────────────────────────
+  energyAdminOverview: () =>
+    req<EnergyAdminOverview>(`/guilds/${g()}/energy-admin/overview`),
+  energyAdminLogImport: (log_text: string) =>
+    req<{ result: EnergyImportResult }>(`/guilds/${g()}/energy-admin/log-import`, {
+      method: "POST",
+      body: JSON.stringify({ log_text }),
+    }),
+  energyAdminSet: (user_id: number, value: number, reason?: string) =>
+    req<{ user_id: number; balance: number }>(`/guilds/${g()}/energy-admin/set`, {
+      method: "POST",
+      body: JSON.stringify({ user_id, value, reason: reason || null }),
+    }),
+  energyAdminWhitelistToggle: (user_id: number) =>
+    req<{ user_id: number; whitelisted: boolean }>(`/guilds/${g()}/energy-admin/whitelist/${user_id}`, {
+      method: "POST",
+    }),
 };

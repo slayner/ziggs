@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ALBION_ITEMS, itemRenderUrl, ICON_SIZE_SM, type ItemSlot } from "../data/albion-items";
+import { ALBION_ITEMS, battleMountFamily, itemRenderUrl, ICON_SIZE_SM, type ItemSlot } from "../data/albion-items";
 import { imgRetry } from "../api";
 import { useLang, useT, itemLocalName } from "../i18n";
 
@@ -28,13 +28,17 @@ export function ItemPicker({ slot, valueId, valueName, onChange, placeholder, di
     () => excludeIds?.map(id => id.replace(/^T\d+_/, "").replace(/@\d+$/, "")) ?? [],
     [excludeIds]
   );
-  const slotItems = useMemo(
-    () => ALBION_ITEMS.filter(i => {
+  const slotItems = useMemo(() => {
+    const seenBattleMounts = new Set<string>();
+    return ALBION_ITEMS.filter(i => {
       if (i.slot !== slot) return false;
+      const family = battleMountFamily(i.id);
+      if (family && (seenBattleMounts.has(family) || !seenBattleMounts.add(family))) return false;
       if (!excludeBases.length) return true;
       const base = i.id.replace(/^T\d+_/, "").replace(/@\d+$/, "");
       return !excludeBases.includes(base);
-    }),
+    });
+  },
     [slot, excludeBases]
   );
 

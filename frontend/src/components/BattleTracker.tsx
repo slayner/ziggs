@@ -378,6 +378,7 @@ export default function BattleTracker({
     <div className="mx-auto w-full max-w-5xl px-4 py-6">
       <GlobalSearch
         onQueryChange={onSearch}
+        battlesOnly
         extraFilters={
           <>
             <button

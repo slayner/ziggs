@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, BOT_INVITE, type CatalogRole, type DiscordRole, type NodeDef, type NodeMaps, type Permissions, type RegearSettings, type SiteGuild } from "../api";
+import { api, BOT_INVITE, type DiscordRole, type NodeDef, type NodeMaps, type Permissions, type RegearSettings, type SiteGuild, type WeaponOut } from "../api";
 import { useLang, useT, REGION_LABELS, LANG_FULL, type Lang, type TKey } from "../i18n";
 import { ALBION_ITEMS, itemRenderUrl } from "../data/albion-items";
 import { Panel } from "./Panel";
@@ -231,8 +231,8 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [channels, setChannels] = useState<{ id: string; name: string }[] | null>(null);
   const [voiceChannels, setVoiceChannels] = useState<{ id: string; name: string }[] | null>(null);
   const [channelsErr, setChannelsErr] = useState<string | null>(null);
-  const [gameRoles, setGameRoles] = useState<CatalogRole[]>([]);
-  const [eventRoleGates, setEventRoleGates] = useState<Record<string, string[]>>({});
+  const [weapons, setWeapons] = useState<WeaponOut[]>([]);
+  const [eventWeaponGates, setEventWeaponGates] = useState<Record<string, string[]>>({});
   // MÃ­nimo de builds (funÃ§Ãµes) ao se inscrever. NÃ£o existe limite mÃ¡ximo.
   const [signupMinBuilds, setSignupMinBuilds] = useState<string>("");
   // Regear: canal de screenshots, % de cobertura, categorias cobertas, override
@@ -354,7 +354,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setJuicyKillMinSilver(String(g.settings.juicy_kill_min_silver ?? 50_000_000));
       setJuicyKillMinFame(String(g.settings.juicy_kill_min_fame ?? 0));
       setJuicyKillRegions((g.settings.juicy_kill_regions as string[] | undefined) ?? []);
-      setEventRoleGates((g.settings.event_role_gates as Record<string, string[]> | undefined) ?? {});
+      setEventWeaponGates((g.settings.event_weapon_gates as Record<string, string[]> | undefined) ?? {});
       setSignupMinBuilds(String(g.settings.signup_min_builds ?? ""));
       const commandRoles = g.settings.command_roles as Record<string, string[]> | undefined;
       // Sem nada salvo ainda, o default Ã© admin-only (ver DEFAULT_ALLOWED_ROLES
@@ -370,7 +370,7 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
     api.guildDiscordChannels(guildId, true)
       .then(setVoiceChannels)
       .catch(() => setVoiceChannels([]));
-    api.listRoles().then(setGameRoles).catch(() => setGameRoles([]));
+    api.listWeapons().then(setWeapons).catch(() => setWeapons([]));
     api.getRegearSettings()
       .then(s => { setRegear(s); setRegearEnabled(s.enabled); })
       .catch(() => setRegear(null));
@@ -907,25 +907,24 @@ async function saveJuicyKillMinSilver() {
   }
 
   function saveGates(next: Record<string, string[]>) {
-    setEventRoleGates(next);
-    api.updateGuildSettings(guildId, { event_role_gates: next }).catch(() => setEventRoleGates(eventRoleGates));
+    setEventWeaponGates(next);
+    api.updateGuildSettings(guildId, { event_weapon_gates: next }).catch(() => setEventWeaponGates(eventWeaponGates));
   }
 
-  function toggleGateRole(fnLower: string, roleId: string) {
-    const cur = eventRoleGates[fnLower] ?? [];
+  function toggleGateRole(weaponId: string, roleId: string) {
+    const cur = eventWeaponGates[weaponId] ?? [];
     const next = cur.includes(roleId) ? cur.filter(r => r !== roleId) : [...cur, roleId];
-    saveGates({ ...eventRoleGates, [fnLower]: next });
+    saveGates({ ...eventWeaponGates, [weaponId]: next });
   }
 
-  function addGate(fnName: string) {
-    const fnLower = fnName.toLowerCase();
-    if (eventRoleGates[fnLower]) return;
-    saveGates({ ...eventRoleGates, [fnLower]: [] });
+  function addGate(weaponId: string) {
+    if (eventWeaponGates[weaponId]) return;
+    saveGates({ ...eventWeaponGates, [weaponId]: [] });
   }
 
-  function removeGate(fnLower: string) {
-    const next = { ...eventRoleGates };
-    delete next[fnLower];
+  function removeGate(weaponId: string) {
+    const next = { ...eventWeaponGates };
+    delete next[weaponId];
     saveGates(next);
   }
 
@@ -1257,19 +1256,19 @@ async function saveJuicyKillMinSilver() {
                 </div>
                 <p className="text-xs text-zinc-500 mb-3">{t("roleGatesDesc")}</p>
 
-                {Object.keys(eventRoleGates).length === 0 && (
+                {Object.keys(eventWeaponGates).length === 0 && (
                   <p className="text-xs text-zinc-600 italic mb-3">{t("roleGatesEmpty")}</p>
                 )}
 
                 <div className="flex flex-wrap gap-2 mb-4">
-                  {Object.entries(eventRoleGates).map(([fnLower, roleIds]) => {
-                    const display = gameRoles.find(gr => gr.name.toLowerCase() === fnLower)?.name ?? fnLower;
+                  {Object.entries(eventWeaponGates).map(([weaponId, roleIds]) => {
+                    const display = weapons.find(weapon => String(weapon.id) === weaponId)?.name ?? weaponId;
                     return (
-                      <div key={fnLower} className="inline-flex flex-col w-fit max-w-[260px] rounded-lg border border-zinc-800 bg-zinc-900/80 p-3">
+                      <div key={weaponId} className="inline-flex flex-col w-fit max-w-[260px] rounded-lg border border-zinc-800 bg-zinc-900/80 p-3">
                         <div className="flex items-center gap-2 mb-2">
                           <span className="text-xs font-semibold text-zinc-200">{display}</span>
                           <button
-                            type="button" onClick={() => removeGate(fnLower)}
+                            type="button" onClick={() => removeGate(weaponId)}
                             className="text-xs text-zinc-500 hover:text-red-400"
                             title={t("remove")}
                           >
@@ -1279,7 +1278,7 @@ async function saveJuicyKillMinSilver() {
                         <div className="flex flex-wrap gap-1.5">
                           {(roles ?? []).map(r => (
                             <button
-                              key={r.id} type="button" onClick={() => toggleGateRole(fnLower, r.id)}
+                              key={r.id} type="button" onClick={() => toggleGateRole(weaponId, r.id)}
                               className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                                 roleIds.includes(r.id)
                                   ? "border-amber-500 bg-amber-500/15 text-amber-300"
@@ -1300,9 +1299,9 @@ async function saveJuicyKillMinSilver() {
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-400"
                 >
                   <option value="">{t("roleGatesAddFunction")}</option>
-                  {gameRoles
-                    .filter(gr => !eventRoleGates[gr.name.toLowerCase()])
-                    .map(gr => <option key={gr.id} value={gr.name}>{gr.name}</option>)}
+                  {weapons
+                    .filter(weapon => !eventWeaponGates[String(weapon.id)])
+                    .map(weapon => <option key={weapon.id} value={weapon.id}>{weapon.name}</option>)}
                 </select>
 
                 <div className="flex items-center gap-3 mt-5 mb-2">

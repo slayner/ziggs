@@ -175,9 +175,6 @@ export default function EventsPage({ perms, active = true }: { perms: Permission
               {e.caller_name && <span><i className="ti ti-user" aria-hidden="true" /> {e.caller_name}</span>}
             </small>
           </span>
-          {e.seriousness === "serious" && (
-            <i className="ti ti-alert-triangle ev-serious" title={t("evSeriousnessSerious")} aria-hidden="true" />
-          )}
           <StatePill state={e.state} />
           <i className={"ti ev-card-chevron " + (isExpanded ? "ti-chevron-up" : "ti-chevron-down")} aria-hidden="true" />
         </button>

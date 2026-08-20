@@ -63,7 +63,20 @@ function artAll(baseId: string, name: string, slot: ItemSlot, nameEn?: string): 
 // não leva prefixo numérico (noTier): "Mamute de Comando do Ancião", não
 // "8.0 Mamute de Comando do Ancião".
 function bm(id: string, namePt: string, nameEn: string): AlbionItem {
-  return { id, name: namePt, nameEn, noTier: true, slot: "weapon" };
+  return {
+    id,
+    name: namePt.replace(/(?: de (?:Cristal|Ouro|Prata|Bronze)| do Ancião)$/, ""),
+    nameEn: nameEn.replace(/^(?:Crystal|Gold|Silver|Bronze|Elder's) /, ""),
+    noTier: true,
+    slot: "weapon",
+  };
+}
+
+/** A família da BM ignora a skin sazonal; o picker mostra somente a primeira. */
+export function battleMountFamily(id: string): string | null {
+  return id.startsWith("UNIQUE_MOUNT_")
+    ? id.replace(/_(?:CRYSTAL|GOLD|SILVER|BRONZE)$/, "")
+    : null;
 }
 
 export const ALBION_ITEMS: AlbionItem[] = [

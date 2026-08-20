@@ -1468,28 +1468,55 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
     setBattle(null);
     setError(null);
 
+    let cancelled = false;
+    const ALWAYS_RETRYABLE = new Set([202, 502, 503, 504]);
+    const MAX_404_RETRIES = 6;
+    const POLL_DELAY = 3_000;
+    const MAX_POLL_DELAY = 30_000;
+
+    // Poll em /battles/by-code/{public_id} até a batalha estar deep-processada
+    // (202 = ainda processando, 200 = pronta). Atualiza a URL pro código curto.
+    const pollByCode = (publicId: string, delay: number) => {
+      fetch(`${API}/battles/by-code/${publicId}`)
+        .then(res => {
+          if (cancelled) return;
+          if (res.status === 404) throw new Error(t("battleNotFoundOldError"));
+          if (ALWAYS_RETRYABLE.has(res.status)) {
+            setTimeout(() => { if (!cancelled) pollByCode(publicId, Math.min(delay * 1.3, MAX_POLL_DELAY)); }, delay);
+            return;
+          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((data?: BattleDetail) => {
+          if (cancelled || !data) return;
+          navigateReplace(`/${data.public_id}`);
+          setBattle(data);
+          setResolving(false);
+        })
+        .catch(e => { if (!cancelled) { setError(e instanceof Error ? e.message : String(e)); setResolving(false); } });
+    };
+
     if (code) {
       fetch(`${API}/battles/by-code/${code}`)
         .then(res => {
-          if (!res.ok) throw new Error(res.status === 404 ? t("linkNotFoundError") : `HTTP ${res.status}`);
+          if (cancelled) return;
+          if (res.status === 404) throw new Error(t("linkNotFoundError"));
+          if (ALWAYS_RETRYABLE.has(res.status)) {
+            setResolving(true);
+            setTimeout(() => { if (!cancelled) pollByCode(code, POLL_DELAY); }, POLL_DELAY);
+            return;
+          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.json();
         })
-        .then(setBattle)
-        .catch(e => setError(e instanceof Error ? e.message : String(e)));
-      return;
+        .then((data?: BattleDetail) => { if (!cancelled && data) { setBattle(data); } })
+        .catch(e => { if (!cancelled) { setError(e instanceof Error ? e.message : String(e)); } });
+      return () => { cancelled = true; };
     }
 
     if (albionIds) {
       setResolving(true);
-      let cancelled = false;
-      // 404 só é retryable um número limitado de vezes (~2min de tentativas):
-      // cobre o caso de a batalha ter acabado de acontecer e a API do Albion
-      // ainda não ter indexado. Batalha antiga demais (não existe mais na API)
-      // também cai em 404 — sem o limite, ficava tentando pra sempre sem nunca
-      // mostrar nada pro usuário. 502/503/504 (instabilidade da própria API)
-      // continuam tentando indefinidamente, como antes.
-      const ALWAYS_RETRYABLE = new Set([502, 503, 504]);
-      const MAX_404_RETRIES = 6;
       const attempt = (delay: number, retries404Left: number) => {
         fetch(`${API}/battles/resolve`, {
           method: "POST",
@@ -1498,6 +1525,8 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
         })
           .then(res => {
             if (cancelled) return;
+            // 404 = batalha não existe na API do Albion (ainda não indexada ou
+            // antiga demais). Retry limitado pra não ficar pra sempre.
             if (res.status === 404 && retries404Left > 0) {
               setTimeout(() => { if (!cancelled) attempt(Math.min(delay * 2, 30_000), retries404Left - 1); }, delay);
               return;
@@ -1510,10 +1539,18 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.json();
           })
-          .then((data?: BattleDetail) => {
+          .then((data?: { public_id?: string; status?: string } & Partial<BattleDetail>) => {
             if (cancelled || !data) return;
+            // 202 = batalha criada mas ainda light (deep-process enfileirado).
+            // Troca a URL pro código curto e faz poll até ficar pronta.
+            if (data.status === "processing" && data.public_id) {
+              navigateReplace(`/${data.public_id}`);
+              setTimeout(() => { if (!cancelled) pollByCode(data.public_id!, POLL_DELAY); }, POLL_DELAY);
+              return;
+            }
+            // 200 = batalha já estava deep, detalhe pronto.
             navigateReplace(`/${data.public_id}`);
-            setBattle(data);
+            setBattle(data as BattleDetail);
             setResolving(false);
           })
           .catch(e => { if (!cancelled) { setError(e instanceof Error ? e.message : String(e)); setResolving(false); } });

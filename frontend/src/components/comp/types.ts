@@ -29,7 +29,7 @@ export type DraftRole = {
   potion_qty:    number;
   food_qty:      number;
 };
-export type DraftSlot  = { fn: string | null; role: DraftRole };
+export type DraftSlot  = { id?: number; fn: string | null; role: DraftRole };
 export type DraftParty = { name: string; slots: DraftSlot[] };
 export type Draft      = { id: number; name: string; parties: DraftParty[] };
 
