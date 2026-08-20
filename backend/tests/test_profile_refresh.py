@@ -56,7 +56,9 @@ def test_refresh_done_at_armado_so_em_sucesso():
     """O cooldown só arma quando o refresh REALMENTE aconteceu — timeout/host
     inválido não pode bloquear o retry do usuário."""
     src = inspect.getsource(pw.sync_refresh_requests)
-    assert "_refresh_done_at[player.albion_id]" in src, "arma o cooldown em sucesso"
+    # O loop desempacota `for albion_id, region in refresh_list:` — usa a var
+    # de loop, não `player.albion_id`. Casar o que o código realmente faz.
+    assert "_refresh_done_at[albion_id]" in src, "arma o cooldown em sucesso"
     assert "if ok:" in src, "só em sucesso (não em timeout/host inválido)"
 
 
@@ -95,6 +97,41 @@ def test_warm_player_grava_nucleo_antes_da_sync_de_kills():
         "upsert do núcleo do perfil deve vir ANTES da sync de kills"
 
 
+def test_cold_load_grava_nucleo_antes_da_sync_de_kills():
+    """Bug do 'primeira carga não salva': o cold load (by-name) rodava
+    sync_player_kills ANTES do upsert_player. O jogador podia NÃO existir no
+    banco ainda (primeira visita de verdade), e _record_kill_event resolve
+    killer_player_id/victim_player_id por lookup no banco — sem a linha do
+    jogador, os FKs ficam NULL. Como o dedupe é por (region, albion_event_id),
+    as kills/deaths ficavam orfanadas PRA SEME, e nem o refresh (warmer)
+    recuperava (os eventos já estavam no ledger, o sync pula). Regrediu em
+    produção: perfil mostrava fame (escalar, salva pelo upsert final) mas
+    as listas de kills/deaths vinham vazias até a galera clicar em ⟳ — que
+    também não resolvia. Mesma ordem do _warm_player (ver teste acima)."""
+    src = inspect.getsource(pl._cold_load_player)
+    assert src.index("upsert_player(db, raw, region)") < src.index("sync_player_kills("), \
+        "cold load deve gravar o núcleo do perfil (upsert_player) ANTES da sync de kills"
+
+
+def test_get_player_by_id_grava_nucleo_antes_da_sync_de_kills():
+    """Mesmo bug do cold load, na rota /players/{albion_id}: o jogador pode não
+    existir no banco ainda (deep link por ID cru, sem ter sido visto antes).
+    Mesma ordem do _warm_player / _cold_load_player."""
+    src = inspect.getsource(pl.get_player)
+    assert src.index("upsert_player(db, raw") < src.index("sync_player_kills("), \
+        "get_player deve gravar o núcleo (upsert_player) ANTES da sync de kills"
+
+
+def test_warm_by_name_grava_nucleo_antes_da_sync_de_kills():
+    """Mesmo bug no bootstrap do companion (warm_by_name — próprio char de
+    quem nunca caiu em ZvZ rastreada). O jogador é desconhecido por definição,
+    então o upsert primeiro é OBRIGATÓRIO — sem ele, TODA kill da primeira
+    sincronização fica órfã."""
+    src = inspect.getsource(pw.warm_by_name)
+    assert src.index("upsert_player(db, raw, region)") < src.index("sync_player_kills("), \
+        "warm_by_name (bootstrap) deve gravar o núcleo ANTES da sync de kills"
+
+
 def test_sync_player_kills_dedupe_antes_do_upsert_pesado():
     """Perf: evento já no ledger pula _upsert_event_players (um db.commit() por
     player). Sem o dedupe ANTES, um refresh de jogador ativo refazia centenas de
@@ -112,8 +149,10 @@ def test_sync_refresh_reseta_stage_pr_queued_em_falha():
     'queued' — senão o usuário vê 'buscando perfil' pra sempre num pedido que
     já falhou e está esperando refazer."""
     src = inspect.getsource(pw.sync_refresh_requests)
-    assert "_refresh_progress[player.albion_id] = \"queued\"" in src, "reseta stage em falha"
-    assert "_refresh_progress.pop(player.albion_id, None)" in src, "limpa stage em sucesso"
+    # O loop desempacota `for albion_id, region in refresh_list:` — usa a var
+    # de loop, não `player.albion_id`. Casar o que o código realmente faz.
+    assert "_refresh_progress[albion_id] = \"queued\"" in src, "reseta stage em falha"
+    assert "_refresh_progress.pop(albion_id, None)" in src, "limpa stage em sucesso"
 
 
 def test_endpoint_refresh_progress_existe():

@@ -44,10 +44,21 @@ _URGENT_REASONS = (REPROCESS_REASON_EMPTY, REPROCESS_REASON_FAILED)
 
 
 async def _reprocess_batch(client, db) -> int:
+    # Pula batalhas light com >= DEEP_PROCESS_MIN_PLAYERS — o
+    # _retry_stuck_battles (loop próprio) já as pega, e processar a mesma
+    # batalha nos dois loops causa UniqueViolation em battle_participants
+    # (cada um abre SyncSessionLocal separada, DELETE+INSERT concorrentes).
+    from app.services.battle_tracker import DEEP_PROCESS_MIN_PLAYERS
     priority = case((Battle.reprocess_reason.in_(_URGENT_REASONS), 0), else_=1)
     battles = (await db.scalars(
-        select(Battle).where(Battle.reprocess_reason.isnot(None))
-        .order_by(priority, Battle.id).limit(BATCH_SIZE)
+        select(Battle).where(
+            Battle.reprocess_reason.isnot(None),
+            ~(
+                (Battle.processing_tier == "light")
+                & (Battle.players_total >= DEEP_PROCESS_MIN_PLAYERS)
+            ),
+        )
+        .order_by(priority, Battle.start_time.desc()).limit(BATCH_SIZE)
     )).all()
     if not battles:
         return 0

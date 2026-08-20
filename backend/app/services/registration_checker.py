@@ -17,22 +17,61 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
 from app.auth import discord
 from app.config import get_settings
 from app.db import get_session
+from app.models.audit import AuditLog
 from app.models.registration import BotRegistration
 from app.models.tenancy import Guild
 from app.services.albion_gate import BOT_REGISTER, albion_scope, slot
 from app.services.player_tracker import HOSTS, make_client
 
 log = logging.getLogger(__name__)
-CHECK_INTERVAL = 6 * 3600  # segundos — mesma cadência do guild_check_loop do bot legado
+
+
+def _pick_best_match(matches: list[dict], owned_ids: set[str], alliance_id: str | None) -> dict:
+    """Desambigua múltiplos personagens de mesmo nome (case-insensitive):
+    prefere o que está numa das guildas próprias, depois na aliança, depois
+    qualquer um com guilda (evita o deletado sem guilda). Fallback: primeiro."""
+    if not matches:
+        return {}
+    for p in matches:
+        gid = str(p.get("GuildId") or "")
+        if gid and gid in owned_ids:
+            return p
+    if alliance_id:
+        for p in matches:
+            aid = str(p.get("AllianceId") or "") or None
+            if aid and aid == alliance_id:
+                return p
+    for p in matches:
+        if str(p.get("GuildId") or ""):
+            return p
+    return matches[0]
+
+
+# 15min entre ciclos completos — cadência pedida pelo dono pra revogar rápido
+# registros de aliados cuja guilda saiu da aliança. Antes era 6h (igual ao bot
+# legado), o que deixava membros com permissão por até 6h depois de uma guilda
+# aliada sair da aliança. O custo de cada ciclo é 1 HTTP por registro ativo
+# (GET /players/{id}); com registros na casa das centenas por guilda e poucas
+# guildas, isso ainda cabe folgado no pool reserved BOT_REGISTER (5 slots).
+CHECK_INTERVAL = 15 * 60
 VERIFY_MAX_ATTEMPTS = 3    # ciclos com nick não encontrado antes de revogar o registro manual
-VERIFY_POLL_INTERVAL = 15 * 60  # tick do loop; com verificação pendente roda o ciclo na hora
+VERIFY_POLL_INTERVAL = 15 * 60  # tick do loop; igual a CHECK_INTERVAL — ciclo roda todo tick
 _SEARCH_RETRIES = 2
+
+# Revogação por membresia NÃO é mais na primeira falha da API do Albion. A API
+# retorna GuildId vazio/404/stale temporariamente com frequência, e cada falha
+# virava revogação imediata de um membro que estava na guild. Agora acumula
+# fail_count; só revoga após REVOKE_AFTER_FAILS falhas CONSECUTIVAS em ciclos
+# diferentes. Sucesso zera o contador. Com intervalo de 15min, 4 falhas = 1h
+# de tolerância — tempo pra API se recuperar de um blip.
+REVOKE_AFTER_FAILS = 4
 
 
 def _manual_attempt_id(current_id: str, nick_lower: str) -> str | None:
@@ -53,14 +92,22 @@ def _manual_attempt_id(current_id: str, nick_lower: str) -> str | None:
     return f"manual:{nick_lower}#{tries}"
 
 
-async def _resolve_nick(client, name: str, region_pref: str | None):
+async def _resolve_nick(
+    client, name: str, region_pref: str | None,
+    owned_ids: set[str] | None = None, alliance_id: str | None = None,
+):
     """Busca o nick no search da API pública (mesma rota do /register).
     Devolve (found, região, any_host_ok): found=None com any_host_ok=True =
     nick não existe (resposta válida da API); any_host_ok=False = API fora do
-    ar/instável — NÃO conta como falha, o próximo ciclo tenta de novo."""
+    ar/instável — NÃO conta como falha, o próximo ciclo tenta de novo.
+
+    Se houver mais de um personagem com o mesmo nome (case-insensitive) — ex.:
+    um deletado sem guilda e um ativo na guilda configurada — prefere o que
+    está na guilda/aliança configurada (desambiguação igual ao /register)."""
     nl = name.lower()
     hosts = {region_pref: HOSTS[region_pref]} if region_pref in HOSTS else HOSTS
     any_ok = False
+    owned = owned_ids or set()
     for r, host in hosts.items():
         for attempt in range(_SEARCH_RETRIES):
             try:
@@ -72,10 +119,8 @@ async def _resolve_nick(client, name: str, region_pref: str | None):
             except Exception:
                 continue
             any_ok = True
-            match = next(
-                (p for p in resp.json().get("players", []) if (p.get("Name") or "").lower() == nl),
-                None,
-            )
+            matches = [p for p in resp.json().get("players", []) if (p.get("Name") or "").lower() == nl]
+            match = _pick_best_match(matches, owned, alliance_id) if matches else None
             if match:
                 return match, r, True
             break  # resposta válida sem o nick nessa região — não repete
@@ -99,8 +144,16 @@ def _membership_ok(found: dict, g_guild_id, g_alliance_id, g_settings: dict, own
 
 async def _revoke(db, reg: BotRegistration, bot_token: str | None, motivo: str) -> None:
     reg.active = False
-    # Persiste active=False e libera read tx antes do await (Discord API call
-    # em thread — read tx aberta impede wal_checkpoint).
+    db.add(AuditLog(
+        guild_id=reg.guild_id, actor_id=reg.discord_user_id,
+        actor_type="bot", source="bot",
+        action="registration.revoked", entity="bot_registration", entity_id=str(reg.id),
+        before={"albion_player_name": reg.albion_player_name, "role_id": str(reg.role_id), "active": True},
+        after={"active": False},
+        note=motivo,
+    ))
+    # Persiste active=False + AuditLog e libera read tx antes do await (Discord
+    # API call em thread — read tx aberta impede wal_checkpoint).
     db.commit()
     if bot_token:
         try:
@@ -111,6 +164,89 @@ async def _revoke(db, reg: BotRegistration, bot_token: str | None, motivo: str) 
         except Exception as e:
             log.warning("registration_checker: falha ao remover cargo de %s: %s", reg.discord_user_id, e)
     log.info("Registro de %s revogado (%s)", reg.albion_player_name, motivo)
+
+
+async def _mirror_ally_to_own_guild(
+    db, ally_reg: BotRegistration, player_guild_id: str, player_name: str,
+    player_alliance_id: str | None, player_id: str, region: str,
+    bot_token: str | None,
+) -> None:
+    """Quando um aliado é validado na guilda Ziggs A, e a guilda Albion dele é
+    uma `Guild` no Ziggs B com registration ativo, cria um `BotRegistration`
+    espelho na guilda B (membro direto, is_ally=False) e atribui o cargo no
+    Discord da guilda B — o aliado que já passava pela verificação constante
+    recebe automaticamente o cargo de registro na própria guilda dele quando
+    ele ativa o registration lá, sem precisar rodar /register de novo.
+    Idempotente: se já existe linha ativa, não duplica nem re-aplica o cargo."""
+    if not player_guild_id:
+        return
+    own_guild = db.scalar(select(Guild).where(Guild.albion_guild_id == player_guild_id))
+    if own_guild is None or own_guild.id == ally_reg.guild_id:
+        return  # a guilda Albion dele não é uma guilda no Ziggs, ou é a própria
+    own_settings = own_guild.settings or {}
+    own_role_id = own_settings.get("register_role_id")
+    if not own_role_id:
+        return  # guilda de destino não tem registration ativo — não há o que dar
+    # Já existe linha desse personagem + discord na guilda de destino?
+    existing = db.scalar(select(BotRegistration).where(
+        BotRegistration.guild_id == own_guild.id,
+        BotRegistration.albion_player_id == player_id,
+        BotRegistration.discord_user_id == ally_reg.discord_user_id,
+    ))
+    if existing is not None:
+        if not existing.active:
+            # Reativa linha inativa (voltou pra guilda própria depois de sair).
+            existing.active = True
+            existing.human_revoked_at = None
+            existing.albion_player_name = player_name
+            existing.region = region
+            existing.role_id = int(own_role_id)
+            existing.is_ally = False
+            db.commit()
+            await _apply_role(
+                str(own_guild.id), str(ally_reg.discord_user_id),
+                str(own_role_id), bot_token,
+            )
+        return
+    db.add(BotRegistration(
+        guild_id=own_guild.id,
+        discord_user_id=ally_reg.discord_user_id,
+        albion_player_id=player_id,
+        albion_player_name=player_name,
+        region=region,
+        role_id=int(own_role_id),
+        is_ally=False,
+        active=True,
+    ))
+    db.add(AuditLog(
+        guild_id=own_guild.id, actor_id=None, actor_type="system", source="system",
+        action="registration.mirror_ally", entity="bot_registration", entity_id=None,
+        after={
+            "albion_player_name": player_name, "albion_player_id": player_id,
+            "role_id": str(own_role_id), "from_guild_id": str(ally_reg.guild_id),
+            "player_guild_id": player_guild_id,
+            "alliance_id": player_alliance_id,
+        },
+        note=f"espelho auto: aliado válido em {ally_reg.guild_id} é membro direto aqui",
+    ))
+    db.commit()
+    await _apply_role(
+        str(own_guild.id), str(ally_reg.discord_user_id),
+        str(own_role_id), bot_token,
+    )
+    log.info("Espelho aliado: %s agora registrado em %s (guilda própria dele)",
+             player_name, own_guild.id)
+
+
+async def _apply_role(guild_id: str, user_id: str, role_id: str, bot_token: str | None) -> None:
+    """Atribui o cargo no Discord (best-effort: 403/404 = membro não está no
+    servidor, ignora — não dá erro)."""
+    if not bot_token:
+        return
+    try:
+        await asyncio.to_thread(discord.add_guild_member_role, guild_id, user_id, role_id, bot_token)
+    except Exception as e:
+        log.warning("registration_checker: falha ao aplicar cargo espelho em %s/%s: %s", guild_id, user_id, e)
 
 
 async def _verify_manual(db, client, bot_token: str, manual_by_guild: dict, guild_data: dict, owned_ids_by_guild: dict) -> None:
@@ -127,6 +263,7 @@ async def _verify_manual(db, client, bot_token: str, manual_by_guild: dict, guil
         for rid, _gid, region, _pid, albion_player_name, _ally, _uid, _role in rows:
             found, found_region, any_ok = await _resolve_nick(
                 client, albion_player_name, guild_region or region,
+                owned_ids=owned, alliance_id=g_alliance_id,
             )
             if not any_ok:
                 continue  # API fora do ar — não conta falha
@@ -251,26 +388,56 @@ async def _check_once() -> None:
                     player_guild_id = str(data.get("GuildId") or "") if data else None
                     player_alliance_id = (str(data.get("AllianceId") or "") or None) if data else None
 
+                    # 404/timeout/JSON inválido = API instável, NÃO é "saiu da
+                    # guild". Não conta falha nem sucesso — próxima tentativa.
+                    if data is None:
+                        continue
+
                     if is_ally:
                         allowed_allies = g_settings.get("ally_allowed_guilds") or ["none"]
                         still_valid = bool(
-                            data is not None
-                            and g_alliance_id
+                            g_alliance_id
                             and player_alliance_id == g_alliance_id
                             and ("all" in allowed_allies or player_guild_id in allowed_allies)
                         )
+                        # Aliado válido → espelha pra própria guilda dele se ela
+                        # existir no Ziggs (auto-registro sem /register manual).
+                        if still_valid and player_guild_id and albion_player_id:
+                            reg_snapshot = db.get(BotRegistration, rid)
+                            if reg_snapshot is not None:
+                                await _mirror_ally_to_own_guild(
+                                    db, reg_snapshot, player_guild_id,
+                                    albion_player_name, player_alliance_id,
+                                    albion_player_id, region, bot_token,
+                                )
                     else:
                         owned = owned_ids_by_guild.get(guild_id, set())
                         if g_guild_id:
                             owned.add(str(g_guild_id))
-                        still_valid = data is not None and player_guild_id in owned
+                        still_valid = player_guild_id in owned
 
-                    if still_valid:
+                    reg_fresh = db.get(BotRegistration, rid)
+                    if reg_fresh is None or not reg_fresh.active:
                         continue
 
-                    reg = db.get(BotRegistration, rid)
-                    if reg is not None:
-                        await _revoke(db, reg, bot_token, "saiu da aliança permitida" if is_ally else "saiu da guilda Albion")
+                    if still_valid:
+                        # Sucesso zera o contador de falhas consecutivas.
+                        if reg_fresh.fail_count > 0:
+                            reg_fresh.fail_count = 0
+                            reg_fresh.last_fail_at = None
+                            db.commit()
+                        continue
+
+                    # Falha real (API respondeu 200 mas GuildId não bate).
+                    # Acumula e só revoga após REVOKE_AFTER_FAILS consecutivas.
+                    reg_fresh.fail_count = (reg_fresh.fail_count or 0) + 1
+                    reg_fresh.last_fail_at = datetime.now(timezone.utc)
+                    db.commit()
+                    if reg_fresh.fail_count < REVOKE_AFTER_FAILS:
+                        log.info("registration_checker: %s falhou validação (%d/%d) — aguardando mais falhas antes de revogar",
+                                 albion_player_name, reg_fresh.fail_count, REVOKE_AFTER_FAILS)
+                        continue
+                    await _revoke(db, reg_fresh, bot_token, "saiu da aliança permitida" if is_ally else "saiu da guilda Albion")
 
         db.commit()
     except Exception:

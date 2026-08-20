@@ -45,12 +45,6 @@ class EventType(str, enum.Enum):
     LOOTSPLIT_REGEAR = "lootsplit_regear"
 
 
-class EventSeriousness(str, enum.Enum):
-    """Quão sério é o CTA — casual não exige atenção de todo mundo, sério sim."""
-    CASUAL = "casual"
-    SERIOUS = "serious"
-
-
 class ParticipationMode(str, enum.Enum):
     """Como a participação é capturada. voice_percent existe no modelo desde já,
     mas só presence tem a captura implementada por enquanto — ver

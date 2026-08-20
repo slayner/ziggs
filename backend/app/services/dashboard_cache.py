@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import OperationalError
 
 from app.db import SyncSessionLocal, AsyncSessionLocal
@@ -52,6 +52,10 @@ async def refresh_recent_battles() -> dict:
         .group_by(BattleParticipant.battle_id, BattleParticipant.guild_id)
         .having(func.count(BattleParticipant.id) >= DEFAULT_MIN_PLAYERS)
     )
+    min_players_filter = or_(
+        Battle.id.in_(big_guild_battle_ids),
+        Battle.players_total >= DEFAULT_MIN_PLAYERS,
+    )
     counts: dict[str, int] = {}
     async with AsyncSessionLocal() as db:
         for region in REGIONS:
@@ -59,9 +63,10 @@ async def refresh_recent_battles() -> dict:
                 select(Battle)
                 .where(
                     Battle.region == region,
+                    Battle.processing_tier == "deep",
                     Battle.is_lethal.is_(True),
                     Battle.kill_count >= DEFAULT_MIN_KILLS,
-                    Battle.id.in_(big_guild_battle_ids),
+                    min_players_filter,
                 )
                 .order_by(Battle.start_time.desc())
                 .limit(RECENT_BATTLES_PER_REGION)
@@ -84,9 +89,10 @@ async def refresh_recent_battles() -> dict:
             counts[region] = await db.scalar(
                 select(func.count(Battle.id)).where(
                     Battle.region == region,
+                    Battle.processing_tier == "deep",
                     Battle.is_lethal.is_(True),
                     Battle.kill_count >= DEFAULT_MIN_KILLS,
-                    Battle.id.in_(big_guild_battle_ids),
+                    min_players_filter,
                 )
             ) or 0
     rows.sort(key=lambda r: r["start_time"], reverse=True)

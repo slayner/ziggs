@@ -125,9 +125,8 @@ def _merge_parties(comp: Comp, parties: list[PartyIn]) -> None:
     são atualizados in-place; slots que sumiram são deletados (ondelete SET NULL
     nos assignments); slots novos são criados.
 
-    Match é por (party_position, slot_position) — o frontend sempre envia na
-    ordem visual, e position é o índice estável que não muda entre edits
-    (o CompBuilder não reordena slots arrastando, só adiciona/remove)."""
+    Slots existentes são identificados pelo id enviado pelo frontend. Isso deixa
+    a posição mudar sem trocar o EventAssignment de lugar."""
     # Indexa parties existentes por position.
     existing_parties: dict[int, CompParty] = {p.position: p for p in comp.parties}
 
@@ -140,19 +139,23 @@ def _merge_parties(comp: Comp, parties: list[PartyIn]) -> None:
         else:
             party.name = p_in.name
 
-        # Indexa slots existentes por position dentro da party.
-        existing_slots: dict[int, CompSlot] = {s.position: s for s in party.slots}
-        seen_slot_positions: set[int] = set()
+        existing_slots: dict[int, CompSlot] = {s.id: s for s in party.slots}
+        # Libera posições para o rearranjo antes de atribuir os índices finais.
+        for slot in party.slots:
+            slot.position += len(party.slots) + len(p_in.slots)
+        db.flush()
+        seen_slot_ids: set[int] = set()
 
         for s_idx, s_in in enumerate(p_in.slots):
-            seen_slot_positions.add(s_idx)
-            slot = existing_slots.get(s_idx)
+            slot = existing_slots.get(s_in.id) if s_in.id is not None else None
             if slot is None:
                 # Slot novo — cria.
                 slot = CompSlot(position=s_idx, label=s_in.label, notes=s_in.notes, fn=s_in.fn)
                 party.slots.append(slot)
             else:
+                seen_slot_ids.add(slot.id)
                 # Slot existe — atualiza metadados.
+                slot.position = s_idx
                 slot.label = s_in.label
                 slot.notes = s_in.notes
                 slot.fn = s_in.fn
@@ -171,7 +174,7 @@ def _merge_parties(comp: Comp, parties: list[PartyIn]) -> None:
 
         # Remove slots que sumiram dessa party.
         for slot in list(party.slots):
-            if slot.position not in seen_slot_positions:
+            if slot.id is not None and slot.id not in seen_slot_ids and slot not in party.slots[len(existing_slots):]:
                 party.slots.remove(slot)
 
     # Remove parties que sumiram.

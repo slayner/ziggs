@@ -20,7 +20,7 @@ from fastapi import HTTPException
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.orm import Session
 
-from app.api.routes.render import render_item
+from app.api.routes.render import render_item_for_card
 from app.models.players import AlbionPlayer, PlayerKillEvent
 from app.services.awakened import awakened_value, is_awakened
 from app.services.lethality import is_likely_lethal
@@ -168,6 +168,7 @@ GRID_W = GRID_COLS * (ICON_SIZE + SLOT_GAP)
 # Tamanho do render baixado do CDN — 128 é o maior size que o CDN serve
 #可靠 pra TODOS os itens (256 retorna 500 em vários). Upscale via LANCZOS.
 CDN_ICON_SIZE = 128
+_ICON_FETCH_ATTEMPTS = 3
 
 # Cores de tier (alinhadas com o site): T4=verde, T5=azul, T6=roxo, T7=dourado, T8=laranja
 _TIER_COLORS = {
@@ -202,16 +203,18 @@ def _generate_placeholder_icon(item_id: str, quality: int = 0) -> Image.Image:
 
 
 async def _fetch_item_icon(item_id: str, quality: int = 0) -> Image.Image | None:
-    try:
-        response = await render_item(item_id, quality, CDN_ICON_SIZE)
-    except HTTPException:
-        pass  # CDN não tem — gera placeholder abaixo
-    else:
+    for attempt in range(_ICON_FETCH_ATTEMPTS):
         try:
+            response = await render_item_for_card(item_id, quality, CDN_ICON_SIZE)
             img = Image.open(BytesIO(response.body)).convert("RGBA")
             return img.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
+        except HTTPException as exc:
+            if exc.status_code == 502 and attempt + 1 < _ICON_FETCH_ATTEMPTS:
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
         except Exception:
             pass
+        break
     # Fallback: ícone gerado com a cor do tier + nome encurtado.
     # A CDN da Albion não tem render pra TODOS os itens (kill trophies do
     # Mists, itens novos antes do render ser publicado, etc.). Em vez de

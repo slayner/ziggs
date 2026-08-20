@@ -4,16 +4,15 @@ quantidade + gate por cargo do Discord — porta de `bot/cogs/massinfo.py`
 Comp -> CompParty -> CompSlot -> CompSlotRole -> GameRole do site em vez da
 planilha/escalação do bot antigo.
 
-Granularidade: a "função" que aparece no picker é `GameRole.name` (não
-`CompSlot.fn`, que é só a categoria da vaga, nem `CompSlot.label`, texto
-livre). Categoria de agrupamento pro picker do bot vem de
-`GameRole.weapon_id -> Weapon.invisible_function` — o bot antigo usava um
-emoji prefixado no nome da função, mas os `GameRole` reais daqui não têm essa
-convenção (conferido direto no banco).
+Granularidade (ago/2026): a identidade de uma opção de signup é o par
+(Weapon.id, CompSlot.fn) — ver `pair_key`. Longbow+DPS e Longbow+Support são
+opções DISTINTAS no picker, no gate de quantidade e no autofill. A escolha de
+GameRole concreta (build) continua existindo só na atribuição de escalação
+(EventAssignment.game_role_id).
 
 Uma `CompSlot` = uma vaga (capacidade 1), não importa quantas `GameRole` ela
-aceita via `CompSlotRole`. "Preenchida" é uma aproximação: conta usuários
-distintos cuja primeira escolha (`function_1`) bate com alguma `GameRole` da
+aceita via CompSlotRole. "Preenchida" é uma aproximação: conta usuários
+distintos cuja primeira escolha (`weapon_fns[0]`) bate com algum par da
 party, até o limite de vagas da party — não há atribuição de vaga específica
 (o bot antigo tinha isso via célula nomeada da planilha; aqui é
 auto-inscrição, não escalação manual).
@@ -32,11 +31,28 @@ SIGNUPS_PER_PARTY = 20
 OPEN_PARTIES_AT_START = 2
 
 
+def function_key(name: str) -> str:
+    """Identity of a legacy GameRole-name option; display names stay readable."""
+    return " ".join(name.casefold().split())
+
+
+def fn_key(fn: str | None) -> str:
+    """Normaliza o fn do CompSlot (casefold/strip). Vazio/None vira 'other' —
+    mesma convenção de agrupamento do picker (FALLBACK_CATEGORY)."""
+    return " ".join((fn or "").casefold().split()) or "other"
+
+
+def pair_key(weapon_id: int, fn: str | None) -> str:
+    """Identidade de uma opção de signup: o par (Weapon.id, CompSlot.fn).
+    Longbow+DPS e Longbow+Support são chaves distintas."""
+    return f"w{int(weapon_id)}:{fn_key(fn)}"
+
+
 @dataclass
 class PartyDef:
-    """Só o que o gate precisa de uma party: capacidade e nomes de função."""
+    """Só o que o gate precisa de uma party: capacidade e pares oferecidos."""
     total_slots: int
-    role_names: set[str] = field(default_factory=set)
+    pair_keys: set[str] = field(default_factory=set)
 
 
 def _party_signup_threshold(party_num: int) -> int:
@@ -49,34 +65,34 @@ def _party_signup_threshold(party_num: int) -> int:
 
 def quantity_gate(
     parties: list[PartyDef],
-    signup_function_1s: list[str],
+    signup_first_pairs: list[str],
     functions_released: bool,
 ) -> set[str]:
-    """Funções liberadas pela cascata de abertura de parties. Fail-open (libera
+    """Pares liberados pela cascata de abertura de parties. Fail-open (libera
     tudo) se não há dados de vaga, se `functions_released=True` (equivalente
     ao /liberarfuncoes do bot antigo), ou se tudo já está cheio/fechado."""
-    all_roles: set[str] = set().union(*(p.role_names for p in parties)) if parties else set()
-    if not all_roles or functions_released:
-        return all_roles
+    all_pairs: set[str] = set().union(*(p.pair_keys for p in parties)) if parties else set()
+    if not all_pairs or functions_released:
+        return all_pairs
 
-    total_signups = len(signup_function_1s)
-    open_functions: set[str] = set()
+    total_signups = len(signup_first_pairs)
+    open_pairs: set[str] = set()
     for idx, party in enumerate(parties):
         party_num = idx + 1
         if party_num <= OPEN_PARTIES_AT_START:
             is_open = True
         else:
             prev = parties[idx - 1]
-            prev_filled = sum(1 for fn in signup_function_1s if fn in prev.role_names)
+            prev_filled = sum(1 for k in signup_first_pairs if k in prev.pair_keys)
             prev_remaining = max(0, prev.total_slots - prev_filled)
             is_open = prev_remaining <= PARTY_UNLOCK_REMAINING or total_signups >= _party_signup_threshold(party_num)
         if not is_open:
             continue
-        filled = sum(1 for fn in signup_function_1s if fn in party.role_names)
+        filled = sum(1 for k in signup_first_pairs if k in party.pair_keys)
         if filled < party.total_slots:
-            open_functions |= party.role_names
+            open_pairs |= party.pair_keys
 
-    return open_functions or all_roles  # nada aberto -> fail-open
+    return open_pairs or all_pairs  # nada aberto -> fail-open
 
 
 def role_gate_allows(
@@ -96,30 +112,49 @@ def role_gate_allows(
     return bool(discord_role_ids & required_ids)
 
 
-def eligible_functions(
+def weapon_gate_allows(
+    weapon_ids: set[int], discord_role_ids: set[int], weapon_gates: dict[str, list[str]],
+) -> bool:
+    """Any restricted weapon in a grouped role restricts that signup option."""
+    if not weapon_ids:
+        return True
+    return all(role_gate_allows(str(weapon_id), discord_role_ids, weapon_gates) for weapon_id in weapon_ids)
+
+
+def eligible_options(
     parties: list[PartyDef],
-    signup_function_1s: list[str],
+    signup_first_pairs: list[str],
     discord_role_ids: set[int],
-    event_role_gates: dict[str, list[str]],
+    event_weapon_gates: dict[str, list[str]],
     functions_released: bool,
     is_staff: bool,
+    option_weapons: dict[str, int] | None = None,
 ) -> tuple[list[str], str | None]:
-    """Combina quantity_gate ∩ role_gate. `is_staff` (quem tem events.manage)
-    ignora os dois gates, igual ao bypass de staff/council do bot antigo.
-    Retorna (funções, motivo_da_recusa) — motivo em (None, "no_slots", "no_role")."""
-    all_roles: set[str] = set().union(*(p.role_names for p in parties)) if parties else set()
-    if not all_roles:
+    """Combina quantity_gate ∩ weapon_gate sobre CHAVES DE PAR
+    (weapon_id, slot fn). `is_staff` (quem tem events.manage) ignora os dois
+    gates, igual ao bypass de staff/council do bot antigo. `option_weapons`
+    mapeia pair_key -> weapon_id (cada opção tem exatamente uma arma).
+    Retorna (pair_keys, motivo_da_recusa) — motivo em (None, "no_slots", "no_role")."""
+    all_pairs: set[str] = set().union(*(p.pair_keys for p in parties)) if parties else set()
+    if not all_pairs:
         return [], "no_slots"
 
     if is_staff:
-        return sorted(all_roles), None
+        return sorted(all_pairs), None
 
-    quantity_allowed = quantity_gate(parties, signup_function_1s, functions_released)
+    quantity_allowed = quantity_gate(parties, signup_first_pairs, functions_released)
     if not quantity_allowed:
         return [], "no_slots"
 
-    role_allowed = {f for f in quantity_allowed if role_gate_allows(f, discord_role_ids, event_role_gates)}
-    if not role_allowed:
+    option_weapons = option_weapons or {}
+    weapon_allowed = {
+        k for k in quantity_allowed
+        if weapon_gate_allows(
+            {option_weapons[k]} if k in option_weapons else set(),
+            discord_role_ids, event_weapon_gates,
+        )
+    }
+    if not weapon_allowed:
         return [], "no_role"
 
-    return sorted(role_allowed), None
+    return sorted(weapon_allowed), None

@@ -134,3 +134,16 @@ def remove_guild_member_role(guild_id: str, user_id: str, role_id: str, bot_toke
         )
         if r.status_code not in (204, 404):
             r.raise_for_status()
+
+
+def add_guild_member_role(guild_id: str, user_id: str, role_id: str, bot_token: str) -> None:
+    """PUT /guilds/{guild_id}/members/{user_id}/roles/{role_id} — usado pelo
+    registration_checker quando espelha um aliado pra própria guilda dele
+    (auto-registro sem interação do bot)."""
+    with httpx.Client(timeout=5) as c:
+        r = c.put(
+            f"{API}/guilds/{guild_id}/members/{user_id}/roles/{role_id}",
+            headers={"Authorization": f"Bot {bot_token}"},
+        )
+        if r.status_code not in (204, 403, 404):
+            r.raise_for_status()

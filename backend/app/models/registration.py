@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, func
-from sqlalchemy import DateTime
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, Snowflake, pk
@@ -42,6 +41,14 @@ class BotRegistration(Base):
     # em vez de membro direto — o check periódico revalida cada caso diferente.
     is_ally: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Decisão explícita no Discord (/unregister, remoção de cargo, kick ou ban).
+    # Retentativas automáticas iniciadas antes deste instante não podem reativar.
+    human_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Contador de falhas CONSECUTIVAS de revalidação (API do Albion instável
+    # retorna GuildId vazio/404 temporário). Só revoga depois de N falhas
+    # seguidas; sucesso zera. last_fail_at evita raiva dupla no mesmo ciclo.
+    fail_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
+    last_fail_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -79,9 +79,13 @@ def delete_event(
     event_id: int,
     guild: Guild = Depends(deps.tenant_guild),
     db: Session = Depends(deps.db_session),
+    user: User | None = Depends(deps.optional_user),
     _m=Depends(deps.require_permission("nodes.manage")),
 ):
-    if not svc.delete_event(db, guild.id, event_id):
+    if not svc.delete_event(
+        db, guild.id, event_id,
+        actor_id=user.id if user else None, actor_source="site",
+    ):
         raise HTTPException(status_code=404, detail="node não encontrado")
     db.commit()
 

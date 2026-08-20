@@ -36,7 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.rate_limit import RateLimitMiddleware
-from app.api.routes import auth, battles, catalog, claims, companion, comps, craft, events, highscores, loot, lootlog, market_history, meta, nodes, players, profiles, regear, render, scan, user_profile
+from app.api.routes import auth, battles, catalog, claims, companion, comps, craft, energy_admin, events, highscores, loot, lootlog, market_history, member, meta, nodes, players, profiles, regear, render, scan, user_profile
 from app.api.routes.render import run_prerender_forever
 from app.config import get_settings
 from app.domain.states import EventState, allowed_targets
@@ -175,6 +175,8 @@ app.include_router(comps.router)
 app.include_router(craft.router)
 app.include_router(events.router)
 app.include_router(events.public_router)
+app.include_router(member.router)
+app.include_router(energy_admin.router)
 app.include_router(highscores.router)
 app.include_router(loot.router)
 app.include_router(lootlog.router)

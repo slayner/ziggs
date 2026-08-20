@@ -5,7 +5,7 @@ import json as _json
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,10 @@ from app.api.schemas.catalog import (
 )
 from app.domain.suggestions import RoleBuild, suggest_build
 from app.models.catalog import GameRole, Weapon, WeaponSpell
+from app.models.comp_preferences import CompRolePreference
+from app.models.comps import Comp, CompParty, CompSlot, CompSlotRole
+from app.models.events import Event, EventSignup
+from app.domain.states import EventState
 from app.models.prices import ItemPriceLatest
 from app.models.tenancy import Guild
 from app.services.prices import _AVG_SENTINEL, sync_5city_prices
@@ -163,6 +167,7 @@ async def update_role(
     role = await db.get(GameRole, role_id)
     if role is None or role.guild_id != guild.id:
         raise HTTPException(status_code=404, detail="função não encontrada")
+    old_name = role.name
 
     # Detecta mudança de build — só os slots que exigem spec (arma, offhand,
     # capacete, armadura, bota). Capa/food/pot/skill/spell são ajustes que não
@@ -194,6 +199,8 @@ async def update_role(
         ))
 
     await db.flush()
+    if payload.name is not None and _role_key(old_name) != _role_key(role.name):
+        await _separate_renamed_role(db, guild, role_id, old_name)
     await db.commit()
     return _detail(role, await _get_weapon(db, role.weapon_id))
 
@@ -320,3 +327,75 @@ async def suggest(
             for k, v in result.fields.items()
         },
     )
+
+
+def _role_key(name: str) -> str:
+    return " ".join(name.casefold().split())
+
+
+async def _separate_renamed_role(
+    db: AsyncSession, guild: Guild, role_id: int, old_name: str,
+) -> None:
+    """Keep active events valid when one variant leaves a same-name signup group."""
+    old_key = _role_key(old_name)
+    await db.execute(delete(CompRolePreference).where(CompRolePreference.game_role_id == role_id))
+
+    active_events = list((await db.scalars(select(Event).where(
+        Event.guild_id == guild.id,
+        Event.state.in_((EventState.SCHEDULED, EventState.IN_PROGRESS)),
+        Event.comp_id.isnot(None),
+    ))).all())
+    affected: list[tuple[Event, list[EventSignup]]] = []
+    affected_comp_ids: set[int] = set()
+    for event in active_events:
+        role_ids = set((await db.scalars(
+            select(CompSlotRole.game_role_id)
+            .join(CompSlot, CompSlot.id == CompSlotRole.slot_id)
+            .join(CompParty, CompParty.id == CompSlot.party_id)
+            .where(CompParty.comp_id == event.comp_id)
+        )).all())
+        if role_id not in role_ids:
+            continue
+        affected_comp_ids.add(event.comp_id)
+        roles = list((await db.scalars(select(GameRole).where(GameRole.id.in_(role_ids)))).all())
+        if any(_role_key(item.name) == old_key for item in roles):
+            continue
+        signups = list((await db.scalars(select(EventSignup).where(EventSignup.event_id == event.id))).all())
+        changed = []
+        for signup in signups:
+            functions = [name for name in (signup.functions or []) if _role_key(name) != old_key]
+            if len(functions) != len(signup.functions or []):
+                signup.functions = functions
+                changed.append(signup)
+        if changed:
+            event.signup_message_dirty = True
+            affected.append((event, changed))
+
+    if affected:
+        comps = {
+            comp.id: comp.name
+            for comp in (await db.scalars(select(Comp).where(Comp.id.in_(affected_comp_ids)))).all()
+        }
+        settings = dict(guild.settings or {})
+        prompts = list(settings.get("pending_function_prompts") or [])
+        indexes = {(item.get("event_id"), item.get("user_id")): index for index, item in enumerate(prompts)}
+        for event, signups in affected:
+            for signup in signups:
+                payload = {
+                    "event_id": event.id, "user_id": signup.user_id,
+                    "title": event.title, "comp_name": comps.get(event.comp_id),
+                    "scheduled_at": event.scheduled_at.isoformat() if event.scheduled_at else None,
+                    "reason": "changed",
+                }
+                key = (event.id, signup.user_id)
+                if key in indexes:
+                    prompts[indexes[key]] = payload
+                else:
+                    indexes[key] = len(prompts)
+                    prompts.append(payload)
+        settings["pending_function_prompts"] = prompts
+        guild.settings = settings
+
+    from app.services.event_signups import _party_defs_cache
+    for comp_id in affected_comp_ids:
+        _party_defs_cache.pop(comp_id, None)

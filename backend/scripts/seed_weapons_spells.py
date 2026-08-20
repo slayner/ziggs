@@ -257,6 +257,25 @@ def _base_id(unique_name: str) -> str:
     return re.sub(r"^T\d+_", "", unique_name)
 
 
+def _display_name(name: str) -> str:
+    """Remove o adjetivo de tier do nome de catálogo (Adept's Battleaxe → Battleaxe)."""
+    return re.sub(
+        r"^(?:Beginner's?|Novice'?s?|Journeyman'?s?|Adept'?s?|Expert'?s?|Master'?s?|Grandmaster'?s?|Elder'?s?)\s+",
+        "", name,
+    )
+
+
+def _battle_mount_base(unique_name: str) -> str:
+    """Agrupa skins Silver/Gold/Crystal/Bronze da mesma battle mount."""
+    return re.sub(r"_(?:CRYSTAL|GOLD|SILVER|BRONZE)$", "", unique_name)
+
+
+def _battle_mount_name(name: str) -> str:
+    """Crystal Battle Rhino → Battle Rhino; Elder's Command Mammoth → Command Mammoth."""
+    name = _display_name(name)
+    return re.sub(r"^(?:Crystal|Gold|Silver|Bronze)\s+", "", name)
+
+
 def _normalize_name(spell_id: str) -> str:
     """GENEROUSHEAL → Generous Heal  |  PASSIVE_ENERGYCHANCE_HOLYSTAFF → Energy Chance"""
     s = re.sub(r"_(HOLYSTAFF|NATURESTAFF|ARCANESTAFF|CURSESTAFF|FIRESTAFF|FROSTSTAFF|"
@@ -358,7 +377,7 @@ def main() -> None:
             continue
         seen_bases.add(base)
 
-        display_name = name_map.get(uid, base.replace("_", " ").title())
+        display_name = _display_name(name_map.get(uid, base.replace("_", " ").title()))
         category = "two-hand" if any(base.startswith(p) for p in _TWOHANDED_PREFIXES) else "one-hand"
 
         weapon_rows.append(Weapon(
@@ -385,7 +404,7 @@ def main() -> None:
 
         weapon_rows.append(Weapon(
             item_id=uid,
-            name=name_map.get(uid, base.replace("_", " ").title()),
+            name=_display_name(name_map.get(uid, base.replace("_", " ").title())),
             invisible_function=_infer_fn(w),
             category="two-hand",
         ))
@@ -397,8 +416,13 @@ def main() -> None:
     battle_mounts = [m for m in all_mounts if m.get("@shopsubcategory1") == "battle_mount"]
     print(f"Battle mounts: {len(battle_mounts)}")
 
+    seen_battle_mounts: set[str] = set()
     for m in battle_mounts:
         uid  = m["@uniquename"]
+        mount_base = _battle_mount_base(uid)
+        if mount_base in seen_battle_mounts:
+            continue
+        seen_battle_mounts.add(mount_base)
         base = _base_id(uid)
         if base in seen_bases:
             continue
@@ -406,7 +430,7 @@ def main() -> None:
 
         weapon_rows.append(Weapon(
             item_id=uid,
-            name=name_map.get(uid, base.replace("_", " ").title()),
+            name=_battle_mount_name(name_map.get(uid, base.replace("_", " ").title())),
             invisible_function=_infer_fn(m),
             category="two-hand",  # BM não tem offhand
         ))

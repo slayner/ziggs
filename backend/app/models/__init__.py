@@ -8,7 +8,7 @@ from app.models.catalog import Weapon, GameRole, WeaponSpell  # noqa: F401
 from app.models.comps import (  # noqa: F401
     Comp, CompParty, CompSlot, CompSlotRole,
 )
-from app.models.comp_preferences import CompRolePreference  # noqa: F401
+from app.models.comp_preferences import CompRolePreference, WeaponFnPreference  # noqa: F401
 from app.models.events import (  # noqa: F401
     Event, EventParticipant, EventVerificationStep, EventStateTransition, EventSignup,
     EventAssignment,
@@ -28,6 +28,7 @@ from app.models.battles import (  # noqa: F401
 from app.models.claims import CharacterClaim, RegisteredCharacter  # noqa: F401
 from app.models.registration import BotRegistration  # noqa: F401
 from app.models.economy import EconomyBalance, EconomyTransaction  # noqa: F401
+from app.models.energy import EnergyBalance, EnergyEntry, EnergyWhitelist  # noqa: F401
 from app.models.regear import RegearRequest  # noqa: F401
 from app.models.lootlog import LootLogSubmission  # noqa: F401
 from app.models.nodes import (  # noqa: F401
@@ -47,7 +48,7 @@ __all__ = [
     "Guild", "User", "GuildMember", "GuildAlbionLink", "PremiumTier",
     "Weapon", "GameRole", "WeaponSpell",
     "Comp", "CompParty", "CompSlot", "CompSlotRole",
-    "CompRolePreference",
+    "CompRolePreference", "WeaponFnPreference",
     "Event", "EventParticipant", "EventVerificationStep", "EventStateTransition", "EventSignup", "EventAssignment",
     "AuditLog",
     "EventLootEntry", "GuildChestEntry", "ItemPriceCache", "LootVerification",
@@ -60,6 +61,7 @@ __all__ = [
     "CharacterClaim", "RegisteredCharacter",
     "BotRegistration",
     "EconomyBalance", "EconomyTransaction",
+    "EnergyBalance", "EnergyEntry", "EnergyWhitelist",
     "RegearRequest",
     "LootLogSubmission",
     "NodeDef", "NodeEvent", "NodeEventLog", "NodeMap", "NodeMapExclusion", "NodeCalendar",

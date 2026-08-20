@@ -40,7 +40,7 @@ def test_highscores_precompute_cycle_uses_async_session():
         assert db is session
         return {"source": "fresh"}
 
-    async def fake_rankings(db, *_args):
+    async def fake_rankings(db, *_args, **_kw):
         assert db is session
         return {"total": 0, "rows": []}
 

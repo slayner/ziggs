@@ -47,6 +47,15 @@ _SAFE_KEY = re.compile(r"^[\w@.\-' ]+$")
 _CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
 _MISSING_CACHE_HEADERS = {"Cache-Control": "public, max-age=300"}
 _VALID_ITEM_SIZES = (0, 64, 128)
+# Snap requested sizes to the closest valid value. Some callers (craft
+# calculator) request sizes like 32/48/96 — without this, they get HTTP 400
+# and no image renders. The CDN only produces 64/128; anything else is a
+# client-side display hint, not a different asset. Ties round UP so small
+# icons (32) get 64 (a real asset) instead of 0 (full-res default).
+def _snap_size(s: int) -> int:
+    if s in _VALID_ITEM_SIZES:
+        return s
+    return min(_VALID_ITEM_SIZES, key=lambda v: (abs(v - s), -v))
 
 # In-memory cache for HOT icons. The browser caches each icon once (immutable),
 # but different users repeat the same common icons (meta gear, weapons) — and
@@ -220,21 +229,10 @@ def _cache_has_real_render(cache_path: Path, key: str) -> bool:
     return _cached_real_render(cache_path, key) is not None
 
 
-def _cached_missing_render(cache_path: Path, mkey: str) -> bytes | None:
-    """Serve a known placeholder without reopening the CDN on every request."""
+def _cached_missing_render(cache_path: Path, mkey: str) -> bool:
+    """True if this render is known to be missing (marker file exists)."""
     marker = _missing_path(cache_path)
-    if not marker.exists():
-        return None
-    hot = _mem_get(mkey)
-    if hot is not None:
-        return hot
-    try:
-        content = cache_path.read_bytes()
-    except OSError:
-        marker.unlink(missing_ok=True)
-        return None
-    _mem_put(mkey, content)
-    return content
+    return marker.exists()
 
 
 def _cache_path(kind: str, key: str, quality: int = 0, size: int = 0) -> Path:
@@ -319,11 +317,28 @@ async def _fetch_render(
 async def render_item(
     key: str, quality: int = 0, size: int = 0,
 ) -> Response:
-    if not 0 <= quality <= 5 or size not in _VALID_ITEM_SIZES:
+    if not 0 <= quality <= 5:
         raise HTTPException(400, "invalid render parameters")
+    size = _snap_size(size)
     return await _cached_render(
         "item", key, _cache_path("item", key, quality, size), _request_params("item", quality, size)
     )
+
+
+async def render_item_for_card(key: str, quality: int = 0, size: int = 0) -> Response:
+    """Resolve a known miss once more before a permanent Discord card is made."""
+    try:
+        response = await render_item(key, quality, size)
+    except HTTPException as e:
+        if e.status_code != 404:
+            raise
+        outcome = await recover_render_miss("item", key, quality, size)
+        if outcome is True:
+            return await render_item(key, quality, size)
+        if outcome is None:
+            raise HTTPException(502, "Albion render unavailable")
+        raise
+    return response
 
 
 # Spell icon, for the companion damage meter. No quality/size: the spell CDN
@@ -351,10 +366,9 @@ async def _cached_render(
 
     mkey = str(cache_path)
     key_lock = _KEY_LOCKS[hash(mkey) % len(_KEY_LOCKS)]
-    missing = _cached_missing_render(cache_path, mkey)
-    if missing is not None:
+    if _cached_missing_render(cache_path, mkey):
         await _record_render_miss(kind, key, params.get("quality", 0), params.get("size", 0))
-        return Response(content=missing, media_type="image/png", headers=_MISSING_CACHE_HEADERS)
+        raise HTTPException(404, "render not found")
     hot = _mem_get(mkey)
     if hot is not None:  # hot icon: served from RAM, no stat or disk
         return Response(content=hot, media_type="image/png", headers=_CACHE_HEADERS)
@@ -366,10 +380,9 @@ async def _cached_render(
     try:
         async with key_lock:
             # Fetch and write share the lock so a cold key has one CDN request.
-            missing = _cached_missing_render(cache_path, mkey)
-            if missing is not None:
+            if _cached_missing_render(cache_path, mkey):
                 await _record_render_miss(kind, key, params.get("quality", 0), params.get("size", 0))
-                return Response(content=missing, media_type="image/png", headers=_MISSING_CACHE_HEADERS)
+                raise HTTPException(404, "render not found")
             hot = _mem_get(mkey)
             if hot is not None:
                 return Response(content=hot, media_type="image/png", headers=_CACHE_HEADERS)
@@ -380,15 +393,11 @@ async def _cached_render(
             async with _FETCH_SEM:
                 content = await _fetch_render(kind, key, params, fallback)
             if content is None:
-                placeholder = _generate_placeholder(key)
-                if placeholder is None:
-                    raise HTTPException(404, "render not found")
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                cache_path.write_bytes(placeholder)
                 _missing_path(cache_path).touch(exist_ok=True)
-                _mem_put(mkey, placeholder)
+                _mem_drop(mkey)
                 await _record_render_miss(kind, key, params.get("quality", 0), params.get("size", 0))
-                return Response(content=placeholder, media_type="image/png", headers=_MISSING_CACHE_HEADERS)
+                raise HTTPException(404, "render not found")
 
             # Written under the original key even when it came from spell fallback.
             cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -413,7 +422,7 @@ async def recover_render_miss(kind: str, key: str, quality: int, size: int) -> b
     fallback = _spell_display_names().get(key) if kind == "spell" else None
     async with key_lock:
         missing = _cached_missing_render(cache_path, mkey)
-        if missing is None and _cache_has_real_render(cache_path, key):
+        if not missing and _cache_has_real_render(cache_path, key):
             _missing_path(cache_path).unlink(missing_ok=True)
             _mem_drop(mkey)
             return True
@@ -423,12 +432,6 @@ async def recover_render_miss(kind: str, key: str, quality: int, size: int) -> b
         except httpx.HTTPError:
             return None
         if content is None:
-            if not cache_path.exists():
-                placeholder = _generate_placeholder(key)
-                if placeholder is not None:
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_bytes(placeholder)
-                    _mem_put(mkey, placeholder)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             _missing_path(cache_path).touch(exist_ok=True)
             return False
@@ -445,7 +448,8 @@ _ITEM_CACHE_FILE = re.compile(r"^(.*)_q(\d+)_s(\d+)\.png$")
 
 
 def discover_cached_render_misses(cache_dir: Path = _CACHE_DIR) -> list[tuple[str, str, int, int]]:
-    """Mark old generated placeholders so deployments also heal past misses."""
+    """Mark old generated placeholders so deployments also heal past misses.
+    Legacy placeholder PNGs are deleted so the CDN gets re-tried on next access."""
     misses: set[tuple[str, str, int, int]] = set()
     for cache_path in cache_dir.glob("*.png"):
         match = _ITEM_CACHE_FILE.match(cache_path.name)
@@ -463,6 +467,8 @@ def discover_cached_render_misses(cache_dir: Path = _CACHE_DIR) -> list[tuple[st
                 continue
             if _is_generated_placeholder(content, key):
                 marker.touch(exist_ok=True)
+                cache_path.unlink(missing_ok=True)
+                _mem_drop(str(cache_path))
                 misses.add(identity)
     return sorted(misses)
 

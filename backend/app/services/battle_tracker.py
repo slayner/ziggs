@@ -636,16 +636,47 @@ async def resolve_by_albion_id(client: httpx.AsyncClient, db: AsyncSession, albi
     região), senão tenta os 3 hosts (cada ID só existe de fato numa região, as
     outras 2 respondem 404). Resolvida explicitamente por alguém, sempre processa
     em profundidade (builds/lados) mesmo que a luta seja pequena."""
+    battle = await find_or_create_battle(client, db, albion_id)
+    if battle is None:
+        return None
+
+    if battle.processing_tier != "deep" or not _is_frozen(battle, datetime.now(timezone.utc)):
+        try:
+            # Usuário forçou a batalha pelo ID → prioridade máxima (mesmo nível
+            # de uma pesquisa de perfil: humano esperando o resultado).
+            async with albion_scope(PROFILE):
+                await deep_process(client, db, battle, HOSTS[battle.region])
+        except Exception as e:
+            log.warning("battle_tracker: falha ao resolver %s: %s", albion_id, e)
+
+    return battle
+
+
+async def find_or_create_battle(client: httpx.AsyncClient, db: AsyncSession, albion_id: str) -> Battle | None:
+    """Acha a batalha pelo ID cru do Albion na nossa base, senão busca nos 3
+    hosts e cria o registro light. NÃO faz deep_process — só garante que a
+    batalha existe na base. Usado por /battles/resolve quando não queremos
+    bloquear a request esperando o deep-process completar.
+
+    Se a batalha já foi deep-processada e descartada (probe 'missing' = não
+    era lethal), retorna None — não recria pra não entrar em loop infinito
+    (criar light → enfileirar deep → descobrir não-lethal → deletar → ...)."""
     existing = (await db.scalars(
         select(Battle).where(Battle.albion_id == albion_id).order_by(Battle.start_time.desc())
     )).all()
     battle = existing[0] if existing else None
-    host = HOSTS.get(battle.region) if battle else None
     # Libera read tx antes do HTTP — read tx aberta durante await impede
     # wal_checkpoint, cresce o WAL, commit futuro fsync-o inteiro.
     await db.commit()
 
     if battle is None:
+        # Já foi deep-processada e descartada (não-lethal)? Não recria.
+        from app.models.battles import BattleIdProbe
+        probe = await db.scalar(select(BattleIdProbe).where(BattleIdProbe.albion_id == albion_id))
+        await db.commit()
+        if probe is not None:
+            return None
+
         for region, candidate_host in HOSTS.items():
             try:
                 raw = await fetch_battle_detail(client, candidate_host, albion_id)
@@ -655,20 +686,7 @@ async def resolve_by_albion_id(client: httpx.AsyncClient, db: AsyncSession, albi
                 continue
             battle = await upsert_battle_light(db, raw, region)
             await db.commit()
-            host = candidate_host
             break
-
-    if battle is None:
-        return None
-
-    if battle.processing_tier != "deep" or not _is_frozen(battle, datetime.now(timezone.utc)):
-        try:
-            # Usuário forçou a batalha pelo ID → prioridade máxima (mesmo nível
-            # de uma pesquisa de perfil: humano esperando o resultado).
-            async with albion_scope(PROFILE):
-                await deep_process(client, db, battle, host)
-        except Exception as e:
-            log.warning("battle_tracker: falha ao resolver %s: %s", albion_id, e)
 
     return battle
 
@@ -739,7 +757,7 @@ async def _backfill_deep_fetch_all(
     return await asyncio.gather(*[fetch_one(b) for b in battles])
 
 
-RETRY_STUCK_BATCH = 20  # batalhas travadas em "light" retentadas por região a cada ciclo
+RETRY_STUCK_BATCH = 50  # batalhas travadas em "light" retentadas por região a cada ciclo — sempre em ordem decrescente (recentes primeiro)
 
 
 async def _retry_stuck_battles(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str) -> int:
@@ -757,6 +775,9 @@ async def _retry_stuck_battles(client: httpx.AsyncClient, db: AsyncSession, regi
     falhasse no primeiro attempt ficava travada em "light" indefinidamente,
     sem ninguém pra tentar de novo — era exatamente o sintoma de "batalha
     fantasma" logo após o servidor subir."""
+    # Batalhas marcadas deep_process_failed (scan_dispatcher desistiu) vão
+    # primeiro — são batalhas que o usuário já viu quebradas, prioridade alta.
+    from sqlalchemy import case as _case
     stuck = (await db.scalars(
         select(Battle)
         .where(
@@ -764,7 +785,10 @@ async def _retry_stuck_battles(client: httpx.AsyncClient, db: AsyncSession, regi
             Battle.processing_tier == "light",
             Battle.players_total >= DEEP_PROCESS_MIN_PLAYERS,
         )
-        .order_by(Battle.start_time.desc())
+        .order_by(
+            _case((Battle.reprocess_reason == "deep_process_failed", 0), else_=1),
+            Battle.start_time.desc(),
+        )
         .limit(RETRY_STUCK_BATCH)
     )).all()
     if not stuck:
@@ -1031,8 +1055,10 @@ async def _reverse_startup_sweep(client: httpx.AsyncClient, db: AsyncSession, re
     log.info("battle_tracker: varredura reversa de startup concluída (%s)", region)
 
 
-RECENT_PAGES_PER_CYCLE = 8  # 8*51=408 batalhas/região por ciclo — deep_process roda em paralelo
-
+RECENT_PAGES_PER_CYCLE = 8  # mínimo de páginas (8*51=408 batalhas/região/ciclo) — piso
+RECENT_PAGES_MAX = 60      # teto: ~3000 batalhas/região/ciclo (60*51). Acima disso o feed
+                           # já estaria tão atrasado que sondar o topo não resolve — o
+                           # battle_sweeper cobre o resto pelos buracos entre IDs.
 # Delay de PUBLICAÇÃO da API do Albion por região: quanto tempo a API demora pra
 # expor uma batalha depois que ela termina. ~5min num dia normal; em dia de
 # tráfego alto a API sobrecarrega e atrasa (já observado 8h). Medido de graça no
@@ -1041,6 +1067,22 @@ RECENT_PAGES_PER_CYCLE = 8  # 8*51=408 batalhas/região por ciclo — deep_proce
 # Usa end_time (imutável), não fetched_at. Em memória: perde no restart, reenche
 # no 1º ciclo (~1min). region -> (medido_em, delay_segundos).
 _api_delay: dict[str, tuple[datetime, float]] = {}
+
+
+def _pages_for_delay(region: str) -> int:
+    """Páginas de feed pra buscar nesta região, escaladas pelo delay medido.
+
+    Base: ~1 página (51 batalhas) cobre POLL_INTERVAL (50s) de tráfego normal.
+    Se a API está N minutos atrasada, precisa de ~N/POLL_INTERVAL páginas extra
+    pra cobrir a janela acumulada — senão batalhas saem do topo do feed antes do
+    próximo ciclo e caem acima do maior ID conhecido (buraco que o sweeper não
+    cobre). Teto em RECENT_PAGES_MAX pra não estourar rate limit em delay extremo."""
+    _, secs = _api_delay.get(region, (None, 0.0))
+    if not secs or secs <= POLL_INTERVAL:
+        return RECENT_PAGES_PER_CYCLE
+    # ciclos acumulados = delay / intervalo; cada ciclo ≈ 1 página extra
+    extra = int(secs // POLL_INTERVAL)
+    return min(RECENT_PAGES_MAX, RECENT_PAGES_PER_CYCLE + extra)
 
 
 def publish_delay_status() -> dict:
@@ -1091,7 +1133,8 @@ async def sync_recent() -> int:
                 # ciclo. Agora só para de paginar mais, mantém o que já pegou.
                 battles: list[dict] = []
                 async with albion_scope(NEW_ELIGIBLE):
-                    for page in range(RECENT_PAGES_PER_CYCLE):
+                    pages = _pages_for_delay(region)
+                    for page in range(pages):
                         try:
                             batch = await fetch_battles(client, host, offset=page * BACKFILL_PAGE_SIZE)
                         except Exception as e:

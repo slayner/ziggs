@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 
 from app.domain.blackzone_maps import BLACKZONE_MAPS
+from app.models.audit import AuditLog
 from app.models.nodes import (
     NodeCalendar, NodeDef, NodeEvent, NodeEventLog, NodeMap, NodeMapExclusion,
 )
@@ -215,18 +216,38 @@ def add_event(db: Session, guild_id: int, node_type: str, map_name: str,
     db.add(row)
     db.flush()
     # Auditoria permanente — scout = quem adicionou (p/ pagamento de scout).
-    db.add(NodeEventLog(
+    log_row = NodeEventLog(
         guild_id=guild_id, node_type=node_type, map_name=map_name,
         spawn_at=spawn_at, scout_id=added_by_id, scout_name=added_by_name,
-    ))
+    )
+    db.add(log_row)
     db.flush()
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=added_by_id, actor_type="bot", source="bot",
+        action="node.add", entity="node_event", entity_id=str(row.id),
+        after={"node_type": node_type, "map_name": map_name,
+               "spawn_at": spawn_at.isoformat(), "scout_name": added_by_name},
+        note=f"log #{log_row.id}",
+    ))
     return row
 
 
-def delete_event(db: Session, guild_id: int, event_id: int) -> bool:
+def delete_event(db: Session, guild_id: int, event_id: int,
+                 *, actor_id: int | None = None, actor_source: str = "bot") -> bool:
+    # Snapshot antes de deletar (NodeEvent perde após commit).
+    row = db.scalar(select(NodeEvent).where(
+        NodeEvent.id == event_id, NodeEvent.guild_id == guild_id
+    ))
     res = db.execute(delete(NodeEvent).where(
         NodeEvent.id == event_id, NodeEvent.guild_id == guild_id
     ))
+    if res.rowcount > 0 and row is not None:
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=actor_id, actor_type=actor_source, source=actor_source,
+            action="node.delete", entity="node_event", entity_id=str(event_id),
+            before={"node_type": row.node_type, "map_name": row.map_name,
+                    "spawn_at": row.spawn_at.isoformat() if row.spawn_at else None},
+        ))
     return res.rowcount > 0
 
 
@@ -314,6 +335,12 @@ def claim_node(
     row.sold_value = int(sold_value) if captured else 0
     _mark_dirty(ev)
     db.flush()
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=actor_id, actor_type="bot", source="bot",
+        action="node.claim", entity="node_event_log", entity_id=str(node_log_id),
+        after={"event_id": event_id, "captured": captured, "sold_value": int(sold_value)},
+        note=f"node {row.node_type} @ {row.map_name}",
+    ))
     return row
 
 

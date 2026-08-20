@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 # ----- entrada (criar/editar) -----------------------------------------------
 class SlotIn(BaseModel):
+    id: int | None = None
     label: str | None = None
     notes: str | None = None
     fn: str | None = None   # tipo de função da bracket (ex.: "tank", "healer")

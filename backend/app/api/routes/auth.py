@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -23,12 +26,14 @@ from app.auth.session import make_session
 from app.config import get_settings
 from app.models.audit import AuditLog
 from app.models.battles import BattleGuild
+from app.models.catalog import Weapon
 from app.models.economy import EconomyBalance, EconomyTransaction
 from app.models.events import Event, EventParticipant, EventSignup
 from app.models.nodes import NodeEvent
 from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildAlbionLink, GuildMember, GuildRolePermission, User
 from app.services import economy as economy_svc
+from app.services import event_gates as event_gates_svc
 from app.services import event_signups as event_signups_svc
 from app.services import events as events_svc
 from app.services import nodes as nodes_svc
@@ -52,6 +57,43 @@ def _require_bot_secret(authorization: str) -> None:
     """Compara em tempo constante — `!=` normal vaza timing por byte comparado."""
     if not secrets.compare_digest(authorization, f"Bearer {get_settings().bot_api_secret}"):
         raise HTTPException(401)
+
+
+_WEAPON_NAMES: dict[str, dict[str, str]] = {}
+
+
+def _init_weapon_names() -> None:
+    global _WEAPON_NAMES
+    if _WEAPON_NAMES:
+        return
+    data_dir = Path(__file__).resolve().parents[3] / "data"
+    frontend_dir = Path(__file__).resolve().parents[4] / "frontend"
+    for lang, path in [
+        ("en", frontend_dir / "src" / "data" / "en-names.json"),
+        ("pt", data_dir / "pt-items.json"),
+        ("es", frontend_dir / "src" / "i18n" / "es-items.json"),
+    ]:
+        try:
+            _WEAPON_NAMES[lang] = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            _WEAPON_NAMES[lang] = {}
+
+
+_init_weapon_names()
+
+
+def _weapon_base_id(item_id: str) -> str:
+    return re.sub(r"^T\d+_", "", item_id or "")
+
+
+def _translate_weapon_name(weapon_name: str, weapon_item_id: str, lang: str) -> str:
+    if lang == "en":
+        return weapon_name
+    table = _WEAPON_NAMES.get(lang, {})
+    translated = table.get(_weapon_base_id(weapon_item_id or ""))
+    if translated:
+        return translated
+    return weapon_name
 
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
@@ -341,6 +383,39 @@ ALBION_LOOKUP_RETRIES = 3
 ALBION_LOOKUP_BACKOFF = 0.6  # segundos, multiplicado pela tentativa (0.6s, 1.2s, ...)
 
 
+def _pick_best_match(matches: list[dict], owned_ids: set[str], alliance_id: str | None) -> dict:
+    """Entre vários personagens com o mesmo nome (case-insensitive), prefere o
+    que está na guilda configurada (owned_ids) ou na aliança. Caso contrário,
+    devolve o primeiro — mesmo comportamento do `next()` antigo.
+
+    O search do Albion pode devolver um personagem DELETADO com o mesmo nome de
+    um ativo (ex.: "Xmonkkeyx" deletado + "xMonkkeyx" ativo na SIGHT). Sem
+    desambiguar, o .lower() pegava o deletado (GuildId vazio → "not_in_guild"
+    injusto). Aqui priorizamos quem tem GuildId/AllianceId reais que batem com
+    a guilda/aliança configurada."""
+    if not matches:
+        return {}  # caller já checa; placeholder pra typing
+    # 1. Membro direto de uma das guildas próprias.
+    for p in matches:
+        gid = str(p.get("GuildId") or "")
+        if gid and gid in owned_ids:
+            return p
+    # 2. Membro da aliança configurada.
+    if alliance_id:
+        for p in matches:
+            aid = str(p.get("AllianceId") or "") or None
+            if aid and aid == alliance_id:
+                return p
+    # 3. Qualquer um que tenha guilda (provavelmente ativo) — evita o deletado
+    #    sem guilda quando há um ativo com guilda desconhecida.
+    for p in matches:
+        gid = str(p.get("GuildId") or "")
+        if gid:
+            return p
+    # 4. Fallback: primeiro da lista (comportamento original).
+    return matches[0]
+
+
 async def _lookup_albion_guild(name: str, region: str | None = None) -> dict | None:
     """Acha a guilda pelo nome exato na busca da Albion (mesmo endpoint usado
     pra jogadores) — devolve o registro de `guilds` com Id/AllianceId/AllianceName.
@@ -399,9 +474,8 @@ class GuildSettingsIn(BaseModel):
     # LootLogSubmission atrelado ao evento (resolve por lootlog_thread_id).
     # Null = sem thread automática. Espelho do regear_thread_channel_id.
     lootlog_thread_channel_id: str | None = None
-    # {nome_da_funcao_minusculo: [discord_role_id, ...]} — substitui a tabela
-    # role_gates do bot antigo (ver app/services/event_gates.py).
-    event_role_gates: dict[str, list[str]] | None = None
+    # {weapon_id: [discord_role_id, ...]} — a arma canônica ignora tier e enchant.
+    event_weapon_gates: dict[str, list[str]] | None = None
     # Mínimo de roles que um inscrito deve escolher. Toda role conta e não
     # existe limite máximo.
     signup_min_builds: int | None = None
@@ -564,11 +638,11 @@ async def update_guild_settings(
             settings["lootlog_thread_channel_id"] = body.lootlog_thread_channel_id
         else:
             settings.pop("lootlog_thread_channel_id", None)
-    if "event_role_gates" in body.model_fields_set:
-        if body.event_role_gates:
-            settings["event_role_gates"] = body.event_role_gates
+    if "event_weapon_gates" in body.model_fields_set:
+        if body.event_weapon_gates:
+            settings["event_weapon_gates"] = body.event_weapon_gates
         else:
-            settings.pop("event_role_gates", None)
+            settings.pop("event_weapon_gates", None)
     if "signup_min_builds" in body.model_fields_set:
         if body.signup_min_builds and body.signup_min_builds > 0:
             settings["signup_min_builds"] = body.signup_min_builds
@@ -642,11 +716,22 @@ async def update_guild_settings(
     if "battle_feed_channel_id" in body.model_fields_set:
         if body.battle_feed_channel_id:
             settings["battle_feed_channel_id"] = body.battle_feed_channel_id
-            if "battle_feed_last_id" not in settings:
-                # Inicializa cursor no maior Battle.id existente — senão trocar
-                # de canal despejaria todo o histórico no canal novo.
+            if "battle_feed_last_ts" not in settings:
+                # Inicializa watermark no maior start_time existente — senão
+                # trocar de canal despejaria histórico no canal novo. Backfill
+                # de settings legados: se existia battle_feed_last_id, converte
+                # pra timestamp (max start_time naquele id) uma única vez.
                 from app.models.battles import Battle
-                settings["battle_feed_last_id"] = await db.scalar(select(func.max(Battle.id))) or 0
+                legacy_id = settings.pop("battle_feed_last_id", None)
+                if legacy_id:
+                    ts = await db.scalar(
+                        select(func.max(Battle.start_time)).where(Battle.id <= legacy_id)
+                    ) or datetime.now(timezone.utc)
+                else:
+                    ts = await db.scalar(select(func.max(Battle.start_time))) or datetime.now(timezone.utc)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                settings["battle_feed_last_ts"] = ts.isoformat()
         else:
             settings.pop("battle_feed_channel_id", None)
     if "battle_feed_min_players" in body.model_fields_set:
@@ -657,11 +742,22 @@ async def update_guild_settings(
     if "juicy_kill_channel_id" in body.model_fields_set:
         if body.juicy_kill_channel_id:
             settings["juicy_kill_channel_id"] = body.juicy_kill_channel_id
-            if "juicy_kill_last_id" not in settings:
-                # Inicializa cursor no maior PlayerKillEvent.id existente —
-                # senão trocar de canal despejaria histórico no canal novo.
+            if "juicy_kill_last_ts" not in settings:
+                # Inicializa watermark no maior timestamp existente — senão
+                # trocar de canal despejaria histórico no canal novo. Backfill
+                # de settings legados: se existia juicy_kill_last_id, converte
+                # pra timestamp (max timestamp naquele id) uma única vez.
                 from app.models.players import PlayerKillEvent
-                settings["juicy_kill_last_id"] = await db.scalar(select(func.max(PlayerKillEvent.id))) or 0
+                legacy_id = settings.pop("juicy_kill_last_id", None)
+                if legacy_id:
+                    ts = await db.scalar(
+                        select(func.max(PlayerKillEvent.timestamp)).where(PlayerKillEvent.id <= legacy_id)
+                    ) or datetime.now(timezone.utc)
+                else:
+                    ts = await db.scalar(select(func.max(PlayerKillEvent.timestamp))) or datetime.now(timezone.utc)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                settings["juicy_kill_last_ts"] = ts.isoformat()
         else:
             settings.pop("juicy_kill_channel_id", None)
     if "juicy_kill_min_silver" in body.model_fields_set:
@@ -712,12 +808,19 @@ async def guild_allies(
     user: User = Depends(deps.require_user),
     db: AsyncSession = Depends(deps.async_db_session),
 ):
-    """Guildas conhecidas da mesma aliança (vistas pelo tracker de batalhas),
-    pra montar a lista de aliados permitidos no /register. A aliança em si é
-    descoberta automaticamente (ver bot_register) — sem aliança descoberta
-    ainda, devolve lista vazia. Cada candidata é reconfirmada ao vivo (ver
-    _is_guild_in_alliance) antes de entrar na resposta, pra não mostrar guilda
-    que já saiu da aliança só porque apareceu numa batalha antiga."""
+    """Guildas da mesma aliança (excluindo as próprias do servidor), pra montar
+    a lista de aliados permitidos no /register.
+
+    Fonte principal: `Guild.settings["alliance_members"]`, mantida quente pelo
+    `guild_verifier` (worker que roda a cada 15min e consulta a API autoritativa
+    `/alliances/{id}`). Antes a lista vinha só de `BattleGuild` (vistas em
+    batalhas) + check ao vivo por guilda — ficava vazia em guildas sem
+    batalhas rastreadas e era lenta (1 HTTP por candidata).
+
+    Fallback pra `BattleGuild` só se `alliance_members` ainda não foi populada
+    (guilda recém-linkada antes do 1º ciclo do guild_verifier). Nesse caso usa o
+    caminho antigo com `_is_guild_in_alliance` pra não mostrar guilda que já
+    saiu da aliança."""
     await _require_admin_async(db, user, guild_id)
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
@@ -725,7 +828,18 @@ async def guild_allies(
     if not g.albion_alliance_id:
         return []
     from app.services.guild_links import async_albion_guild_ids
-    owned_ids = await async_albion_guild_ids(db, guild_id)
+    owned_ids = set(await async_albion_guild_ids(db, guild_id))
+
+    # Fonte principal: alliance_members (guild_verifier já populou).
+    members = ((g.settings or {}).get("alliance_members") or [])
+    if members:
+        return [
+            {"id": str(m["id"]), "name": m.get("name") or str(m["id"])}
+            for m in members
+            if str(m.get("id")) not in owned_ids
+        ]
+
+    # Fallback: BattleGuild (guilda recém-linkada, sem 1º ciclo do verifier).
     rows = (await db.execute(
         select(BattleGuild.albion_guild_id, BattleGuild.guild_name)
         .where(
@@ -1049,6 +1163,7 @@ COMMANDS_REGISTRY = [
     {"name": "profile", "description": "Mostra o perfil de um jogador do Albion (fama PvP/PvE, guilda, saldo e attendance)", "category": "miscellaneous"},
     {"name": "attendance", "description": "Mostra estatísticas de participação em eventos CTA", "category": "management"},
     {"name": "lowattendance", "description": "Lista membros com menor participação nos últimos 7 dias", "category": "management"},
+    {"name": "bypass", "description": "Remove um usuário do anúncio recorrente de não-registrados com acesso ao mass-info", "category": "management"},
 ]
 
 # Default de allowed_roles pra comandos sensíveis quando o admin ainda não
@@ -1067,6 +1182,7 @@ DEFAULT_ALLOWED_ROLES = {
     "removeguildmoney": ["admin"],
     "event": ["admin"],
     "lowattendance": ["admin"],
+    "bypass": ["admin"],
 }
 
 # "register_others" não é um comando próprio — é uma sub-permissão do
@@ -1184,7 +1300,7 @@ async def bot_guild_commands(
         "event_review_channel_id": settings.get("event_review_channel_id"),
         "regear_thread_channel_id": settings.get("regear_thread_channel_id"),
         "lootlog_thread_channel_id": settings.get("lootlog_thread_channel_id"),
-        "event_role_gates": settings.get("event_role_gates", {}),
+        "event_weapon_gates": settings.get("event_weapon_gates", {}),
         "massinfo_message_id": settings.get("massinfo_message_id"),
         "nodes_calendar_channel_id": settings.get("nodes_calendar_channel_id"),
         "voice_cta_channel_id": settings.get("voice_cta_channel_id"),
@@ -1199,6 +1315,10 @@ async def bot_guild_commands(
         "juicy_kill_hard_floor": _JUICY_KILL_HARD_FLOOR,
         "juicy_kill_min_fame": settings.get("juicy_kill_min_fame", 0),
         "juicy_kill_regions": settings.get("juicy_kill_regions", []),
+        # Usuários com acesso ao canal mass-info que o bot NÃO deve anunciar como
+        # "sem registro" (ver cogs/massinfo_access.py no bot-v2). Lista de IDs
+        # Discord em string — o /bypass do bot adiciona/remove aqui.
+        "massinfo_access_bypass_user_ids": settings.get("massinfo_access_bypass_user_ids", []),
     }
 
 
@@ -1210,6 +1330,35 @@ async def bot_guild_commands(
 # massinfo_message_id) — o site é a fonte da verdade, o bot não guarda estado.
 
 _AUDIT_LOG_BATCH = 25
+
+
+def _audit_log_dict(row: AuditLog) -> dict:
+    return {
+        "id": row.id, "actor_id": str(row.actor_id) if row.actor_id else None,
+        "actor_type": row.actor_type, "source": row.source, "action": row.action,
+        "entity": row.entity, "entity_id": row.entity_id,
+        "before": row.before, "after": row.after, "note": row.note,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+def _attach_actor_names(rows: list[AuditLog], user_rows: list[tuple]) -> list[dict]:
+    """Console do site: payload cru + `actor_name` (users.global_name ||
+    username). Ator que nunca logou no site (comando do bot) fica sem nome —
+    a UI mostra só o id; `actor_id` permanece pra rastreabilidade."""
+    names = {uid: (global_name or username) for uid, global_name, username in user_rows}
+    entries = [_audit_log_dict(row) for row in rows]
+    for row, d in zip(rows, entries):
+        d["actor_name"] = names.get(row.actor_id) if row.actor_id else None
+    return entries
+
+
+async def _audit_console_entries(db: AsyncSession, rows: list[AuditLog]) -> list[dict]:
+    ids = {r.actor_id for r in rows if r.actor_id}
+    user_rows = (await db.execute(
+        select(User.id, User.global_name, User.username).where(User.id.in_(ids))
+    )).all() if ids else []
+    return _attach_actor_names(rows, user_rows)
 
 
 class LogsChannelIn(BaseModel):
@@ -1228,13 +1377,58 @@ async def bot_set_logs_channel(
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
-    max_id = await db.scalar(select(func.max(AuditLog.id)).where(AuditLog.guild_id == guild_id)) or 0
     settings = dict(g.settings or {})
+    # O bot pode chegar aqui com cache anterior à troca manual de canal. A
+    # configuração salva pelo admin é autoritativa e não pode ser sobrescrita.
+    if settings.get("logs_channel_id") and settings["logs_channel_id"] != body.channel_id:
+        return {"ok": True}
+    max_id = await db.scalar(select(func.max(AuditLog.id)).where(AuditLog.guild_id == guild_id)) or 0
     settings["logs_channel_id"] = body.channel_id
     settings.setdefault("logs_last_sent_id", max_id)
     g.settings = settings
     await db.commit()
     return {"ok": True}
+
+
+class MassinfoAccessBypassIn(BaseModel):
+    """`action=add` adiciona `user_id` à lista de bypass; `remove` retira.
+    `user_id` em string (snowflake Discord, mesmo formato de BotRegistration)."""
+    action: str  # "add" | "remove"
+    user_id: str
+
+
+@router.post("/bot/guilds/{guild_id}/massinfo-access/bypass")
+async def bot_set_massinfo_access_bypass(
+    guild_id: int, body: MassinfoAccessBypassIn,
+    authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
+):
+    """Persiste a decisão do /bypass do bot: usuários com acesso ao canal
+    mass-info que NÃO devem ser anunciados como "sem registro" pelo loop de
+    verificação (ver cogs/massinfo_access.py no bot-v2). Idempotente."""
+    _require_bot_secret(authorization)
+    if body.action not in ("add", "remove"):
+        raise HTTPException(400, "action deve ser 'add' ou 'remove'")
+    if not body.user_id.isdigit():
+        raise HTTPException(400, "user_id deve ser um snowflake numérico")
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    settings = dict(g.settings or {})
+    ids = set(settings.get("massinfo_access_bypass_user_ids", []))
+    if body.action == "add":
+        ids.add(body.user_id)
+    else:
+        ids.discard(body.user_id)
+    settings["massinfo_access_bypass_user_ids"] = sorted(ids)
+    g.settings = settings
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=int(body.user_id),
+        actor_type="bot", source="bot",
+        action="massinfo.bypass_" + body.action, entity="guild", entity_id=str(guild_id),
+        note=f"user_id={body.user_id}",
+    ))
+    await db.commit()
+    return {"ok": True, "bypass_user_ids": settings["massinfo_access_bypass_user_ids"]}
 
 
 @router.get("/bot/guilds/{guild_id}/audit-log")
@@ -1253,16 +1447,31 @@ async def bot_audit_log_work(
         .order_by(AuditLog.id.asc())
         .limit(_AUDIT_LOG_BATCH)
     )).all()
-    return {"entries": [
-        {
-            "id": r.id, "actor_id": str(r.actor_id) if r.actor_id else None,
-            "actor_type": r.actor_type, "source": r.source, "action": r.action,
-            "entity": r.entity, "entity_id": r.entity_id,
-            "before": r.before, "after": r.after, "note": r.note,
-            "created_at": r.created_at.isoformat(),
-        }
-        for r in rows
-    ]}
+    return {"entries": [_audit_log_dict(row) for row in rows]}
+
+
+@router.get("/auth/guilds/{guild_id}/audit-log")
+async def guild_audit_log(
+    guild_id: int,
+    before_id: int | None = Query(None, ge=1),
+    after_id: int | None = Query(None, ge=1),
+    limit: int = Query(100, ge=1, le=200),
+    user: User = Depends(deps.require_user),
+    db: AsyncSession = Depends(deps.async_db_session),
+):
+    """Console administrativo do mesmo log que o bot retransmite ao Discord."""
+    await _require_admin_async(db, user, guild_id)
+    stmt = select(AuditLog).where(AuditLog.guild_id == guild_id)
+    if after_id is not None:
+        rows = (await db.scalars(
+            stmt.where(AuditLog.id > after_id).order_by(AuditLog.id.asc()).limit(limit)
+        )).all()
+        return {"entries": await _audit_console_entries(db, rows), "has_more": False}
+
+    if before_id is not None:
+        stmt = stmt.where(AuditLog.id < before_id)
+    rows = (await db.scalars(stmt.order_by(AuditLog.id.desc()).limit(limit))).all()
+    return {"entries": await _audit_console_entries(db, rows), "has_more": len(rows) == limit}
 
 
 class AuditLogSyncedIn(BaseModel):
@@ -1299,13 +1508,22 @@ async def bot_battle_feed(
     guild_id: int, authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Próximo lote de batalhas ainda não postadas no canal de feed da guilda.
-    Cursor em Guild.settings.battle_feed_last_id. Filtra por mínimo de
-    jogadores da PRÓPRIA guilda (albion_guild_id com >= N participantes) e
-    por região (se configurada).
 
-    Só retorna batalhas deep-processadas (sides analisados) — batalhas "light"
-    não têm factions_summary e o embed ficaria vazio."""
+    Checkpoint por timestamp (battle_feed_last_ts), NÃO por id interno — mesma
+    razão do juicy-kill queue: uma batalha descoberta tardiamente (sweeper,
+    backfill, API atrasada) recebe id MAIOR mas start_time MENOR, e no cursor
+    por id seria postada fora de ordem cronológica. Por start_time, posta em
+    ordem do jogo.
+
+    Filtra por mínimo de jogadores da PRÓPRIA guilda (albion_guild_id com
+    >= N participantes) e por região (se configurada). Só retorna batalhas
+    deep-processadas (sides analisados) — batalhas "light" não têm
+    factions_summary e o embed ficaria vazio.
+
+    Cutoff postable: batalhas com start_time < agora - 48h - avg_api_delay
+    não são postadas."""
     _require_bot_secret(authorization)
+    from app.services.postable import postable_cutoffs_by_region
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
@@ -1313,18 +1531,29 @@ async def bot_battle_feed(
     channel_id = settings.get("battle_feed_channel_id")
     if not channel_id:
         return {"battles": []}
-    since_id = settings.get("battle_feed_last_id", 0)
+    watermark = _parse_watermark(settings.get("battle_feed_last_ts"))
     min_players = settings.get("battle_feed_min_players", 10)
 
+    # Região configurada ou todas — cutoff por região.
+    guild_region = settings.get("albion_guild_region")
+    feed_regions = [guild_region] if guild_region and guild_region in HOSTS else list(HOSTS.keys())
+    cutoffs = await postable_cutoffs_by_region(db, feed_regions)
+
     q = select(Battle).where(
-        Battle.id > since_id,
         Battle.is_lethal.is_(True),
     )
-    # Filtro por região: se a guilda tem albion_guild_region configurada, só
-    # posta batalhas daquela região. Sem região configurada = todas.
-    guild_region = settings.get("albion_guild_region")
-    if guild_region and guild_region in HOSTS:
-        q = q.where(Battle.region == guild_region)
+    if watermark is not None:
+        q = q.where(Battle.start_time > watermark)
+    # Cutoff por região (OR com cutoff individual)
+    from sqlalchemy import or_, and_
+    conds = []
+    for r in feed_regions:
+        if c := cutoffs.get(r):
+            conds.append(and_(Battle.region == r, Battle.start_time >= c))
+        else:
+            conds.append(Battle.region == r)
+    if conds:
+        q = q.where(or_(*conds))
     if min_players > 0:
         # Filtro pelas guildas CONFIGURADAS daqui (primária + links) — só posta
         # batalhas onde alguma guilda própria teve >= N jogadores.
@@ -1339,7 +1568,7 @@ async def bot_battle_feed(
             )
             q = q.where(Battle.id.in_(guild_battle_ids))
 
-    battles = (await db.scalars(q.order_by(Battle.id.asc()).limit(_BATTLE_FEED_BATCH))).all()
+    battles = (await db.scalars(q.order_by(Battle.start_time.asc()).limit(_BATTLE_FEED_BATCH))).all()
     if not battles:
         return {"battles": []}
 
@@ -1365,7 +1594,7 @@ async def bot_battle_feed(
 
 
 class BattleFeedSyncedIn(BaseModel):
-    last_id: int
+    last_ts: datetime
 
 
 @router.post("/bot/guilds/{guild_id}/battle-feed-synced")
@@ -1373,13 +1602,20 @@ async def bot_battle_feed_synced(
     guild_id: int, body: BattleFeedSyncedIn,
     authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
-    """Avança o cursor após o bot postar as batalhas com sucesso."""
+    """Avança o watermark após o bot postar as batalhas com sucesso.
+
+    Watermark = start_time da última batalha postada (não do id)."""
     _require_bot_secret(authorization)
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
     settings = dict(g.settings or {})
-    settings["battle_feed_last_id"] = max(int(settings.get("battle_feed_last_id", 0)), body.last_id)
+    new_ts = body.last_ts
+    if new_ts.tzinfo is None:
+        new_ts = new_ts.replace(tzinfo=timezone.utc)
+    current = _parse_watermark(settings.get("battle_feed_last_ts"))
+    if current is None or new_ts > current:
+        settings["battle_feed_last_ts"] = new_ts.isoformat()
     g.settings = settings
     await db.commit()
     return {"ok": True}
@@ -1390,12 +1626,37 @@ async def bot_battle_feed_synced(
 class BotRegisterIn(BaseModel):
     discord_user_id: str
     albion_player_name: str
+    # Momento em que o humano acionou /register. Retentativas automáticas usam
+    # este mesmo instante, para nunca desfazer uma revogação posterior.
+    requested_at: datetime
     # True quando o comando usou o parâmetro `usuario` pra registrar outra
     # pessoa (não o autor da interação). Com a vigilância desligada
     # (register_remove_role_on_leave=False), esse registro é "de confiança":
     # assume a identidade sem NENHUMA consulta à API do Albion e nunca é
     # revalidado pelo registration_checker.
     registering_other: bool = False
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _registration_request_is_superseded(requested_at: datetime, human_revoked_at: datetime | None) -> bool:
+    """A remoção humana vence retentativas que começaram antes dela."""
+    return human_revoked_at is not None and _as_utc(requested_at) <= _as_utc(human_revoked_at)
+
+
+def _revoke_registration_by_human(registrations, revoked_at: datetime | None = None) -> None:
+    revoked_at = revoked_at or datetime.now(timezone.utc)
+    for registration in registrations:
+        registration.active = False
+        registration.human_revoked_at = revoked_at
+
+
+def _registration_roles_to_revoke(registrations, removed_role_ids: set[int], retains_massinfo_access: bool):
+    if retains_massinfo_access:
+        return []
+    return [registration for registration in registrations if registration.role_id in removed_role_ids]
 
 
 @router.post("/bot/register/{guild_id}")
@@ -1426,6 +1687,15 @@ async def bot_register(
 
     name = body.albion_player_name.strip()
     nl = name.lower()
+    # Kick, ban e /unregister revogam a conta inteira; qualquer retry anterior,
+    # inclusive de outro nick, precisa perder para essa decisão humana.
+    latest_human_revocation = await db.scalar(select(BotRegistration.human_revoked_at).where(
+        BotRegistration.guild_id == guild_id,
+        BotRegistration.discord_user_id == int(body.discord_user_id),
+        BotRegistration.human_revoked_at.is_not(None),
+    ).order_by(BotRegistration.human_revoked_at.desc()))
+    if _registration_request_is_superseded(body.requested_at, latest_human_revocation):
+        return {"ok": False, "reason": "human_revoked"}
     # Resposta perdida depois do commit: reaplica o cargo sem depender de uma
     # segunda consulta à API da Albion (que pode estar instável justamente
     # durante a repetição).
@@ -1476,11 +1746,24 @@ async def bot_register(
                 "albion_player_name": existing.albion_player_name,
             }
         if existing:
-            existing.albion_player_name = name
-            existing.region = region
-            existing.role_id = int(role_id)
-            existing.is_ally = False
-            existing.active = True
+            result = await db.execute(update(BotRegistration).where(
+                BotRegistration.id == existing.id,
+                or_(
+                    BotRegistration.human_revoked_at.is_(None),
+                    BotRegistration.human_revoked_at < _as_utc(body.requested_at),
+                ),
+            ).values(
+                albion_player_name=name,
+                region=region,
+                role_id=int(role_id),
+                is_ally=False,
+                active=True,
+                human_revoked_at=None,
+                created_at=datetime.now(timezone.utc),
+            ))
+            if not result.rowcount:
+                await db.commit()
+                return {"ok": False, "reason": "human_revoked"}
         else:
             db.add(BotRegistration(
                 guild_id=guild_id,
@@ -1499,6 +1782,12 @@ async def bot_register(
     region: str | None = None
     any_host_ok = False
     guild_region = (g.settings or {}).get("albion_guild_region")
+    # Resolve as guildas próprias e a aliança ANTES do HTTP — usadas pra
+    # desambiguar matches de mesmo nome (preferir o char que está na guilda
+    # configurada em vez de um deletado com o mesmo nick).
+    from app.services.guild_links import async_albion_guild_ids
+    owned_ids = set(await async_albion_guild_ids(db, guild_id))
+    g_alliance_id = g.albion_alliance_id
     # Libera read tx antes do HTTP (busca na API do Albion por região).
     await db.commit()
     # Alianças e guildas não cruzam região (cada região é um servidor de jogo
@@ -1523,8 +1812,15 @@ async def bot_register(
                     continue
                 any_host_ok = True
                 candidates = resp.json().get("players", [])
-                match = next((p for p in candidates if (p.get("Name") or "").lower() == nl), None)
-                if match:
+                # Pode haver mais de um personagem com o mesmo nome (case-
+                # insensitive) — um deletado/sem guilda e outro ativo na
+                # guilda configurada. Casar só por .lower() pega o primeiro
+                # da lista, que pode ser o deletado (player_guild_id vazio →
+                # "not_in_guild" injusto). Preferir o que está na guilda ou
+                # aliança configurada; se nenhum bater, cai no primeiro.
+                matches = [p for p in candidates if (p.get("Name") or "").lower() == nl]
+                if matches:
+                    match = _pick_best_match(matches, owned_ids, g_alliance_id)
                     found, region = match, r
                 break  # resposta válida (só não achou esse nick nessa região) — não repete
             if found:
@@ -1543,8 +1839,6 @@ async def bot_register(
     player_alliance_id = str(found.get("AllianceId") or "") or None
     is_ally = False
 
-    from app.services.guild_links import async_albion_guild_ids
-    owned_ids = await async_albion_guild_ids(db, guild_id)
     if player_guild_id in owned_ids:
         # Membro direto (guilda primária ou qualquer link) — a busca já trouxe o
         # AllianceId dele, e como aliança é atributo da guilda (não do jogador),
@@ -1585,13 +1879,28 @@ async def bot_register(
         }
 
     if existing:
-        existing.albion_player_name = found["Name"]
-        existing.region = region
-        existing.role_id = int(role_id)
-        existing.is_ally = is_ally
-        existing.active = True
+        result = await db.execute(update(BotRegistration).where(
+            BotRegistration.id == existing.id,
+            or_(
+                BotRegistration.human_revoked_at.is_(None),
+                BotRegistration.human_revoked_at < _as_utc(body.requested_at),
+            ),
+        ).values(
+            albion_player_name=found["Name"],
+            region=region,
+            role_id=int(role_id),
+            is_ally=is_ally,
+            active=True,
+            human_revoked_at=None,
+            created_at=datetime.now(timezone.utc),
+        ))
+        if not result.rowcount:
+            await db.commit()
+            return {"ok": False, "reason": "human_revoked"}
+        reg_id = existing.id
+        was_reactivation = True
     else:
-        db.add(BotRegistration(
+        reg = BotRegistration(
             guild_id=guild_id,
             discord_user_id=int(body.discord_user_id),
             albion_player_id=albion_player_id,
@@ -1600,7 +1909,22 @@ async def bot_register(
             role_id=int(role_id),
             is_ally=is_ally,
             active=True,
-        ))
+        )
+        db.add(reg)
+        await db.flush()
+        reg_id = reg.id
+        was_reactivation = False
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=int(body.discord_user_id),
+        actor_type="bot", source="bot",
+        action="registration.reactivate" if was_reactivation else "registration.register",
+        entity="bot_registration", entity_id=str(reg_id),
+        after={
+            "albion_player_name": found["Name"], "albion_player_id": albion_player_id,
+            "role_id": str(role_id), "is_ally": is_ally, "region": region,
+            "registering_other": body.registering_other,
+        },
+    ))
     await db.commit()
     return {"ok": True, "role_id": str(role_id), "albion_player_name": found["Name"]}
 
@@ -1635,8 +1959,16 @@ async def bot_unregister(
         return {"ok": False, "reason": "not_registered"}
     role_ids = sorted({str(r.role_id) for r in regs})
     discord_user_ids = sorted({str(r.discord_user_id) for r in regs})
+    _revoke_registration_by_human(regs)
+    # Audit por registro revogado — trilha imutável de quem perdeu o registro.
     for r in regs:
-        r.active = False
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=int(body.discord_user_id) if body.discord_user_id else None,
+            actor_type="bot", source="bot",
+            action="registration.unregister", entity="bot_registration", entity_id=str(r.id),
+            before={"albion_player_name": r.albion_player_name, "role_id": str(r.role_id), "is_ally": r.is_ally},
+            note=f"alvo: {body.albion_player_name or body.discord_user_id}",
+        ))
     await db.commit()
     return {"ok": True, "role_ids": role_ids, "discord_user_ids": discord_user_ids}
 
@@ -1682,6 +2014,26 @@ async def bot_registration_lookup(
     }
 
 
+@router.get("/bot/registrations/{guild_id}")
+async def bot_registrations_all(
+    guild_id: int,
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(deps.async_db_session),
+):
+    """Lista os discord_user_id com registro ATIVO na guilda — usado pelo loop
+    de verificação de acesso ao mass-info (cogs/massinfo_access.py no bot-v2)
+    pra saber quem está registrado sem chamar /bot/registration-lookup N vezes.
+    Devolve só IDs pra manter o payload mínimo."""
+    _require_bot_secret(authorization)
+    rows = (await db.scalars(
+        select(BotRegistration.discord_user_id).where(
+            BotRegistration.guild_id == guild_id,
+            BotRegistration.active.is_(True),
+        ).distinct()
+    )).all()
+    return {"discord_user_ids": [str(uid) for uid in rows]}
+
+
 class BotMemberGoneIn(BaseModel):
     discord_user_id: str
 
@@ -1702,8 +2054,15 @@ async def bot_registration_left_guild(
         BotRegistration.discord_user_id == int(body.discord_user_id),
         BotRegistration.active.is_(True),
     ))).all()
+    _revoke_registration_by_human(regs)
     for r in regs:
-        r.active = False
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=int(body.discord_user_id),
+            actor_type="bot", source="bot",
+            action="registration.left_guild", entity="bot_registration", entity_id=str(r.id),
+            before={"albion_player_name": r.albion_player_name, "role_id": str(r.role_id)},
+            note="membro saiu/kick/ban do Discord",
+        ))
     await db.commit()
     return {"ok": True}
 
@@ -1711,6 +2070,10 @@ async def bot_registration_left_guild(
 class BotRoleRemovedIn(BaseModel):
     discord_user_id: str
     removed_role_ids: list[str]
+    # Avaliado pelo bot com os cargos finais + overwrites do canal mass-info.
+    # Sem canal configurado ou sem acesso, vem False e mantém o comportamento
+    # seguro de revogar a role de registration removida.
+    retains_massinfo_access: bool = False
 
 
 @router.post("/bot/registration-role-removed/{guild_id}")
@@ -1731,11 +2094,32 @@ async def bot_registration_role_removed(
         BotRegistration.discord_user_id == int(body.discord_user_id),
         BotRegistration.active.is_(True),
     ))).all()
-    for r in regs:
-        if r.role_id in removed:
-            r.active = False
+    revoked = _registration_roles_to_revoke(regs, removed, body.retains_massinfo_access)
+    _revoke_registration_by_human(revoked)
+    for r in revoked:
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=int(body.discord_user_id),
+            actor_type="bot", source="bot",
+            action="registration.role_removed", entity="bot_registration", entity_id=str(r.id),
+            before={"albion_player_name": r.albion_player_name, "role_id": str(r.role_id)},
+            note=f"cargos removidos manualmente: {sorted(removed)}",
+        ))
     await db.commit()
-    return {"ok": True}
+    role_ids = [str(r.role_id) for r in revoked]
+    # Normalmente o cargo já saiu antes do evento chegar. Esta remoção é
+    # idempotente e fecha a corrida com uma resposta velha de /register, mesmo
+    # quando o bot precisou enfileirar o evento enquanto o backend estava fora.
+    bot_token = get_settings().discord_bot_token
+    if bot_token:
+        for role_id in role_ids:
+            try:
+                await asyncio.to_thread(
+                    discord.remove_guild_member_role,
+                    str(guild_id), body.discord_user_id, role_id, bot_token,
+                )
+            except Exception:
+                pass
+    return {"ok": True, "role_ids": role_ids}
 
 
 # ── Bot heartbeat ─────────────────────────────────────────────────────────────
@@ -1840,6 +2224,7 @@ def bot_economy_pay(
     if sender.balance < body.amount:
         return {"ok": False, "from_balance": sender.balance}
     receiver = _get_or_create_balance(db, guild_id, body.to_user_id)
+    before = {"from_balance": sender.balance, "to_balance": receiver.balance}
     sender.balance -= body.amount
     receiver.balance += body.amount
     receiver.total_earned += body.amount
@@ -1850,6 +2235,14 @@ def bot_economy_pay(
         total_earned_user_id=body.to_user_id, amount=body.amount,
     )
     db.add(tx)
+    db.flush()
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=body.from_user_id, actor_type="bot", source="bot",
+        action="economy.pay", entity="balance", entity_id=str(body.to_user_id),
+        before=before,
+        after={"from_balance": sender.balance, "to_balance": receiver.balance, "amount": body.amount},
+        note=f"transaction #{tx.id}",
+    ))
     db.commit()
     db.refresh(tx)
     return {"ok": True, "from_balance": sender.balance, "to_balance": receiver.balance, "transaction_id": tx.id}
@@ -1884,6 +2277,7 @@ def bot_economy_add(
                 "transaction_id": previous.id,
             }
     bal = _get_or_create_balance(db, guild_id, body.discord_user_id)
+    before = bal.balance
     bal.balance += body.amount
     bal.total_earned += body.amount
     tx = EconomyTransaction(
@@ -1893,6 +2287,13 @@ def bot_economy_add(
         total_earned_user_id=body.discord_user_id, amount=body.amount,
     )
     db.add(tx)
+    db.flush()
+    db.add(AuditLog(
+        guild_id=guild_id, actor_id=body.actor_discord_id, actor_type="bot", source="bot",
+        action="economy.add", entity="balance", entity_id=str(body.discord_user_id),
+        before={"balance": before}, after={"balance": bal.balance, "amount": body.amount},
+        note=f"transaction #{tx.id}",
+    ))
     db.commit()
     db.refresh(tx)
     return {"balance": bal.balance, "total_earned": bal.total_earned, "transaction_id": tx.id}
@@ -1932,6 +2333,7 @@ def bot_economy_remove(
                 "transaction_id": previous.id,
             }
     bal = _get_or_create_balance(db, guild_id, body.discord_user_id)
+    before = bal.balance
     actual = body.amount if body.allow_negative else min(bal.balance, body.amount)
     bal.balance -= actual
     transaction_id = None
@@ -1943,6 +2345,13 @@ def bot_economy_remove(
             total_earned_user_id=None, amount=actual,
         )
         db.add(tx)
+        db.flush()
+        db.add(AuditLog(
+            guild_id=guild_id, actor_id=body.actor_discord_id, actor_type="bot", source="bot",
+            action="economy.remove", entity="balance", entity_id=str(body.discord_user_id),
+            before={"balance": before}, after={"balance": bal.balance, "amount": actual},
+            note=f"transaction #{tx.id}",
+        ))
         db.commit()
         db.refresh(tx)
         transaction_id = tx.id
@@ -2323,42 +2732,93 @@ def bot_events_eligible_functions(
     event_id: int,
     discord_user_id: int,
     discord_role_ids: str = "",
+    lang: str = "en",
     authorization: str = Header(...),
     db: Session = Depends(deps.db_session),
 ):
     _require_bot_secret(authorization)
     g = db.scalar(select(Guild).where(Guild.id == guild_id))
-    event_role_gates = ((g.settings or {}) if g else {}).get("event_role_gates", {})
+    settings = (g.settings or {}) if g else {}
+    event_weapon_gates = settings.get("event_weapon_gates", {})
     event = db.scalar(select(Event).where(Event.id == event_id, Event.guild_id == guild_id))
     try:
-        functions, reason, current, categories, min_builds = event_signups_svc.get_eligible_functions(
-            db, guild_id, event_id, discord_user_id, _parse_role_ids(discord_role_ids), event_role_gates,
+        options, reason, current, min_builds = event_signups_svc.get_eligible_options(
+            db, guild_id, event_id, discord_user_id, _parse_role_ids(discord_role_ids), event_weapon_gates,
         )
     except ServiceError as e:
         raise HTTPException(404, str(e))
-    profile_functions = event_signups_svc.get_role_profile(
+    for o in options:
+        o["weapon_name"] = _translate_weapon_name(
+            o.get("weapon_name", ""), o.get("weapon_item_id", ""), lang,
+        )
+    profile_options = event_signups_svc.get_profile_options(
         db, guild_id, event.comp_id if event else None, discord_user_id,
+        {o["key"]: o for o in options},
     )
+    fn_types = {
+        item.get("key"): {
+            "label": item.get("label") or item.get("key"),
+            "emoji": item.get("emoji") or "❔",
+            "position": index,
+        }
+        for index, item in enumerate(settings.get("fn_types") or [])
+        if item.get("key")
+    }
+
+    def _fn_label(fn: str | None) -> str:
+        meta = fn_types.get(fn or "") or fn_types.get(event_gates_svc.fn_key(fn))
+        return (meta or {}).get("label") or fn or "other"
+
+    def _pair_label(weapon_id: int, fn: str | None) -> str:
+        weapon_name = next(
+            (o["weapon_name"] for o in options if o["weapon_id"] == weapon_id), None,
+        ) or f"w{weapon_id}"
+        return weapon_name
+
+    current_options = [
+        event_gates_svc.pair_key(int(e["weapon_id"]), e.get("fn"))
+        for e in ((current.weapon_fns or []) if current else [])
+        if isinstance(e, dict) and e.get("weapon_id") is not None
+    ]
     return {
-        "functions": functions,
-        "categories": {f: categories.get(f, "other") for f in functions},
+        # Opções distintas por par (weapon, fn) — a identidade do signup.
+        "options": [
+            {
+                "key": o["key"], "weapon_id": o["weapon_id"],
+                "weapon_name": o["weapon_name"], "fn": o["fn"],
+                "label": o["weapon_name"],
+            }
+            for o in options
+        ],
         "denial_reason": reason,
         "signup_min_builds": min_builds,
         "assignment_mode": event.assignment_mode if event else "hybrid",
         "functions_released": bool(event and event.functions_released),
         "current_signup": (
             {
+                "options": current_options,
+                "labels": [
+                    _pair_label(int(e["weapon_id"]), e.get("fn"))
+                    for e in (current.weapon_fns or [])
+                    if isinstance(e, dict) and e.get("weapon_id") is not None
+                ],
+                # Legado (exibição): nomes de GameRole do snapshot.
                 "functions": list(current.functions or []),
             }
             if current else None
         ),
-        "profile_functions": profile_functions,
+        # Pré-seleção: preferências globais (weapon, fn) visíveis nesta comp.
+        "profile_options": profile_options,
+        "category_types": fn_types,
     }
 
 
 class BotSignupIn(BaseModel):
     user_id: int
     user_name: str | None = None
+    # Identidade nova: pair keys ("w<weapon_id>:<fn>") na ordem de preferência.
+    options: list[str] = []
+    # Legado (bot antigo durante o deploy): nomes de GameRole.
     functions: list[str] = []
     discord_role_ids: list[int] = []
 
@@ -2373,18 +2833,41 @@ def bot_events_upsert_signup(
 ):
     _require_bot_secret(authorization)
     g = db.scalar(select(Guild).where(Guild.id == guild_id))
-    event_role_gates = ((g.settings or {}) if g else {}).get("event_role_gates", {})
+    event_weapon_gates = ((g.settings or {}) if g else {}).get("event_weapon_gates", {})
     try:
         row = event_signups_svc.upsert_signup(
-            db, guild_id, event_id, body.user_id, body.user_name, body.functions,
-            set(body.discord_role_ids), event_role_gates,
+            db, guild_id, event_id, body.user_id, body.user_name, body.options,
+            set(body.discord_role_ids), event_weapon_gates,
+            legacy_names=body.functions,
         )
     except ServiceError as e:
         raise HTTPException(404, str(e))
     event = db.get(Event, event_id)
     db.commit()
+    # Labels ("Arma · Fn") pro bot confirmar o que foi gravado.
+    wids = {
+        int(e["weapon_id"]) for e in (row.weapon_fns or [])
+        if isinstance(e, dict) and e.get("weapon_id") is not None
+    }
+    weapon_names = {
+        w.id: w.name for w in db.scalars(select(Weapon).where(Weapon.id.in_(wids)))
+    } if wids else {}
+    saved_pairs = [
+        e for e in (row.weapon_fns or [])
+        if isinstance(e, dict) and e.get("weapon_id") is not None
+    ]
+
+    def _saved_label(e: dict) -> str:
+        wid = int(e["weapon_id"])
+        return weapon_names.get(wid) or ('w' + str(wid))
+
     return {
         "ok": True,
+        "options": [
+            event_gates_svc.pair_key(int(e["weapon_id"]), e.get("fn"))
+            for e in saved_pairs
+        ],
+        "labels": [_saved_label(e) for e in saved_pairs],
         "functions": list(row.functions or []),
         "assignment_mode": event.assignment_mode if event else "hybrid",
     }
@@ -2413,6 +2896,11 @@ async def bot_events_get_signup(
     ))
     return {
         "exists": row is not None,
+        "options": [
+            event_gates_svc.pair_key(int(e["weapon_id"]), e.get("fn"))
+            for e in ((row.weapon_fns or []) if row else [])
+            if isinstance(e, dict) and e.get("weapon_id") is not None
+        ],
         "functions": list(row.functions or []) if row else [],
         "assignment_mode": event.assignment_mode,
     }
@@ -3292,15 +3780,44 @@ _JUICY_KILL_BATCH = 25
 _JUICY_KILL_HARD_FLOOR = 20_000_000  # mínimo absoluto — nenhum guilda desce abaixo disso
 
 
+def _parse_watermark(value) -> datetime | None:
+    """Lê watermark de settings (ISO string ou None) -> datetime aware, ou None."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 @router.get("/bot/guilds/{guild_id}/juicy-kill/queue")
 async def bot_juicy_kill_queue(
     guild_id: int, authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
     """Próximo lote de juicy kills (silver_dropped >= min) ainda não postados.
-    Cursor em Guild.settings.juicy_kill_last_id."""
+
+    Checkpoint por timestamp (juicy_kill_last_ts), NÃO por id interno. O id é
+    ordem de INSERÇÃO no nosso banco; uma kill descoberta tardiamente (backfill,
+    sweeper, API atrasada) recebe id MAIOR mas timestamp MENOR — no cursor por
+    id ela seria postada DEPOIS de kills mais recentes, fora da linha do tempo.
+    Por timestamp, posta em ordem cronológica do jogo.
+
+    Precificação on-demand: kills com silver_dropped=NULL dentro do horizonte
+    são precificadas aqui (get_battle_prices_with_presumption) antes de responder
+    — senão uma kill recém-descoberta que ainda não passou pelo worker
+    silver_dropped ficava atrás do cursor pra sempre e nunca era postada.
+
+    Cutoff postable: kills com timestamp < agora - 48h - avg_api_delay(region)
+    não são postadas (permanecem no banco, só não vão pro Discord)."""
     _require_bot_secret(authorization)
     from app.models.players import PlayerKillEvent
     from app.services.lethality import is_likely_lethal
+    from app.services.postable import postable_cutoffs_by_region
+    from app.services.prices import get_battle_prices_with_presumption
+    from app.services.awakened import awakened_value
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
@@ -3311,32 +3828,70 @@ async def bot_juicy_kill_queue(
     min_silver = max(settings.get("juicy_kill_min_silver", 50_000_000), _JUICY_KILL_HARD_FLOOR)
     min_fame = settings.get("juicy_kill_min_fame", 0)
     regions = settings.get("juicy_kill_regions") or []
-    since_id = settings.get("juicy_kill_last_id", 0)
+    watermark = _parse_watermark(settings.get("juicy_kill_last_ts"))
 
+    # Cutoff por região: kills mais antigas que isso não são postadas.
+    cutoffs = await postable_cutoffs_by_region(db, regions or list(HOSTS.keys()))
+
+    from sqlalchemy import or_ as _sql_or, and_ as _sql_and
     q = select(PlayerKillEvent).where(
-        PlayerKillEvent.id > since_id,
-        PlayerKillEvent.silver_dropped >= min_silver,
         PlayerKillEvent.fame > 0,
+        # Filtro no DB: só kills sem preço (precificar on-demand) OU já
+        # precificadas acima do threshold. Sem isso, 1000+ kills pequenas
+        # (silver_dropped < min) entre o watermark e a kill grande preenchem
+        # o LIMIT antes dela chegar — a kill grande nunca é retornada.
+        _sql_or(PlayerKillEvent.silver_dropped.is_(None), PlayerKillEvent.silver_dropped >= min_silver),
     )
+    if watermark is not None:
+        q = q.where(PlayerKillEvent.timestamp > watermark)
     if min_fame > 0:
         q = q.where(PlayerKillEvent.fame >= min_fame)
+    # Filtro por região: cutoff individual + região configurada
     if regions:
-        q = q.where(PlayerKillEvent.region.in_(regions))
-    candidates = (await db.scalars(q.order_by(PlayerKillEvent.id.asc()).limit(_JUICY_KILL_BATCH * 4))).all()
+        # OR por região com cutoff próprio
+        conds = []
+        for r in regions:
+            if c := cutoffs.get(r):
+                conds.append(_sql_and(PlayerKillEvent.region == r, PlayerKillEvent.timestamp >= c))
+            else:
+                conds.append(PlayerKillEvent.region == r)
+        q = q.where(_sql_or(*conds))
+    else:
+        # Sem filtro de região = todas, mas ainda aplica cutoff por região
+        conds = []
+        for r, c in cutoffs.items():
+            conds.append(_sql_and(PlayerKillEvent.region == r, PlayerKillEvent.timestamp >= c))
+        if conds:
+            q = q.where(_sql_or(*conds))
+
+    candidates = (await db.scalars(q.order_by(PlayerKillEvent.timestamp.asc()).limit(_JUICY_KILL_BATCH * 4))).all()
+    if not candidates:
+        return {"kills": []}
+
+    # Sem precificação on-demand: kills com silver_dropped=NULL ficam pra trás
+    # (o worker silver_dropped as precifica em background). A precificação
+    # aqui travava o endpoint por minutos quando havia dezenas de kills NULL
+    # antes da kill grande já precificada — o bot nunca recebia a kill grande.
+
+    # Filtra: silver_dropped >= min_silver E é lethal (segunda barreira)
     events = []
     dirty = False
     for ev in candidates:
+        if ev.silver_dropped is None:
+            continue  # ainda sem preço (gear sem cotação, worker não chegou) — espera
         if not is_likely_lethal(ev.fame, ev.victim_equipment, ev.group_member_count):
-            # Segunda barreira para ledger legado/manual: tira o falso positivo
-            # da fila em vez de deixá-lo bloquear o cursor para sempre.
-            ev.silver_dropped = 0
-            dirty = True
+            if ev.silver_dropped > 0:
+                ev.silver_dropped = 0
+                dirty = True
+            continue
+        if ev.silver_dropped < min_silver:
             continue
         events.append(ev)
         if len(events) == _JUICY_KILL_BATCH:
             break
     if dirty:
         await db.commit()
+
     if not events:
         return {"kills": []}
 
@@ -3344,6 +3899,51 @@ async def bot_juicy_kill_queue(
     for ev in events:
         out.append(await _juicy_kill_payload_async(db, ev))
     return {"kills": out}
+
+
+def _has_gear(ev) -> bool:
+    """True se a vítima tinha equipamento ou inventário (pode ter silver_dropped>0)."""
+    eq = ev.victim_equipment or {}
+    if any(slot and slot.get("Type") for slot in eq.values()):
+        return True
+    return any(inv and inv.get("Type") for inv in (ev.victim_inventory or []))
+
+
+async def _price_kills_on_demand(db: AsyncSession, events: list) -> None:
+    """Precifica kills com silver_dropped=NULL ali mesmo (on-demand), em vez de
+    esperar o worker silver_dropped. Mesma lógica de _price_events no worker:
+    coleta item_ids do equipamento+inventário, busca preços, soma. Não commita
+    (caller decide)."""
+    from app.services.prices import get_battle_prices_with_presumption
+    from app.services.awakened import awakened_value
+    pairs: list[tuple[str, int]] = []
+    for ev in events:
+        for item in (ev.victim_equipment or {}).values():
+            if item and item.get("Type"):
+                pairs.append((item["Type"], 1))
+        for inv in (ev.victim_inventory or []):
+            if inv and inv.get("Type"):
+                pairs.append((inv["Type"], inv.get("Count") or 1))
+    if not pairs:
+        return
+    item_ids = list({iid for iid, _ in pairs})
+    # Libera read tx antes do HTTP (get_battle_prices faz chamadas à AODP).
+    await db.commit()
+    price_by_id, _basis = await get_battle_prices_with_presumption(db, item_ids)
+    for ev in events:
+        total = 0
+        for item in (ev.victim_equipment or {}).values():
+            if item and item.get("Type"):
+                total += price_by_id.get(item["Type"], 0) + awakened_value(
+                    item["Type"], item.get("LegendarySoul"),
+                )
+        for inv in (ev.victim_inventory or []):
+            if inv and inv.get("Type"):
+                total += (
+                    price_by_id.get(inv["Type"], 0)
+                    + awakened_value(inv["Type"], inv.get("LegendarySoul"))
+                ) * (inv.get("Count") or 1)
+        ev.silver_dropped = total
 
 
 def _juicy_kill_payload(db: Session, ev) -> dict:
@@ -3403,7 +4003,7 @@ def _juicy_kill_build(ev, killer, victim, delay) -> dict:
 
 
 class JuicyKillSyncedIn(BaseModel):
-    last_id: int
+    last_ts: datetime
 
 
 @router.post("/bot/guilds/{guild_id}/juicy-kill/synced")
@@ -3411,13 +4011,21 @@ async def bot_juicy_kill_synced(
     guild_id: int, body: JuicyKillSyncedIn,
     authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
-    """Avança o cursor após o bot postar as kills com sucesso."""
+    """Avança o watermark após o bot postar as kills com sucesso.
+
+    Watermark = timestamp da última kill postada (não do id). Próximo poll
+    busca kills com timestamp > watermark, em ordem cronológica."""
     _require_bot_secret(authorization)
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
     settings = dict(g.settings or {})
-    settings["juicy_kill_last_id"] = max(int(settings.get("juicy_kill_last_id", 0)), body.last_id)
+    new_ts = body.last_ts
+    if new_ts.tzinfo is None:
+        new_ts = new_ts.replace(tzinfo=timezone.utc)
+    current = _parse_watermark(settings.get("juicy_kill_last_ts"))
+    if current is None or new_ts > current:
+        settings["juicy_kill_last_ts"] = new_ts.isoformat()
     g.settings = settings
     await db.commit()
     return {"ok": True}
@@ -3726,12 +4334,14 @@ def bot_members_sync(
 ):
     """Bot envia a lista de membros do Discord (5min). O backend faz upsert de
     User + GuildMember — popula a tabela com TODOS os membros, não só os que
-    logaram no site. O site usa isso pra autocomplete ao adicionar participante
-    a evento. Saídas (on_member_remove) já são marcadas pelo bot separadamente;
-    este sync só cuida de entradas e atualizações."""
+    logaram no site. O snapshot também é o fallback autoritativo das remoções
+    humanas que algum evento do gateway não conseguiu entregar."""
     _require_bot_secret(authorization)
     if not body.members:
         return {"ok": True, "synced": 0}
+    # Pass 1: upsert Users — flush antes de criar GuildMember porque
+    # user_id é inteiro flat (não relationship), SQLAlchemy não ordena
+    # INSERTs por dependência FK implícita e GuildMember vinha antes de User.
     for m in body.members:
         user = db.get(User, m.user_id)
         if user is None:
@@ -3745,6 +4355,9 @@ def bot_members_sync(
                 user.global_name = m.global_name
             if m.avatar is not None:
                 user.avatar = m.avatar
+    db.flush()
+    # Pass 2: upsert GuildMembers — Users já estão no banco.
+    for m in body.members:
         gm = db.scalar(select(GuildMember).where(
             GuildMember.guild_id == guild_id, GuildMember.user_id == m.user_id,
         ))

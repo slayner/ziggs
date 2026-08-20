@@ -550,7 +550,13 @@ async def sync_5city_prices(
 
 
 _BATTLE_SENTINEL = "_battle_spot_"
-BATTLE_PRICE_TTL = timedelta(hours=8)  # preços de loot de batalha: reusar cache < 8h, re-buscar se mais velho
+BATTLE_PRICE_TTL = timedelta(days=7)  # preços de loot de batalha: reusar cache < 7d, re-buscar se mais velho
+# Aumentado de 8h pra 7d pra suportar kills descobertas tardiamente (backfill,
+# sweeper, API atrasada). A proteção anti-troll já existe: IQR-trim no
+# _compute_5city_avg (corta listing absurdo em mercado fino) + tier cap duro
+# em _fetch_spot_prices (descarta preço > _TIER_CAP[tier]). 7d cobre o horizonte
+# de postagem do juicy kill (cutoff 48h + delay médio 72h) com folga — sem
+# re-buscar a cada 8h custa menos AODP e estabiliza a precificação.
 
 
 async def _fetch_spot_prices(item_ids: list[str]) -> list[dict[str, Any]]:

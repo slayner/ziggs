@@ -29,8 +29,8 @@ from app.services import scan_dispatcher
 router = APIRouter(prefix="/scan", tags=["scan"])
 
 _SCAN_SECRET = os.getenv("SCAN_SECRET")
-_MAX_REPORT_WIRE_BYTES = 1024 * 1024
-_MAX_REPORT_BYTES = 4 * 1024 * 1024
+_MAX_REPORT_WIRE_BYTES = 5 * 1024 * 1024
+_MAX_REPORT_BYTES = 20 * 1024 * 1024
 
 
 def _check_bootstrap_secret(raw: str | None) -> None:
@@ -42,6 +42,13 @@ class RegisterIn(BaseModel):
     worker_id: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
     region_pref: str | None = Field(default=None, max_length=16)
+    # Tunnel metadata — opcional. Quando preenchido, a VPS aparece no
+    # /vps-manifest.json (companion + site) automaticamente.
+    vps_label: str | None = Field(default=None, max_length=64)
+    vps_country: str | None = Field(default=None, max_length=64)
+    vps_endpoint: str | None = Field(default=None, max_length=128)
+    vps_server_pubkey: str | None = Field(default=None, max_length=128)
+    vps_ping_url: str | None = Field(default=None, max_length=256)
 
 
 class RegisterOut(BaseModel):
@@ -59,7 +66,12 @@ async def scan_register(
     _check_bootstrap_secret(x_scan_secret)
     try:
         w, credential = await scan_dispatcher.register_worker(
-            db, body.worker_id, body.name, body.region_pref
+            db, body.worker_id, body.name, body.region_pref,
+            vps_label=body.vps_label,
+            vps_country=body.vps_country,
+            vps_endpoint=body.vps_endpoint,
+            vps_server_pubkey=body.vps_server_pubkey,
+            vps_ping_url=body.vps_ping_url,
         )
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from exc

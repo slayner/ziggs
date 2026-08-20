@@ -1,10 +1,13 @@
 """Regressions for the price and image used by Juicy Kills."""
 import asyncio
 from datetime import datetime, timezone
+from io import BytesIO
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException, Response
+from PIL import Image
 from app.services.awakened import awakened_value, is_awakened
-from app.services.juicy_kill_image import _load_icons
+from app.services.juicy_kill_image import _fetch_item_icon, _load_icons
 from app.services.prices import get_battle_prices
 
 
@@ -102,6 +105,27 @@ def test_icon_loader_reports_missing_icons():
     assert cache[("T8_HEAD_PLATE_SET1", 1)] is None
 
 
+def test_icon_fetch_retries_transient_render_failure():
+    buf = BytesIO()
+    Image.new("RGBA", (16, 16), "white").save(buf, "PNG")
+    calls = 0
+
+    async def render(*_args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise HTTPException(502, "Albion render unavailable")
+        return Response(content=buf.getvalue(), media_type="image/png")
+
+    async def run():
+        with patch("app.services.juicy_kill_image.render_item_for_card", side_effect=render), \
+             patch("app.services.juicy_kill_image.asyncio.sleep", AsyncMock()):
+            return await _fetch_item_icon("T8_HEAD_PLATE_SET1", 1)
+
+    assert asyncio.run(run()) is not None
+    assert calls == 2
+
+
 # ── Janela de pricing do worker silver_dropped × delay da API ─────────────────
 # O timestamp do evento é o horário do JOGO; com a API atrasada (americas já
 # ficou 30h+), a kill chega "velha" e uma janela fixa de 6h deixava ela NULL
@@ -187,6 +211,7 @@ if __name__ == "__main__":
     test_battle_price_outlier_tier_cap_removes_troll()
     test_low_tier_price_does_not_break_cap_lookup()
     test_icon_loader_reports_missing_icons()
+    test_icon_fetch_retries_transient_render_failure()
     test_recent_cutoffs_stretch_by_measured_delay()
     test_recent_cutoffs_default_without_measurement()
     test_process_batch_query_filters_by_region_cutoff()

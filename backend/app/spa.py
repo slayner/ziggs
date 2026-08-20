@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -30,11 +31,14 @@ _PUBLIC_EVENT_RE = re.compile(r"^e/[A-Za-z0-9_-]{32}$")
 _REGION_NAME = {"am": "Americas", "as": "Asia", "eu": "Europe"}
 
 
-async def _og_for_path(path: str) -> tuple[str, str, str | None]:
+async def _og_for_path(path: str, query: str = "") -> tuple[str, str, str | None]:
     """(title, description, image_url|None) da rota — só com a URL, sem DB.
 
     Batalha por código busca o resumo no banco: /{code} é tanto a URL pública
-    da página quanto a URL que o Discord lê para montar o embed.
+    da página quanto a URL que o Discord lê para montar o embed. IDs crus
+    (/123, /multi?ids=123,456) também resolvem pro grupo correspondente quando
+    a batalha já está na base — senão OG genérico (a página SPA resolve na
+    hora via /battles/resolve e troca a URL pro código curto).
     """
     m = _PLAYER_RE.match(path)
     if m:
@@ -51,8 +55,17 @@ async def _og_for_path(path: str) -> tuple[str, str, str | None]:
     if _PUBLIC_EVENT_RE.match(path):
         return ("Escalação", "", None)
 
-    if _BATTLE_IDS_RE.match(path) or path == "multi":
-        return ("Batalha", "", None)
+    # IDs crus do Albion: /123 ou /multi?ids=123,456
+    albion_ids: list[str] = []
+    if path == "multi":
+        ids_param = (parse_qs(query).get("ids") or [""])[0]
+        albion_ids = [s.strip() for s in ids_param.split(",") if s.strip()]
+    elif _BATTLE_IDS_RE.match(path):
+        albion_ids = path.split(",")
+
+    if albion_ids:
+        title, image = await _battle_summary_by_albion_ids(albion_ids)
+        return (title or "Batalha", "", image)
 
     if _BATTLE_CODE_RE.match(path):
         title, image = await _battle_summary(path)
@@ -64,49 +77,88 @@ async def _og_for_path(path: str) -> tuple[str, str, str | None]:
     return ("", "", None)  # rota sem OG específico → index como está
 
 
+async def _group_summary(db, battle_ids: list[int]) -> tuple[str, str | None]:
+    """Título + URL do PNG de preview dado os battle_ids internos do grupo.
+    Se alguma batalha ainda é light (não deep-processada), não gera imagem —
+    o embed do Discord seria gerado com dados vazios."""
+    from app.config import get_settings
+    from app.models.battles import Battle
+    from app.services import battle_groups
+    from app.api.routes.battles import _factions_summary
+    from sqlalchemy import select
+
+    if not battle_ids:
+        return ("", None)
+    battles = (await db.scalars(select(Battle).where(Battle.id.in_(battle_ids)))).all()
+    if not battles:
+        return ("", None)
+    # Se alguma batalha do grupo ainda é light, não tem dados de factions/participants
+    # — OG genérico (sem imagem). O embed só vale a pena quando a batalha está pronta.
+    if any(b.processing_tier != "deep" for b in battles):
+        return ("", None)
+    b = battles[0]
+    # Tags das factions vs (mesmo formato da imagem de preview)
+    all_factions: dict[str, dict] = {}
+    for bid in battle_ids:
+        for f in await _factions_summary(db, bid):
+            key = f["alliance_name"] or f["guild_name"]
+            if key in all_factions:
+                all_factions[key]["kills"] += f["kills"]
+            else:
+                all_factions[key] = dict(f)
+    top = sorted(all_factions.values(), key=lambda r: r["kills"], reverse=True)[:4]
+    tags = []
+    for f in top:
+        tag = f"[{f['alliance_name']}]" if f["alliance_name"] else f["guild_name"]
+        tags.append(tag[:12])
+    title = "  vs  ".join(tags) if tags else f"{b.players_total} players · {b.kill_count} kills"
+    group = await battle_groups.get_or_create_group(db, battle_ids)
+    image = f"{get_settings().frontend_url}/battles/preview/{group.public_id}.png"
+    return (title, image)
+
+
 async def _battle_summary(public_id: str) -> tuple[str, str | None]:
-    """Título + URL do PNG de preview da batalha."""
+    """Título + URL do PNG de preview da batalha (por código curto)."""
     try:
-        from app.config import get_settings
         from app.db import AsyncSessionLocal
-        from app.models.battles import Battle
         from app.services import battle_groups
-        from app.api.routes.battles import _factions_summary
 
         async with AsyncSessionLocal() as db:
             ids = await battle_groups.get_group_battle_ids(db, public_id)
             if not ids:
                 return ("", None)
-            b = await db.get(Battle, ids[0])
-            if not b:
-                return ("", None)
-            # Tags das factions vs (mesmo formato da imagem de preview)
-            all_factions: dict[str, dict] = {}
-            for bid in ids:
-                for f in await _factions_summary(db, bid):
-                    key = f["alliance_name"] or f["guild_name"]
-                    if key in all_factions:
-                        all_factions[key]["kills"] += f["kills"]
-                    else:
-                        all_factions[key] = dict(f)
-            top = sorted(all_factions.values(), key=lambda r: r["kills"], reverse=True)[:4]
-            tags = []
-            for f in top:
-                tag = f"[{f['alliance_name']}]" if f["alliance_name"] else f["guild_name"]
-                tags.append(tag[:12])
-            title = "  vs  ".join(tags) if tags else f"{b.players_total} players · {b.kill_count} kills"
-            image = f"{get_settings().frontend_url}/battles/preview/{public_id}.png"
-            return (title, image)
+            return await _group_summary(db, ids)
     except Exception:
         return ("", None)  # DB fora/erro → OG genérico, página abre igual
+
+
+async def _battle_summary_by_albion_ids(albion_ids: list[str]) -> tuple[str, str | None]:
+    """Título + URL do PNG de preview dado albion_ids crus (formato /multi?ids=
+    ou /123,456). Resolve só batalhas JÁ na base — não bate na API do Albion
+    (SSR precisa ser rápido e sem rede externa). Se alguma não estiver na base,
+    devolve OG genérico; a página SPA resolve via /battles/resolve na hora."""
+    try:
+        from app.db import AsyncSessionLocal
+        from app.models.battles import Battle
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as db:
+            battles = (await db.scalars(
+                select(Battle).where(Battle.albion_id.in_(albion_ids))
+            )).all()
+            if len(battles) != len(albion_ids):
+                return ("", None)
+            return await _group_summary(db, [b.id for b in battles])
+    except Exception:
+        return ("", None)
 
 
 def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
 
-async def _inject_og(index_html: str, path: str) -> str:
-    title, desc, image = await _og_for_path(path)
+async def _inject_og(index_html: str, path: str, query: str = "") -> str:
+    title, desc, image = await _og_for_path(path, query)
     if not title and not image:
         return index_html
     html = index_html
@@ -156,7 +208,6 @@ def install(app: FastAPI) -> None:
     if not index_file.is_file():
         return  # sem build → backend segue API-only (dev com Vite server)
 
-    index_html = index_file.read_text(encoding="utf-8")
     docs_file = _DIST / "docs.html"
 
     @app.get("/{full_path:path}", include_in_schema=False)
@@ -175,5 +226,6 @@ def install(app: FastAPI) -> None:
         request_host = request.headers.get("host", "").split(":", 1)[0].lower()
         if docs_file.is_file() and docs_host and request_host == docs_host:
             return FileResponse(docs_file)
-        return HTMLResponse(await _inject_og(index_html, full_path),
+        # Frontend deploys replace dist without restarting the API process.
+        return HTMLResponse(await _inject_og(index_file.read_text(encoding="utf-8"), full_path, request.url.query),
                             headers={"Cache-Control": "no-cache"})

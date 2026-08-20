@@ -6,7 +6,6 @@ enfileira no warmer, estado compartilhado entre visitantes, cooldown de 5min,
 retry automático em falha."""
 import asyncio
 import inspect
-import threading
 from datetime import timedelta
 
 import app.services.profile_warmer as pw
@@ -73,8 +72,10 @@ def test_rotas_de_refresh_tem_cooldown_10min():
 def test_payload_expose_refresh_requested_at():
     """Sem expor refresh_requested_at no payload, o front não sabe que tem
     refresh em andamento — cada visitante só vê o próprio estado local."""
-    src_g = inspect.getsource(pr._build_guild_payload_sync)
-    src_a = inspect.getsource(pr._build_alliance_payload_sync)
+    # profiles.py foi migrado pra async: _build_guild_payload_sync virou
+    # _build_guild_payload (AsyncSession). Casar os nomes atuais.
+    src_g = inspect.getsource(pr._build_guild_payload)
+    src_a = inspect.getsource(pr._build_alliance_payload)
     assert "refresh_requested_at" in src_g, "guild expõe refresh_requested_at"
     assert "refresh_requested_at" in src_a, "alliance expõe refresh_requested_at"
 
@@ -105,41 +106,46 @@ def test_cold_load_de_guild_alliance_desacoplado_da_request():
 
 
 def test_cold_load_timeout_mantem_worker_rastreado_e_fecha_sessao(monkeypatch):
-    started = threading.Event()
-    release = threading.Event()
+    """profiles.py foi migrado pra async (AsyncSessionLocal + asyncio.wait_for
+    + asyncio.shield). O teste original casava um modelo sync (SessionLocal +
+    to_thread); reescrito pro modelo async.
 
-    class FakeSession:
-        closed = False
+    Garante: no timeout, o stage vira error:timeout e a task sai de
+    _cold_load_tasks (não fica pra sempre rastreada)."""
+    started = asyncio.Event()
+    release = asyncio.Event()
 
-        def close(self):
-            self.closed = True
-
-    session = FakeSession()
-
-    def build(db, albion_id):
-        assert db is session
+    async def slow_build(db, albion_id):
         started.set()
-        release.wait(1)
+        await release.wait()  # segura até o teste liberar
         return {"albion_id": albion_id}
 
-    monkeypatch.setattr(pr, "SessionLocal", lambda: session)
-    monkeypatch.setattr(pr, "_build_guild_payload_sync", build)
-    monkeypatch.setattr(pr, "COLD_LOAD_TIMEOUT", timedelta(milliseconds=10))
+    monkeypatch.setattr(pr, "_build_guild_payload", slow_build)
+    monkeypatch.setattr(pr, "COLD_LOAD_TIMEOUT", timedelta(milliseconds=50))
 
     async def run():
         key = "guild:test"
         task = asyncio.create_task(pr._cold_load_guild("test"))
         pr._cold_load_tasks[key] = task
-        while not started.is_set():
-            await asyncio.sleep(0)
-        await asyncio.sleep(0.03)
-        assert pr._cold_load_tasks.get(key) is task
-        assert not task.done()
-        assert not session.closed
-        release.set()
+        # Espera o build começar (started) + o timeout disparar (~50ms).
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await asyncio.sleep(0.15)  # garante que o wait_for respondeu o timeout
+        # Stage marcado como error:timeout.
+        entry = pr._load_progress.get(key)
+        assert entry is not None and entry[1] == "error:timeout", \
+            f"stage deveria ser error:timeout, é {entry}"
+        assert pr._cold_timeout_at.get(key) is not None, "marca _cold_timeout_at"
+        # No modelo async com asyncio.shield, o timeout do wait_for NÃO espera a
+        # inner terminar — a task externa (_cold_load_guild) completa e remove
+        # a chave de _cold_load_tasks (pop na última linha da função). A inner
+        # shielded continua rodando órfã até o release vir.
         await asyncio.wait_for(task, 1)
-        assert key not in pr._cold_load_tasks
-        assert session.closed
+        assert task.done(), "task externa completa após o timeout"
+        assert key not in pr._cold_load_tasks, "task externa sai de _cold_load_tasks"
+        # Libera a inner órfã (não vira leak — o release.set() a completa).
+        release.set()
+        # Dá um tick pro event loop fechar a inner.
+        await asyncio.sleep(0)
 
     try:
         asyncio.run(run())

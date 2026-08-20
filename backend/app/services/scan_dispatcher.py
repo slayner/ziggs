@@ -37,8 +37,12 @@ from app.models.scan_worker import (
 )
 from app.services.battle_tracker import (
     BATTLES_API_OFFSET_LIMIT,
+    DEEP_PROCESS_MIN_PLAYERS,
+    EVENTS_MAX_PAGES,
     REPROCESS_REASON_SWEEPER,
     fetch_battles,
+    fetch_battle_detail,
+    fetch_events,
     upsert_battle_light,
 )
 from app.services.albion_gate import slot
@@ -179,7 +183,13 @@ def _affinity_due() -> bool:
 
 
 async def register_worker(
-    db: AsyncSession, worker_id: str, name: str, region_pref: str | None
+    db: AsyncSession, worker_id: str, name: str, region_pref: str | None,
+    *,
+    vps_label: str | None = None,
+    vps_country: str | None = None,
+    vps_endpoint: str | None = None,
+    vps_server_pubkey: str | None = None,
+    vps_ping_url: str | None = None,
 ) -> tuple[ScanWorker, str]:
     worker = await db.scalar(select(ScanWorker).where(ScanWorker.worker_id == worker_id))
     if worker is None:
@@ -192,6 +202,12 @@ async def register_worker(
         worker.region_pref = None
     worker.status = "active"
     worker.last_heartbeat = _now()
+    # Tunnel metadata — atualiza a cada registro (VPS pode mudar endpoint/key).
+    worker.vps_label = vps_label
+    worker.vps_country = vps_country
+    worker.vps_endpoint = vps_endpoint
+    worker.vps_server_pubkey = vps_server_pubkey
+    worker.vps_ping_url = vps_ping_url
     token = secrets.token_urlsafe(32)
     worker.api_token_hash = hashlib.sha256(token.encode()).hexdigest()
     worker.credential_revoked = False
@@ -578,6 +594,9 @@ async def _retry_failed_tasks(db: AsyncSession) -> int:
         .where(
             ScanWorkTask.status == "failed",
             ScanWorkTask.completed_at < _now() - FAILED_RETRY_INTERVAL,
+            # deep_process: 404 permanente em batalhas velhas — não recriar
+            # depois de 3 tentativas. A batalha é marcada como deep abaixo.
+            ~((ScanWorkTask.feed_type == "deep_process") & (ScanWorkTask.attempt_count >= 3)),
         )
         .values(
             status="pending",
@@ -588,7 +607,94 @@ async def _retry_failed_tasks(db: AsyncSession) -> int:
         )
         .execution_options(synchronize_session=False)
     )
+    # Batalhas deep_process que excederam 3 tentativas: marcar
+    # reprocess_reason pra o battle_reprocessor tentar de novo e deletar as
+    # tasks. NÃO setar processing_tier="deep" — deep significa "deep-processado
+    # com sucesso" (com kill_events/sides/equipment). Marcar deep sem processar
+    # deixava a batalha sem kill_events, só com side "rats", e o frontend não
+    # tinha como distinguir de uma deep real.
+    exhausted = (await db.scalars(
+        select(ScanWorkTask).where(
+            ScanWorkTask.feed_type == "deep_process",
+            ScanWorkTask.status == "failed",
+            ScanWorkTask.attempt_count >= 3,
+        )
+    )).all()
+    if exhausted:
+        albion_ids = [str(t.page_offset) for t in exhausted]
+        await db.execute(
+            update(Battle)
+            .where(Battle.albion_id.in_(albion_ids))
+            .values(processing_tier="light", reprocess_reason="deep_process_failed")
+            .execution_options(synchronize_session=False)
+        )
+        for t in exhausted:
+            await db.delete(t)
     return result.rowcount or 0
+
+
+# ── Deep-process delegado pros workers ──────────────────────────────────────
+# Workers ociosos (sem feed recente pra claimar) podem ajudar o backend a
+# deep-processar batalhas antigas. O backend cuida das recentes (via
+# _retry_stuck_battles em ordem decrescente); os workers pegam as mais velhas
+# (ascendente) pra não competir no mesmo conjunto.
+DEEP_PROCESS_TASKS_PER_WORKER = 3
+DEEP_PROCESS_BATCH = 20  # batalhas light transformadas em tasks por ciclo
+
+
+async def _ensure_deep_process_tasks(db: AsyncSession, active_workers: int) -> int:
+    """Cria tarefas 'deep_process' pra batalhas light antigas que workers
+    ociosos podem claimar. prioridade 0 (só roda quando não há feed recente).
+
+    Pega batalhas light em ordem ASCENDENTE (mais velhas primeiro) — o backend
+    via _retry_stuck_battles cuida das recentes (descendente). Assim os dois
+    caminhos não competem no mesmo conjunto.
+
+    page_offset guarda o battle.id (não o offset do feed)."""
+    # Já existem tasks deep_process pendentes/claimed suficientes?
+    target = max(1, active_workers * DEEP_PROCESS_TASKS_PER_WORKER)
+    existing = int(await db.scalar(
+        select(func.count()).select_from(ScanWorkTask).where(
+            ScanWorkTask.feed_type == "deep_process",
+            ScanWorkTask.status.in_(("pending", "claimed")),
+        )
+    ) or 0)
+    needed = max(0, DEEP_PROCESS_BATCH - existing, target - existing)
+    if needed == 0:
+        return 0
+
+    # Batalhas light com players suficientes, DESCENDENTE (recentes primeiro) —
+    # a API pública do Albion só serve batalhas numa janela de ~7-14 dias;
+    # batalhas mais velhas retornam 404 e o worker fica em loop de erros.
+    # Batalhas que já têm task deep_process (qualquer status — done/failed
+    # também, pra não recriar tasks pra batalhas já processadas).
+    already_tasked = set((await db.scalars(
+        select(ScanWorkTask.page_offset).where(
+            ScanWorkTask.feed_type == "deep_process",
+        )
+    )).all())
+    # page_offset é int mas albion_id é varchar — compara como strings
+    already_tasked_str = {str(v) for v in already_tasked}
+    candidates = (await db.scalars(
+        select(Battle).where(
+            Battle.processing_tier == "light",
+            Battle.players_total >= DEEP_PROCESS_MIN_PLAYERS,
+            ~Battle.albion_id.in_(already_tasked_str) if already_tasked_str else True,
+        )
+        .order_by(Battle.start_time.desc())
+        .limit(needed)
+    )).all()
+    created = 0
+    for b in candidates:
+        db.add(ScanWorkTask(
+            region=b.region,
+            feed_type="deep_process",
+            page_offset=int(b.albion_id),
+            priority=1,
+            status="pending",
+        ))
+        created += 1
+    return created
 
 
 async def generate_tasks(db: AsyncSession) -> int:
@@ -623,6 +729,11 @@ async def generate_tasks(db: AsyncSession) -> int:
                     )
             except IntegrityError:
                 pass
+    # Deep-process delegado: quando há workers ativos, cria tarefas pra
+    # batalhas light antigas (o backend cuida das recentes via _retry_stuck).
+    # prioridade 0 (baixa) — só roda quando não há feed recente pra claimar.
+    if active_workers > 0:
+        created += await _ensure_deep_process_tasks(db, active_workers)
     await _cleanup_history(db)
     await db.commit()
     return created
@@ -638,8 +749,8 @@ async def _claim_next(
 ) -> ScanWorkTask | None:
     now = _now()
     query = (
-        select(ScanWorkTask, ScanStreamState)
-        .join(
+        select(ScanWorkTask)
+        .outerjoin(
             ScanStreamState,
             and_(
                 ScanStreamState.region == ScanWorkTask.region,
@@ -655,12 +766,19 @@ async def _claim_next(
         )
         .where(
             ScanWorkTask.status == "pending",
-            ScanStreamState.paused.is_(False),
+            # deep_process não tem ScanStreamState — só aplica filtro de
+            # circuit/paused pra battles/kills (que têm stream state).
             or_(
-                ScanStreamState.circuit_state == "closed",
+                ScanStreamState.id.is_(None),
                 and_(
-                    ScanStreamState.circuit_state == "open",
-                    ScanStreamState.opened_until <= now,
+                    ScanStreamState.paused.is_(False),
+                    or_(
+                        ScanStreamState.circuit_state == "closed",
+                        and_(
+                            ScanStreamState.circuit_state == "open",
+                            ScanStreamState.opened_until <= now,
+                        ),
+                    ),
                 ),
             ),
         )
@@ -671,29 +789,34 @@ async def _claim_next(
         query = query.where(ScanWorkTask.priority > 0)
     order = [ScanWorkTask.priority.desc()]
     if prefer_latency:
-        order.append(ScanWorkerRegionMetric.ewma_latency_ms.asc().nullslast())
+        order.append(ScanWorkerRegionMetric.ewma_latency_ms.asc().nullsfirst())
     order.extend((
         ScanStreamState.last_claimed_at.asc().nullsfirst(),
         ScanWorkTask.id.asc(),
     ))
-    row = (await db.execute(
+    task = (await db.scalars(
         query
         .order_by(*order)
-        .with_for_update(of=(ScanWorkTask, ScanStreamState), skip_locked=True)
+        .with_for_update(of=(ScanWorkTask,), skip_locked=True)
         .limit(1)
     )).first()
-    if row is None:
+    if task is None:
         return None
-    task, stream = row
     task.status = "claimed"
     task.claimed_by = worker_id
     task.lease_token = uuid.uuid4().hex
     task.attempt_count += 1
     task.claimed_at = now
     task.claim_expires_at = now + WORK_CLAIM_TTL
-    stream.last_claimed_at = now
-    if stream.circuit_state == "open":
-        stream.circuit_state = "half_open"
+    # stream pode ser None (deep_process não tem ScanStreamState)
+    stream = await db.scalar(select(ScanStreamState).where(
+        ScanStreamState.region == task.region,
+        ScanStreamState.feed_type == task.feed_type,
+    ))
+    if stream is not None:
+        stream.last_claimed_at = now
+        if stream.circuit_state == "open":
+            stream.circuit_state = "half_open"
     await db.commit()
     await db.refresh(task)
     return task
@@ -900,7 +1023,7 @@ async def report_work(
         or task.claim_expires_at <= _now()
     ):
         raise PermissionError("stale lease")
-    if data is not None and len(data) > FEED_PAGE_SIZE:
+    if data is not None and len(data) > FEED_PAGE_SIZE and task.feed_type != "deep_process":
         raise ValueError("página maior que o limite do feed")
     if latency_ms is not None:
         metric = await db.scalar(select(ScanWorkerRegionMetric).where(
@@ -985,7 +1108,44 @@ async def _apply_ingest_payload(
     accepted = 0
     errors = 0
     payload = ingest.payload or []
-    if task.feed_type == "battles":
+    if task.feed_type == "deep_process":
+        # Worker buscou detail + events da batalha via albion_id (guardado em
+        # page_offset). Resolve albion_id → Battle.id interno pra _write_deep_data.
+        from app.services.battle_tracker import _write_deep_data
+        for item in payload:
+            if not item.get("_deep_process"):
+                continue
+            albion_id = item.get("battle_id")
+            raw = item.get("raw")
+            events = item.get("events") or []
+            if not albion_id or raw is None:
+                errors += 1
+                continue
+            battle = await db.scalar(
+                select(Battle).where(
+                    Battle.albion_id == str(albion_id),
+                    Battle.region == task.region,
+                )
+            )
+            if battle is None:
+                errors += 1
+                continue
+            try:
+                ok = await asyncio.to_thread(_write_deep_data, battle.id, raw, events)
+                if ok:
+                    accepted += 1
+                else:
+                    b = await db.get(Battle, battle.id)
+                    if b is not None:
+                        b.reprocess_reason = b.reprocess_reason or "deep_process_empty"
+                    errors += 1
+            except Exception as exc:
+                log.warning("scan_dispatcher: deep_process %s: %s", albion_id, exc)
+                b = await db.get(Battle, battle.id)
+                if b is not None:
+                    b.reprocess_reason = b.reprocess_reason or "deep_process_failed"
+                errors += 1
+    elif task.feed_type == "battles":
         raw_ids = {str(raw.get("id")) for raw in payload if raw.get("id") is not None}
         existing = set((await db.scalars(
             select(Battle.albion_id).where(
@@ -1344,6 +1504,18 @@ async def get_worker_stats(db: AsyncSession) -> dict:
             "errors": metric.errors,
             "ewma_latency_ms": round(metric.ewma_latency_ms, 1) if metric.ewma_latency_ms is not None else None,
         }
+    # Contagem de batalhas por processing_tier por região — light = descoberta
+    # mas sem eventos/deep-process, deep = processada. A diferença é a fila de
+    # processamento pendente que o embed de monitoring mostra.
+    processing: dict[str, dict[str, int]] = {}
+    for region, tier, count in (await db.execute(
+        select(Battle.region, Battle.processing_tier, func.count())
+        .where(Battle.processing_tier.in_(("light", "deep")))
+        .group_by(Battle.region, Battle.processing_tier)
+    )).all():
+        processing.setdefault(region, {"light": 0, "deep": 0})
+        processing[region][tier] = count or 0
+
     return {
         "workers": rows,
         "tasks": status_counts,
@@ -1356,6 +1528,7 @@ async def get_worker_stats(db: AsyncSession) -> dict:
         "sla": sla,
         "incidents": incidents,
         "affinity": affinity,
+        "processing": processing,
         "strategy": {
             "active_vps": active,
             "mode": "fallback" if active == 0 else "assist" if backend_is_idle() else "coordinator",
@@ -1420,6 +1593,16 @@ async def _fetch_task(task: ScanWorkTask) -> list[dict]:
     async with make_client() as client:
         if task.feed_type == "battles":
             return await fetch_battles(client, host, offset=task.page_offset)
+        if task.feed_type == "deep_process":
+            # page_offset guarda o albion_id (não o battle.id interno).
+            albion_id = str(task.page_offset)
+            raw = await fetch_battle_detail(client, host, albion_id)
+            if raw is None:
+                return []
+            events = await fetch_events(client, host, albion_id)
+            # Empacota como um único item; battle_id = albion_id aqui,
+            # _apply_ingest_payload resolve pra Battle.id interno.
+            return [{"_deep_process": True, "battle_id": albion_id, "raw": raw, "events": events}]
         async with slot(host):
             response = await client.get(
                 f"https://{host}/api/gameinfo/events",

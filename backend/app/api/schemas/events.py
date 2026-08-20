@@ -10,7 +10,6 @@ class EventCreate(BaseModel):
     title: str | None = None
     scheduled_at: datetime | None = None
     comp_id: int | None = None
-    seriousness: str = "casual"  # casual | serious
     # Voice tracking sempre ligado — não é mais escolha na criação (site parou
     # de mostrar o toggle; % da call sempre calculada a partir dos snapshots).
     participation_mode: str = "voice_percent"  # presence | voice_percent
@@ -48,7 +47,6 @@ class EventSummary(BaseModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     comp_id: int | None = None
-    seriousness: str = "casual"
     participation_mode: str = "presence"
     signup_mode: str = "signup"
     assignment_mode: str = "hybrid"
@@ -153,7 +151,6 @@ class EventDetail(BaseModel):
     tab_value: int = 0
     tab_image_url: str | None = None
     battleboard_url: str | None = None
-    seriousness: str = "casual"
     participation_mode: str = "presence"
     signup_mode: str = "signup"
     assignment_mode: str = "hybrid"
@@ -192,7 +189,10 @@ class SignupOut(BaseModel):
     id: int
     user_id: int
     user_name: str | None
+    # Legado: nomes de GameRole do snapshot de exibição.
     functions: list[str] = Field(default_factory=list)
+    # Identidade do signup (ago/2026): pares {"weapon_id": int, "fn": str}.
+    weapon_fns: list[dict] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -339,7 +339,13 @@ class AssignmentOut(BaseModel):
 class EscalationSignupOut(BaseModel):
     user_id: int
     user_name: str | None
+    # Legado: nomes de GameRole do snapshot de exibição.
     functions: list[str] = Field(default_factory=list)
+    # Identidade do signup (ago/2026): pares (weapon_id, fn) + pair keys
+    # prontas pra casar com os pares de cada slot. A UI de escalação atual usa
+    # `functions`; a futura escalation-board horizontal usará `weapon_fns`/`keys`.
+    weapon_fns: list[dict] = Field(default_factory=list)
+    keys: list[str] = Field(default_factory=list)
 
 
 class EscalationEventOut(BaseModel):
@@ -347,7 +353,6 @@ class EscalationEventOut(BaseModel):
     guild_id: str
     title: str | None = None
     scheduled_at: datetime | None = None
-    seriousness: str
     state: str
     comp_id: int | None = None
     comp_name: str | None = None

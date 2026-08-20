@@ -256,23 +256,66 @@ def companion_latest():
     return Response(content=json.dumps(data), media_type="application/json")
 
 
-_MANIFEST_FILE = Path(__file__).resolve().parents[4] / "frontend" / "public" / "vps-manifest.json"
+# ─── VPS manifest dinâmico (tunnel) ──────────────────────────────────────────
+# Antes era um JSON estático em frontend/public/vps-manifest.json editado à mão.
+# Agora vem do banco: scan_workers com vps_endpoint preenchido e heartbeat recente
+# aparecem automaticamente no companion e no site. Adicionar/remover VPS = ligar/
+# desligar o scanner da VPS — o heartbeat expira em WORKER_HEARTBEAT_TIMEOUT.
+_vps_manifest_cache: list = []  # [monotonic, payload]
+
+
+async def _build_vps_manifest(db: AsyncSession) -> list[dict]:
+    """Lê scan_workers com tunnel metadata e monta o manifest.
+    Lista quem tem tunnel configurado, não quem está pingando agora —
+    o companion pinga cada VPS pra decidir se está online."""
+    from app.models.scan_worker import ScanWorker
+    rows = (await db.scalars(
+        select(ScanWorker).where(
+            ScanWorker.vps_endpoint.is_not(None),
+            ScanWorker.vps_endpoint != "",
+            ScanWorker.status != "quarantined",
+            ScanWorker.credential_revoked.is_(False),
+        ).order_by(ScanWorker.id)
+    )).all()
+    return [
+        {
+            "id": w.worker_id,
+            "label": w.vps_label or w.name,
+            "country": w.vps_country or "",
+            "endpoint": w.vps_endpoint or "",
+            "server_pubkey": w.vps_server_pubkey or "",
+            "ping_url": w.vps_ping_url or "",
+        }
+        for w in rows
+    ]
+
+
+@router.get("/vps-manifest.json")
+async def vps_manifest(db: AsyncSession = Depends(get_async_session)):
+    """Manifest dinâmico das VPS tunnel — lido do banco (scan_workers).
+    O companion busca esta URL em runtime (5min de cache no client).
+    Cache de 30s no servidor pra não bater no DB a cada request."""
+    now = time.monotonic()
+    if _vps_manifest_cache and now - _vps_manifest_cache[0] < 30:
+        return JSONResponse({"vps": _vps_manifest_cache[1]})
+    vps = await _build_vps_manifest(db)
+    _vps_manifest_cache[:] = [now, vps]
+    return JSONResponse({"vps": vps})
+
+
 _vps_pings_cache: list = []  # [timestamp, payload]
 
 
 @router.get("/companion/vps-pings")
-async def companion_vps_pings():
+async def companion_vps_pings(db: AsyncSession = Depends(get_async_session)):
     """Pings das VPS até os servidores do Albion, buscados server-side.
     O browser não pode fetchar http:// de VPS numa página https:// (mixed content),
-    então o backend faz o proxy. Cache de 30s pra não pingar a cada visitante."""
-    import time as _time
-    now = _time.monotonic()
+    então o backend faz o proxy. Cache de 30s pra não pingar a cada visitante.
+    Lê a lista de VPS do banco (scan_workers), não de um JSON estático."""
+    now = time.monotonic()
     if _vps_pings_cache and now - _vps_pings_cache[0] < 30:
         return _vps_pings_cache[1]
-    if not _MANIFEST_FILE.exists():
-        return Response(content="[]", media_type="application/json")
-    manifest = json.loads(_MANIFEST_FILE.read_text(encoding="utf-8"))
-    vps_list = manifest.get("vps", [])
+    vps_list = await _build_vps_manifest(db)
 
     async def ping_one(url: str) -> dict | None:
         try:
@@ -283,7 +326,7 @@ async def companion_vps_pings():
         except Exception:
             return None
 
-    results = await asyncio.gather(*(ping_one(v["ping_url"]) for v in vps_list))
+    results = await asyncio.gather(*(ping_one(v["ping_url"]) for v in vps_list if v["ping_url"]))
     out = [
         {"label": v["label"], "country": v["country"], "pings": p}
         for v, p in zip(vps_list, results)

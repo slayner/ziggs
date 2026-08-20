@@ -22,6 +22,7 @@ from app.models.comps import Comp, CompParty, CompSlot
 from app.models.events import Event, EventAssignment
 from app.models.registration import BotRegistration
 from app.models.tenancy import GuildMember
+from app.services import event_gates
 from app.services.events import ServiceError
 
 
@@ -71,6 +72,7 @@ def _role_out(role: GameRole, weapons: dict[int, Weapon]) -> dict:
     return {
         "id": role.id,
         "name": role.name,
+        "weapon_id": role.weapon_id,
         "invisible_function": w.invisible_function if w else None,
         "weapon_name": w.name if w else None,
         "offhand": role.offhand,
@@ -181,9 +183,20 @@ def build_escalation(
             "user_id": s.user_id,
             "user_name": _display_name(s.user_id, s.user_name),
             "functions": list(s.functions or []),
+            # Identidade do signup: pares (weapon_id, fn) + chaves prontas pra
+            # casar com os pares de cada slot na UI de escalação.
+            "weapon_fns": [
+                {"weapon_id": int(e["weapon_id"]), "fn": e.get("fn")}
+                for e in (s.weapon_fns or [])
+                if isinstance(e, dict) and e.get("weapon_id") is not None
+            ],
         }
         for s in ev.signups
     ]
+    for entry in enlisted:
+        entry["keys"] = [
+            event_gates.pair_key(p["weapon_id"], p["fn"]) for p in entry["weapon_fns"]
+        ]
 
     can_manage = bool(member is not None and (
         member.is_guild_admin or has_permission(db, member, "escalacao.manage")
@@ -196,7 +209,6 @@ def build_escalation(
             "guild_id": str(ev.guild_id),
             "title": ev.title,
             "scheduled_at": ev.scheduled_at,
-            "seriousness": ev.seriousness.value,
             "state": ev.state.value,
             "comp_id": ev.comp_id,
             "comp_name": comp_name,
@@ -277,6 +289,36 @@ def assign(
     return row
 
 
+def _slot_pairs(slot: CompSlot, roles: dict[int, GameRole]) -> set[tuple[int, str]]:
+    """Pares (weapon_id, fn_key) que este slot aceita."""
+    pairs: set[tuple[int, str]] = set()
+    for csr in slot.roles:
+        role = roles.get(csr.game_role_id)
+        if role is not None and role.weapon_id is not None:
+            pairs.add((role.weapon_id, event_gates.fn_key(slot.fn)))
+    return pairs
+
+
+def _signup_pairs(signup, role_pairs: dict[int, set[tuple[int, str]]], roles: dict[int, GameRole]) -> set[tuple[int, str]]:
+    """Pares desejados por um inscrito. `weapon_fns` é a fonte; eventos
+    legados (weapon_fns vazio) derivam dos nomes de GameRole contra as roles
+    desta comp."""
+    wanted: set[tuple[int, str]] = set()
+    for entry in (signup.weapon_fns or []):
+        if isinstance(entry, dict) and entry.get("weapon_id") is not None:
+            try:
+                wanted.add((int(entry["weapon_id"]), event_gates.fn_key(entry.get("fn"))))
+            except (TypeError, ValueError):
+                break
+    if not wanted:
+        names = {event_gates.function_key(n) for n in (signup.functions or [])}
+        for role_id, pairs in role_pairs.items():
+            role = roles.get(role_id)
+            if role is not None and event_gates.function_key(role.name) in names:
+                wanted |= pairs
+    return wanted
+
+
 def _autofill_plan(db: Session, guild_id: int, ev: Event) -> list[dict]:
     if ev.comp_id is None:
         return []
@@ -290,6 +332,17 @@ def _autofill_plan(db: Session, guild_id: int, ev: Event) -> list[dict]:
     roles = {
         r.id: r for r in db.scalars(select(GameRole).where(GameRole.id.in_(role_ids)))
     } if role_ids else {}
+    # role -> pares (weapon, fn) nos slots onde aparece — alimenta o fallback
+    # legado (nome -> par) do _signup_pairs.
+    role_pairs: dict[int, set[tuple[int, str]]] = {}
+    for party in comp.parties:
+        for slot in party.slots:
+            for csr in slot.roles:
+                role = roles.get(csr.game_role_id)
+                if role is not None and role.weapon_id is not None:
+                    role_pairs.setdefault(csr.game_role_id, set()).add(
+                        (role.weapon_id, event_gates.fn_key(slot.fn))
+                    )
     occupied = {
         a.comp_slot_id for a in ev.assignments
         if a.comp_slot_id is not None
@@ -299,7 +352,7 @@ def _autofill_plan(db: Session, guild_id: int, ev: Event) -> list[dict]:
     for signup in ev.signups:
         if signup.user_id in assigned_users:
             continue
-        wanted = set(signup.functions or [])
+        wanted = _signup_pairs(signup, role_pairs, roles)
         if not wanted:
             continue
         match = None
@@ -307,19 +360,28 @@ def _autofill_plan(db: Session, guild_id: int, ev: Event) -> list[dict]:
             for slot in party.slots:
                 if slot.id in occupied:
                     continue
-                role = next((r for r in slot.roles if roles.get(r.game_role_id) and roles[r.game_role_id].name in wanted), None)
-                if role is not None:
-                    match = (slot, role)
+                # Slot compatível = alguma flex do slot forma um par desejado.
+                # A atribuição persiste a GameRole CONCRETA (a primeira flex
+                # compatível, na ordem do slot) — vários roles podem
+                # compartilhar o mesmo par.
+                flex = next((
+                    csr for csr in slot.roles
+                    if roles.get(csr.game_role_id) is not None
+                    and roles[csr.game_role_id].weapon_id is not None
+                    and (roles[csr.game_role_id].weapon_id, event_gates.fn_key(slot.fn)) in wanted
+                ), None)
+                if flex is not None:
+                    match = (slot, flex)
                     break
             if match is not None:
                 break
         if match is None:
             continue
-        slot, role = match
+        slot, flex = match
         plan.append({
             "slot_id": slot.id, "user_id": signup.user_id,
-            "user_name": signup.user_name, "game_role_id": role.game_role_id,
-            "game_role_name": roles[role.game_role_id].name,
+            "user_name": signup.user_name, "game_role_id": flex.game_role_id,
+            "game_role_name": roles[flex.game_role_id].name,
         })
         occupied.add(slot.id)
         assigned_users.add(signup.user_id)
@@ -328,7 +390,7 @@ def _autofill_plan(db: Session, guild_id: int, ev: Event) -> list[dict]:
 
 def autofill_signup(
     db: Session, guild_id: int, event_id: int, user_id: int,
-    user_name: str | None, functions: list[str], *, force: bool = False,
+    user_name: str | None, *, force: bool = False,
 ) -> EventAssignment | None:
     """Fills one free slot for a signup, never replacing a locked assignment."""
     ev = _get_event(db, guild_id, event_id)

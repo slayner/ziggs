@@ -32,6 +32,21 @@ router = APIRouter(prefix="/highscores", tags=["highscores"])
 # outra arma do live.
 REMOVED_WEAPON_BASES = {"2H_IRONGAUNTLETS_HELL"}  # "Black Hands" (demonic Iron Gauntlets)
 
+# Battlemounts (invisible_function='battlemount') também não são armas — o
+# ranking de highscores é de armas, mounts continuam no catálogo pra comps e
+# classificação de batalha (battles.py _classify_role). Carregado do banco uma
+# vez e cacheado pra não varrer a tabela a cada request.
+_battlemount_bases: set[str] | None = None
+
+
+async def _excluded_weapon_bases(db: AsyncSession) -> set[str]:
+    """Bases que não devem aparecer no ranking de armas: removidas + battlemounts."""
+    global _battlemount_bases
+    if _battlemount_bases is None:
+        rows = await db.scalars(select(Weapon.item_id).where(Weapon.invisible_function == "battlemount"))
+        _battlemount_bases = {_wbase(item_id) for item_id in rows if _wbase(item_id)}
+    return REMOVED_WEAPON_BASES | _battlemount_bases
+
 # Kinds de jogador que agregam de AlbionPlayer diretamente (não de
 # batalha/kill event) — coleta (total + por recurso). "alltime" só (são
 # famas acumulativas da conta, não janela semanal). Ranking simples:
@@ -563,12 +578,13 @@ async def _compute_highlights(db: AsyncSession, region_list: list[str] | None) -
 
     weapon_scorer = None
     bulk_points = await _bulk_weapon_points(db, region_list, tw)
+    excluded = await _excluded_weapon_bases(db)
     best: tuple[str, str, int] | None = None
     for albion_id, weapons in bulk_points.items():
         if not weapons:
             continue
         wb, pts = max(
-            ((w, p) for w, p in weapons.items() if w not in REMOVED_WEAPON_BASES),
+            ((w, p) for w, p in weapons.items() if w not in excluded),
             key=lambda kv: kv[1], default=(None, 0),
         )
         if pts > 0 and (best is None or pts > best[2]):
@@ -595,6 +611,52 @@ _GUILD_KINDS = {"pvp_fame", "underdog", "efficiency", "most_battles"}
 # crafting é jogador por padrão → scope=guild soma AlbionPlayer.crafting_fame por guild_name.
 _PLAYER_SCOPE_KINDS = {"pvp_fame", "most_battles"}
 _GUILD_SCOPE_KINDS = {"crafting"}
+
+
+async def _player_kill_fame_rankings(
+    db: AsyncSession, region_list: list[str] | None, tw: TimeWindow,
+    search_term: str | None, limit: int, offset: int,
+) -> dict:
+    """scope=player pvp_fame: SUM(fame) over player_kill_events by killer.
+
+    Counts ALL PvP fame from the kill feed (every kill seen by the global
+    tracker), not just battle fame. This includes 1v1s, ganks and small
+    fights that never become tracked battles. Supports time windows via the
+    event timestamp, like _silver_ranking does.
+    """
+    fame_where = [PlayerKillEvent.fame > 0]
+    fame_where.extend(_time_region_clauses(tw, PlayerKillEvent.region, PlayerKillEvent.timestamp, region_list))
+    fame_by_killer = select(
+        PlayerKillEvent.killer_player_id.label("player_id"),
+        func.sum(PlayerKillEvent.fame).label("fame"),
+    ) \
+        .where(*fame_where) \
+        .group_by(PlayerKillEvent.killer_player_id) \
+        .subquery()
+    filters = []
+    if region_list:
+        filters.append(AlbionPlayer.region.in_(region_list))
+    if search_term:
+        filters.append(norm_sql(AlbionPlayer.name).like(f"%{norm_name(search_term)}%"))
+    joined = fame_by_killer.join(AlbionPlayer, AlbionPlayer.id == fame_by_killer.c.player_id)
+    total = (await db.scalar(
+        select(func.count()).select_from(joined).where(*filters)
+    )) or 0
+    page = (await db.execute(
+        select(AlbionPlayer, fame_by_killer.c.fame)
+        .select_from(joined)
+        .where(*filters)
+        .order_by(fame_by_killer.c.fame.desc(), AlbionPlayer.id)
+        .offset(offset)
+        .limit(limit)
+    )).all()
+    return {
+        "total": total,
+        "rows": [
+            {**_player_out(player, player.albion_id), "value": int(fame), "rank": offset + i + 1}
+            for i, (player, fame) in enumerate(page)
+        ],
+    }
 
 
 async def _player_battle_rankings(
@@ -710,10 +772,13 @@ async def highscore_rankings(
     if window not in {"alltime", "week", "month", "season"} and not window.startswith("season:"):
         raise HTTPException(422, "invalid highscore window")
     tw = await _resolve_window(window, region_list)
-    # scope não-default bypassa cache (precompute só cobre default).
-    # rankings_cache_key já retorna None p/ windows não-cacheáveis (season:N
-    # histórico computa ao vivo).
-    ckey = hc.rankings_cache_key(kind, window, region_list) if scope == "default" else None
+    # scope não-default bypassa cache (precompute só cobre default), EXCETO
+    # player-scope pvp_fame que tem precompute próprio (a query live aggregate
+    # 4M+ kill events e demora 40-80s).
+    cache_kind = kind
+    if scope == "player" and kind == "pvp_fame":
+        cache_kind = "pvp_fame_player"
+    ckey = hc.rankings_cache_key(cache_kind, window, region_list) if cache_kind != kind or scope == "default" else None
     if ckey:
         cached = await db.get(DashboardCache, ckey)
         if cached is not None and cached.payload.get("_window") == _window_marker(tw):
@@ -749,8 +814,12 @@ async def _compute_rankings(
     tw: TimeWindow, search_term: str | None, limit: int, offset: int,
     scope: str = "default",
 ) -> dict:
-    # scope=player em kinds de guilda de batalha: agrega por BattleParticipant.
+    # scope=player em kinds de guilda de batalha.
     if scope == "player" and kind in _PLAYER_SCOPE_KINDS:
+        if kind == "pvp_fame":
+            # Player PvP fame counts ALL kills (1v1, gank, small fights), not
+            # just battle fame. Guilds stay battle-filtered above.
+            return await _player_kill_fame_rankings(db, region_list, tw, search_term, limit, offset)
         battle_filters = _base_battle_filters(region_list, tw)
         return await _player_battle_rankings(db, kind, battle_filters, search_term, limit, offset)
 
@@ -816,6 +885,7 @@ async def _compute_rankings(
     # weapon_base != None restringe a query a essa arma (índice) em vez de
     # computar pontos de todas; weapon_scorer (weapon_base=None) precisa de todas.
     bulk_points = await _bulk_weapon_points(db, region_list, tw, weapon_base)
+    excluded = await _excluded_weapon_bases(db)
     candidates3: list[tuple[str, str, int]] = []
     for albion_id, weapons in bulk_points.items():
         if weapon_base is not None:
@@ -825,10 +895,11 @@ async def _compute_rankings(
         else:
             if not weapons:
                 continue
-            # weapon_scorer: melhor arma do jogador — ignora bases removidas pra
-            # não eleger ninguém "melhor player" com arma que não existe mais.
+            # weapon_scorer: melhor arma do jogador — ignora bases excluídas
+            # (removidas do jogo + battlemounts) pra não eleger ninguém "melhor
+            # player" com arma que não existe ou com mount.
             wb, pts = max(
-                ((w, p) for w, p in weapons.items() if w not in REMOVED_WEAPON_BASES),
+                ((w, p) for w, p in weapons.items() if w not in excluded),
                 key=lambda kv: kv[1], default=(None, 0),
             )
             if pts > 0:
@@ -888,10 +959,15 @@ async def highscore_seasons(regions: str | None = None):
 async def highscore_weapons(db: AsyncSession = Depends(deps.async_db_session)):
     """Todas as armas do catálogo (base + função) — público, sem auth, pro
     dropdown de rankings por arma do Highscores. Nome/ícone ficam a cargo do
-    frontend (albion-items.ts já tem nome localizado + render por base)."""
+    frontend (albion-items.ts já tem nome localizado + render por base).
+
+    Battlemounts (invisible_function='battlemount') são excluídas — o ranking é
+    de ARMAS, não de mounts. Elas continuam no catálogo pra comps/classificação
+    de batalha (ver battles.py _classify_role), só não aparecem no dropdown."""
+    excluded = await _excluded_weapon_bases(db)
     seen: dict[str, str | None] = {}
     for item_id, fn in (await db.execute(select(Weapon.item_id, Weapon.invisible_function))):
         wb = _wbase(item_id)
-        if wb and wb not in seen and wb not in REMOVED_WEAPON_BASES:
+        if wb and wb not in seen and wb not in excluded:
             seen[wb] = fn
     return [{"weapon_base": wb, "invisible_function": fn} for wb, fn in sorted(seen.items())]

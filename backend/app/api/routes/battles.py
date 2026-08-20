@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -607,23 +608,25 @@ async def list_battles(
     if min_kills > 0:
         q = q.where(Battle.kill_count >= min_kills)
 
-    # Letalidade é checada por morte (não pela fama agregada — ver
-    # Battle.is_lethal): só desqualifica batalha deep-processada onde alguma
-    # vítima equipada dropou fama 0, prova de zona não letal (duelo/arena).
-    # Batalha "light" (sem eventos de kill pra checar) fica de fora dessa
-    # checagem, default True.
-    q = q.where(Battle.is_lethal.is_(True))
+    # Só batalhas deep-processadas e letais — light tier não aparece no site
+    # (sem eventos de kill processados, sem lados, sem participantes reais).
+    q = q.where(Battle.processing_tier == "deep", Battle.is_lethal.is_(True))
 
     if min_players > 0:
         # "jogadores mínimos" = alguma guilda da batalha tinha pelo menos N
         # jogadores — não o total de jogadores da batalha (Battle.players_total).
+        # Batalhas light (sem BattleParticipant ainda) passam pelo players_total
+        # do resumo da API, pra aparecerem no feed antes do deep-process completar.
         big_guild_battle_ids = (
             select(BattleParticipant.battle_id)
             .where(BattleParticipant.guild_id.isnot(None))
             .group_by(BattleParticipant.battle_id, BattleParticipant.guild_id)
             .having(func.count(BattleParticipant.id) >= min_players)
         )
-        q = q.where(Battle.id.in_(big_guild_battle_ids))
+        q = q.where(or_(
+            Battle.id.in_(big_guild_battle_ids),
+            Battle.players_total >= min_players,
+        ))
 
     if search:
         nq = norm_name(search)
@@ -860,6 +863,15 @@ async def get_battle_by_code(public_id: str, db: AsyncSession = Depends(deps.asy
     battle_ids = await battle_groups.get_group_battle_ids(db, public_id)
     if not battle_ids:
         raise HTTPException(404, "Link não encontrado")
+    battles = (await db.scalars(select(Battle).where(Battle.id.in_(battle_ids)))).all()
+    # Todas as batalhas do grupo foram deletadas (deep-process descobriu que
+    # não era lethal) — link morto, não fica em poll pra sempre.
+    if not battles:
+        raise HTTPException(404, "Batalha não encontrada")
+    # Se alguma batalha do grupo ainda é light (não deep-processada), retorna
+    # 202 processando — o frontend faz poll até ficar pronta.
+    if any(b.processing_tier != "deep" for b in battles):
+        return JSONResponse(status_code=202, content={"public_id": public_id, "status": "processing"})
     return await _combined_detail(db, battle_ids, public_id)
 
 
@@ -876,18 +888,25 @@ async def get_battle_item_prices(item_ids: str, db: AsyncSession = Depends(deps.
 async def resolve_battles(albion_ids: list[str] = Body(..., embed=True), db: AsyncSession = Depends(deps.async_db_session)):
     """Recebe 1+ IDs crus do Albion (de qualquer região), acha/cria a batalha
     correspondente (na nossa base ou direto na API do Albion) e devolve o
-    detalhe já combinado num único link público."""
+    detalhe já combinado num único link público.
+
+    Se alguma batalha ainda não foi deep-processada (light), enfileira uma
+    task deep_process e retorna 202 com public_id + status=processing — o
+    frontend faz poll em /battles/by-code/{public_id} até ficar pronta."""
     ids = list(dict.fromkeys(i.strip() for i in albion_ids if i.strip()))
     if not ids:
         raise HTTPException(400, "Nenhum ID informado")
 
     resolved: list[Battle] = []
     unresolved: list[str] = []
+    needs_processing = False
     async with battle_tracker.make_client() as client:
         for albion_id in ids:
-            battle = await battle_tracker.resolve_by_albion_id(client, db, albion_id)
+            battle = await battle_tracker.find_or_create_battle(client, db, albion_id)
             if battle is not None:
                 resolved.append(battle)
+                if battle.processing_tier != "deep":
+                    needs_processing = True
             else:
                 unresolved.append(albion_id)
 
@@ -900,6 +919,36 @@ async def resolve_battles(albion_ids: list[str] = Body(..., embed=True), db: Asy
         )
 
     group = await battle_groups.get_or_create_group(db, [b.id for b in resolved])
+
+    # Se alguma batalha ainda é light, enfileira deep_process pra todas as
+    # light do grupo e retorna 202 (ainda processando). O frontend faz poll
+    # em /battles/by-code/{public_id} até receber 200.
+    if needs_processing:
+        from app.models.scan_worker import ScanWorkTask
+        from sqlalchemy import select as _sel
+        # Enfileira task deep_process pra cada batalha light do grupo (alta
+        # prioridade — humano esperando). Se já existe task em qualquer status,
+        # não duplica — UniqueViolation no commit custa mais que o SELECT.
+        for b in resolved:
+            if b.processing_tier != "deep":
+                existing_task = await db.scalar(_sel(ScanWorkTask).where(
+                    ScanWorkTask.feed_type == "deep_process",
+                    ScanWorkTask.page_offset == int(b.albion_id),
+                ))
+                if existing_task is None:
+                    db.add(ScanWorkTask(
+                        region=b.region,
+                        feed_type="deep_process",
+                        page_offset=int(b.albion_id),
+                        priority=0,  # alta prioridade (mais baixo = primeiro)
+                        status="pending",
+                    ))
+        await db.commit()
+        return JSONResponse(
+            status_code=202,
+            content={"public_id": group.public_id, "status": "processing", "unresolved_ids": unresolved},
+        )
+
     detail = await _combined_detail(db, [b.id for b in resolved], group.public_id)
     # IDs que o usuário colou junto mas não resolveram (não existem mais na API
     # do Albion, geralmente por serem antigos demais) — o frontend ignora e

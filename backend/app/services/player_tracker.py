@@ -29,7 +29,32 @@ TIMEOUT = httpx.Timeout(20.0, read=40.0)  # ponytail: read 40s — API do Albion
 POLL_INTERVAL = 120  # 2 min — kill feed atualiza rápido; antes era 300s (5min) e kills demoravam 5x mais que batalhas pra serem descobertas
 SNAPSHOT_MAX_AGE = timedelta(hours=24)  # resolução do gráfico de crescimento de fama
 FEED_LIMIT = 51  # máximo que a API devuelve por página
-FEED_MAX_PAGES = 8  # até 8 páginas (408 events) por poll — cobre rajadas grandes sem exceder rate limit
+FEED_MAX_PAGES = 8  # mínimo de páginas (408 events) por poll — piso
+FEED_PAGES_MAX = 60  # teto: ~3000 events/poll. Mesma lógica do sync_recent:
+                     # quando a API atrasa, o feed enche de eventos já conhecidos
+                     # no topo e os novos ficam nas páginas mais fundas. Sem
+                     # escalar, essas páginas somem do feed antes do próximo
+                     # ciclo e caem acima do maior ID conhecido — buraco que o
+                     # kill_sweeper não cobre (só sonda entre IDs conhecidos).
+
+
+def _pages_for_region(region: str) -> int:
+    """Páginas de kill feed pra buscar nesta região, escaladas pelo delay da API.
+
+    Reusa o delay medido pelo battle_tracker (mesma API gameinfo, mesmo atraso
+    por região) — mesmo padrão que silver_dropped já usa. Sem medição (restart,
+    1º ciclo) usa o piso FEED_MAX_PAGES."""
+    try:
+        from app.services.battle_tracker import publish_delay_status
+        delays = publish_delay_status()
+        secs = (delays.get(region) or {}).get("delay_secs") or 0
+    except Exception:
+        secs = 0
+    if not secs or secs <= POLL_INTERVAL:
+        return FEED_MAX_PAGES
+    # cada POLL_INTERVAL de delay ≈ 1 página extra acumulada no feed
+    extra = int(secs // POLL_INTERVAL)
+    return min(FEED_PAGES_MAX, FEED_MAX_PAGES + extra)
 
 
 async def _observe_albion(response: httpx.Response) -> None:
@@ -328,14 +353,25 @@ async def sync_player_kills(client: httpx.AsyncClient, db: AsyncSession, host: s
 
 async def poll_once() -> int:
     """Busca o kill feed das 3 regiões uma vez, paginando até não achar eventos
-    novos (ou atingir FEED_MAX_PAGES). Upserta jogadores e registra cada kill
-    no ledger. Retorna contagem de jogadores upsertados."""
+    novos (ou atingir o teto escalado pelo delay). Upserta jogadores e registra
+    cada kill no ledger. Retorna contagem de jogadores upsertados."""
     count = 0
     async with AsyncSessionLocal() as db:
         async with make_client() as c:
             for region, host in HOSTS.items():
                 seen_event_ids: set[str] = set()
-                for page in range(FEED_MAX_PAGES):
+                max_pages = _pages_for_region(region)
+                # Delay alto: NÃO confia no break de "0 novos nesta página" —
+                # quando a API atrasa, o feed enche de eventos já conhecidos no
+                # topo e os novos ficam mais fundo. Parar na primeira página com
+                # 0 novos perde tudo que apareceu durante o delay. Em dia normal
+                # (delay baixo), o break continua valendo — poupa requests.
+                from app.services.battle_tracker import publish_delay_status
+                delays = publish_delay_status()
+                delay_secs = (delays.get(region) or {}).get("delay_secs") or 0
+                trust_zero_break = delay_secs <= POLL_INTERVAL * 2
+                page = 0
+                for page in range(max_pages):
                     offset = page * FEED_LIMIT
                     try:
                         async with albion_scope(NEW_ELIGIBLE):
@@ -388,10 +424,13 @@ async def poll_once() -> int:
 
                     # Se esta página não teve eventos novos, não vale a pena
                     # paginar mais — as próximas páginas são tudo já conhecido.
-                    if new_count == 0:
+                    # EXCETO em delay alto: o feed está represado e os novos
+                    # podem estar mais fundo (ver trust_zero_break acima).
+                    if new_count == 0 and trust_zero_break:
                         break
 
-                log.debug("player_tracker: %s — %d eventos novos em %d páginas", region, len(seen_event_ids), page + 1)
+                log.debug("player_tracker: %s — %d eventos novos em %d páginas (max=%d, delay=%ds)",
+                          region, len(seen_event_ids), page + 1, max_pages, delay_secs)
 
     return count
 

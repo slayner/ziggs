@@ -22,7 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, Snowflake, json_type, pk
-from app.domain.states import EventSeriousness, EventState, EventType, ParticipationMode, VerificationStep
+from app.domain.states import EventState, EventType, ParticipationMode, VerificationStep
 
 
 def new_escalation_token() -> str:
@@ -60,10 +60,6 @@ class Event(Base, TimestampMixin):
         ForeignKey("comps.id", ondelete="SET NULL"), index=True
     )
 
-    seriousness: Mapped[EventSeriousness] = mapped_column(
-        Enum(EventSeriousness, name="event_seriousness"),
-        default=EventSeriousness.CASUAL, nullable=False,
-    )
     participation_mode: Mapped[ParticipationMode] = mapped_column(
         Enum(ParticipationMode, name="participation_mode"),
         default=ParticipationMode.PRESENCE, nullable=False,
@@ -183,9 +179,18 @@ class EventSignup(Base, TimestampMixin):
     )
     user_id: Mapped[int] = mapped_column(Snowflake, nullable=False)
     user_name: Mapped[str | None] = mapped_column(String(255))
-    # Nomes de GameRole escolhidos (não FK — um CompSlot aceita várias GameRole
-    # via CompSlotRole). Ordenados por preferência; functions[0] é a preferida.
+    # LEGADO: nomes de GameRole escolhidos (não FK — um CompSlot aceita várias
+    # GameRole via CompSlotRole). Ordenados por preferência; functions[0] é a
+    # preferida. Continua gravado como snapshot de exibição (e como fonte dos
+    # eventos anteriores à migration zw3a4b5c6d7f), mas a IDENTIDADE da
+    # inscrição é `weapon_fns` — não mude o significado desta coluna.
     functions: Mapped[list] = mapped_column(json_type(), default=list, nullable=False)
+    # Identidade da inscrição (ago/2026): snapshot de pares
+    # [{"weapon_id": int, "fn": str}, ...] — (Weapon.id, CompSlot.fn), ordenados
+    # por preferência (weapon_fns[0] alimenta o quantity gate e o autofill).
+    # `fn` é o fn cru do slot no momento do signup. Eventos legados têm [] e
+    # seguem legíveis via `functions`.
+    weapon_fns: Mapped[list] = mapped_column(json_type(), default=list, nullable=False)
 
     event: Mapped["Event"] = relationship(back_populates="signups")
 

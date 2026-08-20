@@ -19,6 +19,7 @@ PERMISSION_KEYS = [
     "nodes.view",  "nodes.manage",
     "guild.admin",
     "escalacao.manage",
+    "energy.manage",
 ]
 ALL_TRUE  = {k: True  for k in PERMISSION_KEYS}
 ALL_FALSE = {k: False for k in PERMISSION_KEYS}

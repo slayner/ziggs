@@ -849,11 +849,18 @@ async def _cold_load_player(region: str, name: str, host: str) -> None:
                     return
                 # Não depende só do feed global ter visto a luta desse jogador
                 # específico — busca direto nos endpoints de kills/deaths dele.
-                _load_progress[progress_key] = (token, "kills")
+                # Upsert ANTES da sync de kills (mesma ordem do _warm_player): o
+                # jogador pode não existir no DB ainda (primeira visita de verdade),
+                # e _record_kill_event resolve killer_player_id/victim_player_id
+                # por lookup no banco. Sem a linha do jogador, os FKs ficam NULL
+                # e o dedupe por event_id orfana as kills/deaths pra sempre — nem
+                # o refresh (warmer) recupera, porque os eventos já estão no
+                # ledger. Gravar o núcleo primeiro garante o link.
+                _load_progress[progress_key] = (token, "build")
                 async with AsyncSessionLocal() as db:
-                    await sync_player_kills(c, db, host, region, raw["Id"])
-                    _load_progress[progress_key] = (token, "build")
                     await upsert_player(db, raw, region)
+                    _load_progress[progress_key] = (token, "kills")
+                    await sync_player_kills(c, db, host, region, raw["Id"])
 
     try:
         await asyncio.wait_for(_work(), timeout=COLD_LOAD_TIMEOUT.total_seconds())
@@ -892,7 +899,12 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
     cached = await db.scalar(
         select(AlbionPlayer).where(AlbionPlayer.region == region, func.lower(AlbionPlayer.name) == name.lower())
     )
-    if cached is not None:
+    if cached is not None and cached.lifetime_statistics is not None:
+        # Cache com perfil completo (LifetimeStatistics já foi carregado alguma
+        # vez) — serve na hora. Se só vimos o player via feed/search (sem
+        # LifetimeStatistics), kill_fame/death_fame/pve/gathering estão zeros e
+        # o perfil mostra nada — precisa do cold load pra buscar o perfil
+        # completo. Cai pro fluxo de cold load abaixo.
         await _queue_refresh_if_stale(db, cached)
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
         await db.commit()
@@ -948,7 +960,10 @@ async def get_player(albion_id: str, region: str | None = None, db: AsyncSession
     Cache-first: mesma lógica de get_player_by_name — só busca ao vivo se
     nunca vimos esse ID antes."""
     cached = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
-    if cached is not None:
+    if cached is not None and cached.lifetime_statistics is not None:
+        # Mesma lógica de get_player_by_name: só serve o cache se já temos o
+        # perfil completo (LifetimeStatistics). Sem ele, kill_fame/death_fame/
+        # pve/gathering estão zeros e o perfil mostra nada — cai pro cold load.
         await _queue_refresh_if_stale(db, cached)
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
         await db.commit()
@@ -975,9 +990,13 @@ async def get_player(albion_id: str, region: str | None = None, db: AsyncSession
                     existing.is_deleted = True
                     await db.commit()
                 raise HTTPException(404, "Jogador não encontrado")
+            # Upsert ANTES da sync de kills — ver _cold_load_player. Sem a linha
+            # do jogador no banco, _record_kill_event registra kills/deaths com
+            # killer_player_id/victim_player_id = NULL (orfanadas pelo dedupe de
+            # event_id; nem refresh recupera).
+            player = await upsert_player(db, raw, resolved_region)
             await sync_player_kills(c, db, resolved_host, resolved_region, raw["Id"])
 
-    player = await upsert_player(db, raw, resolved_region)
     return await _build_profile_payload(db, player, raw)
 
 

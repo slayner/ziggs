@@ -509,8 +509,12 @@ async def warm_by_name(name: str, region: str) -> dict:
                     if not (isinstance(raw, dict) and raw.get("Id")):
                         log.info("warm: %s (%s) — perfil vazio", name, region)
                         return {"status": "fetch_failed"}
-                    await sync_player_kills(client, db, host, region, raw["Id"])
+                    # Upsert ANTES da sync de kills (ver _cold_load_player em
+                    # routes/players.py): sem a linha do jogador no banco, as
+                    # kills/deaths ingeridas ficam com FK NULL e o dedupe por
+                    # event_id orfana pra sempre.
                     await upsert_player(db, raw, region)
+                    await sync_player_kills(client, db, host, region, raw["Id"])
             log.info("warm: %s (%s) — bootstrap de %s", name, region, raw["Id"])
             return {"status": "bootstrapped"}
         except Exception as e:

@@ -46,13 +46,25 @@ class ScanWorker(Base):
     credential_revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    # ─── Tunnel metadata — opcional, enviado no /scan/register.
+    # Quando preenchido, a VPS aparece no /vps-manifest.json (companion + site).
+    # VPS sem tunnel (worker puro de scan) deixa esses campos vazios.
+    vps_label: Mapped[str | None] = mapped_column(String(64))
+    vps_country: Mapped[str | None] = mapped_column(String(64))
+    vps_endpoint: Mapped[str | None] = mapped_column(String(128))
+    vps_server_pubkey: Mapped[str | None] = mapped_column(String(128))
+    vps_ping_url: Mapped[str | None] = mapped_column(String(256))
+
 
 class ScanWorkTask(Base):
-    """Task de feed polling: buscar uma página do feed de batalhas ou kills.
+    """Task de feed polling ou deep-process delegado.
 
     feed_type:
-      'battles' — GET /api/gameinfo/battles?sort=recent&limit=51&offset={offset}
-      'kills'   — GET /api/gameinfo/events?limit=51&offset={offset}
+      'battles'      — GET /api/gameinfo/battles?sort=recent&limit=51&offset={offset}
+      'kills'        — GET /api/gameinfo/events?limit=51&offset={offset}
+      'deep_process' — deep-process de batalha light: busca detail + events
+                       paginados de /api/gameinfo/battles/{id} + /events/battle/{id}.
+                       page_offset guarda o battle.id (não o offset do feed).
 
     status:
       'pending'  — aguardando um worker pegar

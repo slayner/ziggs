@@ -25,6 +25,7 @@ from app.api.routes.render import (
     _is_placeholder,
     _spell_display_names,
 )
+from fastapi import HTTPException
 
 
 def test_png_minusculo_e_placeholder():
@@ -101,15 +102,14 @@ def test_retentar_render_usa_backoff_limitado():
 def test_placeholder_nao_fica_immutavel_no_navegador():
     with TemporaryDirectory() as d:
         cache_path = Path(d) / "T8_HEAD_PLATE_SET1_q1_s128.png"
-        placeholder = render_module._generate_placeholder("T8_HEAD_PLATE_SET1")
-        assert placeholder is not None
-        cache_path.write_bytes(placeholder)
         render_module._missing_path(cache_path).touch()
 
         with patch("app.api.routes.render._record_render_miss", AsyncMock()):
-            response = asyncio.run(render_module._cached_render("item", "T8_HEAD_PLATE_SET1", cache_path, {}))
-
-        assert response.headers["cache-control"] == "public, max-age=300"
+            try:
+                asyncio.run(render_module._cached_render("item", "T8_HEAD_PLATE_SET1", cache_path, {}))
+                assert False, "should have raised 404"
+            except HTTPException as e:
+                assert e.status_code == 404
 
 
 def test_retentativa_preserva_placeholder_pequeno():
@@ -118,7 +118,6 @@ def test_retentativa_preserva_placeholder_pequeno():
         render_module._CACHE_DIR = cache_dir
         try:
             cache_path = cache_dir / "T1_TEST_q0_s0.png"
-            cache_path.write_bytes(b"x" * 500)
             render_module._missing_path(cache_path).touch()
             with patch("app.api.routes.render._fetch_render", AsyncMock(return_value=None)):
                 result = await render_module.recover_render_miss("item", "T1_TEST", 0, 0)
@@ -129,16 +128,42 @@ def test_retentativa_preserva_placeholder_pequeno():
     with TemporaryDirectory() as d:
         result, cache_path = asyncio.run(run(Path(d)))
         assert result is False
-        assert cache_path.exists()
+        assert not cache_path.exists()
 
 
-def test_render_rejeita_tamanho_que_criaria_cache_sem_limite():
-    try:
-        asyncio.run(render_module.render_item("T8_HEAD_PLATE_SET1", size=1))
-    except render_module.HTTPException as exc:
-        assert exc.status_code == 400
-    else:
-        raise AssertionError("size arbitrário não deve criar uma chave de cache")
+def test_card_retries_known_placeholder_before_rendering():
+    async def run(cache_dir: Path):
+        old_cache_dir = render_module._CACHE_DIR
+        render_module._CACHE_DIR = cache_dir
+        try:
+            key = "T8_HEAD_PLATE_SET1"
+            cache_path = render_module._cache_path("item", key, 0, 128)
+            render_module._missing_path(cache_path).touch()
+            real = b"x" * 2_000
+            with patch("app.api.routes.render._fetch_render", AsyncMock(return_value=real)), \
+                 patch("app.api.routes.render._record_render_miss", AsyncMock()):
+                return await render_module.render_item_for_card(key, 0, 128)
+        finally:
+            render_module._CACHE_DIR = old_cache_dir
+
+    with TemporaryDirectory() as d:
+        response = asyncio.run(run(Path(d)))
+
+    assert response.body == b"x" * 2_000
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
+def test_render_snap_size_arbitrario_pro_valido_mais_proximo():
+    # Arbitrary sizes snap to the closest valid size (0, 64, 128) instead of
+    # being rejected, so callers that request 32/48/96 still get an icon.
+    # Ties round UP so 32 -> 64 (a real asset) instead of 0 (full-res default).
+    assert render_module._snap_size(1) == 0
+    assert render_module._snap_size(32) == 64
+    assert render_module._snap_size(48) == 64
+    assert render_module._snap_size(96) == 128
+    assert render_module._snap_size(64) == 64
+    assert render_module._snap_size(128) == 128
+    assert render_module._snap_size(0) == 0
 
 
 def test_cache_frio_concorrente_baixa_uma_vez():
@@ -180,6 +205,7 @@ if __name__ == "__main__":
     test_retentar_render_usa_backoff_limitado()
     test_placeholder_nao_fica_immutavel_no_navegador()
     test_retentativa_preserva_placeholder_pequeno()
-    test_render_rejeita_tamanho_que_criaria_cache_sem_limite()
+    test_card_retries_known_placeholder_before_rendering()
+    test_render_snap_size_arbitrario_pro_valido_mais_proximo()
     test_cache_frio_concorrente_baixa_uma_vez()
     print("render OK")

@@ -96,6 +96,18 @@ def require_guild_member(
     return member
 
 
+def require_active_guild_member(
+    member: GuildMember = Depends(require_guild_member),
+) -> GuildMember:
+    """Membro ATIVO da guilda do path: além de existir (require_guild_member),
+    `left_at` deve ser NULL — quem saiu do servidor Discord não acessa o portal
+    do membro. Usado SÓ nas rotas /guilds/{guild_id}/member/* (portal do membro);
+    as rotas administrativas legadas continuam com require_guild_member."""
+    if member.left_at is not None:
+        raise HTTPException(status_code=403, detail="membro não está mais na guilda")
+    return member
+
+
 def require_permission(key: str):
     """Factory de dependência: exige a permissão `key` (ou admin de servidor) na
     guilda do path. Usa a mesma lógica de app/auth/permissions.py que alimenta

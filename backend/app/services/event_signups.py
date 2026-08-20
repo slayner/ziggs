@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.domain.states import EventState
 from app.models.audit import AuditLog
-from app.models.catalog import GameRole
-from app.models.comp_preferences import CompRolePreference
+from app.models.catalog import GameRole, Weapon
+from app.models.comp_preferences import WeaponFnPreference
 from app.models.comps import Comp, CompParty, CompSlot, CompSlotRole
 from app.models.events import Event, EventSignup
 from app.models.tenancy import Guild, GuildRolePermission
@@ -280,15 +280,15 @@ def ack_ping_triggers(db: Session, guild_id: int) -> None:
 
 def _load_party_defs(
     db: Session, comp_id: int | None,
-) -> tuple[list[event_gates.PartyDef], dict[str, str]]:
-    """(parties, {nome_da_funcao: categoria}) — categoria vem do CompSlot.fn
-    (tipo de função que o usuário definiu no CompBuilder: tank/healer/support/
-    dps/pierce/battlemount/...), usada pro bot agrupar o picker.
+) -> tuple[list[event_gates.PartyDef], dict[str, dict]]:
+    """(parties, options) — `options` mapeia pair_key -> opção de signup:
+    {weapon_id, fn, weapon_name, role_names}. A identidade de cada opção é o
+    par (Weapon.id, CompSlot.fn) — não o nome da GameRole.
 
-    Cache: 2 queries (Comp selectinload + GameRole batch) por clique de botão.
-    Durante clique-massa (30 pessoas em 10s) a comp não muda — TTL 30s corta
-    de ~60 queries pra 2 por janela. Invalidação por TTL: se o admin editar a
-    comp no meio, expira em até 30s."""
+    Cache: 2 queries (Comp selectinload + GameRole/Weapon batch) por clique de
+    botão. Durante clique-massa (30 pessoas em 10s) a comp não muda — TTL 30s
+    corta queries. Invalidação por TTL: se o admin editar a comp no meio,
+    expira em até 30s."""
     if comp_id is None:
         return [], {}
     now = time.monotonic()
@@ -306,10 +306,13 @@ _PARTY_DEFS_TTL = 30.0  # segundos
 
 def _load_party_defs_uncached(
     db: Session, comp_id: int,
-) -> tuple[list[event_gates.PartyDef], dict[str, str]]:
-    """(parties, {nome_da_role: categoria}) — categoria vem do CompSlot.fn
-    (tipo de função que o usuário definiu no CompBuilder: tank/healer/support/
-    dps/pierce/battlemount/...). Se o slot não tem fn, cai em "other"."""
+) -> tuple[list[event_gates.PartyDef], dict[str, dict]]:
+    """(parties, options) — cada slot contribui um par por GameRole com arma:
+    pair_key(weapon_id, slot.fn). Role sem arma não forma par (não tem
+    identidade no domínio novo) e fica de fora do picker. `role_names` da
+    opção guarda os nomes de GameRole que casam, em ordem da comp — é o
+    snapshot de exibição (`EventSignup.functions`) e o pool de flex do
+    autofill/escalação."""
     comp = db.scalar(
         select(Comp)
         .where(Comp.id == comp_id)
@@ -327,40 +330,54 @@ def _load_party_defs_uncached(
         game_roles = {
             r.id: r for r in db.scalars(select(GameRole).where(GameRole.id.in_(game_role_ids)))
         }
+    weapon_ids = {
+        r.weapon_id for r in game_roles.values() if r.weapon_id is not None
+    }
+    weapons: dict[int, Weapon] = {}
+    if weapon_ids:
+        weapons = {w.id: w for w in db.scalars(select(Weapon).where(Weapon.id.in_(weapon_ids)))}
 
-    # Categoria de cada role = fn do slot onde ela aparece. Um role pode
-    # aparecer em slots com fn diferente — usa o primeiro fn não-nulo que
-    # encontrar (em prática a comp agrupa roles do mesmo fn no mesmo slot).
-    categories: dict[str, str] = {}
+    options: dict[str, dict] = {}
+    parties: list[event_gates.PartyDef] = []
     for party in comp.parties:
+        keys: set[str] = set()
         for slot in party.slots:
             slot_fn = slot.fn or FALLBACK_CATEGORY
             for csr in slot.roles:
                 role = game_roles.get(csr.game_role_id)
-                if role and role.name not in categories:
-                    categories[role.name] = slot_fn
+                if role is None or role.weapon_id is None:
+                    continue
+                key = event_gates.pair_key(role.weapon_id, slot_fn)
+                weapon = weapons.get(role.weapon_id)
+                opt = options.setdefault(key, {
+                    "weapon_id": role.weapon_id,
+                    "fn": slot_fn,
+                    "weapon_name": weapon.name if weapon else f"w{role.weapon_id}",
+                    "weapon_item_id": weapon.item_id if weapon else None,
+                    "role_names": [],
+                })
+                opt["role_names"].append(role.name)
+                keys.add(key)
+        parties.append(event_gates.PartyDef(total_slots=len(party.slots), pair_keys=keys))
+    return parties, options
 
-    parties: list[event_gates.PartyDef] = []
-    for party in comp.parties:
-        names: set[str] = set()
-        for slot in party.slots:
-            for csr in slot.roles:
-                role = game_roles.get(csr.game_role_id)
-                if role:
-                    names.add(role.name)
-        parties.append(event_gates.PartyDef(total_slots=len(party.slots), role_names=names))
-    return parties, categories
 
-    parties: list[event_gates.PartyDef] = []
-    for party in comp.parties:
-        names: set[str] = set()
-        for slot in party.slots:
-            for csr in slot.roles:
-                role = game_roles.get(csr.game_role_id)
-                if role:
-                    names.add(role.name)
-        parties.append(event_gates.PartyDef(total_slots=len(party.slots), role_names=names))
-    return parties, categories
+def _signup_first_pair(signup: EventSignup, options: dict[str, dict]) -> str | None:
+    """Primeira escolha de um signup como pair_key. `weapon_fns` é a fonte;
+    eventos legados (weapon_fns vazio — migration não conseguiu backfill)
+    caem pro nome de GameRole -> par via role_names das opções."""
+    for entry in (signup.weapon_fns or []):
+        if isinstance(entry, dict) and entry.get("weapon_id") is not None:
+            try:
+                return event_gates.pair_key(int(entry["weapon_id"]), entry.get("fn"))
+            except (TypeError, ValueError):
+                break
+    for name in (signup.functions or []):
+        wanted = event_gates.function_key(name)
+        for key, opt in options.items():
+            if any(event_gates.function_key(n) == wanted for n in opt["role_names"]):
+                return key
+    return None
 
 
 def _is_staff(db: Session, guild_id: int, discord_role_ids: set[int]) -> bool:
@@ -388,68 +405,61 @@ def signup_count(db: Session, event_id: int) -> int:
     ) or 0
 
 
-def get_role_profile(db: Session, guild_id: int, comp_id: int | None, user_id: int) -> list[str]:
-    """Return the active role profile for one player and composition."""
-    if comp_id is None:
+def get_profile_options(
+    db: Session, guild_id: int, comp_id: int | None, user_id: int,
+    options: dict[str, dict],
+) -> list[str]:
+    """Pair keys das preferências GLOBAIS do jogador (WeaponFnPreference) que
+    aparecem entre as opções desta comp — pré-seleção do picker. Guild-scoped:
+    preferência salva na comp A pré-seleciona o mesmo par na comp B."""
+    if comp_id is None or not options:
         return []
-    comp_roles = list(db.scalars(
-        select(GameRole)
-        .join(CompSlotRole, CompSlotRole.game_role_id == GameRole.id)
-        .join(CompSlot, CompSlot.id == CompSlotRole.slot_id)
-        .join(CompParty, CompParty.id == CompSlot.party_id)
-        .where(CompParty.comp_id == comp_id, GameRole.guild_id == guild_id)
-        .order_by(CompParty.position, CompSlot.position, CompSlotRole.position, GameRole.name)
-    ).unique())
-    role_ids = {r.id for r in comp_roles}
-    if not role_ids:
-        return []
-    saved = set(db.scalars(select(CompRolePreference.game_role_id).where(
-        CompRolePreference.guild_id == guild_id,
-        CompRolePreference.comp_id == comp_id,
-        CompRolePreference.user_id == user_id,
-        CompRolePreference.game_role_id.in_(role_ids),
-    )))
-    return [r.name for r in comp_roles if r.id in saved]
-
-
-def _save_role_profile(
-    db: Session, guild_id: int, comp_id: int | None, user_id: int, functions: list[str],
-) -> None:
-    """Replace the active profile with the roles selected in this CTA."""
-    if comp_id is None:
-        return
-    roles = list(db.scalars(
-        select(GameRole)
-        .join(CompSlotRole, CompSlotRole.game_role_id == GameRole.id)
-        .join(CompSlot, CompSlot.id == CompSlotRole.slot_id)
-        .join(CompParty, CompParty.id == CompSlot.party_id)
-        .where(CompParty.comp_id == comp_id, GameRole.guild_id == guild_id)
-    ).unique())
-    by_name = {r.name: r.id for r in roles}
-    selected_ids = {by_name[f] for f in functions if f in by_name}
-    existing = list(db.scalars(select(CompRolePreference).where(
-        CompRolePreference.guild_id == guild_id,
-        CompRolePreference.comp_id == comp_id,
-        CompRolePreference.user_id == user_id,
-    )))
-    for row in existing:
-        if row.game_role_id not in selected_ids:
-            db.delete(row)
-    existing_ids = {row.game_role_id for row in existing}
-    for role_id in selected_ids - existing_ids:
-        db.add(CompRolePreference(
-            guild_id=guild_id, comp_id=comp_id, user_id=user_id, game_role_id=role_id,
+    saved = {
+        event_gates.pair_key(r.weapon_id, r.fn)
+        for r in db.scalars(select(WeaponFnPreference).where(
+            WeaponFnPreference.guild_id == guild_id,
+            WeaponFnPreference.user_id == user_id,
         ))
+    }
+    return [key for key in options if key in saved]  # ordem da comp
 
 
-def get_eligible_functions(
+def _save_weapon_fn_profile(
+    db: Session, guild_id: int, comp_id: int | None, user_id: int,
+    selected: dict[str, dict], visible: set[str],
+) -> None:
+    """Atualiza a preferência global (weapon, fn) tocando APENAS nos pares
+    visíveis na comp deste evento: remover Longbow+DPS aqui não apaga
+    Longbow+Support nem o par de uma arma que não está nessa comp."""
+    if comp_id is None or not visible:
+        return
+    existing = list(db.scalars(select(WeaponFnPreference).where(
+        WeaponFnPreference.guild_id == guild_id,
+        WeaponFnPreference.user_id == user_id,
+    )))
+    existing_keys = {
+        event_gates.pair_key(r.weapon_id, r.fn): r for r in existing
+    }
+    for key, row in existing_keys.items():
+        if key in visible and key not in selected:
+            db.delete(row)
+    for key, opt in selected.items():
+        if key not in existing_keys:
+            db.add(WeaponFnPreference(
+                guild_id=guild_id, user_id=user_id,
+                weapon_id=opt["weapon_id"], fn=event_gates.fn_key(opt["fn"]),
+            ))
+
+
+def get_eligible_options(
     db: Session, guild_id: int, event_id: int,
     discord_user_id: int, discord_role_ids: set[int],
-    event_role_gates: dict[str, list[str]],
-) -> tuple[list[str], str | None, EventSignup | None, dict[str, str], int | None]:
-    """(funções elegíveis pra ESTE usuário agora, motivo_da_recusa, sua
-    inscrição atual, {nome_da_funcao: categoria}, min_builds). Não existe
-    limite máximo."""
+    event_weapon_gates: dict[str, list[str]],
+) -> tuple[list[dict], str | None, EventSignup | None, int | None]:
+    """(opções elegíveis pra ESTE usuário agora — dicts com key/weapon_id/
+    weapon_name/fn/role_names, motivo_da_recusa, sua inscrição atual,
+    min_builds). Não existe limite máximo; a identidade de cada opção é o par
+    (Weapon.id, CompSlot.fn)."""
     ev = _get_event(db, guild_id, event_id)
     if reason := signup_block_reason(ev.state, ev.comp_id, ev.signup_mode):
         raise ServiceError(reason)
@@ -458,67 +468,100 @@ def get_eligible_functions(
             EventSignup.event_id == event_id,
             EventSignup.user_id == discord_user_id,
         ))
-        return [], None, current, {}, None
-    parties, categories = _load_party_defs(db, ev.comp_id)
+        return [], None, current, None
+    parties, options = _load_party_defs(db, ev.comp_id)
     all_signups = db.scalars(select(EventSignup).where(EventSignup.event_id == event_id)).all()
-    signup_function_1s = [s.functions[0] for s in all_signups if s.functions]
+    first_pairs = [p for p in (_signup_first_pair(s, options) for s in all_signups) if p]
     current = next((s for s in all_signups if s.user_id == discord_user_id), None)
 
     is_staff = _is_staff(db, guild_id, discord_role_ids)
-    functions, reason = event_gates.eligible_functions(
-        parties, signup_function_1s, discord_role_ids, event_role_gates,
+    keys, reason = event_gates.eligible_options(
+        parties, first_pairs, discord_role_ids, event_weapon_gates,
         ev.functions_released, is_staff,
+        {k: o["weapon_id"] for k, o in options.items()},
     )
     g = db.scalar(select(Guild).where(Guild.id == guild_id))
     settings = (g.settings or {}) if g else {}
     min_builds = settings.get("signup_min_builds")
-    return functions, reason, current, categories, min_builds
+    eligible = [dict(options[k], key=k) for k in keys]
+    return eligible, reason, current, min_builds
 
 
-def validate_role_minimum(functions: list[str], min_builds: int | None) -> None:
+def validate_role_minimum(weapon_fns: list, min_builds: int | None) -> None:
     if min_builds is None:
         return
-    if len(functions) < min_builds:
+    if len(weapon_fns) < min_builds:
         raise ServiceError(f"escolha ao menos {min_builds} roles")
 
 
 def upsert_signup(
     db: Session, guild_id: int, event_id: int,
-    user_id: int, user_name: str | None, functions: list[str],
-    discord_role_ids: set[int], event_role_gates: dict[str, list[str]],
+    user_id: int, user_name: str | None, weapon_fns: list[str],
+    discord_role_ids: set[int], event_weapon_gates: dict[str, list[str]],
+    legacy_names: list[str] | None = None,
+    actor_source: str = "bot",
 ) -> EventSignup:
+    """`weapon_fns` = pair keys escolhidos (ordem de preferência).
+    `legacy_names` = nomes de GameRole de um bot antigo — convertidos pra
+    pares quando não vêm keys (janela de deploy).
+
+    `actor_source` controla a procedência no audit log: ``"bot"`` (default,
+    callers do Discord bot legados) ou ``"site"`` (portal do membro). Não
+    afeta validação — os gates são os mesmos pra qualquer caller."""
     ev = _get_event(db, guild_id, event_id)
-    eligible, _reason, _current, _categories, min_builds = get_eligible_functions(
-        db, guild_id, event_id, user_id, discord_role_ids, event_role_gates,
+    eligible, _reason, current, min_builds = get_eligible_options(
+        db, guild_id, event_id, user_id, discord_role_ids, event_weapon_gates,
     )
+    by_key = {o["key"]: o for o in eligible}
+    weapon_fns = list(dict.fromkeys(weapon_fns))
+    if not weapon_fns and legacy_names:
+        wanted = {event_gates.function_key(n) for n in legacy_names}
+        weapon_fns = [
+            o["key"] for o in eligible
+            if any(event_gates.function_key(n) in wanted for n in o["role_names"])
+        ]
     # Corta pra interseção com o que É elegível agora — resistência a um
     # botão desatualizado (o usuário viu a lista antes de outra pessoa
     # preencher a vaga entretanto).
-    trimmed = [f for f in functions if f in eligible]
-    if set(trimmed) != set(functions):
+    trimmed = [k for k in weapon_fns if k in by_key]
+    if set(trimmed) != set(weapon_fns):
         raise ServiceError("uma ou mais roles não estão mais disponíveis")
     validate_role_minimum(trimmed, min_builds)
 
-    # _current já é a linha deste usuário (veio do load de get_eligible_functions)
+    # _current já é a linha deste usuário (veio do load de get_eligible_options)
     # — sem segunda query pelo mesmo registro.
-    row = _current
-    before = list(row.functions or []) if row is not None else None
+    row = current
+    before = {
+        "functions": list(row.functions or []),
+        "weapon_fns": list(row.weapon_fns or []),
+    } if row is not None else None
     if row is None:
         row = EventSignup(event_id=event_id, guild_id=guild_id, user_id=user_id)
         db.add(row)
     row.user_name = user_name
-    row.functions = trimmed
-    # Confirmar presença antes da liberação manda functions=[] e não deve apagar
+    row.weapon_fns = [
+        {"weapon_id": by_key[k]["weapon_id"], "fn": by_key[k]["fn"]} for k in trimmed
+    ]
+    # Snapshot legado de nomes (exibição/compat): primeira GameRole que casa
+    # com cada par, na ordem da comp. Vários roles podem compartilhar o par —
+    # a escolha concreta continua sendo da escalação (EventAssignment).
+    row.functions = [
+        by_key[k]["role_names"][0] for k in trimmed if by_key[k]["role_names"]
+    ]
+    # Confirmar presença antes da liberação manda [] e não deve apagar
     # um perfil já conhecido. Depois da liberação, [] é uma escolha explícita.
-    if ev.functions_released or functions:
-        _save_role_profile(db, guild_id, ev.comp_id, user_id, trimmed)
+    if ev.functions_released or weapon_fns:
+        _save_weapon_fn_profile(
+            db, guild_id, ev.comp_id, user_id,
+            {k: by_key[k] for k in trimmed}, set(by_key),
+        )
 
     db.add(AuditLog(
-        guild_id=guild_id, actor_id=user_id, actor_type="bot", source="bot",
+        guild_id=guild_id, actor_id=user_id, actor_type=actor_source, source=actor_source,
         action="signup.upsert", entity="event_signup", entity_id=None,
         event_id=event_id,
-        before={"functions": before} if before is not None else None,
-        after={"functions": trimmed, "user_name": user_name},
+        before=before,
+        after={"weapon_fns": list(row.weapon_fns), "user_name": user_name},
     ))
     ev.signup_message_dirty = True
     db.flush()
@@ -526,12 +569,15 @@ def upsert_signup(
         from app.services import event_escalation
         db.expire(ev, ["signups"])
         event_escalation.autofill_signup(
-            db, guild_id, event_id, user_id, user_name, trimmed,
+            db, guild_id, event_id, user_id, user_name,
         )
     return row
 
 
-def remove_signup(db: Session, guild_id: int, event_id: int, user_id: int) -> None:
+def remove_signup(
+    db: Session, guild_id: int, event_id: int, user_id: int,
+    actor_source: str = "bot",
+) -> None:
     ev = _get_event(db, guild_id, event_id)
     if reason := signup_block_reason(ev.state, ev.comp_id, ev.signup_mode):
         raise ServiceError(reason)
@@ -540,9 +586,13 @@ def remove_signup(db: Session, guild_id: int, event_id: int, user_id: int) -> No
     )
     if row is not None:
         db.add(AuditLog(
-            guild_id=guild_id, actor_id=user_id, actor_type="bot", source="bot",
+            guild_id=guild_id, actor_id=user_id, actor_type=actor_source, source=actor_source,
             action="signup.remove", entity="event_signup", entity_id=None,
-            event_id=event_id, before={"functions": list(row.functions or [])},
+            event_id=event_id,
+            before={
+                "functions": list(row.functions or []),
+                "weapon_fns": list(row.weapon_fns or []),
+            },
         ))
         db.delete(row)
         ev.signup_message_dirty = True
@@ -649,12 +699,12 @@ def build_pending_work(db: Session, guild_id: int, events: list[Event] | None = 
         ev_signups = signups_by_event.get(e.id, [])
         parties_payload = None
         if lupa and e.comp_id:
-            parties, _categories = _load_party_defs(db, e.comp_id)
-            fns = [s.functions[0] for s in ev_signups if s.functions]
+            parties, options = _load_party_defs(db, e.comp_id)
+            first_pairs = [p for p in (_signup_first_pair(s, options) for s in ev_signups) if p]
             parties_payload = [
                 {
                     "party": i + 1, "total": p.total_slots,
-                    "filled": min(p.total_slots, sum(1 for fn in fns if fn in p.role_names)),
+                    "filled": min(p.total_slots, sum(1 for k in first_pairs if k in p.pair_keys)),
                 }
                 for i, p in enumerate(parties)
             ]
@@ -670,7 +720,6 @@ def build_pending_work(db: Session, guild_id: int, events: list[Event] | None = 
             "scheduled_at": _ensure_utc(e.scheduled_at).isoformat() if e.scheduled_at else None,
             "comp_id": e.comp_id,
             "comp_name": comp_names.get(e.comp_id) if e.comp_id else None,
-            "seriousness": e.seriousness.value,
             "type": e.type.value if e.type else None,
             "signup_count": len(ev_signups),
             "lupa_active": lupa,

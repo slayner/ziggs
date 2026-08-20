@@ -43,6 +43,10 @@ REGION_SELECTIONS: list[list[str]] = [
 WINDOWS = ["alltime", "week"]
 
 GUILD_CACHED_KINDS = ["pvp_fame", "efficiency", "most_battles", "underdog"]
+# Player-scope pvp_fame aggregates SUM(fame) from player_kill_events — a 4M+
+# row table. Without precompute the live query takes 40-80s. Cache it with a
+# separate key namespace so the route can serve from cache when scope=player.
+_PLAYER_CACHED_KINDS = ["pvp_fame_player"]
 # gather/fishing/crafting são famas ACUMULADAS da conta (sem timestamp) —
 # honestamente all-time só, não suportam window. Não rotule como seasonal.
 _ALLTIME_ONLY_KINDS = [
@@ -77,6 +81,8 @@ def rankings_cache_key(kind: str, window: str, region_list: list[str] | None) ->
     if not rk or window not in WINDOWS:
         return None  # window fora dos correntes (ex.: season:N histórico) → ao vivo
     if kind in GUILD_CACHED_KINDS:
+        return f"hs:rk:{kind}:{window}:{rk}"
+    if kind in _PLAYER_CACHED_KINDS:
         return f"hs:rk:{kind}:{window}:{rk}"
     if kind == "weapon_scorer" and rk in _WEAPON_SCORER_CACHEABLE:
         return f"hs:rk:{kind}:{window}:{rk}"
@@ -128,6 +134,14 @@ async def _compute_all() -> dict[str, dict]:
                 if skey:
                     payloads[skey] = await _compute_rankings(db_read, _SILVER_KIND, region_list, tw, None, TOP_N, 0)
                     payloads[skey]["_window"] = _window_marker(tw)
+
+                # Player-scope pvp_fame: SUM(fame) from player_kill_events —
+                # expensive live (40-80s), precompute with the guild cycle.
+                for pkind in _PLAYER_CACHED_KINDS:
+                    pkey = rankings_cache_key(pkind, window, region_list)
+                    if pkey:
+                        payloads[pkey] = await _compute_rankings(db_read, "pvp_fame", region_list, tw, None, TOP_N, 0, scope="player")
+                        payloads[pkey]["_window"] = _window_marker(tw)
     return payloads
 
 
@@ -171,8 +185,12 @@ async def sync_once() -> int:
 
 
 async def run_forever() -> None:
-    # ponytail: o ciclo repetia as mesmas agregações por kind/região e ocupou
-    # vários núcleos por >4min em produção. Reativar após agrupar essas queries.
-    logger.info("highscores_cache: precompute automático desativado")
+    # Precompute reativado: player-scope pvp_fame live query takes 40-80s
+    # (aggregates 4M+ kill events). The 15min cycle keeps the page responsive.
+    # Guild rankings also benefit from cache vs live battle aggregation.
     while True:
         await asyncio.sleep(INTERVAL)
+        try:
+            await _cycle()
+        except Exception:
+            logger.exception("highscores_cache: ciclo falhou (próxima tentativa em %ds)", INTERVAL)

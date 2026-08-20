@@ -18,10 +18,7 @@ from app.api.schemas.events import (
     PayoutPreview, PayoutRow, RegearSummary, SignupOut, VerificationStepOut,
 )
 from app.domain import state_machine
-from app.domain.states import (
-    EventSeriousness, EventState,
-    ParticipationMode, TERMINAL, VerificationStep, allowed_targets,
-)
+from app.domain.states import EventState, ParticipationMode, TERMINAL, VerificationStep, allowed_targets
 from app.models.audit import AuditLog
 from app.models.battles import Battle, BattleGuild, BattleParticipant
 from app.models.economy import EconomyTransaction
@@ -569,6 +566,7 @@ def _detail(ev: Event, db: Session) -> EventDetail:
         SignupOut(
             id=s.id, user_id=s.user_id, user_name=s.user_name,
             functions=list(s.functions or []),
+            weapon_fns=[dict(e) for e in (s.weapon_fns or []) if isinstance(e, dict)],
             created_at=s.created_at,
         )
         for s in ev.signups
@@ -587,7 +585,7 @@ def _detail(ev: Event, db: Session) -> EventDetail:
         callout_at=ev.callout_at, ended_at=ev.ended_at, is_loss=ev.is_loss,
         tab_value=ev.tab_value, tab_image_url=ev.tab_image_url,
         battleboard_url=ev.battleboard_url,
-        seriousness=ev.seriousness.value, participation_mode=ev.participation_mode.value,
+        participation_mode=ev.participation_mode.value,
         signup_mode=ev.signup_mode, assignment_mode=ev.assignment_mode,
         autofill_mode=ev.autofill_mode, published_at=ev.published_at,
         functions_released=ev.functions_released, total_snapshots=ev.total_snapshots,
@@ -655,12 +653,22 @@ def _absentees_from_members(members: dict[int, str], ev: Event) -> list[BattleAb
     """Membros em batalha na janela do evento sem nenhum EventParticipant (nem
     call, nem inscrição). Reaproveita o mapa já consultado em _detail — evita
     uma segunda query de batalha."""
+    import logging
     already = {p.user_id for p in ev.participants}
-    return [
+    result = [
         BattleAbsenteeOut(user_id=uid, user_name=name)
         for uid, name in members.items()
         if uid not in already
     ]
+    # Log de debug: se algum battle_member que já é participante passou pelo
+    # filtro, é bug de dedup — precisamos saber (não deveria acontecer).
+    leaked = [uid for uid in members if uid in already]
+    if leaked:
+        logging.getLogger(__name__).warning(
+            "events: _absentees_from_members: %d battle_members já eram participantes "
+            "mas não foram filtrados (user_ids=%s)", len(leaked), leaked[:5],
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -680,10 +688,6 @@ def create_event(
     publish = payload.publish
     if publish is None:
         publish = True
-    try:
-        seriousness = EventSeriousness(payload.seriousness)
-    except ValueError:
-        raise ServiceError(f"seriousness inválida: {payload.seriousness}")
     try:
         participation_mode = ParticipationMode(payload.participation_mode)
     except ValueError:
@@ -709,7 +713,6 @@ def create_event(
         scheduled_at=scheduled_at,
         comp_id=payload.comp_id,
         functions_released=payload.comp_id is not None,
-        seriousness=seriousness,
         participation_mode=participation_mode,
         caller_id=actor_id,
         caller_name=caller_name,
@@ -750,7 +753,7 @@ def list_events(db: Session, guild_id: int) -> list[EventSummary]:
             title=e.title, caller_name=e.caller_name,
             scheduled_at=e.scheduled_at, created_at=e.created_at,
             started_at=e.started_at, ended_at=e.ended_at,
-            comp_id=e.comp_id, seriousness=e.seriousness.value,
+            comp_id=e.comp_id,
             participation_mode=e.participation_mode.value,
             signup_mode=e.signup_mode, assignment_mode=e.assignment_mode,
             autofill_mode=e.autofill_mode, published_at=e.published_at,
@@ -894,10 +897,11 @@ def update_event(
         from app.services import event_signups as event_signups_svc
         event_signups_svc.queue_function_prompt_deletes(db, guild_id, ev.id)
         # A presença continua válida; apenas o snapshot de roles da comp antiga
-        # é invalidado. O perfil persistente é por comp e não é tocado aqui.
+        # é invalidado. A preferência global (weapon, fn) não é tocada aqui.
         if ev.signups:
             for signup in ev.signups:
                 signup.functions = []
+                signup.weapon_fns = []
             if comp_id is not None:
                 notified_signups = [
                     {"user_id": s.user_id, "user_name": s.user_name}
@@ -956,6 +960,7 @@ def list_signups(db: Session, guild_id: int, event_id: int) -> list[SignupOut]:
         SignupOut(
             id=s.id, user_id=s.user_id, user_name=s.user_name,
             functions=list(s.functions or []),
+            weapon_fns=[dict(e) for e in (s.weapon_fns or []) if isinstance(e, dict)],
             created_at=s.created_at,
         )
         for s in ev.signups
@@ -1575,7 +1580,17 @@ def embed_dto(db: Session, guild_id: int, event_id: int) -> dict | None:
             select(EventAssignment).where(EventAssignment.event_id == event_id)
         )
     ]
+    # Loggers que enviaram lootlog — mostrado no embed de revisão independentemente
+    # do split/tab_value (logger_payouts só é populado quando tab_value > 0).
+    from app.services import lootlog as lootlog_svc
+    submissions = [
+        {"submitter_user_id": s.submitter_user_id,
+         "submitter_name": s.submitter_name,
+         "row_count": len([l for l in (s.raw_text or "").splitlines() if l.strip()])}
+        for s in lootlog_svc.list_submissions(db, guild_id, event_id)
+    ]
     return {"event": detail, "nodes": nodes, "assignments": assignments,
+            "lootlog_submissions": submissions,
             "event_channel_id": str(ev.event_channel_id) if ev.event_channel_id else None,
             "event_message_id": str(ev.event_message_id) if ev.event_message_id else None,
             "split_thread_id": str(ev.split_thread_id) if ev.split_thread_id else None}
@@ -1808,12 +1823,15 @@ def list_event_thread_terminal(db: Session, guild_id: int) -> list[dict]:
 
 def mark_event_thread_archived(db: Session, guild_id: int, event_id: int) -> bool:
     """Marca que o bot já arquivou (lock) a thread do embed — tira o evento da
-    lista de arquivamento."""
+    lista de arquivamento e do outbox de edição."""
     ev = db.scalar(select(Event).where(
         Event.id == event_id, Event.guild_id == guild_id))
     if ev is None:
         return False
     ev.event_thread_archived = True
+    # Uma thread trancada não aceita mais a edição pendente; deixá-la dirty faz
+    # o bot tentar reeditá-la para sempre e pode atrasar eventos novos.
+    ev.event_embed_dirty = False
     db.flush()
     return True
 
