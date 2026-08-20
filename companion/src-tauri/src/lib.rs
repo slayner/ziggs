@@ -127,7 +127,6 @@ async fn set_config(
                 .feed_aodp
                 .store(b, std::sync::atomic::Ordering::Relaxed);
         }
-        ("auto_lootlog_submit", serde_json::Value::Bool(b)) => cfg.auto_lootlog_submit = b,
         // Damage meter spell index calibration — see spell_index_offset in config.
         ("spell_index_offset", serde_json::Value::Number(n)) => {
             cfg.spell_index_offset = n.as_i64().unwrap_or(0) as i32;
@@ -686,7 +685,7 @@ async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("failed to open browser: {e}"))
 }
 
-// ─── Discord login (optional) + lootlog auto-submit ──────────────────────────
+// ─── Discord login (optional) ────────────────────────────────────
 
 #[tauri::command]
 async fn companion_login(
@@ -734,7 +733,6 @@ async fn companion_logout(state: tauri::State<'_, AppState>) -> Result<(), Strin
     cfg.discord_token = None;
     cfg.discord_user_id = None;
     cfg.discord_username = None;
-    cfg.auto_lootlog_submit = false;
     config::save(&cfg).map_err(|e| format!("failed to save config: {e}"))?;
     Ok(())
 }
@@ -874,65 +872,6 @@ async fn loot_silver_worker(
     }
 }
 
-async fn auto_lootlog_worker(
-    config: Arc<Mutex<CompanionConfig>>,
-    loot: Arc<Mutex<Vec<photon_parser::LootEvent>>>,
-) {
-    let mut submitted: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-
-        let cfg = config.lock().await.clone();
-        if !cfg.auto_lootlog_submit || cfg.discord_token.is_none() {
-            continue;
-        }
-        let api = api::ApiClient::new(config::API_BASE_URL).with_token(cfg.discord_token.clone());
-        let events = match api.active_events().await {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::debug!("auto-lootlog: could not list events: {e:#}");
-                continue;
-            }
-        };
-        let Some(ev) = single_review_event(&events) else {
-            continue;
-        };
-        if !submitted.contains(&ev.event_id) {
-            let csv = {
-                let buf = loot.lock().await;
-                lootlog::build_csv_from_loot(&buf)
-            };
-            // No captured loot — skip; sending empty CSV would overwrite a
-            // good manual submission with nothing.
-            if csv.lines().count() <= 1 {
-                continue;
-            }
-            match api.submit_lootlog(ev.event_id, &csv).await {
-                Ok(out) => {
-                    submitted.insert(ev.event_id);
-                    tracing::info!(
-                        "auto-lootlog: event {} submitted ({} lines)",
-                        ev.event_id,
-                        out.row_count
-                    );
-                }
-                Err(e) => tracing::warn!("auto-lootlog: event {} failed: {e:#}", ev.event_id),
-            }
-        }
-    }
-}
-
-fn single_review_event(events: &[api::ActiveEvent]) -> Option<&api::ActiveEvent> {
-    // Antes exigia exatamente 1 evento em review (proteção contra ambiguidade),
-    // mas guildas ativas têm vários eventos em review ao mesmo tempo (SIGHT tem
-    // 4 hoje), e o auto-submit nunca disparava. Pega o de maior event_id (mais
-    // recente) — o auto-submit é idempotente (upsert por guild+event+submitter)
-    // e o `submitted` HashSet impede re-envio do mesmo evento.
-    events
-        .iter()
-        .filter(|e| e.state == "review")
-        .max_by_key(|e| e.event_id)
-}
 
 // ─── Autostart (Task Scheduler on Windows — admin without UAC prompt on boot) ──
 
@@ -1772,14 +1711,8 @@ pub fn run() {
             tauri::async_runtime::spawn(load_item_names_map());
             tauri::async_runtime::spawn(lootlog::load_item_names());
 
-            // Auto-submit lootlog: watches user's events and submits when
-            // one enters review. The worker checks the toggle each cycle.
             {
                 let st = app.state::<AppState>();
-                tauri::async_runtime::spawn(auto_lootlog_worker(
-                    Arc::clone(&st.config),
-                    Arc::clone(&st.sniffer.loot),
-                ));
                 // Illustrative silver badge for the Lootlog tab. Not load-bearing.
                 tauri::async_runtime::spawn(loot_silver_worker(
                     Arc::clone(&st.sniffer.loot),
@@ -2214,32 +2147,4 @@ mod policy_tests {
         );
     }
 
-    fn event(id: i64, state: &str) -> api::ActiveEvent {
-        api::ActiveEvent {
-            event_id: id,
-            guild_id: 1,
-            guild_name: None,
-            title: None,
-            scheduled_at: None,
-            state: state.into(),
-        }
-    }
-
-    #[test]
-    fn auto_lootlog_picks_most_recent_review_event() {
-        // Com 1 evento em review, envia pra ele.
-        assert_eq!(
-            single_review_event(&[event(1, "review")]).map(|e| e.event_id),
-            Some(1)
-        );
-        // Com vários em review, envia pro de maior ID (mais recente) — antes
-        // exigia exatamente 1 e nunca disparava em guildas ativas.
-        assert_eq!(
-            single_review_event(&[event(120, "review"), event(123, "review"), event(121, "review")])
-                .map(|e| e.event_id),
-            Some(123)
-        );
-        // Sem review, não envia.
-        assert!(single_review_event(&[event(1, "in_progress")]).is_none());
-    }
 }

@@ -23,7 +23,6 @@ type CompanionConfig = {
   discord_token: string | null;
   discord_user_id: string | null;
   discord_username: string | null;
-  auto_lootlog_submit: boolean;
   install_id: string;
   spell_index_offset: number;
   region: string;
@@ -1009,15 +1008,6 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
         </div>
 
         <div className="loot-toolbar">
-          {/* Single toggle button, same pattern as Damage Meter chips. */}
-          <button
-            className={`dmg-chip${config.auto_lootlog_submit ? " active" : ""}`}
-            onClick={() => update("auto_lootlog_submit", !config.auto_lootlog_submit)}
-            disabled={!loggedIn}
-            title={!loggedIn ? t("connectDiscordForLootlog") : `${t("autoSubmitDesc")}\n\n${t("autoSubmitWhen")}`}
-          >
-            {t("autoSubmitToggle")}
-          </button>
           <button className="btn" onClick={handleDownload} disabled={loot.length === 0}
                   title={t("downloadCsvHint")}>
             {t("downloadCsv")}
@@ -1029,13 +1019,13 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
         </div>
 
         <div className="terminal" ref={terminalRef} onScroll={onTerminalScroll}>
-          {debug.map((l, i) => (
+          {debug.filter(l => l.level !== "info").map((l, i) => (
             <div key={`d${i}`} className="terminal-line">
               <span className="t-time">{l.ts}</span>{" "}
-              <span className={l.level === "err" ? "t-err-tag" : l.level === "warn" ? "t-warn-tag" : "t-info-tag"}>
-                [{l.level === "err" ? "ERR" : l.level === "warn" ? "WARN" : "INFO"}]
+              <span className={l.level === "err" ? "t-err-tag" : "t-warn-tag"}>
+                [{l.level === "err" ? "ERR" : "WARN"}]
               </span>{" "}
-              <span className={l.level === "err" ? "t-err" : l.level === "warn" ? "t-warn" : "t-info-msg"}>{l.msg}</span>
+              <span className={l.level === "err" ? "t-err" : "t-warn"}>{l.msg}</span>
             </div>
           ))}
           {loot.map((r, i) => (

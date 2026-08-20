@@ -65,9 +65,6 @@ pub struct CompanionConfig {
     pub discord_user_id: Option<String>,
     /// Discord username shown in the UI.
     pub discord_username: Option<String>,
-    /// Auto-submit lootlog when a user event enters REVIEW.
-    /// Guild is resolved server-side from the user's event signups.
-    pub auto_lootlog_submit: bool,
     /// Stable identity of THIS installation (one PC = one id). Generated on first
     /// use and persisted. Sent in the X-Ziggs-Install header so the backend
     /// treats app restarts and concurrent rebuild processes as the same companion.
@@ -111,7 +108,6 @@ impl Default for CompanionConfig {
             discord_token: None,
             discord_user_id: None,
             discord_username: None,
-            auto_lootlog_submit: false,
             install_id: String::new(), // generated on demand by install_id()
             spell_index_offset: 0,
             region: default_region(),
@@ -210,8 +206,7 @@ mod tests {
             "minimize_to_tray": true,
             "discord_token": null,
             "discord_user_id": null,
-            "discord_username": null,
-            "auto_lootlog_submit": false
+            "discord_username": null
         }"#;
         let cfg: CompanionConfig = serde_json::from_str(json).expect("valid config");
         assert_eq!(cfg.api_base_url, API_BASE_URL);
