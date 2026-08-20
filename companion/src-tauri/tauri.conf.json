@@ -1,0 +1,70 @@
+{
+    "$schema":  "https://schema.tauri.app/config/2",
+    "productName":  "Ziggs Companion",
+    "version":  "0.2.8",
+    "identifier":  "xyz.ziggs.companion",
+    "build":  {
+                  "frontendDist":  "../dist",
+                  "devUrl":  "http://localhost:1420",
+                  "beforeDevCommand":  "npm run dev",
+                  "beforeBuildCommand":  "npm run build"
+              },
+    "app":  {
+                "windows":  [
+                                {
+                                    "label":  "main",
+                                    "title":  "Ziggs Companion",
+                                    "width":  980,
+                                    "height":  760,
+                                    "minWidth":  1020,
+                                    "minHeight":  660,
+                                    "resizable":  true,
+                                    "fullscreen":  false,
+                                    "visible":  false,
+                                    "decorations":  false
+                                }
+                            ],
+                "security":  {
+                                 "csp":  null
+                             }
+            },
+    "bundle":  {
+                   "active":  true,
+                   "createUpdaterArtifacts":  true,
+                   "targets":  "all",
+                   "icon":  [
+                                "icons/32x32.png",
+                                "icons/128x128.png",
+                                "icons/icon.ico",
+                                "icons/icon.png"
+                            ],
+                   "resources":  [
+                                     "resources/wintun.dll"
+                                 ],
+                   "category":  "Utility",
+                   "shortDescription":  "Ziggs Companion",
+                   "longDescription":  "Distributed battle scanner, route/DNS optimizer and lootlog helper for the Ziggs platform.",
+                   "windows":  {
+                                   "nsis":  {
+                                                "installerHooks":  "nsis/installer-hooks.nsh",
+                                                "languages":  [
+                                                                  "English",
+                                                                  "Portuguese",
+                                                                  "Spanish"
+                                                              ],
+                                                "displayLanguageSelector":  false
+                                            }
+                               }
+               },
+    "plugins":  {
+                    "updater":  {
+                                    "pubkey":  "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdENzJCMkI5MDc4MTVGRDkKUldUWlg0RUh1Ykp5ZmZQQU03VE5QeXV5M0I1WnhqRnFEdUwvejBTSCttM0djYmN0VzNIR1p2c0cK",
+                                    "endpoints":  [
+                                                      "https://ziggs.xyz/companion/latest.json"
+                                                  ],
+                                    "windows":  {
+                                                    "installMode":  "quiet"
+                                                }
+                                }
+                }
+}
