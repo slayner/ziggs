@@ -973,15 +973,12 @@ pub struct LootEvent {
     pub is_silver: bool,     // param 3 — true = silver, not an item
 }
 
-/// Albion player name: 3-20 chars, alphanumeric, starts with a letter.
-/// Game entities (GUILDBANNER_ELEPHANT, SCHEMA_01, MOB_...) have '_' or
-/// leading digits — this filters mechanics that fire the same loot event.
+/// Albion player name: 3-20 chars, alphanumeric.
+/// Game entities (GUILDBANNER_ELEPHANT, SCHEMA_01, MOB_...) have '_' —
+/// this filters mechanics that fire the same loot event.
+/// Player names CAN be purely numeric (e.g. "50369333670").
 pub fn is_player_name(name: &str) -> bool {
     (3..=20).contains(&name.len())
-        && name
-            .chars()
-            .next()
-            .map_or(false, |c| c.is_ascii_alphabetic())
         && name.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
@@ -1758,9 +1755,9 @@ mod tests {
     fn test_is_player_name() {
         assert!(is_player_name("Slayner"));
         assert!(is_player_name("Player123"));
+        assert!(is_player_name("50369333670")); // purely numeric name
         assert!(!is_player_name("GUILDBANNER_ELEPHANT")); // underscore
         assert!(!is_player_name("SCHEMA_01"));
-        assert!(!is_player_name("1abc")); // starts with digit
         assert!(!is_player_name("ab")); // too short
     }
 

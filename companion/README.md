@@ -16,7 +16,7 @@ React/TypeScript frontend.
 - **DNS tester**: Pings Cloudflare, Google, Quad9, and OpenDNS to score the
   best resolver for the player's location.
 - **Damage meter**: Captures damage events from Photon network packets via
-  Npcap. Shows per-player breakdown by skill, timeline, and DPS. Players only
+  WinDivert. Shows per-player breakdown by skill, timeline, and DPS. Players only
   (no mobs).
 - **Lootlog capture**: Parses `/loot` chat output and generates CSV files
   compatible with ao-loot-logger. Optional auto-submit to guild events.
@@ -24,9 +24,8 @@ React/TypeScript frontend.
 ## Requirements
 
 - Windows 10/11 (64-bit)
-- [Npcap](https://npcap.com/) installed (for packet capture: damage meter,
-  prices, market history). Without Npcap, the app runs but packet-dependent
-  features are disabled. A download prompt is shown on first launch.
+- Administrator privileges (for WinDivert packet capture and wintun tunnel).
+  No external driver installation needed — WinDivert DLL + .sys are bundled.
 - Rust 1.77+ with MSVC build tools
 - Node.js 18+
 
@@ -92,7 +91,7 @@ companion/
 │   │   ├── config.rs           CompanionConfig (JSON persistence)
 │   │   ├── api.rs              HTTP client for backend API
 │   │   ├── scanner.rs          Battle scan worker (claim/report cycle)
-│   │   ├── sniffer.rs          Npcap packet capture, Photon event parsing
+│   │   ├── sniffer.rs          WinDivert packet capture, Photon event parsing
 │   │   ├── photon_parser.rs    Photon protocol decoder, damage accumulator
 │   │   ├── tunnel.rs           WireGuard tunnel (boringtun + wintun)
 │   │   ├── tunnel_presets.rs   WireGuard endpoints per Albion region

@@ -400,6 +400,11 @@ T: dict[str, dict[str, str]] = {
         "en": "You're already signed up with: **{functions}**. What do you want to do?",
         "es": "Ya estás inscrito con: **{functions}**. ¿Qué deseas hacer?",
     },
+    "signup_already_registered_no_comp": {
+        "pt": "Você já confirmou presença neste CTA. A administração ainda não definiu uma composição — quando liberarem as funções, você receberá uma DM pra escolher suas roles.",
+        "en": "You already confirmed attendance for this CTA. Admins haven't set a composition yet — once they release functions, you'll get a DM to pick your roles.",
+        "es": "Ya confirmaste presencia en este CTA. La administración aún no definió composición — cuando liberen las funciones, recibirás un DM para elegir tus roles.",
+    },
     "signup_change_btn": {"pt": "🔄 Alterar funções", "en": "🔄 Change functions", "es": "🔄 Cambiar funciones"},
     "signup_remove_btn": {"pt": "🗑️ Retirar meu nome", "en": "🗑️ Remove my name", "es": "🗑️ Retirar mi nombre"},
     "signup_removed": {

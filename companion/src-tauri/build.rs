@@ -1,11 +1,7 @@
-// build.rs — finds the Npcap SDK (wpcap.lib) automatically.
+// build.rs — compiles the Tauri manifest and Common Controls v6 manifest.
 //
-// Search in:
-//   1. NPCAP_SDK_DIR env var
-//   2. C:\npcap-sdk\Lib\x64
-//   3. C:\Program Files\Npcap SDK\Lib\x64
-//
-// If found, add it to the LIB path so the linker finds wpcap.lib.
+// Npcap SDK linking was removed: packet capture now uses WinDivert (bundled
+// as DLL+sys in resources/), no external SDK or driver installation needed.
 
 fn which_rc() -> Option<String> {
     // Look for rc.exe in installed Windows Kits (10.0.22621, etc.)
@@ -35,7 +31,8 @@ fn main() {
     // silently, even with decorations:false removing the native title bar
     // (no native chrome AND no JS drag = window impossible to move).
     // Real incident on 20-21/07/2026: build.rs was rewritten for auto-detect
-    // of the Npcap SDK and this call disappeared along with it.
+    // of the Npcap SDK and this call disappeared along with it. (Npcap SDK
+    // linking has since been removed entirely — capture uses WinDivert.)
     //
     // new_without_app_manifest(): the default tauri_build embeds ONE Windows
     // manifest of its own (windows-app-manifest.xml). This file ALREADY embeds OUR
@@ -96,41 +93,5 @@ fn main() {
             }
         }
 
-        let candidates = [
-            std::env::var("NPCAP_SDK_DIR").ok().map(|d| {
-                std::path::Path::new(&d)
-                    .join("Lib")
-                    .join("x64")
-                    .to_string_lossy()
-                    .into_owned()
-            }),
-            Some("C:\\npcap-sdk\\Lib\\x64".into()),
-            Some("C:\\Program Files\\Npcap SDK\\Lib\\x64".into()),
-        ];
-
-        for candidate in candidates.iter().flatten() {
-            let lib_path = std::path::Path::new(candidate);
-            if lib_path.join("wpcap.lib").exists() {
-                println!("cargo:rustc-link-search=native={}", candidate);
-                // Delay-load wpcap.dll: so the companion starts without Npcap
-                // installed. The DLL is only loaded when the sniffer first
-                // calls a pcap function, not at process startup. Without this
-                // the .exe crashes on launch with "wpcap.dll not found".
-                println!("cargo:rustc-link-arg=/DELAYLOAD:wpcap.dll");
-                println!("cargo:rustc-link-arg=/DELAYLOAD:packet.dll");
-                // delayimp.lib provides the delay-load helper
-                let delayimp = lib_path.parent().unwrap_or(lib_path).join("delayimp.lib");
-                if delayimp.exists() {
-                    println!("cargo:rustc-link-lib=dylib=delayimp");
-                } else {
-                    // delayimp.lib ships with Visual Studio / Windows SDK
-                    println!("cargo:rustc-link-lib=dylib=delayimp");
-                }
-                println!("cargo:rerun-if-env-changed=NPCAP_SDK_DIR");
-                return;
-            }
-        }
-        println!("cargo:warning=Npcap SDK not found. Download from https://npcap.com/dist/ and extract to C:\\npcap-sdk");
-        println!("cargo:warning=Or set NPCAP_SDK_DIR=<path> pointing to the SDK folder");
     }
 }

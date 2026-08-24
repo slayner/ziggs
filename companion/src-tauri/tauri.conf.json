@@ -38,9 +38,11 @@
                                 "icons/icon.ico",
                                 "icons/icon.png"
                             ],
-                   "resources":  [
-                                     "resources/wintun.dll"
-                                 ],
+                    "resources":  [
+                                      "resources/wintun.dll",
+                                      "resources/WinDivert.dll",
+                                      "resources/WinDivert64.sys"
+                                  ],
                    "category":  "Utility",
                    "shortDescription":  "Ziggs Companion",
                    "longDescription":  "Distributed battle scanner, route/DNS optimizer and lootlog helper for the Ziggs platform.",

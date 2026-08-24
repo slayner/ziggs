@@ -451,10 +451,21 @@ async def _open_signup_flow(
                 replace_prev=False, guild_id=target_guild_id,
             )
             return
-        view = AlreadyRegisteredView(event_id=event_id, guild_id=target_guild_id, lang=lang)
+        # Sem comp (functions_released=False) e sem roles no signup: não há
+        # funções pra alterar — não oferecer o botão "Alterar funções".
+        can_change = has_choice or bool(data.get("functions_released"))
+        view = AlreadyRegisteredView(
+            event_id=event_id, guild_id=target_guild_id, lang=lang, can_change=can_change,
+        )
         shown = current.get("labels") or current.get("functions") or []
+        if can_change:
+            content = t(lang, "signup_already_registered", functions=", ".join(shown) or "—")
+        else:
+            # Sem comp: a inscrição é só presença. Mensagem dedicada evita o
+            # "— O que deseja fazer?" sem função pra mostrar.
+            content = t(lang, "signup_already_registered_no_comp")
         await interaction.response.send_message(
-            t(lang, "signup_already_registered", functions=", ".join(shown) or "—"),
+            content,
             view=view, ephemeral=True,
         )
         return
@@ -541,19 +552,23 @@ class AdminSignupView(discord.ui.View):
 class AlreadyRegisteredView(discord.ui.View):
     """Já tem inscrição nesse evento — mudar funções, remover, ou não fazer nada."""
 
-    def __init__(self, *, event_id: int, guild_id: int, lang: str):
+    def __init__(self, *, event_id: int, guild_id: int, lang: str, can_change: bool = True):
         super().__init__(timeout=60)
         self.event_id = event_id
         self.guild_id = guild_id
         self.lang = lang
 
-        change_btn = discord.ui.Button(label=t(lang, "signup_change_btn"), style=discord.ButtonStyle.primary)
-        change_btn.callback = self._on_change
         remove_btn = discord.ui.Button(label=t(lang, "signup_remove_btn"), style=discord.ButtonStyle.danger)
         remove_btn.callback = self._on_remove
         cancel_btn = discord.ui.Button(label=t(lang, "cancel_btn"), style=discord.ButtonStyle.secondary)
         cancel_btn.callback = self._on_cancel
-        self.add_item(change_btn)
+        # Só mostra "Alterar funções" se há funções pra alterar (comp definida
+        # ou o signup já tinha roles). Sem comp, o botão levaria a um dead-end
+        # "sem vagas/sem role" sem sentido.
+        if can_change:
+            change_btn = discord.ui.Button(label=t(lang, "signup_change_btn"), style=discord.ButtonStyle.primary)
+            change_btn.callback = self._on_change
+            self.add_item(change_btn)
         self.add_item(remove_btn)
         self.add_item(cancel_btn)
 

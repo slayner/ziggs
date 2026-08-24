@@ -209,7 +209,7 @@ export interface BuildSuggestion {
 
 export interface CompUpdatePayload {
   name?: string;
-  parties?: { name: string | null; slots: { label: string | null; fn: string | null; role_ids: number[] }[] }[];
+  parties?: { name: string | null; slots: { id?: number; label: string | null; fn: string | null; role_ids: number[] }[] }[];
 }
 
 export interface Suggestion {

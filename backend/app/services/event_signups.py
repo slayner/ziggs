@@ -300,6 +300,12 @@ def _load_party_defs(
     return result
 
 
+def invalidate_party_defs(comp_id: int) -> None:
+    """Invalida o cache de party defs quando a comp é editada/deletada.
+    Chamado por services.comps.update_comp e delete_comp."""
+    _party_defs_cache.pop(comp_id, None)
+
+
 _party_defs_cache: dict[int, tuple[tuple[list, dict], float]] = {}
 _PARTY_DEFS_TTL = 30.0  # segundos
 

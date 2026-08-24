@@ -64,8 +64,12 @@ export function CompList({ perms, compList, loadError, setCompList, onOpen }: {
     setCopyingId(id);
     try {
       const c = await api.getComp(id);
-      await navigator.clipboard.writeText(encodeCompCode(compToDraft(c)));
-      flashCodeMsg(t("compCodeCopied"));
+      try {
+        await navigator.clipboard.writeText(encodeCompCode(compToDraft(c)));
+        flashCodeMsg(t("compCodeCopied"));
+      } catch {
+        flashCodeMsg(t("compCodeCopyFail"));
+      }
     } catch {
       flashCodeMsg(t("loadCompError"));
     } finally {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type ChestUploadEntry } from "../api";
 import { useT } from "../i18n";
 import { ITEM_BY_ID } from "../data/albion-items";
@@ -86,21 +86,30 @@ function parseChestLog(text: string): { entries: ChestUploadEntry[]; skipped: st
 export default function LootReconcilePage({ eventId, onReload }: Props) {
   const t = useT();
   const [chestText, setChestText] = useState("");
+  const [lastSaved, setLastSaved] = useState("");
+  const [saving, setSaving] = useState(false);
   const [parseInfo, setParseInfo] = useState<{ ok: number; skipped: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  // Automático: submete assim que o texto é colado, sem botão. `text` vem
-  // direto do clipboardData (não do state, que ainda não terminou de
-  // atualizar no momento do evento onPaste).
+  // Automático: submete o texto colado ou editado, sem botão. `replace=true`
+  // no upload (idempotente) — re-salvar o mesmo texto é seguro: deleta e
+  // recria as linhas do baú do evento. Setamos `lastSaved` imediato (antes
+  // do await) pra que o debounce de 5s não re-dispare enquanto o save do
+  // paste ainda roda; se falhar, reverter `lastSaved` rearma o debounce.
   async function submitChest(text: string) {
+    setSaving(true);
     setErr(null);
+    setLastSaved(text);
     const { entries, skipped } = parseChestLog(text);
     setParseInfo({ ok: entries.length, skipped: skipped.length });
-    if (entries.length === 0) { setErr(t("recNoItems")); return; }
+    if (entries.length === 0) { setErr(t("recNoItems")); setSaving(false); return; }
     try {
       await api.uploadChest(eventId, entries, true);
       onReload();
-    } catch (e: any) { setErr(String(e?.message || e)); }
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+      setLastSaved(""); // rearma o debounce pra re-tentar
+    } finally { setSaving(false); }
   }
 
   function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -108,6 +117,15 @@ export default function LootReconcilePage({ eventId, onReload }: Props) {
     setChestText(text);
     if (text.trim()) submitChest(text);
   }
+
+  // Autosave com debounce de 5s: só dispara se o texto mudou desde o último
+  // save. O paste dispara imediato; edições manuais pegam o debounce.
+  useEffect(() => {
+    if (!chestText.trim() || chestText === lastSaved) return;
+    const id = setTimeout(() => submitChest(chestText), 5000);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chestText, lastSaved]);
 
   return (
     <div>
@@ -121,8 +139,8 @@ export default function LootReconcilePage({ eventId, onReload }: Props) {
           fontSize: 13, lineHeight: 1.5,
         }}
       />
-      {(parseInfo || err) && (
-        <div style={{ padding: "8px 12px", borderTop: "1px solid var(--border)", fontSize: 12 }}>
+      {(parseInfo || err || saving) && (
+        <div style={{ padding: "8px 12px", borderTop: "1px solid var(--border)", fontSize: 12, display: "flex", gap: 12, alignItems: "center" }}>
           {parseInfo && (
             <span>
               {t("recParsed")}: <strong style={{ color: "var(--green)" }}>{parseInfo.ok}</strong>
@@ -131,7 +149,9 @@ export default function LootReconcilePage({ eventId, onReload }: Props) {
               )}
             </span>
           )}
-          {err && <div style={{ color: "var(--gold)", marginTop: parseInfo ? 4 : 0 }}>{err}</div>}
+          {saving && <span className="hint">{t("recSaving")}</span>}
+          {!saving && chestText === lastSaved && lastSaved && <span style={{ color: "var(--green)" }}>✓ {t("recSaved")}</span>}
+          {err && <div style={{ color: "var(--gold)" }}>{err}</div>}
         </div>
       )}
     </div>

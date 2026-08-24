@@ -18,6 +18,7 @@ from app.models.audit import AuditLog
 from app.models.catalog import GameRole, Weapon
 from app.models.comps import Comp, CompParty, CompSlot, CompSlotRole
 from app.models.events import Event
+from app.services.event_signups import invalidate_party_defs
 
 
 class ServiceError(Exception):
@@ -251,6 +252,8 @@ def update_comp(
         _validate_role_ids(db, guild_id, all_role_ids)
         _merge_parties(comp, payload.parties)
         db.flush()
+        # Invalida cache de party defs — a comp mudou de estrutura.
+        invalidate_party_defs(comp.id)
         # Se a comp ficou sem nenhum slot (todas as parties vazias), deleta.
         # O ondelete=SET NULL no Event.comp_id zera a comp dos eventos que a
         # usavam; CompRolePreference é CASCADE e some junto. O frontend recebe
@@ -266,6 +269,7 @@ def update_comp(
                 before={"name": comp.name, "reason": "empty after save"},
             ))
             _cleanup_events_on_comp_delete(db, comp.id)
+            invalidate_party_defs(comp.id)
             db.delete(comp)
             db.flush()
             return None
@@ -302,6 +306,7 @@ def delete_comp(
         before={"name": comp.name},
     ))
     _cleanup_events_on_comp_delete(db, comp_id)
+    invalidate_party_defs(comp_id)
     db.delete(comp)
     return True
 

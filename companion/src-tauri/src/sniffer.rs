@@ -1,21 +1,22 @@
-// Packet sniffer: captures Albion UDP packets via libpcap/Npcap.
+// Packet sniffer: captures Albion UDP packets via WinDivert (WFP layer).
 //
-// Listens on ALL IPv4 interfaces (VPN/ExitLag creates virtual interfaces —
-// listening on only one means losing traffic when the user enables VPN).
-// BPF filter: "udp and (port 5056 or port 5055 or port 4535)" — the 3 ports
-// the game uses.
+// WinDivert hooks at the Windows Filtering Platform network layer, ABOVE
+// routing and VPN encapsulation. This means packets are captured as raw
+// Albion UDP regardless of ExitLag, Cloudflare WARP, or any VPN/route
+// optimizer being active. No external driver installation needed — WinDivert
+// DLL + .sys are bundled.
 //
 // Each packet is passed to the PhotonParser. Loot events (opcode 256) go to
 // the loot buffer. Debug logs go to the debug buffer (shown in the UI
 // terminal). Online/offline detection: no packets for 5s = offline.
 //
-// Requires Npcap on Windows. Needs admin.
+// Requires admin.
 
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -196,9 +197,15 @@ pub struct Sniffer {
     /// Forward market orders to AODP (return data to the community).
     pub feed_aodp: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
+    /// WinDivert capture handle (0 = not started). Lives for the session,
+    /// shutdown on stop/restart. See `windivert.rs`.
+    #[cfg(target_os = "windows")]
+    windivert_handle: Arc<AtomicI64>,
+    #[cfg(not(target_os = "windows"))]
+    windivert_handle: Arc<AtomicI64>,
 }
 
-enum CaptureMsg {
+pub enum CaptureMsg {
     Packet(usize, Vec<u8>),
     Dead(String),
 }
@@ -231,6 +238,10 @@ impl Sniffer {
             capture_prices: Arc::new(AtomicBool::new(false)),
             feed_aodp: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
+            #[cfg(target_os = "windows")]
+            windivert_handle: Arc::new(AtomicI64::new(0)),
+            #[cfg(not(target_os = "windows"))]
+            windivert_handle: Arc::new(AtomicI64::new(0)),
         }
     }
 
@@ -254,12 +265,18 @@ impl Sniffer {
             capture_prices: Arc::clone(&self.capture_prices),
             feed_aodp: Arc::clone(&self.feed_aodp),
             generation: Arc::clone(&self.generation),
+            #[cfg(target_os = "windows")]
+            windivert_handle: Arc::clone(&self.windivert_handle),
+            #[cfg(not(target_os = "windows"))]
+            windivert_handle: Arc::clone(&self.windivert_handle),
         }
     }
 
     pub async fn stop(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.stats.lock().await.running = false;
+        #[cfg(target_os = "windows")]
+        crate::windivert::shutdown(&self.windivert_handle);
     }
 
     pub fn prepare_start(&self) -> u64 {
@@ -270,101 +287,11 @@ impl Sniffer {
         self.generation.load(Ordering::Acquire) == generation
     }
 
-    /// Opens a capture thread per IPv4 interface not yet in `opened`, sending
-    /// packets to the given `tx`. Returns the count of NEW interfaces opened.
+    /// Main loop: starts WinDivert capture and processes packets.
     ///
-    /// Takes `tx`/`opened` from outside (instead of creating its own channel)
-    /// so it can be called again later in the same session when an interface
-    /// appears AFTER boot — WiFi still associating, VPN adapter enabled later,
-    /// Hyper-V/Docker/VirtualBox bringing up a virtual interface with IPv4
-    /// before the real network (autostart on Windows races DHCP). Without this,
-    /// if ANY interface opened first — even a virtual one that never sees
-    /// Albion traffic — the sniffer would never scan the list again and stay
-    /// "no packets" forever.
-    async fn open_all(
-        &self,
-        devices: &[pcap::Device],
-        tx: &mpsc::Sender<CaptureMsg>,
-        opened: &mut HashSet<String>,
-        generation: u64,
-    ) -> usize {
-        let mut opened_count = 0;
-        for dev in devices {
-            if dev.name.contains("lo") || dev.name.contains("Loopback") {
-                continue;
-            }
-            if opened.contains(&dev.name) {
-                continue;
-            }
-            if !dev
-                .addresses
-                .iter()
-                .any(|a| matches!(a.addr, std::net::IpAddr::V4(_)))
-            {
-                continue;
-            }
-            let desc = dev.name.clone();
-            match open_device_capture(dev) {
-                Ok(cap) => {
-                    opened_count += 1;
-                    opened.insert(dev.name.clone());
-                    let l2 = l2_len_for(cap.get_datalink());
-                    self.debug_log(
-                        "info",
-                        &format!(
-                            "Listening on interface: {} (L2={}b — {})",
-                            desc,
-                            l2,
-                            if l2 == 0 { "raw IP / VPN" } else { "ethernet" }
-                        ),
-                    )
-                    .await;
-                    // Spawns a dedicated thread per capture (blocking).
-                    let tx_clone = tx.clone();
-                    let liveness = Arc::clone(&self.generation);
-                    std::thread::spawn(move || {
-                        let mut cap = cap;
-                        while liveness.load(Ordering::Acquire) == generation {
-                            match cap.next_packet() {
-                                Ok(packet) => {
-                                    let _ =
-                                        tx_clone.send(CaptureMsg::Packet(l2, packet.data.to_vec()));
-                                }
-                                Err(pcap::Error::TimeoutExpired) => { /* no packet */ }
-                                Err(e) => {
-                                    let _ = tx_clone.send(CaptureMsg::Dead(desc.clone()));
-                                    tracing::warn!("pcap error on {}: {}", desc, e);
-                                    break;
-                                }
-                            }
-                        }
-                    });
-                }
-                Err(e) => {
-                    // Don't mark as `opened` — the failure may be transient
-                    // (driver still starting, interface not yet up) and
-                    // that's exactly what the re-scan exists to cover.
-                    self.debug_log("warn", &format!("Could not open {}: {}", desc, e))
-                        .await;
-                }
-            }
-        }
-        if opened_count > 0 {
-            self.debug_log(
-                "info",
-                &format!("{} new interface(s) active.", opened_count),
-            )
-            .await;
-        }
-        opened_count
-    }
-
-    /// Main loop: opens listeners on all interfaces, captures packets.
-    ///
-    /// pcap capture is blocking (pcap_next_ex blocks the thread). Since we're
-    /// in a tokio runtime, capture runs on dedicated threads (spawn) that send
-    /// packets via std::mpsc. The async task processes received packets without
-    /// blocking the executor.
+    /// WinDivert capture blocks on a dedicated thread (WinDivertRecv blocks),
+    /// sending packets via std::mpsc. The async task processes received
+    /// packets without blocking the executor.
     pub async fn run(&self) {
         let generation = self.prepare_start();
         self.run_generation(generation).await;
@@ -388,52 +315,54 @@ impl Sniffer {
         }
         self.debug_log(
             "info",
-            "Sniffer starting — scanning for network interfaces…",
+            "Sniffer starting — WinDivert (WFP layer)…",
         )
         .await;
 
-        // The channel lives for the entire session: `open_all` is called
-        // periodically (see `last_iface_scan` below) to pick up interfaces
-        // that appear AFTER boot, reusing the same `tx`.
+        // The channel lives for the entire session.
         let (tx, rx) = mpsc::channel::<CaptureMsg>();
-        let mut opened_ifaces: HashSet<String> = HashSet::new();
 
-        // Enumerating/opening interfaces can fail when the companion starts
-        // alongside Windows (autostart): Npcap service and network adapters
-        // aren't ready yet. Retries instead of killing the sniffer.
+        // Start WinDivert capture. Retries if the DLL or driver isn't ready
+        // yet (autostart races Windows boot — driver service may still be
+        // loading).
         loop {
             if self.generation.load(Ordering::Acquire) != generation {
                 return;
             }
             #[cfg(target_os = "windows")]
-            if !npcap_installed() {
-                let msg = "Npcap is not installed. Retrying in 15s…".to_string();
+            {
+                match crate::windivert::start_capture(
+                    tx.clone(),
+                    Arc::clone(&self.generation),
+                    generation,
+                ) {
+                    Ok(handle) => {
+                        self.windivert_handle.store(
+                            handle.load(std::sync::atomic::Ordering::Relaxed),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        self.debug_log(
+                            "info",
+                            "WinDivert active (WFP layer) — ExitLag/VPN compatible capture enabled.",
+                        )
+                        .await;
+                        break;
+                    }
+                    Err(e) => {
+                        let msg = format!("WinDivert: {}. Retrying in 5s…", e);
+                        self.debug_log("err", &msg).await;
+                        self.stats.lock().await.error = Some(msg);
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let msg = "Packet capture is only supported on Windows.".to_string();
                 self.debug_log("err", &msg).await;
                 self.stats.lock().await.error = Some(msg);
-                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                continue;
+                return;
             }
-            let devices = match pcap::Device::list() {
-                Ok(d) => d,
-                Err(e) => {
-                    let msg = format!("pcap Device::list failed: {}. Npcap installed?", e);
-                    self.debug_log("err", &msg).await;
-                    self.stats.lock().await.error = Some(msg);
-                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-                    continue;
-                }
-            };
-            let n = self
-                .open_all(&devices, &tx, &mut opened_ifaces, generation)
-                .await;
-            if n > 0 {
-                break;
-            }
-            let msg = "No network interface could be opened. Needs admin/Npcap?".to_string();
-            self.debug_log("err", &format!("{} Retrying in 15s…", msg))
-                .await;
-            self.stats.lock().await.error = Some(msg);
-            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
         }
         self.stats.lock().await.error = None;
 
@@ -453,7 +382,6 @@ impl Sniffer {
         let mut loot_container_slots: HashMap<(i64, i32), i64> = HashMap::new();
         let mut loot_objects: HashMap<i64, (i32, i32)> = HashMap::new();
         let mut last_heartbeat = Instant::now();
-        let mut last_iface_scan = Instant::now();
         let mut raw_pkts: u64 = 0;
         // Packet dedup (see PKT_DEDUP_WINDOW): Photon payload hash → last seen.
         // Amortized prune every 500 packets to avoid unbounded growth.
@@ -468,19 +396,15 @@ impl Sniffer {
 
             // Receive packets from channel (non-blocking — if no packet, continue).
             match rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                Ok(CaptureMsg::Dead(name)) => {
-                    opened_ifaces.remove(&name);
-                    self.debug_log(
-                        "warn",
-                        &format!("Capture closed on {name}; interface will be reopened."),
-                    )
-                    .await;
-                    last_iface_scan = Instant::now() - std::time::Duration::from_secs(60);
+                Ok(CaptureMsg::Dead(_)) => {
+                    // WinDivert doesn't use this, but keep the variant for
+                    // potential future capture backends.
                 }
                 Ok(CaptureMsg::Packet(l2_hint, data)) => {
                     raw_pkts += 1;
                     // Photon payload offset: L2 (ethernet/raw) + IP (real IHL) + UDP.
-                    // Hardcoding 42 breaks under VPN/ExitLag (raw IP adapters = 0 L2).
+                    // WinDivert delivers raw IP (L2=0), but the fallback logic in
+                    // photon_offset handles any L2 hint.
                     let off = match photon_offset(&data, l2_hint) {
                         Some(o) => o,
                         None => continue,
@@ -1093,28 +1017,6 @@ impl Sniffer {
                 )
                 .await;
             }
-
-            // Re-scan interfaces: picks up adapters that came up AFTER boot
-            // (WiFi still associating, VPN enabled later). Without this, a
-            // virtual interface that opened first (Hyper-V, Docker, VirtualBox)
-            // would trap the sniffer on it forever, even when the real NIC is
-            // available seconds later.
-            //
-            // Adaptive cadence: 30s while ONLINE (only watching for rare new
-            // adapters), but 5s while OFFLINE. Going offline mid-session is
-            // almost always a ROUTE CHANGE — the user enabled a VPN (Cloudflare
-            // WARP, etc.) and Albion traffic migrated to a new WinTun interface
-            // we're not yet listening on. Fast rescan rehooks as soon as that
-            // adapter gets IPv4. Offline = game closed or idle, so scanning
-            // more is free.
-            let rescan_secs = if was_online { 30 } else { 5 };
-            if last_iface_scan.elapsed().as_secs() >= rescan_secs {
-                last_iface_scan = Instant::now();
-                if let Ok(devices) = pcap::Device::list() {
-                    self.open_all(&devices, &tx, &mut opened_ifaces, generation)
-                        .await;
-                }
-            }
         }
     }
 
@@ -1211,20 +1113,6 @@ fn debug_log_path() -> Option<std::path::PathBuf> {
     dirs::document_dir().map(|d| d.join("ziggs-companion").join("companion-debug.log"))
 }
 
-/// Opens a capture on a specific device with BPF filter for Albion's 3 ports.
-fn open_device_capture(dev: &pcap::Device) -> Result<pcap::Capture<pcap::Active>, String> {
-    let builder =
-        pcap::Capture::from_device(dev.clone()).map_err(|e| format!("from_device: {}", e))?;
-    let builder = builder.promisc(true).immediate_mode(true).timeout(500);
-    let mut opened = builder
-        .open()
-        .map_err(|e| format!("open: {}. Needs admin/Npcap?", e))?;
-    opened
-        .filter("udp and (port 5056 or port 5055 or port 4535)", true)
-        .map_err(|e| format!("BPF filter: {}", e))?;
-    Ok(opened)
-}
-
 /// Compact repr of an operation's params (idx=value) — for calibrating indices.
 fn dump_params(op: &crate::photon_parser::ParsedOperation) -> String {
     use crate::photon_parser::PhotonValue;
@@ -1250,16 +1138,6 @@ fn dump_params(op: &crate::photon_parser::ParsedOperation) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// L2 header size from the interface's datalink type.
-/// Ethernet=14; NULL (BSD loopback / some VPN)=4; rest (raw IP)=0.
-fn l2_len_for(dl: pcap::Linktype) -> usize {
-    match dl.0 {
-        1 => 14, // DLT_EN10MB
-        0 => 4,  // DLT_NULL
-        _ => 0,  // DLT_RAW and similar: raw IP packet (VPN/ExitLag/TUN)
-    }
 }
 
 /// Photon payload offset within the captured frame.
@@ -1313,175 +1191,6 @@ fn albion_server_from_frame(data: &[u8], l2_hint: usize) -> Option<AodpServer> {
         return None; // Valid IP header but neither side is a known Albion server
     }
     None
-}
-
-// ── Npcap DLL path fix ─────────────────────────────────────────────────────
-// Modern Npcap (without "WinPcap API-compatible Mode") installs wpcap.dll
-// and Packet.dll in C:\Windows\System32\Npcap\ and relies on the process
-// PATH to find them. The `pcap` crate calls LoadLibrary("wpcap.dll") — if
-// PATH doesn't include the subdir, it fails with "wpcap.dll not found" even
-// though Npcap is installed. This runs ONCE at startup: reads InstallDir
-// from the registry, adds it to the process PATH, and calls
-// SetDllDirectoryW for the same dir. If Npcap isn't installed at all, this
-// is a no-op — installation is MANUAL on purpose (the free installer aborts
-// `/S`). The sniffer detects absence on its own (Device::list fails) and the
-// UI banner directs the user to manual download. No-op on non-Windows.
-#[cfg(target_os = "windows")]
-pub fn ensure_npcap_dll_path() {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::System::LibraryLoader::SetDllDirectoryW;
-    use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ,
-    };
-
-    // Npcap stores InstallDir + Version in HKLM\SOFTWARE\WOW6432Node\Npcap
-    // (64-bit) or HKLM\SOFTWARE\Npcap (32-bit). Try both.
-    let mut dir: Option<std::path::PathBuf> = None;
-    let mut version: Option<String> = None;
-    for subkey in ["SOFTWARE\\WOW6432Node\\Npcap", "SOFTWARE\\Npcap"] {
-        let mut hkey = 0isize;
-        let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-        if unsafe {
-            RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE,
-                subkey_w.as_ptr(),
-                0,
-                KEY_READ,
-                &mut hkey,
-            )
-        } != 0
-        {
-            continue;
-        }
-        // InstallDir
-        let mut len = 512u32;
-        let mut buf = vec![0u16; (len as usize / 2) + 1];
-        let valname: Vec<u16> = "InstallDir\0".encode_utf16().collect();
-        let mut ty = 0u32;
-        if unsafe {
-            RegQueryValueExW(
-                hkey,
-                valname.as_ptr(),
-                std::ptr::null_mut(),
-                &mut ty,
-                buf.as_mut_ptr() as *mut u8,
-                &mut len,
-            )
-        } == 0
-            && ty == 1
-        {
-            let nul = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-            let s = String::from_utf16_lossy(&buf[..nul]);
-            if !s.is_empty() {
-                dir = Some(std::path::PathBuf::from(s));
-            }
-        }
-        // Version (optional — informational only for now)
-        let mut len = 64u32;
-        let mut buf = vec![0u16; (len as usize / 2) + 1];
-        let valname: Vec<u16> = "Version\0".encode_utf16().collect();
-        let mut ty = 0u32;
-        if unsafe {
-            RegQueryValueExW(
-                hkey,
-                valname.as_ptr(),
-                std::ptr::null_mut(),
-                &mut ty,
-                buf.as_mut_ptr() as *mut u8,
-                &mut len,
-            )
-        } == 0
-            && ty == 1
-        {
-            let nul = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-            let s = String::from_utf16_lossy(&buf[..nul]);
-            if !s.is_empty() {
-                version = Some(s);
-            }
-        }
-        unsafe {
-            RegCloseKey(hkey);
-        }
-        if dir.is_some() {
-            break;
-        }
-    }
-    let _ = version; // reserved for future use (alert on old version, etc.)
-
-    // No Npcap at all: nothing to do here, the sniffer will report the
-    // error and the UI shows the download banner (see comment above).
-    let dir = match dir {
-        Some(d) => d,
-        None => return,
-    };
-    // Already in System32? LoadLibrary finds it on its own, no-op.
-    let sys32 = std::env::var_os("SystemRoot")
-        .map(|r| std::path::PathBuf::from(r).join("System32"))
-        .unwrap_or_default();
-    if dir == sys32 {
-        return;
-    }
-
-    // Add to process PATH (affects LoadLibrary search order).
-    if let Some(cur) = std::env::var_os("PATH") {
-        let mut parts: Vec<std::path::PathBuf> = std::env::split_paths(&cur).collect();
-        if !parts.contains(&dir) {
-            parts.push(dir.clone());
-            if let Ok(joined) = std::env::join_paths(parts) {
-                std::env::set_var("PATH", joined);
-            }
-        }
-    }
-    // SetDllDirectoryW: supplemental to PATH for the loader to find
-    // wpcap.dll even without being in the system PATH. Harmless if already
-    // in System32.
-    let wide: Vec<u16> = dir
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    unsafe {
-        SetDllDirectoryW(wide.as_ptr());
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn ensure_npcap_dll_path() {}
-
-/// Checks whether Npcap is installed (registry key exists), without
-/// modifying PATH/SetDllDirectory — used to decide whether to register
-/// autostart (see `set_autostart` in lib.rs). Low cost: only opens and
-/// closes the key, doesn't read values.
-#[cfg(target_os = "windows")]
-pub fn npcap_installed() -> bool {
-    use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, HKEY_LOCAL_MACHINE, KEY_READ,
-    };
-    for subkey in ["SOFTWARE\\WOW6432Node\\Npcap", "SOFTWARE\\Npcap"] {
-        let mut hkey = 0isize;
-        let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-        if unsafe {
-            RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE,
-                subkey_w.as_ptr(),
-                0,
-                KEY_READ,
-                &mut hkey,
-            )
-        } == 0
-        {
-            unsafe {
-                RegCloseKey(hkey);
-            }
-            return true;
-        }
-    }
-    false
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn npcap_installed() -> bool {
-    true
 }
 
 #[cfg(test)]

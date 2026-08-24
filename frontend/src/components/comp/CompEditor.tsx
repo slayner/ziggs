@@ -9,7 +9,7 @@ import { useT } from "../../i18n";
 import { ColorPicker } from "./ColorPicker";
 import { EquipStrip } from "./EquipStrip";
 import {
-  ALT_CAPABLE, DEFAULT_FN_TYPES, MAX_SLOTS, buildItemsToEquip, emptyRole,
+  ALT_CAPABLE, DEFAULT_FN_TYPES, MAX_SLOTS, buildItemsToEquip, compToDraft, emptyRole,
   fnLabel, getFnDef, itemUrl, roleToPayload, safeAltArr, sortDraftSlots, useEquipSlots,
 } from "./helpers";
 import { SpellPicker } from "./SpellPicker";
@@ -522,7 +522,8 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
     if (!draft) return;
     setSaving(true); setError(null);
     try {
-      // Filtra parties vazias antes de salvar
+      // Clona o estado atual (snapshot) para aplicar as mudanças
+      // sem afetar o draft que o usuário pode continuar editando.
       const partiesToSave = draft.parties.filter(p => p.slots.length > 0);
       const newParties: DraftParty[] = JSON.parse(JSON.stringify(partiesToSave));
       const updatedIds = new Set<number>();
@@ -544,9 +545,9 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
         name: draft.name,
         parties: newParties.map(p => ({
           name: p.name || null,
-            slots: p.slots.map(s => ({
-              id: s.id,
-              label: s.role.name || null,
+          slots: p.slots.map(s => ({
+            id: s.id,
+            label: s.role.name || null,
             fn: s.fn,
             role_ids: s.role.catalog_id !== null ? [s.role.catalog_id] : [],
           })),
@@ -558,21 +559,33 @@ export function CompEditor({ initialDraft, initialImportCode, perms, weapons, on
         onBack();
         return;
       }
-      void updated;
+      // Atualiza o draft com a resposta do backend: IDs de slots/parties
+      // recém-criados, positions normalizadas, roles com weapon_id, etc.
+      // Preserva apenas os campos de role que o backend não retorna
+      // (equip_loaded, equip) mesclando com o snapshot newParties.
       setDraft(prev => {
         if (!prev) return prev;
-        const pruned = pruneEmptyParties(prev);
+        const saved = compToDraft(updated);
+        // Mescla equip/equip_loaded do snapshot (backend não devolve esses)
+        // alinhando por slot id quando possível, senão por índice.
+        const snapById = new Map<number, DraftSlot>();
+        for (const p of newParties) for (const s of p.slots) if (s.id != null) snapById.set(s.id, s);
         return {
-          ...pruned,
-          parties: pruned.parties.map((p, pi) => ({
+          ...saved,
+          parties: saved.parties.map((p, pi) => ({
             ...p,
-            slots: p.slots.map((s, si) => ({
-              ...s,
-              role: {
-                ...s.role,
-                catalog_id: newParties[pi]?.slots[si]?.role.catalog_id ?? s.role.catalog_id,
-              },
-            })),
+            slots: p.slots.map((s, si) => {
+              const snap = s.id != null ? snapById.get(s.id) : newParties[pi]?.slots[si];
+              if (!snap) return s;
+              return {
+                ...s,
+                role: {
+                  ...s.role,
+                  equip: snap.role.equip,
+                  equip_loaded: snap.role.equip_loaded,
+                },
+              };
+            }),
           })),
         };
       });
@@ -830,7 +843,7 @@ if (!draft) return <div className="container"><p className="muted">{t("loading")
 
         <div className="comp-header comp-header-2row">
           <div className="comp-header-title">
-            <button className="btn" style={{ padding: "5px 10px" }} onClick={onBack} title={t("backToListTitle")}>
+            <button className="btn" style={{ padding: "5px 10px" }} onClick={() => { if (!dirty || window.confirm(t("unsavedChanges"))) onBack(); }} title={t("backToListTitle")}>
               <i className="ti ti-arrow-left" aria-hidden />
             </button>
             <input className="comp-name-input" value={draft.name}
