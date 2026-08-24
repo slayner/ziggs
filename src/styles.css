@@ -281,9 +281,6 @@ input, textarea, select { font-family: inherit; }
 .ck-side-tab.disabled { cursor: default; }
 .ck-side-tab.disabled:hover { background: transparent; color: var(--hint); }
 .ck-side-tab.disabled .ck-side-tab-toggle { cursor: pointer; }
-/* Locked tab: Npcap missing — clickable (opens tutorial) but visually dimmed. */
-.ck-side-tab.locked { opacity: 0.55; }
-.ck-side-tab.locked:hover { opacity: 0.8; background: var(--surface-2); }
 .ck-side-tab.expanded { padding-bottom: 10px; }
 .ck-side-tab-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -321,18 +318,6 @@ input, textarea, select { font-family: inherit; }
 .ck-mini-region-label { font-size: 8px; font-weight: 700; letter-spacing: 0.08em; color: var(--hint); }
 .ck-mini-region-conn { font-size: 10px; font-weight: 600; color: var(--text); }
 .ck-mini-region-ms { font-size: 11px; font-weight: 600; color: var(--gold); }
-
-/* ── Npcap banner in sidebar ── */
-.ck-side-npcap {
-  flex-shrink: 0;
-  flex-direction: column; align-items: stretch; gap: 6px;
-  padding: 8px 10px;
-  margin: 0 6px 6px;
-  border: 1px solid var(--orange);
-  border-left: 2px solid var(--orange);
-  background: var(--orange-soft);
-}
-.ck-side-npcap .ck-npcap-hint { display: block; }
 
 /* ── Sidebar footer: status + config ── */
 .ck-side-foot {
@@ -701,17 +686,6 @@ input, textarea, select { font-family: inherit; }
 .ck-internet-state.ready { color: var(--gold); }
 .ck-internet-state.off { color: var(--hint); }
 .ck-internet-foot { display: flex; justify-content: space-between; gap: 14px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); color: var(--hint); font-size: 10px; }
-
-.ck-npcap-steps {
-  list-style: none; display: flex; flex-direction: column; gap: 8px;
-  margin: 4px 0 16px; padding: 0;
-}
-.ck-npcap-steps li {
-  font-size: 13px; line-height: 1.5; color: var(--text);
-  padding: 8px 10px; border: 1px solid var(--border); border-left: 2px solid var(--orange);
-  background: var(--surface-2);
-}
-.ck-npcap-modal-actions { display: flex; gap: 8px; align-items: center; }
 
 /* ── Buttons ── */
 /* Neutral chip button style. Active/primary states turn gold; .primary/.danger replace the old filled "active" buttons. Window buttons and toggles keep their own conventions. */

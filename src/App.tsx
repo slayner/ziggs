@@ -291,9 +291,6 @@ export default function App() {
   // tab switching.
   const [dmgPartyOnly, setDmgPartyOnly] = useState(false);
   const [dmgVsPlayers, setDmgVsPlayers] = useState(false);
-  // Npcap tutorial shown every session while Npcap is missing. Dismissing it
-  // only hides the modal; the sidebar banner remains.
-  const [npcapTutorialDismissed, setNpcapTutorialDismissed] = useState(false);
   // Tunnel vs direct latency history lives in App, not TunnelHero, to survive
   // tab switching. 120 samples × 5s = 10 min.
   const [hist, setHist] = useState<{ d: number | null; tn: number | null }[]>([]);
@@ -394,7 +391,6 @@ export default function App() {
     );
   }
 
-  const npcapMissing = !!(sniffStats?.error && /npcap/i.test(sniffStats.error));
   const playerName = sniffStats?.player_name || "";
   const zone = sniffStats?.last_zone || "unknown";
   const up = Math.max(0, Math.floor((nowTs - sessionStart.current) / 1000));
@@ -404,10 +400,6 @@ export default function App() {
   // disabled).
   if (tab === "damage" && !config.collect_damage_meter) setTab("route");
   if (tab === "loot" && !config.collect_auto_lootlog) setTab("route");
-
-  // Npcap missing: Damage/Loot tabs are click-disabled but show tutorial on click.
-  const damageLocked = npcapMissing;
-  const lootLocked = npcapMissing;
 
   return (
     <div className="ck-root">
@@ -484,38 +476,25 @@ export default function App() {
             />
             <SideTab
               label={t("navDamage")}
-              value={damageLocked ? "🔒" : fmtFull(sniffStats?.damage_total ?? 0)}
+              value={fmtFull(sniffStats?.damage_total ?? 0)}
               valueTone="ok"
               selected={tab === "damage"}
-              onSelect={() => damageLocked ? setNpcapTutorialDismissed(false) : setTab("damage")}
+              onSelect={() => setTab("damage")}
               onToggle={config.collect_damage_meter ? () => updateConfig("collect_damage_meter", false) : () => updateConfig("collect_damage_meter", true)}
               toggleOn={config.collect_damage_meter}
-              inspectable={config.collect_damage_meter && !damageLocked}
-              locked={damageLocked}
+              inspectable={config.collect_damage_meter}
             />
             <SideTab
               label="Lootlog"
-              value={lootLocked ? "🔒" : String(sniffStats?.loot_count ?? 0)}
+              value={String(sniffStats?.loot_count ?? 0)}
               valueTone="ok"
               selected={tab === "loot"}
-              onSelect={() => lootLocked ? setNpcapTutorialDismissed(false) : setTab("loot")}
+              onSelect={() => setTab("loot")}
               onToggle={config.collect_auto_lootlog ? () => updateConfig("collect_auto_lootlog", false) : () => updateConfig("collect_auto_lootlog", true)}
               toggleOn={config.collect_auto_lootlog}
-              inspectable={config.collect_auto_lootlog && !lootLocked}
-              locked={lootLocked}
+              inspectable={config.collect_auto_lootlog}
             />
           </nav>
-
-          {/* Npcap missing banner inside the sidebar. Manual install only. */}
-          {npcapMissing && (
-            <div className="ck-npcap ck-side-npcap">
-              <span>{t("npcapNeeded")}</span>
-              <button className="btn small" onClick={() => invoke("open_npcap_download")}>
-                {t("npcapInstall")}
-              </button>
-              <span className="ck-npcap-hint">{t("npcapHint")}</span>
-            </div>
-          )}
 
           {/* Sidebar footer: player/map/Albion status + config. Always visible. */}
           <div className="ck-side-foot">
@@ -578,36 +557,7 @@ export default function App() {
               <button className="ck-modal-close" onClick={() => setGearOpen(false)} aria-label="close">✕</button>
             </div>
             <div className="ck-modal-body">
-              <ConfigTab config={config} update={updateConfig} lang={pref} setLang={setPref} npcapMissing={npcapMissing} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Npcap tutorial shown every session while Npcap is missing. Dismissal
-          is per-session; the sidebar banner remains. */}
-      {npcapMissing && !npcapTutorialDismissed && (
-        <div className="ck-modal-backdrop" onClick={() => setNpcapTutorialDismissed(true)}>
-          <div className="ck-modal" onClick={e => e.stopPropagation()}>
-            <div className="ck-modal-head">
-              <h2>{t("npcapTutorialTitle")}</h2>
-              <button className="ck-modal-close" onClick={() => setNpcapTutorialDismissed(true)} aria-label="close">✕</button>
-            </div>
-            <div className="ck-modal-body">
-              <p className="card-desc">{t("npcapTutorialIntro")}</p>
-              <ol className="ck-npcap-steps">
-                <li>{t("npcapStep1")}</li>
-                <li>{t("npcapStep2")}</li>
-                <li>{t("npcapStep3")}</li>
-              </ol>
-              <div className="ck-npcap-modal-actions">
-                <button className="btn" onClick={() => invoke("open_npcap_download")}>
-                  {t("npcapInstall")}
-                </button>
-                <button className="btn small" onClick={() => setNpcapTutorialDismissed(true)}>
-                  {t("npcapDismiss")}
-                </button>
-              </div>
+              <ConfigTab config={config} update={updateConfig} lang={pref} setLang={setPref} />
             </div>
           </div>
         </div>
@@ -1287,13 +1237,12 @@ function TunnelHero({ config, tunnelStatus, hist }: {
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 function ConfigTab({
-  config, update, lang, setLang, npcapMissing,
+  config, update, lang, setLang,
 }: {
   config: CompanionConfig;
   update: (key: keyof CompanionConfig, value: unknown) => Promise<void>;
   lang: LangPref;
   setLang: (l: LangPref) => void;
-  npcapMissing: boolean;
 }) {
   const t = useT();
   return (
@@ -1318,8 +1267,6 @@ function ConfigTab({
         <h2>{t("cfgSystem")}</h2>
         <ToggleRow
           label={t("autostart")} on={config.autostart} onChange={(v) => update("autostart", v)}
-          hint={config.autostart && npcapMissing ? t("npcapAutostartHint") : undefined}
-          hintColor="orange"
         />
         <ToggleRow label={t("minimizeTray")} on={config.minimize_to_tray} onChange={(v) => update("minimize_to_tray", v)} />
       </div>

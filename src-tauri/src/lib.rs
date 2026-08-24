@@ -17,6 +17,7 @@ pub mod sniffer;
 pub mod transfer;
 pub mod tunnel;
 pub mod tunnel_presets;
+pub mod windivert;
 pub mod winutil;
 pub mod zone_detect;
 
@@ -139,9 +140,7 @@ async fn set_config(
     if changed_autostart {
         #[cfg(target_os = "windows")]
         {
-            // Without Npcap the companion does nothing useful on boot — skip
-            // registering the task even if the toggle is on.
-            let want = cfg.autostart && sniffer::npcap_installed();
+            let want = cfg.autostart;
             let _ = set_autostart(want);
         }
         #[cfg(not(target_os = "windows"))]
@@ -661,19 +660,6 @@ async fn save_lootlog_csv(
     }
     let _ = app.opener().reveal_item_in_dir(&path);
     Ok(path)
-}
-
-/// Opens the Npcap download page in the user's browser.
-///
-/// Installation is intentionally manual: the free Npcap installer ABORTs /S
-/// ("silent installation is only supported in Npcap OEM") and the free license
-/// prohibits redistribution inside our installer. After installing with default
-/// options, the sniffer's 15s retry loop picks it up without restarting the app.
-#[tauri::command]
-async fn open_npcap_download(app: tauri::AppHandle) -> Result<(), String> {
-    app.opener()
-        .open_url("https://npcap.com/#download", None::<&str>)
-        .map_err(|e| format!("failed to open browser: {e}"))
 }
 
 /// Opens any URL in the default browser. Used for legal links ("Terms",
@@ -1511,7 +1497,7 @@ async fn apply_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
     let _ = app.emit("update-status", "installed");
     stop_tunnel_and_wait(&app.state::<AppState>().tunnel).await;
     // app.restart() relaunches WITHOUT admin — the companion needs admin for
-    // Npcap/wintun. Re-launch elevated via ShellExecuteW("runas") and exit,
+    // WinDivert/wintun. Re-launch elevated via ShellExecuteW("runas") and exit,
     // same as the boot-time elevation path. The new process hits the
     // is_windows_admin() check, passes, and continues normally.
     #[cfg(target_os = "windows")]
@@ -1561,28 +1547,21 @@ pub fn run() {
     crash_report::install_hook();
     crash_report::init_logging();
 
-    // Modern Npcap (without WinPcap mode) puts wpcap.dll in a subdir that the
-    // Windows loader can't find without PATH/SetDllDirectory. Must run BEFORE
-    // any pcap::Device::list — after the first failed call the DLL is cached
-    // as "not found" and subsequent fixes don't help.
-    sniffer::ensure_npcap_dll_path();
-
     let install_id = config::install_id();
     let mut cfg = config::load();
     cfg.install_id = install_id;
 
-    // Start normally without Npcap so the UI can offer the manual install.
+    // Admin is required for WinDivert (packet capture) and wintun (tunnel).
     // In autostart, the Task Scheduler opens with HighestAvailable = no prompt.
     //
     // Anti-loop guard: the elevated child inherits this environment variable.
     // If it still doesn't appear as admin (user denied UAC,
     // or rare bug in is_windows_admin), do NOT re-launch again — show a fatal
-    // MessageBox and exit. Never continues without admin: the sniffer can't
-    // open captures without Npcap+admin, and the user needs to know.
+    // MessageBox and exit.
     #[cfg(target_os = "windows")]
     {
         let already_tried = std::env::var_os("ZIGGS_ELEV_TRIED").is_some();
-        if sniffer::npcap_installed() && !is_windows_admin() {
+        if !is_windows_admin() {
             if already_tried {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
                     MessageBoxW, MB_ICONERROR, MB_OK,
@@ -1590,7 +1569,7 @@ pub fn run() {
                 let title: Vec<u16> = "Ziggs Companion\0".encode_utf16().collect();
                 let msg: Vec<u16> =
                     "Ziggs Companion requires administrator privileges to capture packets \
-                     (Npcap) and manage the tunnel (wintun).\n\n\
+                     (WinDivert) and manage the tunnel (wintun).\n\n\
                      If you declined the UAC prompt, try again and accept it. \
                      If the problem persists, run the companion directly as administrator \
                      (right-click → Run as administrator).\0"
@@ -1737,12 +1716,7 @@ pub fn run() {
             if autostart_on {
                 #[cfg(target_os = "windows")]
                 {
-                    // Without Npcap the companion does nothing useful on boot —
-                    // skip registering. Re-evaluated each startup: if the user
-                    // installs Npcap later, the next launch registers automatically.
-                    if sniffer::npcap_installed() {
-                        let _ = set_autostart(true);
-                    }
+                    let _ = set_autostart(true);
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -2092,7 +2066,6 @@ pub fn run() {
             stop_sniffer,
             get_sniff_stats,
             get_sniffer_debug,
-            open_npcap_download,
             open_url,
             companion_login,
             companion_poll_auth,
