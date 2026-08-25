@@ -47,7 +47,6 @@ from app.models.lootlog import LootLogSubmission
 from app.models.tenancy import Guild, User
 from app.services import companion_scan, companion_kill_scan, lootlog as lootlog_svc, market_history, prices, profile_warmer
 from app.domain.states import EventState
-from app.models.companion import RANGE_SIZE
 from app.models.prices import ItemPriceLatest
 from app.services.player_tracker import HOSTS
 
@@ -600,9 +599,11 @@ async def scan_claim(
 class ScanReportIn(BaseModel):
     task_id: int
     region: str
-    found: list[int] = Field(default_factory=list, max_length=RANGE_SIZE)
-    missing: list[int] = Field(default_factory=list, max_length=RANGE_SIZE)
-    errors: list[int] = Field(default_factory=list, max_length=RANGE_SIZE)
+    # max_length generoso: o range real pode ter >RANGE_SIZE IDs quando há
+    # IDs conhecidos no meio dos candidatos (companion sonda [start..=end]).
+    found: list[int] = Field(default_factory=list, max_length=200)
+    missing: list[int] = Field(default_factory=list, max_length=200)
+    errors: list[int] = Field(default_factory=list, max_length=200)
     # Nick configurado no companion — crédito (found_by) nas batalhas novas.
     character_name: str | None = None
 

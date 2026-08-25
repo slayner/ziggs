@@ -221,11 +221,15 @@ async def report_task(
     if reported_region != task.region:
         raise ValueError("região não corresponde à tarefa")
 
+    # Tamanho real do range pode ser > RANGE_SIZE quando há IDs conhecidos
+    # no meio dos candidatos (o companion sonda [start..=end] inteiro, não
+    # só os candidatos — ele não sabe quais são known). Usa o span real.
+    task_span = task.battle_id_end - task.battle_id_start + 1
     partitions = (found, missing, errors)
-    if any(len(part) > RANGE_SIZE for part in partitions):
+    if any(len(part) > task_span for part in partitions):
         raise ValueError("partição grande demais")
     reported = found + missing + errors
-    if len(reported) > RANGE_SIZE or len(reported) != len(set(reported)):
+    if len(reported) > task_span or len(reported) != len(set(reported)):
         raise ValueError("IDs duplicados ou em excesso")
     if any(aid < task.battle_id_start or aid > task.battle_id_end for aid in reported):
         raise ValueError("ID fora do range reivindicado")

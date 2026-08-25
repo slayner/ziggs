@@ -474,52 +474,240 @@ def discover_cached_render_misses(cache_dir: Path = _CACHE_DIR) -> list[tuple[st
 
 
 # --- Pre-warm: baixa ícones que faltam no cache de disco ----------------------
-# Roda como task no lifespan. Lê item_names.json, checa quais IDs não têm PNG
-# no disco, e baixa com rate limit conservador (sem sobrecarregar a CDN).
-# Uma vez que o cache está quente, o worker é praticamente no-op.
+# Roda como task no lifespan. Lê item_names.json + items.txt, checa quais IDs
+# não têm PNG no disco, e baixa com rate limit conservador (sem sobrecarregar a
+# CDN). Uma vez que o cache está quente, o worker é praticamente no-op.
+#
+# Cobertura:
+#   - Todos os UniqueNames de item_names.json × qualidades 0-5 × tamanhos 0+128
+#   - Crystal weapons pelo nome EN (a CDN não os serve por UniqueName)
+#   - .missing markers são re-testados a cada ciclo (itens novos do jogo)
 
-_PRERENDER_INTERVAL = 3600  # 1h entre ciclos completos
-_PRERENDER_BATCH = 50       # ícones por ciclo (pouco a pouco, sem flood)
-_PRERENDER_DELAY = 0.3      # segundos entre cada fetch
+_PRERENDER_INTERVAL = 600         # 10min entre ciclos quando há trabalho (1h quando idle)
+_PRERENDER_BATCH = 500            # ícones por ciclo (batch grande = catch-up rápido)
+_PRERENDER_CONCURRENCY = 8        # fetches simultâneos (mesmo limite do semáforo)
+_PRERENDER_DELAY = 0.15           # segundos entre batches concorrentes
+_PRERENDER_MISSING_RETEST = 86400  # re-testa .missing a cada 24h
 
 _ITEM_NAMES_FILE = Path(__file__).resolve().parents[3] / "data" / "item_names.json"
+_ITEMS_TXT_FILE = Path(__file__).resolve().parents[3] / "data" / "ao-bin-dump" / "items.txt"
+
+# Crystal weapons: UniqueName → (EN name base, tier). O render CDN só os serve
+# pelo nome EN ("Elder's Infinity Blade@2"), não pelo UniqueName.
+_CRYSTAL_TIER_PREFIX = {4: "Adept's", 5: "Expert's", 6: "Master's",
+                         7: "Grandmaster's", 8: "Elder's"}
+
+# Crystal weapon base IDs (do albion-items.ts artAll). A CDN só os serve
+# pelo nome EN, não pelo UniqueName. Hard-coded para garantir cobertura
+# mesmo sem items.txt ou item_names.json com essas entradas.
+_CRYSTAL_WEAPON_BASES: dict[str, str] = {
+    "MAIN_SWORD": "Infinity Blade",
+    "2H_GLAIVE": "Rift Glaive",
+    "2H_ARCANESTAFF": "Astral Staff",
+    "MAIN_ARCANESTAFF": "Arcane Staff",
+    "MAIN_CURSEDSTAFF": "Rotcaller Staff",
+    "2H_FROSTSTAFF": "Arctic Staff",
+    "MAIN_FROSTSTAFF": "Frost Staff",
+    "2H_FIRESTAFF": "Great Fire Staff",
+    "MAIN_FIRESTAFF": "Flamewalker Staff",
+    "2H_HOLYSTAFF": "Exalted Staff",
+    "MAIN_HOLYSTAFF": "Holy Staff",
+    "MAIN_NATURESTAFF": "Forgebark Staff",
+    "2H_NATURESTAFF": "Great Nature Staff",
+    "2H_DOUBLEBLADEDSTAFF": "Phantom Twinblade",
+    "2H_BOW": "Skystrider Bow",
+    "2H_DUALCROSSBOW": "Arclight Blasters",
+    "2H_DAGGERPAIR": "Twin Slayers",
+    "2H_SCYTHE": "Crystal Reaper",
+    "2H_HAMMER": "Truebolt Hammer",
+    "MAIN_MACE": "Dreadstorm Monarch",
+    "2H_KNUCKLES": "Forcepulse Bracers",
+    "2H_SHAPESHIFTER": "Stillgaze Staff",
+    "OFF_SHIELD": "Unbreakable Ward",
+    "OFF_TOME": "Timelocked Grimoire",
+    "OFF_TORCH": "Blueflame Torch",
+}
+
+
+def _load_items_txt() -> dict[str, str]:
+    """Lê items.txt (UniqueName: EN name) — fonte que cobre crystal weapons."""
+    if not _ITEMS_TXT_FILE.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in _ITEMS_TXT_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        uid, _, en_name = line.partition(":")
+        uid = uid.strip()
+        en_name = en_name.strip()
+        if uid and en_name:
+            out[uid] = en_name
+    return out
+
+
+def _crystal_en_name(uid: str, items_txt: dict[str, str]) -> str | None:
+    """Converte UniqueName de crystal weapon em nome EN para o render CDN.
+    T4_ARTEFACT_MAIN_SWORD_CRYSTAL → "Adept's Infinity Blade@0"
+    (O items.txt tem "Adept's Infinite Crystal" — NÃO é o nome do render.
+    O nome do render vem do albion-items.ts: crystalRenderName.)
+    """
+    m = re.match(r"T(\d+)_ARTEFACT_(.+)_CRYSTAL(@\d+)?$", uid)
+    if not m:
+        return None
+    tier = int(m.group(1))
+    prefix = _CRYSTAL_TIER_PREFIX.get(tier, "Elder's")
+    base = m.group(2)
+    ench = m.group(3) or "@0"
+    name_en = _CRYSTAL_WEAPON_BASES.get(base)
+    if not name_en:
+        return None
+    return f"{prefix} {name_en}{ench}"
+
+
+def _build_prerender_queue() -> list[tuple[str, int, int]]:
+    """Monta a lista de (key, quality, size) para pré-renderizar.
+    Inclui UniqueNames de item_names.json e crystal weapons por nome EN.
+
+    Ordem de prioridade:
+    1. Crystal weapons por nome EN (a CDN não os serve por UniqueName)
+    2. Itens normais por UniqueName
+    Dentro de cada grupo: size=128 primeiro (default do frontend), depois size=0.
+    """
+    seen: set[tuple[str, int, int]] = set()
+    crystal_queue: list[tuple[str, int, int]] = []
+    normal_queue: list[tuple[str, int, int]] = []
+
+    names_data = {}
+    if _ITEM_NAMES_FILE.exists():
+        try:
+            names_data = json.loads(_ITEM_NAMES_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    items_txt = _load_items_txt()
+
+    # --- Crystal weapons por nome EN (prioridade máxima) ---
+    # Gera diretamente da lista hard-coded: T4-T8 × 25 base IDs × @0-@4.
+    for tier in (4, 5, 6, 7, 8):
+        prefix = _CRYSTAL_TIER_PREFIX[tier]
+        for base, name_en in _CRYSTAL_WEAPON_BASES.items():
+            for ench in range(5):
+                en_name = f"{prefix} {name_en}@{ench}"
+                for q in range(6):
+                    for s in (128, 0):
+                        key = (en_name, q, s)
+                        if key not in seen:
+                            seen.add(key)
+                            crystal_queue.append(key)
+
+    # Also check items.txt and item_names.json for crystal UIDs (fallback)
+    for uid in items_txt:
+        en_name = _crystal_en_name(uid, items_txt)
+        if en_name:
+            for ench in range(5):
+                ench_name = en_name.replace("@0", f"@{ench}")
+                for q in range(6):
+                    for s in (128, 0):
+                        key = (ench_name, q, s)
+                        if key not in seen:
+                            seen.add(key)
+                            crystal_queue.append(key)
+
+    for uid in (names_data.keys() if isinstance(names_data, dict) else []):
+        en_name = _crystal_en_name(uid, {})
+        if en_name:
+            for ench in range(5):
+                ench_name = en_name.replace("@0", f"@{ench}")
+                for q in range(6):
+                    for s in (128, 0):
+                        key = (ench_name, q, s)
+                        if key not in seen:
+                            seen.add(key)
+                            crystal_queue.append(key)
+
+    # --- Itens normais por UniqueName ---
+    for uid in (names_data.keys() if isinstance(names_data, dict) else []):
+        for q in range(6):
+            for s in (128, 0):
+                key = (uid, q, s)
+                if key not in seen:
+                    seen.add(key)
+                    normal_queue.append(key)
+
+    return crystal_queue + normal_queue
+
+
+async def _prerender_one(key: str, quality: int, size: int, log: logging.Logger) -> bool:
+    """Baixa um render se faltar no cache. Retorna True se baixou."""
+    cache_path = _cache_path("item", key, quality, size)
+    if _cache_has_real_render(cache_path, key):
+        return False
+    try:
+        await _cached_render("item", key, cache_path, _request_params("item", quality, size))
+        return _cache_has_real_render(cache_path, key)
+    except Exception:
+        return False
 
 
 async def run_prerender_forever() -> None:
-    """Pré-aquece o cache de ícones baixando renders que faltam da CDN da Albion."""
+    """Pré-aquece o cache de ícones baixando renders que faltam da CDN da Albion.
+
+    Cobertura completa: todos os itens × qualidades 0-5 × tamanhos 0+128,
+    incluindo crystal weapons por nome EN. Batch concorrente para catch-up
+    rápido. Re-testa .missing markers a cada 24h (itens novos do jogo)."""
     log = logging.getLogger("render.prerender")
-    await asyncio.sleep(30)  # deixa o startup terminar primeiro
+    log.setLevel(logging.INFO)
+    await asyncio.sleep(30)
+    last_missing_retest = 0.0
+
     while True:
         try:
-            if not _ITEM_NAMES_FILE.exists():
-                log.info("item_names.json ausente — pulando ciclo")
+            queue = _build_prerender_queue()
+            if not queue:
+                log.info("nenhum item para pré-aquecer")
             else:
-                data = json.loads(_ITEM_NAMES_FILE.read_text(encoding="utf-8"))
-                all_ids = list(data.keys()) if isinstance(data, dict) else []
-                missing = []
-                for item_id in all_ids:
-                    # só checa qualidade 0, tamanho 0 (o default do site)
-                    cache_path = _CACHE_DIR / f"{quote(item_id, safe='')}_q0_s0.png"
-                    if _cached_missing_render(cache_path, str(cache_path)) is None and not _cache_has_real_render(cache_path, item_id):
-                        missing.append(item_id)
+                missing: list[tuple[str, int, int]] = []
+                for key, q, s in queue:
+                    cp = _cache_path("item", key, q, s)
+                    has_marker = _missing_path(cp).exists()
+                    if has_marker:
+                        # Re-testa .missing periodicamente (itens novos do jogo)
+                        continue
+                    if not _cache_has_real_render(cp, key):
+                        missing.append((key, q, s))
+
+                # Re-testa .missing markers a cada 24h
+                now_mono = time.monotonic()
+                if now_mono - last_missing_retest > _PRERENDER_MISSING_RETEST:
+                    last_missing_retest = now_mono
+                    retried = 0
+                    for key, q, s in queue:
+                        cp = _cache_path("item", key, q, s)
+                        if _missing_path(cp).exists():
+                            _missing_path(cp).unlink(missing_ok=True)
+                            _RECORDED_MISSES.discard(("item", key, q, s))
+                            if not _cache_has_real_render(cp, key):
+                                missing.append((key, q, s))
+                            retried += 1
+                    if retried:
+                        log.info("re-testando %d .missing markers", retried)
+
                 if missing:
                     batch = missing[:_PRERENDER_BATCH]
                     log.info("pré-aquecendo %d/%d ícones restantes", len(batch), len(missing))
                     fetched = 0
-                    for item_id in batch:
-                        cache_path = _CACHE_DIR / f"{quote(item_id, safe='')}_q0_s0.png"
-                        try:
-                            await _cached_render("item", item_id, cache_path, {})
-                            if _missing_path(cache_path).exists():
-                                continue
-                            if _cache_has_real_render(cache_path, item_id):
-                                fetched += 1
-                        except Exception:
-                            pass  # erro individual não aborta o batch
+                    for i in range(0, len(batch), _PRERENDER_CONCURRENCY):
+                        chunk = batch[i:i + _PRERENDER_CONCURRENCY]
+                        tasks = [_prerender_one(k, q, s, log) for k, q, s in chunk]
+                        results = await asyncio.gather(*tasks, return_exceptions=True)
+                        fetched += sum(1 for r in results if r is True)
                         await asyncio.sleep(_PRERENDER_DELAY)
                     log.info("pré-aquecimento: %d ícones baixados", fetched)
+                    await asyncio.sleep(_PRERENDER_INTERVAL)
                 else:
-                    log.info("cache completo — %d ícones", len(all_ids))
+                    log.info("cache completo — %d combinações", len(queue))
+                    await asyncio.sleep(3600)
         except Exception as e:
             log.warning("erro no ciclo de pré-aquecimento: %s", e)
-        await asyncio.sleep(_PRERENDER_INTERVAL)
+            await asyncio.sleep(_PRERENDER_INTERVAL)
