@@ -44,6 +44,15 @@ const S = {
     adPlaceholder: "Espaço reservado para anúncio",
     adblockMessage: "Detectamos um bloqueador de anúncios. Considere desativá-lo pra esse espaço — ajuda a manter o Ziggs no ar.",
 
+    // AffiliateBanner
+    affCta: "Ver oferta",
+    affExitlagTitle: "Reduza o ping no Albion",
+    affExitlagDesc: "Feito por brasileiros, focado em Albion Online",
+    affNordvpnTitle: "VPN rápida pra gaming",
+    affNordvpnDesc: "Servidores otimizados para jogos online",
+    affSurfsharkTitle: "VPN barata e confiável",
+    affSurfsharkDesc: "Boa performance sem pagar caro",
+
     // Login
     loginTagline: "Controle de guildas de Albion Online",
     loginDemo: "Ver demonstração (sem login)",
@@ -969,6 +978,15 @@ const S = {
     adPlaceholder: "Ad space reserved",
     adblockMessage: "We detected an ad blocker. Consider disabling it for this space — it helps keep Ziggs running.",
 
+    // AffiliateBanner
+    affCta: "View deal",
+    affExitlagTitle: "Lower your ping in Albion",
+    affExitlagDesc: "Made by Brazilians, focused on Albion Online",
+    affNordvpnTitle: "Fast VPN for gaming",
+    affNordvpnDesc: "Gaming-optimized servers",
+    affSurfsharkTitle: "Cheap and reliable VPN",
+    affSurfsharkDesc: "Good performance without paying much",
+
     loginTagline: "Albion Online guild management",
     loginDemo: "View demo (no login)",
     loginHint: "Discord login only · free and premium versions",
@@ -1885,6 +1903,15 @@ const S = {
     switchServer: "Cambiar servidor", inviteBot: "Invitar al bot", discordBot: "Bot de Discord",
     adPlaceholder: "Espacio reservado para anuncio",
     adblockMessage: "Detectamos un bloqueador de anuncios. Considera desactivarlo para este espacio — ayuda a mantener Ziggs en línea.",
+
+    // AffiliateBanner
+    affCta: "Ver oferta",
+    affExitlagTitle: "Reduce el ping en Albion",
+    affExitlagDesc: "Hecho por brasileños, enfocado en Albion Online",
+    affNordvpnTitle: "VPN rápida para gaming",
+    affNordvpnDesc: "Servidores optimizados para juegos online",
+    affSurfsharkTitle: "VPN barata y confiable",
+    affSurfsharkDesc: "Buen rendimiento sin pagar mucho",
 
     loginTagline: "Gestión de gremios de Albion Online",
     loginDemo: "Ver demostración (sin inicio de sesión)",

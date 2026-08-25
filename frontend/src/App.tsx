@@ -3,6 +3,7 @@ import { useLocation, navigate, navigateReplace, goBack, parseBattleRoute, parse
 import { api, setGuild, onBackendDown, setBackendDown, NO_PERMS, type Me, type Permissions, type SiteGuild } from "./api";
 import { useLang, useT, useServer, LANG_LABELS, LANG_FULL, SERVER_LABELS, SERVER_FULL, REGION_LABELS, type Lang, type GameServer } from "./i18n";
 import AdBanner from "./components/AdBanner";
+import AffiliateBanner from "./components/AffiliateBanner";
 import CookieConsent from "./components/CookieConsent";
 import { TermsPage, PrivacyPage, CookiesPage, AboutPage, ContactPage } from "./components/LegalPages";
 
@@ -875,6 +876,9 @@ export default function App() {
         )}
       </Suspense>
       </ErrorBoundary>
+      {/* Banner de afiliados — rotativo, sempre visível, sem precisar
+          de login ou de rede de ads. Mostra ExitLag/NordVPN/Surfshark. */}
+      <AffiliateBanner />
       </div>
       {!eventRoute && !publicEventRoute && <SiteFooter t={t} />}
       <CookieConsent />
