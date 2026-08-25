@@ -279,7 +279,8 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     """Calcula o preview de pagamento. Regear é SEMPRE calculado (universal);
     o lootsplit_mode da guilda decide se/como o valor da tab vira split.
     Participantes IRREGULARES ficam fora do split (sem linha, sem fatia do
-    pool) — mortes/regear seguem pelas linhas explícitas de EventDeath."""
+    pool). O único caminho financeiro de regear é o RegearRequest (screenshot
+    aprovada na thread do evento); EventDeath é apenas informativo (reconcile)."""
     guild = db.get(Guild, ev.guild_id) if db is not None else None
     mode = get_lootsplit_mode(guild)
     guild_tax_pct = get_guild_tax_percent(guild) if mode != "none" else 0
@@ -288,11 +289,10 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     total_pct = sum(p.percent for p in valid_participants)
     rows: dict[int | None, dict] = {}
 
-    total_regear_approved = sum(d.silver_value for d in ev.deaths if d.approved)
-
     # Regears da thread do evento (landmark). Em modos tab (leftover/guild_backed)
     # saem da tab — somam no total_regear e são atribuídos ao requester por linha.
     # Em full/none são independentes (débito de banco no approve) — não entram aqui.
+    total_regear_approved = 0
     thread_regear_rows: list[tuple[int | None, str | None, int]] = []
     if db is not None and mode in ("leftover", "guild_backed"):
         for r in db.scalars(select(RegearRequest).where(
@@ -396,28 +396,9 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
             "total": lootsplit,
         }
 
-    # Regear é universal agora — toda morte aprovada conta, em qualquer modo.
-    for death in ev.deaths:
-        if not death.approved:
-            continue
-        key = death.user_id
-        if key in rows:
-            rows[key]["regear"] += death.silver_value
-            rows[key]["total"] += death.silver_value
-        else:
-            # Morte manual de alguém não listado como participante
-            rows[key] = {
-                "user_id": death.user_id,
-                "display_name": death.display_name,
-                "percent": 0,
-                "lootsplit": 0,
-                "regear": death.silver_value,
-                "scout": 0,
-                "total": death.silver_value,
-            }
-
     # Regears da thread (modos tab) — atribui ao requester (quem postou a print
-    # = quem morreu). Mesma lógica de linha da morte manual.
+    # = quem morreu). Único caminho financeiro de regear; EventDeath é só
+    # informativo (reconcile) e não entra no payout.
     for uid, name, amt in thread_regear_rows:
         if uid in rows:
             rows[uid]["regear"] += amt
@@ -1368,11 +1349,12 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
     Participantes SEMPRE recebem prata (nunca é descontado). Em "leftover" e
     "guild_backed" o regear já saiu da PRÓPRIA tab (embutido no
     participant_pool calculado por _calc_payout) — o banco não é tocado. Em
-    "none"/"full" o regear é custo do banco da guilda, que pode ficar negativo
-    (ex.: CTA encerrado em perda). Em "guild_backed", se o regear tiver comido
-    mais que a tab (guild_deficit_total > 0), o rombo é descontado igualmente
-    do saldo de EconomyBalance de TODO membro da guilda (GuildMember) — ao
-    contrário de "leftover", que simplesmente zera o split nesse caso.
+    "none"/"full" o regear é debitado do banco no momento do approve
+    (regear.update_request), não aqui. Em "guild_backed", se o regear tiver
+    comido mais que a tab (guild_deficit_total > 0), o rombo é descontado
+    igualmente do saldo de EconomyBalance de TODO membro da guilda
+    (GuildMember) — ao contrário de "leftover", que simplesmente zera o split
+    nesse caso.
     """
     payout = _calc_payout(ev, db)
     payout_map = {r.user_id: r for r in payout.payouts}
@@ -1407,6 +1389,12 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
         f" | excluidos: {'; '.join(skipped)}" if skipped else "",
     )
 
+    # Regear em modos non-tab (none/full) já foi debitado do banco no
+    # update_request (regear.update_request). Aqui só há débito se houver
+    # thread_regear_rows em modo tab, mas nesse caso o participant_pool já
+    # embute o regear (não toca o banco). Esta linha é legacy e só debita se
+    # total_regear > 0 em modo non-tab — o que não acontece mais (EventDeath
+    # foi removido do payout). Mantida como segurança.
     if payout.total_regear > 0 and payout.lootsplit_mode not in ("leftover", "guild_backed"):
         guild = db.get(Guild, ev.guild_id)
         if guild is not None:

@@ -283,8 +283,22 @@ def update_request(
     Um pedido pendente pode ser editado e seguir uma única vez para paid,
     denied ou removed. `paid` é imutável; repetir `status=paid` sem alterações
     é idempotente e não gera segundo débito.
+
+    Race condition: dois admins aprovando simultaneamente podiam debitar o
+    banco 2x. O row é lido com SELECT FOR UPDATE quando o target é 'paid',
+    serializando os dois requests — o segundo vê status='paid' e cai no
+    caminho idempotente (return sem débito).
     """
-    r = get_request_row(db, guild_id, request_id)
+    new_status = payload.get("status")
+    # Lock pessimista só no caminho financeiro (paid). Outros updates (edit
+    # final_total, notes, denied) não precisam — não há débito.
+    if new_status == "paid":
+        r = db.scalar(select(RegearRequest).where(
+            RegearRequest.id == request_id,
+            RegearRequest.guild_id == guild_id,
+        ).with_for_update())
+    else:
+        r = get_request_row(db, guild_id, request_id)
     if r is None:
         raise RegearServiceError("pedido de regear não encontrado")
 
