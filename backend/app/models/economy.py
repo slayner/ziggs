@@ -40,7 +40,11 @@ class EconomyTransaction(Base):
     - add:    from_user_id=None,       to_user_id=alvo,         total_earned_user_id=to_user_id
     - remove: from_user_id=alvo,       to_user_id=None,         total_earned_user_id=None
     `from_user_id` perde `amount` de saldo, `to_user_id` ganha `amount` de saldo
-    — desfazer é só inverter os dois (e o total_earned, se houver)."""
+    — desfazer é só inverter os dois (e o total_earned, se houver).
+
+    `event_id` é preenchido apenas em transações de evento (event_payout,
+    event_deficit) — liga a transação ao Event que a gerou, permitindo o
+    portal do membro mostrar o título do evento e um link clicável."""
     __tablename__ = "economy_transactions"
 
     id: Mapped[int] = pk()
@@ -56,4 +60,9 @@ class EconomyTransaction(Base):
     total_earned_user_id: Mapped[int | None] = mapped_column(Snowflake, nullable=True)
     amount: Mapped[int] = mapped_column(BigInt(), nullable=False)
     undone: Mapped[bool] = mapped_column(default=False, nullable=False)
+    # Só preenchido em transações de evento (event_payout, event_deficit).
+    # SET NULL on delete — a transação sobrevive mesmo se o evento for apagado.
+    event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("events.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

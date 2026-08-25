@@ -117,7 +117,7 @@ export default function MemberEvents({ guildId }: { guildId: string }) {
 
 // ── Corpo do card (detalhe + signup + settlement) ──────────────────────────
 
-function MemberEventBody({ eventId, guildId }: { eventId: number; guildId: string }) {
+export function MemberEventBody({ eventId, guildId }: { eventId: number; guildId: string }) {
   const t = useT();
   const { lang } = useLang();
   const [detail, setDetail] = useState<MemberEventDetail | null | undefined>(undefined);

@@ -1389,7 +1389,7 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
                     guild_id=ev.guild_id, kind="event_payout",
                     actor_discord_id=actor_id or 0,
                     from_user_id=None, to_user_id=p.user_id, total_earned_user_id=p.user_id,
-                    amount=row.total,
+                    amount=row.total, event_id=ev.id,
                 ))
 
     log.info(
@@ -1435,7 +1435,7 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
                     guild_id=ev.guild_id, kind="event_deficit",
                     actor_discord_id=actor_id or 0,
                     from_user_id=uid, to_user_id=None, total_earned_user_id=None,
-                    amount=per_member,
+                    amount=per_member, event_id=ev.id,
                 ))
 
 

@@ -303,6 +303,10 @@ export interface MemberWalletTx {
   direction: "in" | "out" | "neutral";  // derivada server-side, nunca do client
   amount: number;
   counterparty_name: string | null;
+  counterparty_albion_name: string | null;
+  actor_name: string | null;
+  event_id: number | null;
+  event_title: string | null;
   undone: boolean;
   created_at: string;
 }

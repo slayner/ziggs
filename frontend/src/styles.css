@@ -1578,6 +1578,18 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .mp-amt.out { color: #e07a7a; }
 .mp-amt.neutral { color: var(--muted); }
 .mp-cp { color: var(--muted); }
+.mp-cp-name { display: inline-flex; align-items: center; gap: 4px; }
+.mp-cp-discord { color: var(--hint); font-size: 10px; margin-left: 2px; }
+.mp-event-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: none; border: none; cursor: pointer;
+  color: var(--gold); font: inherit; padding: 0;
+  text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;
+}
+.mp-event-link:hover { text-decoration-style: solid; }
+.mp-event-link .ti:first-child { font-size: 13px; }
+.mp-event-detail > td { padding: 0 !important; border-bottom: 1px solid var(--border) !important; }
+.mp-event-detail .ev-card-body { padding: 8px 4px; }
 /* Energia: lista em linha (ts como vem do backend). */
 .mp-erow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 7px 2px; border-bottom: 1px solid var(--border); font-size: 12px; }
 .mp-erow:last-of-type { border-bottom: 0; }

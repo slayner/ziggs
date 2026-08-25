@@ -32,6 +32,17 @@ class WalletTxOut(BaseModel):
     # Nome legível da contraparte quando houver (pay entre membros); None
     # pra movimentos de sistema (event_payout, forfeit, ...).
     counterparty_name: str | None = None
+    # Nick de jogo (Albion) da contraparte quando houver (pay entre membros).
+    # Vem do BotRegistration ativo daquele discord_user_id nesta guilda.
+    counterparty_albion_name: str | None = None
+    # Nome do admin/bot que disparou a transação (add/remove/forfeit). None
+    # pra pay (o actor é o próprio pagador) e event_payout (o actor é o
+    # finalizador do evento — não é interessante mostrar).
+    actor_name: str | None = None
+    # Evento vinculado (event_payout/event_deficit). Permite ao frontend
+    # renderizar o título do evento e um link clicável pro detalhe.
+    event_id: int | None = None
+    event_title: str | None = None
     undone: bool = False
     created_at: datetime
 

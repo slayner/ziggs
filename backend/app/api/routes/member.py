@@ -30,6 +30,7 @@ from app.models.comps import Comp, CompParty, CompSlotRole
 from app.models.economy import EconomyBalance, EconomyTransaction
 from app.models.energy import EnergyBalance, EnergyEntry
 from app.models.events import Event, EventParticipant
+from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildMember, User
 from app.services import comps as comps_svc
 from app.services import event_gates, event_signups, events as events_svc
@@ -119,6 +120,47 @@ def get_wallet(
         for u in db.scalars(select(User).where(User.id.in_(counter_ids))):
             names[u.id] = u.global_name or u.username
 
+    # Pré-carrega nicks Albion das contrapartes (BotRegistration ativa).
+    # O membro quer ver "Slayner" em vez de (ou além de) "Joãozinho" quando
+    # houver um /pay — é o nick que ele conhece do jogo.
+    albion_names: dict[int, str] = {}
+    if counter_ids:
+        reg_rows = db.execute(
+            select(BotRegistration.discord_user_id, BotRegistration.albion_player_name)
+            .where(
+                BotRegistration.guild_id == member.guild_id,
+                BotRegistration.discord_user_id.in_(counter_ids),
+                BotRegistration.active.is_(True),
+            )
+        ).all()
+        for discord_id, albion_name in reg_rows:
+            # Pode haver múltiplos chars; guarda o primeiro encontrado.
+            if discord_id not in albion_names:
+                albion_names[discord_id] = albion_name
+
+    # Pré-carrega nomes dos admins/atores (add/remove/forfeit). O actor de pay
+    # é o próprio pagador (já em names); o de event_payout é o finalizador
+    # (não interessante mostrar); o de add/remove é o admin que executou.
+    actor_ids = {
+        r.actor_discord_id for r in rows
+        if r.actor_discord_id
+        and r.actor_discord_id != uid
+        and r.actor_discord_id != r.from_user_id
+        and r.actor_discord_id != r.to_user_id
+        and r.kind in ("add", "remove", "forfeit")
+    }
+    actor_names: dict[int, str] = {}
+    if actor_ids:
+        for u in db.scalars(select(User).where(User.id.in_(actor_ids))):
+            actor_names[u.id] = u.global_name or u.username
+
+    # Pré-carrega eventos vinculados (event_payout/event_deficit).
+    event_ids = {r.event_id for r in rows if r.event_id is not None}
+    event_titles: dict[int, str] = {}
+    if event_ids:
+        for ev in db.scalars(select(Event).where(Event.id.in_(event_ids))):
+            event_titles[ev.id] = ev.title or f"Evento #{ev.id}"
+
     txs = []
     for r in rows:
         if r.to_user_id == uid:
@@ -132,9 +174,19 @@ def get_wallet(
             # sistema) — neutro.
             direction = "neutral"
             cp_id = None
+        # Actor: só mostra pra add/remove/forfeit (o admin que disparou). Em
+        # pay o actor é o pagador (já é a contraparte); em event_payout o actor
+        # é o finalizador do evento (não relevante pro membro).
+        actor_name = None
+        if r.kind in ("add", "remove", "forfeit") and r.actor_discord_id and r.actor_discord_id != uid:
+            actor_name = actor_names.get(r.actor_discord_id)
         txs.append(WalletTxOut(
             id=r.id, kind=r.kind, direction=direction, amount=r.amount,
             counterparty_name=names.get(cp_id) if cp_id else None,
+            counterparty_albion_name=albion_names.get(cp_id) if cp_id else None,
+            actor_name=actor_name,
+            event_id=r.event_id,
+            event_title=event_titles.get(r.event_id) if r.event_id else None,
             undone=r.undone, created_at=r.created_at,
         ))
     return WalletOut(

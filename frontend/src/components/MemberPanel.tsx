@@ -1,7 +1,7 @@
 // Meu painel — portal do membro: carteira (prata), energia e preferências
 // arma+fn. Rotas /member/* só exigem membresia ativa (403 caso contrário),
 // então este tab é visível a qualquer membro logado, sem perms admin.
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   api, setGuild,
   type MemberEnergy, type MemberEnergyEntry,
@@ -9,6 +9,7 @@ import {
   type WeaponFnPref, type WeaponFnValidPair,
 } from "../api";
 import { useT, type TKey } from "../i18n";
+import { MemberEventBody } from "./MemberEvents";
 
 const PAGE = 50;
 const fmt = (n: number) => n.toLocaleString("pt-BR");
@@ -38,6 +39,7 @@ export default function MemberPanel({ guildId }: { guildId: string }) {
   const [wLoading, setWLoading] = useState(true);
   const [wMore, setWMore] = useState(false);
   const [wError, setWError] = useState<string | null>(null);
+  const [openEvent, setOpenEvent] = useState<number | null>(null);
 
   useEffect(() => {
     let dead = false;
@@ -170,19 +172,62 @@ export default function MemberPanel({ guildId }: { guildId: string }) {
             <tbody>
               {txs.map(tx => {
                 const kindKey = WALLET_KIND_KEYS[tx.kind];
+                const hasEvent = tx.event_id != null;
+                const isOpen = openEvent === tx.event_id;
+                // Contraparte: preferir nick Albion (mais reconhecível pro
+                // jogador); cai pro nome Discord se não houver registro.
+                const cpDisplay = tx.counterparty_albion_name
+                  ?? tx.counterparty_name
+                  ?? null;
                 return (
-                  <tr key={tx.id} className={tx.undone ? "mp-undone" : undefined}>
-                    <td className="mp-date">{dt(tx.created_at)}</td>
-                    <td>
-                      <span className="state-pill">{kindKey ? t(kindKey) : tx.kind}</span>
-                      {tx.undone && <span className="state-pill bad">{t("walletUndone")}</span>}
-                    </td>
-                    <td className={`mp-amt ${tx.direction}`}
-                      title={tx.direction === "in" ? t("walletDirIn") : tx.direction === "out" ? t("walletDirOut") : undefined}>
-                      {tx.direction === "in" ? "+" : tx.direction === "out" ? "−" : ""}{fmt(tx.amount)}
-                    </td>
-                    <td className="mp-cp">{tx.counterparty_name ?? "—"}</td>
-                  </tr>
+                  <React.Fragment key={tx.id}>
+                    <tr className={tx.undone ? "mp-undone" : undefined}>
+                      <td className="mp-date">{dt(tx.created_at)}</td>
+                      <td>
+                        <span className="state-pill">{kindKey ? t(kindKey) : tx.kind}</span>
+                        {tx.undone && <span className="state-pill bad">{t("walletUndone")}</span>}
+                      </td>
+                      <td className={`mp-amt ${tx.direction}`}
+                        title={tx.direction === "in" ? t("walletDirIn") : tx.direction === "out" ? t("walletDirOut") : undefined}>
+                        {tx.direction === "in" ? "+" : tx.direction === "out" ? "−" : ""}{fmt(tx.amount)}
+                      </td>
+                      <td className="mp-cp">
+                        {hasEvent ? (
+                          <button
+                            className="mp-event-link"
+                            onClick={() => setOpenEvent(isOpen ? null : tx.event_id)}
+                            aria-expanded={isOpen}
+                          >
+                            <i className="ti ti-calendar-event" aria-hidden="true" />
+                            {tx.event_title ?? `#${tx.event_id}`}
+                            <i className={"ti " + (isOpen ? "ti-chevron-up" : "ti-chevron-down")} aria-hidden="true" />
+                          </button>
+                        ) : cpDisplay ? (
+                          <span className="mp-cp-name">
+                            {cpDisplay}
+                            {tx.counterparty_albion_name && tx.counterparty_name
+                              && tx.counterparty_albion_name !== tx.counterparty_name && (
+                              <small className="mp-cp-discord" title={t("walletDiscordName")}>
+                                ({tx.counterparty_name})
+                              </small>
+                            )}
+                          </span>
+                        ) : tx.actor_name ? (
+                          <span className="mp-cp-name">
+                            <i className="ti ti-user-cog" aria-hidden="true" />
+                            {tx.actor_name}
+                          </span>
+                        ) : "—"}
+                      </td>
+                    </tr>
+                    {hasEvent && isOpen && (
+                      <tr className="mp-event-detail">
+                        <td colSpan={4}>
+                          <MemberEventBody eventId={tx.event_id!} guildId={guildId} />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
