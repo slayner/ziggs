@@ -30,7 +30,7 @@ const AFFILIATES: AffiliateAd[] = [
     icon: "ti-bolt",
     title: "affExitlagTitle",
     desc: "affExitlagDesc",
-    url: "https://www.exitlag.com",
+    url: "https://www.exitlag.com/refer/10344555",
     accent: "#ff6b2b",
   },
   {
