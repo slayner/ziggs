@@ -323,16 +323,22 @@ def _compute_weights(events: list[tuple], subs: list[dict]) -> dict[int, int]:
 
     Importante: com 1 logger o peso NÃO espera 2º p/ corroborar — conta todas
     as únicas imediatamente. O 'esperar mais logs p/ só considerar duplicados'
-    é o caminho 2+ loggers (só overlap conta); single-logger foge dele."""
+    é o caminho 2+ loggers (só overlap conta); single-logger foge dele.
+
+    Logger = quem VIU coleta dentro da janela. Submissão com todas as rows
+    fora da janela (ou vazia) NÃO é logger: é filtrada aqui, não conta como
+    cópia, não corrobora nada e não pode rebaixar o único logger real pro
+    caminho 2+ (onde só overlap conta → peso 0 pra quem logou tudo sozinho)."""
     if not subs:
         return {}
-    excluded, _notes = _detect_copies(events, subs)
+    # Filtra subs: só quem tem pelo menos 1 evento in-window é logger.
+    sids_with_events = {e[2] for e in events if e[2] is not None}
+    active_subs = [s for s in subs if s.get("submitter_id") in sids_with_events]
+    if not active_subs:
+        return {}
+    excluded, _notes = _detect_copies(events, active_subs)
     clean = [e for e in events if e[2] not in excluded]
     canonical = _reconcile(clean)
-    # Logger = quem VIU coleta dentro da janela. Submissão vazia/fora da
-    # janela não é logger: não corrobora nada e não pode rebaixar o único
-    # logger real pro caminho 2+ (onde só overlap conta → peso 0 pra quem
-    # logou tudo sozinho).
     seen_sids = {e[2] for e in clean}
     single_logger = len(seen_sids) <= 1
     weights: dict[int, int] = defaultdict(int)
