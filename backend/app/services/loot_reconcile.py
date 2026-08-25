@@ -24,9 +24,11 @@ from app.api.schemas.loot import (
     NotDepositedOut, ReconcileLooter, ReconcileLooterItem,
 )
 from app.models.events import EventDeath
+from app.models.events import Event
 from app.models.loot import GuildChestEntry, LootVerification
 from app.models.lootlog import LootLogSubmission
 from app.services import loot
+from app.services.lootlog import _event_window
 
 # Janela de dedup: a mesma coleta vista por loggers diferentes chega com
 # timestamps defasados (ms entre máquinas). 60s agrupa a mesma coleta.
@@ -213,6 +215,12 @@ def _price(db: Session, cache: dict[str, int], item_id: str) -> int:
 
 
 def unified_reconcile(db: Session, guild_id: int, event_id: int) -> LootReconcileOut:
+    # Janela do evento: started_at - 5min … ended_at + 15min (mesmo critério do
+    # compute_logger_weights). Coletas fora desta janela são desconsideradas
+    # completamente — não aparecem na reconciliação nem contam como loot.
+    ev = db.get(Event, event_id)
+    win_start, win_end = _event_window(ev) if ev is not None else (None, None)
+
     # 1) loot do lootlog (submissões anônimas, dedup canonical).
     subs = db.scalars(select(LootLogSubmission).where(
         LootLogSubmission.guild_id == guild_id,
@@ -221,6 +229,12 @@ def unified_reconcile(db: Session, guild_id: int, event_id: int) -> LootReconcil
     all_rows: list[dict] = []
     for s in subs:
         for r in (s.loot_rows or []):
+            dt = _parse_ts(r.get("ts"))
+            if dt is not None:
+                if win_start is not None and dt < win_start:
+                    continue
+                if win_end is not None and dt > win_end:
+                    continue
             all_rows.append(r)
     # Ignora 'Trash' (loot de vendor, não vai pro baú) antes de tudo.
     loot_events = [e for e in _canonical_loot(all_rows) if not _is_trash(e)]
