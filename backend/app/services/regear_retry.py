@@ -59,7 +59,10 @@ async def _retry_once() -> None:
             req = db.get(RegearRequest, req_id)
             if req is None:
                 continue
-            req.recognition_attempts += 1
+            # BUG 7: recheck status — logística pode ter aprovado entre o
+            # commit da lista e agora. Não sobrescreve itens de pedido pago.
+            if req.status != "pending":
+                continue
             guild = db.get(Guild, req.guild_id)
             if guild is None:
                 continue
@@ -70,15 +73,27 @@ async def _retry_once() -> None:
             cta_times = _cta_times(db, guild.id)
             landmark = _landmark_window(db, guild.id, req.event_id)
             # Libera read tx antes do HTTP (recognize_by_player chama Albion).
-            # recognition_attempts já foi incrementado — comita pra persistir.
             db.commit()
             try:
                 rec = await regear_recognition.recognize_by_player(names, cta_times, region, landmark)
             except Exception as e:
                 log.debug("regear retry #%s ainda falhou: %s", req.id, e)
+                # BUG 4: exceção de rede/API não conta como tentativa — o pedido
+                # continua elegível para retry quando a API voltar.
                 continue
             if rec is None or not rec.get("items"):
+                # Reconhecimento rodou mas não achou nada — conta como tentativa.
+                req = db.get(RegearRequest, req_id)
+                if req is not None and req.status == "pending":
+                    req.recognition_attempts += 1
+                    db.commit()
                 continue
+            # BUG 7: recheck status novamente — pode ter sido aprovado durante
+            # o HTTP. Não sobrescreve itens de pedido já pago.
+            req = db.get(RegearRequest, req_id)
+            if req is None or req.status != "pending":
+                continue
+            req.recognition_attempts += 1
             settings = regear_config.get_regear_settings(guild)
             await _apply_recognition(db, req, rec, settings)
             db.add(AuditLog(

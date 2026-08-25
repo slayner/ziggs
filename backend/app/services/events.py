@@ -1033,6 +1033,17 @@ def transition(
                 raise ServiceError(
                     "evento tem regears da thread pendentes; julgue todos antes de finalizar"
                 )
+            # Defesa em profundidade: regear paid=0 não deveria existir (o
+            # update_request bloqueia), mas se chegou aqui (ex: valor editado
+            # depois de paid via SQL direto), avisa antes de silently drop.
+            for r in db.scalars(select(RegearRequest).where(
+                RegearRequest.event_id == ev.id, RegearRequest.status == "paid",
+            )).all():
+                amt = r.final_total if r.final_total is not None else r.suggested_total
+                if amt <= 0:
+                    raise ServiceError(
+                        f"regear #{r.id} está pago com valor zero; corrija antes de finalizar"
+                    )
         missing = _missing_checklist(db, ev)
         if missing:
             raise ServiceError("checklist pendente: " + ", ".join(missing))

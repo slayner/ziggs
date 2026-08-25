@@ -215,13 +215,14 @@ async def ingest(
     region = (guild.settings or {}).get("albion_guild_region")
     settings = regear_config.get_regear_settings(guild)
 
-    # Libera read tx antes do HTTP (_recognize faz chamadas à API do Albion).
-    db.commit()
-
+    # Salva a imagem ANTES de commitar a read tx — se o processo crashar
+    # aqui, só perdemos o arquivo (sem pedido órfão).
     rel_path = _save_image(guild.id, image_bytes, filename, content_type)
 
-    rec = await _recognize(db, guild, image_bytes, requester_user_id, region, event_id)
-
+    # Cria o pedido pendente ANTES do reconhecimento HTTP. Se o processo
+    # crashar durante o _recognize (API do Albion), o pedido já existe no
+    # banco com status "pending" e recognition_status "manual" — a fila de
+    # retry pode retomar, e o bot já reagiu com ✅.
     req = RegearRequest(
         guild_id=guild.id,
         event_id=event_id,
@@ -235,6 +236,11 @@ async def ingest(
     )
     db.add(req)
     db.flush()
+    db.commit()  # persiste o pedido pendente antes do HTTP
+
+    # Reconhecimento HTTP (pode demorar/falhar). Se falhar, o pedido já
+    # está persistido como "manual" — a fila de retry cuida do resto.
+    rec = await _recognize(db, guild, image_bytes, requester_user_id, region, event_id)
     await _apply_recognition(db, req, rec, settings)
     db.add(AuditLog(
         guild_id=guild.id, actor_id=requester_user_id, actor_type="bot", source="bot",
@@ -364,6 +370,10 @@ def update_request(
             amount = r.final_total if r.final_total is not None else r.suggested_total
             if amount < 0:
                 raise RegearServiceError("valor do pagamento não pode ser negativo")
+            if amount == 0:
+                raise RegearServiceError(
+                    "valor do pagamento é zero; negue ou remova o pedido em vez de aprovar"
+                )
             guild = db.get(Guild, guild_id)
             # Regears vinculados a evento em modos tab (leftover/guild_backed) saem
             # da tab do evento, não do banco — o débito acontece no _calc_payout.
