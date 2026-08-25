@@ -1,96 +1,69 @@
-import { useState } from "react";
 import { useT, type TKey } from "../i18n";
 
-// Affiliate banner — estilo ad tradicional, largura máxima do conteúdo,
-// imagem de fundo com overlay + CTA. Posicionado antes do footer, fora
-// do fluxo das ferramentas, então não interfere no uso do site.
+// Banner de afiliado inline — renderizado como elemento HTML estilizado
+// (sem imagem carregada de servidor externo), então adblock não bloqueia.
+// Quando AdSense for aprovado, esse banner pode pairar abaixo do leaderboard
+// do AdSense como redundância anti-adblock.
 //
-// Cada visita mostra um banner aleatório dos disponíveis. Ao clicar abre
-// em nova aba com rel=noopener+sponsored (boa prática FTC/SEO).
+// Formato: leaderboard 728x90 (padrão IAB), responsivo no mobile.
 
 interface AffiliateAd {
   id: string;
   name: string;
-  headline: TKey;      // chave i18n: frase curta chamativa
-  desc: TKey;          // chave i18n: uma linha de apoio
-  ctaLabel: TKey;      // chave i18n: texto do botão
-  url: string;         // link de afiliado real
-  gradient: string;    // gradiente CSS de fundo
-  accent: string;      // cor do CTA e elementos de destaque
+  headline: TKey;
+  desc: TKey;
+  cta: TKey;
+  url: string;
+  colors: { bg: string; bgAlt: string; accent: string; text: string; btnText: string };
 }
 
-// Banners ativos. Adicionar/remover conforme programas forem aprovados.
-// gradient + accent definem o visual; o banner usa essas cores como base.
-const BANNERS: AffiliateAd[] = [
+const ADS: AffiliateAd[] = [
   {
     id: "exitlag",
     name: "ExitLag",
     headline: "affExitlagHeadline",
     desc: "affExitlagDesc",
-    ctaLabel: "affExitlagCta",
+    cta: "affCta",
     url: "https://www.exitlag.com/refer/10344555",
-    gradient: "linear-gradient(135deg, #1a0d05 0%, #2d1508 50%, #1a0d05 100%)",
-    accent: "#ff6b2b",
+    colors: { bg: "#1a0d05", bgAlt: "#2d1508", accent: "#ff6b2b", text: "#ffffff", btnText: "#1a0d05" },
   },
-  // Placeholders — preencher quando os links estiverem aprovados:
-  // {
-  //   id: "nordvpn",
-  //   name: "NordVPN",
-  //   headline: "affNordvpnHeadline",
-  //   desc: "affNordvpnDesc",
-  //   ctaLabel: "affNordvpnCta",
-  //   url: "https://nordvpn.com",
-  //   gradient: "linear-gradient(135deg, #0d1a2e 0%, #1a2d4a 50%, #0d1a2e 100%)",
-  //   accent: "#4687ff",
-  // },
-  // {
-  //   id: "surfshark",
-  //   name: "Surfshark",
-  //   headline: "affSurfsharkHeadline",
-  //   desc: "affSurfsharkDesc",
-  //   ctaLabel: "affSurfsharkCta",
-  //   url: "https://surfshark.com",
-  //   gradient: "linear-gradient(135deg, #0d2018 0%, #1a3d2e 50%, #0d2018 100%)",
-  //   accent: "#2ee2a8",
-  // },
+  // Adicionar outros aqui quando os links estiverem aprovados.
+  // NordVPN: bg #0d1a2e, accent #4687ff
+  // Surfshark: bg #0d2018, accent #2ee2a8
 ];
 
 export default function AffiliateBanner() {
   const t = useT();
-  // Índice fixo por sessão (não rotaciona — cada visita mostra um banner).
-  // const [idx] = useState(() => Math.floor(Math.random() * BANNERS.length));
-  // Por agora, só ExitLag está ativo.
-  const [idx] = useState(0);
-  const ad = BANNERS[idx % BANNERS.length];
+  const ad = ADS[0]; // ExitLag por enquanto
   if (!ad) return null;
 
+  const c = ad.colors;
   return (
-    <div className="aff-banner" style={{ background: ad.gradient, borderLeftColor: ad.accent }}>
-      {/* Overlay decorativo — linhas diagonais sutis */}
-      <div className="aff-banner-overlay" aria-hidden="true" />
+    <div className="aff-leaderboard">
+      <a href={ad.url} target="_blank" rel="noopener sponsored" className="aff-leaderboard-link">
+        <div
+          className="aff-leaderboard-inner"
+          style={{ background: `linear-gradient(90deg, ${c.bg} 0%, ${c.bgAlt} 50%, ${c.bg} 100%)` }}
+        >
+          {/* Marca d'água com primeira letra */}
+          <span className="aff-leaderboard-watermark" style={{ color: c.accent }} aria-hidden="true">
+            {ad.name.charAt(0)}
+          </span>
 
-      <div className="aff-banner-inner">
-        {/* Lado esquerdo: nome + mensagem */}
-        <div className="aff-banner-info">
-          <span className="aff-banner-brand" style={{ color: ad.accent }}>{ad.name}</span>
-          <h3 className="aff-banner-headline">{t(ad.headline)}</h3>
-          <p className="aff-banner-desc">{t(ad.desc)}</p>
+          <div className="aff-leaderboard-text">
+            <span className="aff-leaderboard-brand" style={{ color: c.accent }}>{ad.name}</span>
+            <span className="aff-leaderboard-headline" style={{ color: c.text }}>{t(ad.headline)}</span>
+            <span className="aff-leaderboard-desc" style={{ color: `${c.text}99` }}>{t(ad.desc)}</span>
+          </div>
+
+          <span className="aff-leaderboard-cta" style={{ background: c.accent, color: c.btnText }}>
+            {t(ad.cta)}
+          </span>
         </div>
 
-        {/* Lado direito: CTA */}
-        <a
-          href={ad.url}
-          target="_blank"
-          rel="noopener sponsored"
-          className="aff-banner-btn"
-          style={{ background: ad.accent }}
-        >
-          {t(ad.ctaLabel)}
-        </a>
-      </div>
-
-      {/* Badge discreto no canto — disclosure, obrigatório por lei */}
-      <span className="aff-banner-tag">afiliado</span>
+        {/* Badge "afiliado" — disclosure, aparece sutil no canto */}
+        <span className="aff-leaderboard-badge" style={{ color: `${c.text}33` }}>afiliado</span>
+      </a>
     </div>
   );
 }
