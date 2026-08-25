@@ -3,7 +3,8 @@ import { api, type Me, type EscalationOut, type EscalationRole, type EscalationS
 import { useT, useLang, itemLocalName, type Lang, type TKey } from "../i18n";
 import { itemRenderUrl, ITEM_BY_ID, is2H } from "../data/albion-items";
 import { EquipGrid } from "./comp/EquipGrid";
-import { buildItemsToEquip, itemUrl } from "./comp/helpers";
+import { buildItemsToEquip, itemUrl, DEFAULT_FN_TYPES, getFnDef } from "./comp/helpers";
+import type { FnTypeDef } from "./comp/types";
 import AdBanner from "./AdBanner";
 
 interface Props {
@@ -567,6 +568,16 @@ function SignupRail({
   onDrop: (raw: string) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  // Fn types da guilda (com emojis) — carregados uma vez. Usados no hover
+  // expand pra mostrar o emote do tipo de função sobre o render da arma.
+  const [fnTypes, setFnTypes] = useState<FnTypeDef[]>(DEFAULT_FN_TYPES);
+  useEffect(() => {
+    api.getCompFnTypes()
+      .then(({ fn_types }) => {
+        if (fn_types && fn_types.length > 0) setFnTypes(fn_types);
+      })
+      .catch(() => {});
+  }, []);
   // Ordenação: não escalados primeiro, depois escalados (verdes) — sem amarelo.
   const sorted = [...data.enlisted].sort((a, b) => {
     const pa = assignedUserIds.has(a.user_id) ? 1 : 0;
@@ -661,6 +672,24 @@ function SignupRail({
                 ))}
                 {extra > 0 && <span className="esc-rail-more" title={t("escMoreWeapons")}>…</span>}
               </div>
+              {opts.length > 0 && (
+                <div className="esc-rail-hover">
+                  {opts.map((o, i) => {
+                    const fnDef = getFnDef(o.fnKey, fnTypes);
+                    return (
+                      <div key={i} className="esc-rail-hover-render">
+                        <img
+                          src={itemRenderUrl(o.itemId, 1, 256)}
+                          alt="" aria-hidden="true"
+                        />
+                        {fnDef?.emoji && (
+                          <span className="esc-rail-hover-emoji">{fnDef.emoji}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}
@@ -686,8 +715,9 @@ function SignupRail({
 // Opções de arma de um signup — uma por par (weapon_id, fn). Mesma arma com
 // fn diferente vira duas entradas (Longbow DPS e Longbow Support). O label
 // carrega o nome localizado da arma + fn pra desambiguar pares de mesma arma.
-function signupWeaponOptions(s: EscalationSignup, weaponItemId: Map<number, string>, lang: Lang): { itemId: string; label: string }[] {
-  const out: { itemId: string; label: string }[] = [];
+// `fnKey` é a chave normalizada do fn (casefold/strip) pra casar com FnTypeDef.
+function signupWeaponOptions(s: EscalationSignup, weaponItemId: Map<number, string>, lang: Lang): { itemId: string; label: string; fnKey: string }[] {
+  const out: { itemId: string; label: string; fnKey: string }[] = [];
   const seen = new Set<string>();
   for (const wf of s.weapon_fns ?? []) {
     if (wf.weapon_id == null) continue;
@@ -700,7 +730,7 @@ function signupWeaponOptions(s: EscalationSignup, weaponItemId: Map<number, stri
     const weaponLabel = item ? itemLocalName(item, lang) : itemId;
     const fnLabel = wf.fn || "—";
     const label = `${weaponLabel} · ${fnLabel}`;
-    out.push({ itemId, label });
+    out.push({ itemId, label, fnKey: fnKey(wf.fn) });
   }
   // Fallback legado: sem weapon_fns (evento finalizado sem backfill). Sem
   // como mapear nome->weapon_id confiável aqui, ficamos sem renders e o nome

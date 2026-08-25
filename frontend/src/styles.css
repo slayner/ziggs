@@ -528,6 +528,59 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   user-select: none; cursor: pointer;
 }
 .esc-rail-more:hover { color: var(--gold); }
+/* Hover expand: bracket com renders grandes + emote do fn no canto inferior
+   direito de cada render. Some por padrão (max-height/opacity 0), aparece no
+   :hover do card. Expande pra direita e pra baixo (position absolute, top:0,
+   left:100%). Z-index alto pra sobrepor o board. Quantidade de renders = nº
+   de funções do signup (grid wrap, sem nome de função — só render + emote). */
+.esc-rail-hover {
+  display: none;
+  position: absolute;
+  top: 0; left: 100%;
+  margin-left: 6px;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  padding: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 64px);
+  gap: 6px;
+  max-width: 360px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s;
+}
+.esc-rail-card { position: relative; }
+.esc-rail-card:hover .esc-rail-hover {
+  display: grid;
+  opacity: 1;
+  pointer-events: none;
+}
+.esc-rail-hover-render {
+  position: relative;
+  width: 64px; height: 64px;
+}
+.esc-rail-hover-render img {
+  width: 64px; height: 64px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.esc-rail-hover-emoji {
+  position: absolute;
+  bottom: -2px; right: -2px;
+  font-size: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  line-height: 1;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
 /* Verde: escalado (sempre — sem amarelo flex). */
 .esc-rail-placed {
   border-left-color: var(--green); background: rgba(34,197,94,.08);
