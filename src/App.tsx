@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useT, useLang, LANG_LABELS, LANG_FULL, type Lang, type LangPref, type TKey } from "./i18n";
@@ -282,6 +283,7 @@ export default function App() {
   const [sniffStats, setSniffStats] = useState<SniffStats | null>(null);
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus | null>(null);
   const [updateStatus, setUpdateStatus] = useState<"available" | "downloading" | "installed" | null>(null);
+  const [appVersion, setAppVersion] = useState("");
   // Live tabs: Route/Tunnel is the default; Damage and Lootlog have their own
   // tabs. Badges read App state because tab components unmount when not focused.
   const [gearOpen, setGearOpen] = useState(false);
@@ -312,6 +314,7 @@ export default function App() {
 
   useEffect(() => {
     refreshConfig();
+    getVersion().then(setAppVersion).catch(() => {});
     let unlisten: UnlistenFn | null = null;
     listen("scanner-restart", () => {
       invoke("stop_scanner").then(() => invoke("start_scanner"));
@@ -421,7 +424,10 @@ export default function App() {
           getCurrentWindow().startDragging();
         }}
       >
-        <img className="logo" src="/logo.png" alt="Ziggs" />
+        <div className="ck-logo-wrap">
+          <img className="logo" src="/logo.png" alt="Ziggs" />
+          {appVersion && <span className="ck-version">v{appVersion}</span>}
+        </div>
         <span className="ck-brand">ZIGGS</span>
         <span className="ck-sep" />
         <span className="ck-chip"><span className="ck-lbl">{t("ckSession")}</span><b className="ck-num">{uptime}</b></span>
@@ -664,7 +670,7 @@ function fmtFull(n: number): string {
 function DamageTimeline({ data }: { data: number[] }) {
   const t = useT();
   const peak = data.reduce((m, v) => Math.max(m, v), 0);
-  if (peak <= 0) return <div className="dmg-tl-empty empty-inline">{t("dmgTimelineEmpty")}</div>;
+  if (peak <= 0) return null;
   return (
     <div className="dmg-tl">
       <div className="dmg-tl-head">
@@ -744,15 +750,6 @@ function DamageTab({
         <div className="empty-area">{t("dmgOffHint")}</div>
       ) : (
         <>
-          {/* Cockpit hero: the number you glance at mid-fight. */}
-          <div className="ck-hero">
-            <b className="ck-num">{fmtC(filtered.length ? totalDmg : 0)}</b>
-            <span className="ck-hero-sub">
-              {t("ckPartyDmg")} · {t("ckPeak")}{" "}
-              <b className="ck-num">{fmtC(filtered.length ? Math.max(...filtered.map(r => r.dps)) : 0)}/s</b>
-              {" "}· {t("ckInCombat", { n: filtered.length })}
-            </span>
-          </div>
           <div className="dmg-filters">
             <button
               className={`dmg-chip${partyOnly ? " active" : ""}`}
@@ -1280,19 +1277,6 @@ function ConfigTab({
       {/* Spell index calibration removed from UI: it is adjusted per patch
           via config.json, not exposed to users. The field still exists in
           config/set_config. */}
-
-      <div className="card"><CardGlow />
-        <h2>{t("aboutTitle")}</h2>
-        <div className="row"><label>{t("aboutVersion")}</label><b>0.1.0</b></div>
-        <p className="card-desc">{t("aboutDataCredit")}</p>
-        <p className="card-desc">{t("aboutNotAffiliated")}</p>
-        <div className="row about-links">
-          <button className="btn small" onClick={() => invoke("open_url", { url: "https://ziggs.xyz/terms" })}>{t("aboutTerms")}</button>
-          <button className="btn small" onClick={() => invoke("open_url", { url: "https://ziggs.xyz/privacy" })}>{t("aboutPrivacy")}</button>
-          <button className="btn small" onClick={() => invoke("open_url", { url: "https://ziggs.xyz/cookies" })}>{t("aboutCookies")}</button>
-          <button className="btn small" onClick={() => invoke("open_url", { url: "https://ziggs.xyz" })}>{t("aboutSite")}</button>
-        </div>
-      </div>
     </>
   );
 }
