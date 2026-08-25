@@ -2482,30 +2482,60 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   max-width: 560px; line-height: 1.4;
 }
 
-/* ── Affiliate banner (rotativo, não precisa de aprovação de rede) ───────── */
+/* ── Affiliate banner (estilo ad tradicional, full-width) ────────────────── */
 .aff-banner {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  padding: 12px 16px; margin: 16px auto 0; max-width: 720px;
-  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--gold);
-  border-radius: 8px; font-size: 13px;
+  position: relative; overflow: hidden;
+  max-width: 720px; margin: 20px auto 0; border-radius: 12px;
+  border-left: 4px solid;
+  box-shadow: 0 2px 16px rgba(0,0,0,.35);
 }
-.aff-banner-body { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.aff-banner-icon { flex-shrink: 0; font-size: 20px; line-height: 1; }
-.aff-banner-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.aff-banner-name { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--hint); }
-.aff-banner-title { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.aff-banner-desc { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.aff-banner-cta {
-  flex-shrink: 0; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600;
-  background: var(--accent); color: #fff; text-decoration: none; white-space: nowrap;
-  transition: filter .15s;
+.aff-banner-overlay {
+  position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 10px,
+    rgba(255,255,255,.015) 10px,
+    rgba(255,255,255,.015) 20px
+  );
 }
-.aff-banner-cta:hover { filter: brightness(1.1); }
-.aff-banner-cta:active { filter: brightness(.9); }
+.aff-banner-inner {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  padding: 28px 32px;
+}
+.aff-banner-info { min-width: 0; }
+.aff-banner-brand {
+  display: inline-block;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--hint); margin-bottom: 6px;
+}
+.aff-banner-headline {
+  font-size: 18px; font-weight: 700; color: #fff; margin: 0 0 4px; line-height: 1.25;
+  text-shadow: 0 1px 4px rgba(0,0,0,.4);
+}
+.aff-banner-desc {
+  font-size: 13px; color: rgba(255,255,255,.65); margin: 0; line-height: 1.4;
+}
+.aff-banner-btn {
+  flex-shrink: 0;
+  padding: 12px 28px; border-radius: 8px;
+  font-size: 14px; font-weight: 700; color: #fff; text-decoration: none;
+  white-space: nowrap; letter-spacing: .3px;
+  transition: transform .12s, box-shadow .12s;
+  box-shadow: 0 2px 8px rgba(0,0,0,.3);
+}
+.aff-banner-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+.aff-banner-btn:active { transform: translateY(0); }
+.aff-banner-tag {
+  position: absolute; top: 8px; right: 12px;
+  font-size: 10px; color: rgba(255,255,255,.3); text-transform: uppercase; letter-spacing: .5px;
+  user-select: none;
+}
 
 @media (max-width: 600px) {
-  .aff-banner { flex-direction: column; align-items: stretch; gap: 8px; }
-  .aff-banner-cta { text-align: center; }
+  .aff-banner-inner { flex-direction: column; align-items: stretch; text-align: center; }
+  .aff-banner-btn { text-align: center; }
 }
 
 /* ── Banner de consentimento de cookies ─────────────────────────────────── */
