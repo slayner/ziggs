@@ -28,7 +28,7 @@ from app.models.battles import (  # noqa: F401
 from app.models.claims import CharacterClaim, RegisteredCharacter  # noqa: F401
 from app.models.registration import BotRegistration  # noqa: F401
 from app.models.economy import EconomyBalance, EconomyTransaction  # noqa: F401
-from app.models.energy import EnergyBalance, EnergyEntry, EnergyWhitelist  # noqa: F401
+from app.models.energy import EnergyBalance, EnergyControlMessage, EnergyEntry, EnergyWhitelist  # noqa: F401
 from app.models.regear import RegearRequest  # noqa: F401
 from app.models.lootlog import LootLogSubmission  # noqa: F401
 from app.models.nodes import (  # noqa: F401
@@ -61,7 +61,7 @@ __all__ = [
     "CharacterClaim", "RegisteredCharacter",
     "BotRegistration",
     "EconomyBalance", "EconomyTransaction",
-    "EnergyBalance", "EnergyEntry", "EnergyWhitelist",
+    "EnergyBalance", "EnergyControlMessage", "EnergyEntry", "EnergyWhitelist",
     "RegearRequest",
     "LootLogSubmission",
     "NodeDef", "NodeEvent", "NodeEventLog", "NodeMap", "NodeMapExclusion", "NodeCalendar",

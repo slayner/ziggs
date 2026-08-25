@@ -22,6 +22,7 @@ import http_client
 import ephemeral_guard
 from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config, guild_lang_for
+from cogs.nodes import _node_display_name, _node_emoji
 from i18n import t
 
 SITE_URL   = os.getenv("BOT_SITE_URL", "").rstrip("/")
@@ -181,7 +182,7 @@ def _build_event_embed(lang: str, guild_id: int, eid: int, dto: dict) -> discord
         for nd in nodes[:20]:
             spawn = _parse_iso(nd.get("spawn_at"))
             ts = f"<t:{int(spawn.timestamp())}:t>" if spawn else "?"
-            base = f"· **{nd['node_type']}** · 🗺️ {nd['map_name']}"
+            base = f"· **{_node_emoji(nd['node_type'])} {_node_display_name(nd['node_type'], lang)}** · 🗺️ {nd['map_name']}"
             if nd.get("captured"):
                 who = f"<@{nd['scout_id']}>" if nd.get("scout_id") else (nd.get("scout_name") or "—")
                 lines.append(f"​ ✅ {ts} {base}")
@@ -349,7 +350,7 @@ class SplitNodesSelect(discord.ui.Select):
                 pre.add(nd["node_log_id"])
             spawn = _parse_iso(nd.get("spawn_at"))
             ts = f"<t:{int(spawn.timestamp())}:t>" if spawn else "?"
-            label = f"{ts} {nd['node_type']} · {nd['map_name']}"
+            label = f"{ts} {_node_display_name(nd['node_type'], self.lang)} · {nd['map_name']}"
             opts.append(discord.SelectOption(
                 label=label[:100], value=str(nd["node_log_id"]),
                 description=(nd.get("scout_name") or "—")[:100],
@@ -391,7 +392,7 @@ class SplitNodesView(discord.ui.View):
     def _selected_label(self, nd: dict) -> tuple[int, str]:
         spawn = _parse_iso(nd.get("spawn_at"))
         ts = f"<t:{int(spawn.timestamp())}:t>" if spawn else "?"
-        return nd["node_log_id"], f"💵 {nd['node_type']} · {nd['map_name']} ({ts})"
+        return nd["node_log_id"], f"💵 {_node_display_name(nd['node_type'], self.lang)} · {nd['map_name']} ({ts})"
 
     async def _on_confirm(self, interaction: Interaction) -> None:
         sel = self.select.selected_ids
@@ -821,13 +822,13 @@ class EventEmbeds(commands.Cog):
                 # get_channel só cobre cache — threads arquivadas pelo Discord
                 # por inatividade saem do cache (mesmo motivo do fetch_channel
                 # em regear_threads.py._archive_thread).
-                ch = await guild.fetch_channel(int(cid))
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError, TypeError):
+                ch = await dtimeout(guild.fetch_channel(int(cid)))
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError, TypeError, asyncio.TimeoutError):
             ch = None
         if isinstance(ch, discord.Thread):
             try:
-                await ch.edit(archived=True, locked=True)
-            except (discord.Forbidden, discord.HTTPException):
+                await dtimeout(ch.edit(archived=True, locked=True))
+            except SKIP_EXC:
                 pass
         # Best-effort: confirma mesmo sem thread pra trancar (guilda sem sala
         # de revisão configurada, embed num canal comum) ou se ela já sumiu —

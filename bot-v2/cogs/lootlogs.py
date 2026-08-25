@@ -164,8 +164,8 @@ async def _update_header_embed(thread: discord.Thread, lang: str,
         embed.add_field(name=t(lang, "ev_lootlog_standings_title", n=len(rows)),
                         value=body, inline=False)
     try:
-        await msg.edit(embed=embed)  # view omitido → botão continua lá
-    except (discord.Forbidden, discord.HTTPException):
+        await dtimeout(msg.edit(embed=embed))  # view omitido → botão continua lá
+    except SKIP_EXC:
         pass
 
 

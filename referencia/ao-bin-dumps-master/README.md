@@ -1,1 +1,0 @@
-Not much for the README. This contains the data dumped from the game bin files of Albion Online.

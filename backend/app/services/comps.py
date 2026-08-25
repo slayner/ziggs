@@ -144,7 +144,8 @@ def _merge_parties(comp: Comp, parties: list[PartyIn]) -> None:
         # Libera posições para o rearranjo antes de atribuir os índices finais.
         for slot in party.slots:
             slot.position += len(party.slots) + len(p_in.slots)
-        db.flush()
+        from sqlalchemy.orm import object_session
+        object_session(comp).flush()
         seen_slot_ids: set[int] = set()
 
         for s_idx, s_in in enumerate(p_in.slots):

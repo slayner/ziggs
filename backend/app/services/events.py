@@ -7,7 +7,7 @@ audit). Carimba started_at/callout_at/ended_at conforme entra em cada fase.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -601,23 +601,53 @@ def _detail(ev: Event, db: Session) -> EventDetail:
     )
 
 
+# Buffer da janela de batalha: batalhas devem acontecer dentro de ±30min
+# da janela do evento (scheduled_at/started_at → callout_at/ended_at).
+# Sem este buffer, batalhas não relacionadas em eventos IN_PROGRESS longos
+# eram associadas erroneamente (window_end = now() cresce indefinidamente).
+_BATTLE_WINDOW_BUFFER = timedelta(minutes=30)
+
+
 def _battle_members(db: Session, ev: Event) -> dict[int, str]:
     """Membros registrados (/register) vistos numa batalha REAL da guilda (API
     pública do Albion) dentro da janela do evento: {discord_user_id: nome}.
     Heurística por sobreposição de horário (não existe FK evento↔batalha). Só
     leitura. Usado tanto p/ flag de origem (battle_no_call) quanto p/ os
-    absentees (membros em batalha sem nenhum EventParticipant)."""
+    absentees (membros em batalha sem nenhum EventParticipant).
+
+    Janela: [scheduled_at ou started_at - buffer, callout_at ou ended_at + buffer].
+    Não usa now() como fallback — evita que eventos IN_PROGRESS longos capturem
+    batalhas não relacionadas. Batalhas com end_time=NULL (API com delay) são
+    ignoradas — só considera batalhas que a API já fechou."""
     from app.services.guild_links import albion_guild_ids
     guild = db.get(Guild, ev.guild_id)
-    if guild is None or not guild.albion_guild_id or ev.started_at is None:
+    if guild is None or not guild.albion_guild_id:
         return {}
+    # Início da janela: preferir scheduled_at (horário real do CTA), cai pra
+    # started_at (quando o admin clicou em iniciar).
+    window_start = ev.scheduled_at or ev.started_at
+    if window_start is None:
+        return {}
+    # Fim da janela: callout_at (transição pra review) ou ended_at. NÃO usa
+    # now() — se o evento ainda está IN_PROGRESS, o fim é started_at + 2h
+    # (duração típica de CTA) para não crescer indefinidamente.
+    if ev.callout_at is not None:
+        window_end = ev.callout_at
+    elif ev.ended_at is not None:
+        window_end = ev.ended_at
+    else:
+        window_end = window_start + timedelta(hours=2)
+    # Aplica buffer simétrico.
+    window_start = window_start - _BATTLE_WINDOW_BUFFER
+    window_end = window_end + _BATTLE_WINDOW_BUFFER
+    window_start = window_start if window_start.tzinfo else window_start.replace(tzinfo=timezone.utc)
+    window_end = window_end if window_end.tzinfo else window_end.replace(tzinfo=timezone.utc)
     owned_ids = albion_guild_ids(db, ev.guild_id)
-    window_end = ev.ended_at or _now()
     battle_ids = db.scalars(
         select(Battle.id).join(BattleGuild, BattleGuild.battle_id == Battle.id).where(
             BattleGuild.albion_guild_id.in_(owned_ids),
             Battle.start_time <= window_end,
-            or_(Battle.end_time.is_(None), Battle.end_time >= ev.started_at),
+            or_(Battle.end_time.is_(None), Battle.end_time >= window_start),
         )
     ).all()
     if not battle_ids:

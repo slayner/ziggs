@@ -88,3 +88,15 @@ class EnergyWhitelist(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class EnergyControlMessage(Base):
+    """Singleton do embed de energy-control por guilda: canal + message_id.
+    O bot edita in-place a cada atualização (padrão mass-info)."""
+    __tablename__ = "energy_control_messages"
+
+    guild_id: Mapped[int] = mapped_column(
+        ForeignKey("guilds.id", ondelete="CASCADE"), primary_key=True
+    )
+    channel_id: Mapped[int | None] = mapped_column(Snowflake, nullable=True)
+    message_id: Mapped[int | None] = mapped_column(Snowflake, nullable=True)

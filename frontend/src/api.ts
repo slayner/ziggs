@@ -1027,6 +1027,7 @@ export const api = {
     juicy_kill_min_silver?: number | null;
     juicy_kill_min_fame?: number | null;
     juicy_kill_regions?: string[] | null;
+    energy_control_channel_id?: string | null;
   }) =>
     req<{ ok: boolean; albion_guild_resolved: boolean }>(`/auth/guild-settings/${guild_id}`, {
       method: "PATCH",

@@ -13,6 +13,7 @@ from discord.ext import commands, tasks
 
 import http_client
 from cogs.economy import format_silver
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config
 
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
@@ -55,20 +56,20 @@ async def forfeit_loop(cog: ForfeitCog) -> None:
                 ch = guild.get_channel(int(chan_id))
                 if ch is None:
                     try:
-                        ch = await guild.fetch_channel(int(chan_id))
-                    except discord.HTTPException:
+                        ch = await dtimeout(guild.fetch_channel(int(chan_id)))
+                    except (discord.HTTPException, asyncio.TimeoutError):
                         ch = None
                 if ch is not None:
                     for f in forfeited:
                         uid = f["user_id"]
                         amount = f["amount"]
                         try:
-                            await ch.send(
+                            await dtimeout(ch.send(
                                 f"🏦 Saldo de <@{uid}> — **{format_silver(amount)}** — "
                                 f"transferido para o **guild bank** (7 dias fora da guilda).",
                                 allowed_mentions=discord.AllowedMentions.none(),
-                            )
-                        except discord.HTTPException:
+                            ))
+                        except SKIP_EXC:
                             pass
             print(f"[forfeit] {guild.id}: {len(forfeited)} confisc(s)", flush=True)
         except Exception as e:

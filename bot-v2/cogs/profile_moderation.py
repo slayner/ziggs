@@ -132,14 +132,17 @@ class ProfileModeration(commands.Cog):
     async def _post(self, channel: discord.TextChannel, item: dict) -> None:
         # Reconcilia o pequeno canal oficial antes de postar: cobre crash entre
         # channel.send() e o bind do message_id sem criar mensagem duplicada.
-        async for message in channel.history(limit=100):
-            if _submission_id(message) == int(item["id"]):
-                await http_client.post_json(
-                    f"/bot/profile-moderation/{item['id']}/message",
-                    {"message_id": message.id}, tag="profile_moderation",
-                    attempts=2, queue_on_failure=False,
-                )
-                return
+        try:
+            async for message in channel.history(limit=100):
+                if _submission_id(message) == int(item["id"]):
+                    await http_client.post_json(
+                        f"/bot/profile-moderation/{item['id']}/message",
+                        {"message_id": message.id}, tag="profile_moderation",
+                        attempts=2, queue_on_failure=False,
+                    )
+                    return
+        except (discord.HTTPException, asyncio.TimeoutError):
+            return
         data = await http_client.get_bytes(
             f"/bot/profile-moderation/{item['id']}/image", tag="profile_moderation",
         )

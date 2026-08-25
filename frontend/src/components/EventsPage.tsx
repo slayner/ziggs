@@ -3,6 +3,7 @@ import { api, type CatalogRole, type EventDetail, type EventSummary, type NodeEv
 import { useLang, useT, type TKey } from "../i18n";
 import { navigate } from "../router";
 import { RoleIcon } from "./RoleIcons";
+import { nodeDefDisplayName, NODE_EMOJI_MAP } from "./GuildConfig";
 
 // Fluxo: rascunho → agendado → andamento → revisão → concluido.
 const PIPELINE = ["draft", "scheduled", "in_progress", "review", "finalized"];
@@ -751,6 +752,7 @@ function NodeClaimSection({ detail, act, canManage }: {
   detail: EventDetail; act: (p: Promise<EventDetail>) => void; canManage: boolean;
 }) {
   const t = useT();
+  const { lang } = useLang();
   const [nodes, setNodes] = useState<NodeEventLog[]>([]);
   // Valor digitado por node_log_id (string p/ o input; converte no claim).
   const [vals, setVals] = useState<Record<number, string>>({});
@@ -801,7 +803,7 @@ function NodeClaimSection({ detail, act, canManage }: {
             flexWrap: "wrap",
           }}>
             <span style={{ flex: 1, minWidth: 140 }}>
-              <strong>{n.node_type}</strong> · 🗺️ {n.map_name}
+              <strong>{NODE_EMOJI_MAP[n.node_type] ? `${NODE_EMOJI_MAP[n.node_type]} ` : ""}{nodeDefDisplayName(n.node_type, lang)}</strong> · 🗺️ {n.map_name}
               {n.scout_name && <span className="hint"> · 🔎 {n.scout_name}</span>}
             </span>
             <label style={{ display: "flex", alignItems: "center", gap: 4, color: "var(--hint)", cursor: canManage ? "pointer" : "default" }}>

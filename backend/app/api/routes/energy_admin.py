@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.models.audit import AuditLog
-from app.models.energy import EnergyBalance, EnergyWhitelist
+from app.models.energy import EnergyBalance, EnergyEntry, EnergyWhitelist
 from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildMember, User
 from app.services import energy as energy_svc
@@ -30,6 +30,17 @@ from app.services import energy as energy_svc
 router = APIRouter(prefix="/guilds/{guild_id}/energy-admin", tags=["energy-admin"])
 
 DEFAULT_ALERT_THRESHOLD = 50
+
+
+def _mark_energy_control_dirty(db: Session, guild_id: int) -> None:
+    """Marca o flag dirty do energy-control para o bot reeditar o embed."""
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        return
+    settings = dict(g.settings or {})
+    settings["energy_control_dirty"] = True
+    g.settings = settings
+    db.flush()
 
 
 # ── name resolver (mesma fonte da rota /bot/registration-lookup) ────────────────
@@ -169,6 +180,7 @@ def log_import(
         note=f"{res.applied} aplicados, {res.duplicates} duplicatas, "
              f"{res.whitelisted_applied} whitelisted",
     )
+    _mark_energy_control_dirty(db, member.guild_id)
     db.commit()
     return LogImportOut(
         result=ApplyResultOut(
@@ -201,6 +213,7 @@ def manual_set(
         before={"balance": before_bal},
         after={"balance": new_bal, "value": body.value, "reason": body.reason},
     )
+    _mark_energy_control_dirty(db, member.guild_id)
     db.commit()
     return ManualSetOut(user_id=body.user_id, balance=new_bal)
 
@@ -226,6 +239,7 @@ def toggle_whitelist(
         before={"whitelisted": before},
         after={"whitelisted": added},
     )
+    _mark_energy_control_dirty(db, member.guild_id)
     db.commit()
     return WhitelistToggleOut(user_id=user_id, whitelisted=added)
 
@@ -245,6 +259,27 @@ def overview(
     wl_ids = set(db.scalars(select(EnergyWhitelist.discord_user_id).where(
         EnergyWhitelist.guild_id == member.guild_id,
     )).all())
+
+    # Registrados (BotRegistration ativa) — mapa uid → primeiro nome de personagem.
+    reg_rows = db.execute(
+        select(BotRegistration.discord_user_id, BotRegistration.albion_player_name).where(
+            BotRegistration.guild_id == member.guild_id,
+            BotRegistration.active.is_(True),
+        )
+    ).all()
+    reg_ids = {uid for uid, _ in reg_rows}
+    # Primeiro nome de personagem ativo por uid (se múltiplos chars, o 1º vence).
+    reg_names: dict[int, str] = {}
+    for uid, name in reg_rows:
+        if uid not in reg_names:
+            reg_names[uid] = name
+
+    # Usuários com pelo menos uma entry (histórico de energia).
+    has_history_ids = set(db.scalars(
+        select(EnergyEntry.discord_user_id).where(
+            EnergyEntry.guild_id == member.guild_id,
+        ).distinct()
+    ).all())
 
     # Saldos da guilda.
     bal_rows = db.scalars(select(EnergyBalance).where(
@@ -266,10 +301,16 @@ def overview(
     rows: list[OverviewRow] = []
     for gm, user in members:
         uid = gm.user_id
+        # Só mostra registrados.
+        if uid not in reg_ids:
+            continue
         bal = balances.get(uid, 0)
+        # Não mostra saldo 0 se nunca teve log.
+        if bal == 0 and uid not in has_history_ids:
+            continue
         rows.append(OverviewRow(
             user_id=uid,
-            display_name=_display_name(user),
+            display_name=reg_names.get(uid) or _display_name(user),
             balance=bal,
             whitelisted=uid in wl_ids,
             low_energy=bal < threshold,

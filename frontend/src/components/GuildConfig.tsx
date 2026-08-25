@@ -16,53 +16,57 @@ function itemBaseId(id: string): string {
 // â”€â”€ CatÃ¡logo default de tipos de node (localizado por idioma do bot).
 // `key` = nome guardado no banco (canÃ´nico); `name.*` Ã© a traduÃ§Ã£o exibida
 // conforme o idioma do bot. node_events.node_type guarda o `key`.
-// 28 nodes: 5 recursos Ã— 5 tiers (4.4-8.4) + 4 vortex por cor + 4 orbes por cor.
+// 28 nodes: 5 recursos × 5 tiers (4.4-8.4) + 4 vortex por cor + 4 orbes por cor.
 const DEFAULT_NODE_DEFS: {
   key: string; name: { pt: string; en: string; es: string };
   emoji: string | null; weight: number;
 }[] = [
   // Wood (Madeira)
-  { key: "wood_4.4", name: { pt: "Madeira 4.4", en: "Wood 4.4", es: "Madera 4.4" }, emoji: "ðŸªµ", weight: 0.0016 },
-  { key: "wood_5.4", name: { pt: "Madeira 5.4", en: "Wood 5.4", es: "Madera 5.4" }, emoji: "ðŸªµ", weight: 0.008 },
-  { key: "wood_6.4", name: { pt: "Madeira 6.4", en: "Wood 6.4", es: "Madera 6.4" }, emoji: "ðŸªµ", weight: 0.04 },
-  { key: "wood_7.4", name: { pt: "Madeira 7.4", en: "Wood 7.4", es: "Madera 7.4" }, emoji: "ðŸªµ", weight: 0.2 },
-  { key: "wood_8.4", name: { pt: "Madeira 8.4", en: "Wood 8.4", es: "Madera 8.4" }, emoji: "ðŸªµ", weight: 1.0 },
-  // Ore (MinÃ©rio)
-  { key: "ore_4.4", name: { pt: "MinÃ©rio 4.4", en: "Ore 4.4", es: "Mineral 4.4" }, emoji: "ðŸª¨", weight: 0.0016 },
-  { key: "ore_5.4", name: { pt: "MinÃ©rio 5.4", en: "Ore 5.4", es: "Mineral 5.4" }, emoji: "ðŸª¨", weight: 0.008 },
-  { key: "ore_6.4", name: { pt: "MinÃ©rio 6.4", en: "Ore 6.4", es: "Mineral 6.4" }, emoji: "ðŸª¨", weight: 0.04 },
-  { key: "ore_7.4", name: { pt: "MinÃ©rio 7.4", en: "Ore 7.4", es: "Mineral 7.4" }, emoji: "ðŸª¨", weight: 0.2 },
-  { key: "ore_8.4", name: { pt: "MinÃ©rio 8.4", en: "Ore 8.4", es: "Mineral 8.4" }, emoji: "ðŸª¨", weight: 1.0 },
+  { key: "wood_4.4", name: { pt: "Madeira 4.4", en: "Wood 4.4", es: "Madera 4.4" }, emoji: "🪵", weight: 0.0016 },
+  { key: "wood_5.4", name: { pt: "Madeira 5.4", en: "Wood 5.4", es: "Madera 5.4" }, emoji: "🪵", weight: 0.008 },
+  { key: "wood_6.4", name: { pt: "Madeira 6.4", en: "Wood 6.4", es: "Madera 6.4" }, emoji: "🪵", weight: 0.04 },
+  { key: "wood_7.4", name: { pt: "Madeira 7.4", en: "Wood 7.4", es: "Madera 7.4" }, emoji: "🪵", weight: 0.2 },
+  { key: "wood_8.4", name: { pt: "Madeira 8.4", en: "Wood 8.4", es: "Madera 8.4" }, emoji: "🪵", weight: 1.0 },
+  // Ore (Minério)
+  { key: "ore_4.4", name: { pt: "Minério 4.4", en: "Ore 4.4", es: "Mineral 4.4" }, emoji: "🪨", weight: 0.0016 },
+  { key: "ore_5.4", name: { pt: "Minério 5.4", en: "Ore 5.4", es: "Mineral 5.4" }, emoji: "🪨", weight: 0.008 },
+  { key: "ore_6.4", name: { pt: "Minério 6.4", en: "Ore 6.4", es: "Mineral 6.4" }, emoji: "🪨", weight: 0.04 },
+  { key: "ore_7.4", name: { pt: "Minério 7.4", en: "Ore 7.4", es: "Mineral 7.4" }, emoji: "🪨", weight: 0.2 },
+  { key: "ore_8.4", name: { pt: "Minério 8.4", en: "Ore 8.4", es: "Mineral 8.4" }, emoji: "🪨", weight: 1.0 },
   // Fiber (Fibra)
-  { key: "fiber_4.4", name: { pt: "Fibra 4.4", en: "Fiber 4.4", es: "Fibra 4.4" }, emoji: "ðŸŒ¿", weight: 0.0016 },
-  { key: "fiber_5.4", name: { pt: "Fibra 5.4", en: "Fiber 5.4", es: "Fibra 5.4" }, emoji: "ðŸŒ¿", weight: 0.008 },
-  { key: "fiber_6.4", name: { pt: "Fibra 6.4", en: "Fiber 6.4", es: "Fibra 6.4" }, emoji: "ðŸŒ¿", weight: 0.04 },
-  { key: "fiber_7.4", name: { pt: "Fibra 7.4", en: "Fiber 7.4", es: "Fibra 7.4" }, emoji: "ðŸŒ¿", weight: 0.2 },
-  { key: "fiber_8.4", name: { pt: "Fibra 8.4", en: "Fiber 8.4", es: "Fibra 8.4" }, emoji: "ðŸŒ¿", weight: 1.0 },
+  { key: "fiber_4.4", name: { pt: "Fibra 4.4", en: "Fiber 4.4", es: "Fibra 4.4" }, emoji: "🌿", weight: 0.0016 },
+  { key: "fiber_5.4", name: { pt: "Fibra 5.4", en: "Fiber 5.4", es: "Fibra 5.4" }, emoji: "🌿", weight: 0.008 },
+  { key: "fiber_6.4", name: { pt: "Fibra 6.4", en: "Fiber 6.4", es: "Fibra 6.4" }, emoji: "🌿", weight: 0.04 },
+  { key: "fiber_7.4", name: { pt: "Fibra 7.4", en: "Fiber 7.4", es: "Fibra 7.4" }, emoji: "🌿", weight: 0.2 },
+  { key: "fiber_8.4", name: { pt: "Fibra 8.4", en: "Fiber 8.4", es: "Fibra 8.4" }, emoji: "🌿", weight: 1.0 },
   // Hide (Couro)
-  { key: "hide_4.4", name: { pt: "Couro 4.4", en: "Hide 4.4", es: "Cuero 4.4" }, emoji: "ðŸ—", weight: 0.0016 },
-  { key: "hide_5.4", name: { pt: "Couro 5.4", en: "Hide 5.4", es: "Cuero 5.4" }, emoji: "ðŸ—", weight: 0.008 },
-  { key: "hide_6.4", name: { pt: "Couro 6.4", en: "Hide 6.4", es: "Cuero 6.4" }, emoji: "ðŸ—", weight: 0.04 },
-  { key: "hide_7.4", name: { pt: "Couro 7.4", en: "Hide 7.4", es: "Cuero 7.4" }, emoji: "ðŸ—", weight: 0.2 },
-  { key: "hide_8.4", name: { pt: "Couro 8.4", en: "Hide 8.4", es: "Cuero 8.4" }, emoji: "ðŸ—", weight: 1.0 },
+  { key: "hide_4.4", name: { pt: "Couro 4.4", en: "Hide 4.4", es: "Cuero 4.4" }, emoji: "🐗", weight: 0.0016 },
+  { key: "hide_5.4", name: { pt: "Couro 5.4", en: "Hide 5.4", es: "Cuero 5.4" }, emoji: "🐗", weight: 0.008 },
+  { key: "hide_6.4", name: { pt: "Couro 6.4", en: "Hide 6.4", es: "Cuero 6.4" }, emoji: "🐗", weight: 0.04 },
+  { key: "hide_7.4", name: { pt: "Couro 7.4", en: "Hide 7.4", es: "Cuero 7.4" }, emoji: "🐗", weight: 0.2 },
+  { key: "hide_8.4", name: { pt: "Couro 8.4", en: "Hide 8.4", es: "Cuero 8.4" }, emoji: "🐗", weight: 1.0 },
   // Vortex (by color)
-  { key: "vortex_green", name: { pt: "Vortex Verde", en: "Green Vortex", es: "Vortex Verde" }, emoji: "ðŸŸ©", weight: 0.2 },
-  { key: "vortex_blue", name: { pt: "Vortex Azul", en: "Blue Vortex", es: "Vortex Azul" }, emoji: "ðŸŸ¦", weight: 0.2 },
-  { key: "vortex_purple", name: { pt: "Vortex Roxo", en: "Purple Vortex", es: "Vortex Morado" }, emoji: "ðŸŸª", weight: 0.2 },
-  { key: "vortex_gold", name: { pt: "Vortex Dourado", en: "Gold Vortex", es: "Vortex Dorado" }, emoji: "ðŸŸ¨", weight: 0.2 },
+  { key: "vortex_green", name: { pt: "Vortex Verde", en: "Green Vortex", es: "Vortex Verde" }, emoji: "🟩", weight: 0.2 },
+  { key: "vortex_blue", name: { pt: "Vortex Azul", en: "Blue Vortex", es: "Vortex Azul" }, emoji: "🟦", weight: 0.2 },
+  { key: "vortex_purple", name: { pt: "Vortex Roxo", en: "Purple Vortex", es: "Vortex Morado" }, emoji: "🟪", weight: 0.2 },
+  { key: "vortex_gold", name: { pt: "Vortex Dourado", en: "Gold Vortex", es: "Vortex Dorado" }, emoji: "🟨", weight: 0.2 },
   // Orbs (Orbes)
-  { key: "orb_green", name: { pt: "Orbe Verde", en: "Green Orb", es: "Orbe Verde" }, emoji: "ðŸŸ¢", weight: 0.04 },
-  { key: "orb_blue", name: { pt: "Orbe Azul", en: "Blue Orb", es: "Orbe Azul" }, emoji: "ðŸ”µ", weight: 0.04 },
-  { key: "orb_purple", name: { pt: "Orbe Roxa", en: "Purple Orb", es: "Orbe Morada" }, emoji: "ðŸŸ£", weight: 0.04 },
-  { key: "orb_gold", name: { pt: "Orbe Dourada", en: "Gold Orb", es: "Orbe Dorada" }, emoji: "ðŸŸ¡", weight: 0.04 },
+  { key: "orb_green", name: { pt: "Orbe Verde", en: "Green Orb", es: "Orbe Verde" }, emoji: "🟢", weight: 0.04 },
+  { key: "orb_blue", name: { pt: "Orbe Azul", en: "Blue Orb", es: "Orbe Azul" }, emoji: "🔵", weight: 0.04 },
+  { key: "orb_purple", name: { pt: "Orbe Roxa", en: "Purple Orb", es: "Orbe Morada" }, emoji: "🟣", weight: 0.04 },
+  { key: "orb_gold", name: { pt: "Orbe Dourada", en: "Gold Orb", es: "Orbe Dorada" }, emoji: "🟡", weight: 0.04 },
 ];
 
-// Nome exibido de um def: se bater com uma key do catÃ¡logo default, mostra o
-// nome no idioma do bot; senÃ£o mostra o nome literal guardado no banco.
-function nodeDefDisplayName(name: string, botLang: Lang): string {
+// Nome exibido de um def: se bater com uma key do catálogo default, mostra o
+// nome no idioma do bot; senão mostra o nome literal guardado no banco.
+export function nodeDefDisplayName(name: string, botLang: Lang): string {
   const d = DEFAULT_NODE_DEFS.find(x => x.key === name);
   return d ? (d.name[botLang] ?? d.name.pt ?? name) : name;
 }
+
+export const NODE_EMOJI_MAP: Record<string, string> = Object.fromEntries(
+  DEFAULT_NODE_DEFS.filter(d => d.emoji).map(d => [d.key, d.emoji!])
+);
 
 interface ItemBase { baseId: string; name: string; nameEn: string; sampleId: string; slot: string }
 let _bases: ItemBase[] | null = null;
@@ -201,6 +205,8 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [juicyKillMinFame, setJuicyKillMinFame] = useState("0");
   const [juicyKillRegions, setJuicyKillRegions] = useState<string[]>([]);
   const [juicyKillEnabled, setJuicyKillEnabled] = useState(false);
+  const [energyControlChannelId, setEnergyControlChannelId] = useState("");
+  const [energyControlEnabled, setEnergyControlEnabled] = useState(false);
   // Canal de logs do bot (retransmissÃ£o do AuditLog) â€” o bot cria e mantÃ©m
   // sozinho quando ligado (ver cogs/audit_log.py); aqui Ã© sÃ³ leitura pro admin
   // saber onde olhar. Toggle mestre em botLogsEnabled (default true).
@@ -354,6 +360,9 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setJuicyKillMinSilver(String(g.settings.juicy_kill_min_silver ?? 50_000_000));
       setJuicyKillMinFame(String(g.settings.juicy_kill_min_fame ?? 0));
       setJuicyKillRegions((g.settings.juicy_kill_regions as string[] | undefined) ?? []);
+      const ecCh = (g.settings.energy_control_channel_id as string | undefined) ?? "";
+      setEnergyControlChannelId(ecCh);
+      setEnergyControlEnabled(!!ecCh);
       setEventWeaponGates((g.settings.event_weapon_gates as Record<string, string[]> | undefined) ?? {});
       setSignupMinBuilds(String(g.settings.signup_min_builds ?? ""));
       const commandRoles = g.settings.command_roles as Record<string, string[]> | undefined;
@@ -701,6 +710,22 @@ async function saveJuicyKillMinSilver() {
   async function saveJuicyKillRegions(regions: string[]) {
     setJuicyKillRegions(regions);
     await api.updateGuildSettings(guildId, { juicy_kill_regions: regions });
+  }
+
+  async function saveEnergyControlChannel(value: string) {
+    setEnergyControlChannelId(value);
+    setEnergyControlEnabled(!!value);
+    await api.updateGuildSettings(guildId, { energy_control_channel_id: value || null });
+  }
+
+  function toggleEnergyControlFeature(v: boolean) {
+    setEnergyControlEnabled(v);
+    if (v) {
+      if (energyControlChannelId) api.updateGuildSettings(guildId, { energy_control_channel_id: energyControlChannelId });
+      else if (!energyControlChannelId) openFeat("energycontrol")
+    } else {
+      api.updateGuildSettings(guildId, { energy_control_channel_id: null });
+    }
   }
 
   // â”€â”€ Nodes: tipos de node + mapas (a antiga aba Nodes virou esta seÃ§Ã£o) â”€â”€
@@ -1889,7 +1914,7 @@ async function saveJuicyKillMinSilver() {
                       ) : (
                         <tr key={d.id} style={{ borderTop: "1px solid var(--border)" }}>
                           <td className="py-1.5 px-2 text-xs text-zinc-200">{nodeDefDisplayName(d.name, botLanguage)}</td>
-                          <td className="py-1.5 px-2 text-xs text-zinc-200">{d.emoji ?? "â€”"}</td>
+                          <td className="py-1.5 px-2 text-xs text-zinc-200">{d.emoji ?? "—"}</td>
                           <td className="py-1.5 px-2 text-xs text-zinc-200">
                             {Math.round(d.weight * 100)}%
                             {(() => {
@@ -2059,7 +2084,22 @@ async function saveJuicyKillMinSilver() {
               </div>
             </FeatureRow>
 
-            {/* Comandos avulsos â€” half width */}
+            {/* Energy Control - embed de saldos negativos */}
+            <FeatureRow
+              icon="ti-bolt" iconColor="text-amber-300"
+              title={t("energyControlTitle")} desc={t("featEnergyControlDesc")}
+              on={energyControlEnabled}
+              onToggle={toggleEnergyControlFeature}
+              disabled={!hasGuild}
+              statusHint={energyControlEnabled && energyControlChannelId ? chName(energyControlChannelId) : t("featNeedsSetup")}
+              open={featOpen.has("energycontrol")} onOpen={() => toggleFeat("energycontrol")}
+            >
+              <label className="block text-xs text-zinc-400 mb-1">{t("energyControlChannelLabel")}</label>
+              <p className="text-[11px] text-zinc-600 mb-2">{t("energyControlChannelDesc")}</p>
+              {channelSelect(energyControlChannelId, saveEnergyControlChannel)}
+            </FeatureRow>
+
+            {/* Comandos avulsos â€" half width */}
             <FeatureRow
               icon="ti-apps" iconColor="text-zinc-400"
               title={t("cmdCategoryMiscellaneous")} desc=""

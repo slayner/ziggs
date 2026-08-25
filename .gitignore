@@ -93,3 +93,9 @@ backend/scripts/import_legacy_energy.py
 backend/scripts/run_precompute.py
 backend/scripts/retry_all_renders_30x.py
 backend/scripts/run_migration.sh
+
+# Router de modelos (Claude Code) — tooling local
+router/.env
+router/state.json
+router/logs/
+router/venv/

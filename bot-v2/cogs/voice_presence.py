@@ -21,6 +21,7 @@ import discord
 from discord.ext import commands, tasks
 
 import http_client
+from cogs._discord_timeout import SKIP_EXC, dtimeout
 from cogs.general import _guild_command_config
 
 SITE_URL   = os.getenv("BOT_SITE_URL", "").rstrip("/")
@@ -89,8 +90,8 @@ class VoicePresence(commands.Cog):
         channel = guild.get_channel(cid)
         if channel is None:
             try:
-                channel = await guild.fetch_channel(cid)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                channel = await dtimeout(guild.fetch_channel(cid))
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException, asyncio.TimeoutError):
                 print(f"[voice_presence] {guild.id}: canal {cid} não encontrado/sem acesso")
                 return
         if not isinstance(channel, discord.VoiceChannel):

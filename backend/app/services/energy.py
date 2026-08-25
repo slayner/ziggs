@@ -22,7 +22,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.energy import EnergyBalance, EnergyEntry, EnergyWhitelist
+from app.models.energy import EnergyBalance, EnergyControlMessage, EnergyEntry, EnergyWhitelist
+from app.models.registration import BotRegistration
 
 log = logging.getLogger(__name__)
 
@@ -243,3 +244,72 @@ def ledger_reconciles(
         EnergyEntry.discord_user_id == discord_user_id,
     ))
     return bal == int(summed or 0)
+
+
+# --- Energy Control embed (canal de saldos negativos) ------------------------
+def get_control_message(db: Session, guild_id: int) -> tuple[int | None, int | None]:
+    """(channel_id, message_id) do embed de energy-control. None se não há."""
+    row = db.scalar(select(EnergyControlMessage).where(EnergyControlMessage.guild_id == guild_id))
+    if row is None:
+        return None, None
+    return row.channel_id, row.message_id
+
+
+def set_control_message(db: Session, guild_id: int, channel_id: int | None, message_id: int | None) -> None:
+    row = db.get(EnergyControlMessage, guild_id)
+    if row is None:
+        row = EnergyControlMessage(guild_id=guild_id)
+        db.add(row)
+    row.channel_id = channel_id
+    row.message_id = message_id
+    db.flush()
+
+
+def control_rows(db: Session, guild_id: int, threshold: int = 100) -> list[dict]:
+    """Jogadores com saldo < threshold, registrados, não-whitelisted, e que
+    já tiveram pelo menos um log no passado (não lista saldo 0 sem histórico).
+    Retorna lista de {user_id, display_name, balance} ordenada por saldo asc."""
+    wl_ids = set(list_whitelist(db, guild_id))
+    # Saldos
+    bal_rows = db.scalars(select(EnergyBalance).where(EnergyBalance.guild_id == guild_id)).all()
+    balances = {b.discord_user_id: int(b.balance) for b in bal_rows}
+    # Registrados (BotRegistration ativa) — mapa uid → primeiro nome de personagem.
+    reg_rows = db.execute(
+        select(BotRegistration.discord_user_id, BotRegistration.albion_player_name).where(
+            BotRegistration.guild_id == guild_id,
+            BotRegistration.active.is_(True),
+        )
+    ).all()
+    reg_ids = {uid for uid, _ in reg_rows}
+    reg_names: dict[int, str] = {}
+    for uid, name in reg_rows:
+        if uid not in reg_names:
+            reg_names[uid] = name
+    # Usuários com pelo menos uma entry (histórico)
+    has_history_ids = set(db.scalars(
+        select(EnergyEntry.discord_user_id).where(
+            EnergyEntry.guild_id == guild_id,
+        ).distinct()
+    ).all())
+    # Nomes (GuildMember + User) como fallback
+    from app.models.tenancy import GuildMember, User
+    name_map: dict[int, str] = {}
+    for gm, user in db.execute(
+        select(GuildMember, User).join(User, GuildMember.user_id == User.id).where(
+            GuildMember.guild_id == guild_id,
+        )
+    ).all():
+        name_map[gm.user_id] = user.global_name or user.username or str(gm.user_id)
+    rows = []
+    for uid, bal in balances.items():
+        if uid in wl_ids:
+            continue
+        if uid not in reg_ids:
+            continue
+        if bal >= threshold:
+            continue
+        if bal == 0 and uid not in has_history_ids:
+            continue
+        rows.append({"user_id": uid, "display_name": reg_names.get(uid) or name_map.get(uid, str(uid)), "balance": bal})
+    rows.sort(key=lambda r: (r["balance"], r["display_name"]))
+    return rows

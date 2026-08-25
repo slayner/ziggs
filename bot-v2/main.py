@@ -158,6 +158,52 @@ async def offline_queue_loop() -> None:
         print(f"✓ offline_queue: {n} escrita(s) re-enviada(s) ({offline_queue.pending()} pendentes)")
 
 
+# Watchdog de loops mortos: verifica a cada 60s se todos os tasks.loop
+# conhecidos estão rodando. Se um loop morreu sem passar pelo .error handler
+# (task cancelada/presa sem raise), o watchdog reinicia manualmente.
+_LOOP_REGISTRY: list[tuple[str, tasks.Loop]] = []
+
+def _register_loops() -> None:
+    """Coleta todos os tasks.loop ativos dos cogs + os loops do main."""
+    _LOOP_REGISTRY.clear()
+    for name, loop in [
+        ("heartbeat", heartbeat_loop),
+        ("event_work", event_work_loop),
+        ("offline_queue", offline_queue_loop),
+    ]:
+        _LOOP_REGISTRY.append((name, loop))
+    for cog_name in ["Events", "EventEmbeds", "AuditLog", "RegearThreads",
+                     "LootlogThreads", "Nodes", "JuicyKills", "BattleFeed",
+                     "VoicePresence", "MassinfoAccess", "ProfileModeration",
+                     "ScanDashboard", "MemberSync", "Forfeit", "EnergyControl"]:
+        cog = bot.get_cog(cog_name)
+        if cog is None:
+            continue
+        for attr in dir(cog):
+            val = getattr(cog, attr, None)
+            if isinstance(val, tasks.Loop) and not getattr(val, "_is_watchdog", False):
+                _LOOP_REGISTRY.append((f"{cog_name}.{attr}", val))
+
+
+@tasks.loop(seconds=60)
+async def loop_watchdog() -> None:
+    """Verifica se todos os loops registrados estão rodando. Reinicia os
+    que morreram silenciosamente (sem passar pelo .error handler)."""
+    if not _LOOP_REGISTRY:
+        _register_loops()
+    dead = []
+    for name, loop in _LOOP_REGISTRY:
+        if not loop.is_running():
+            dead.append(name)
+            try:
+                loop.start()
+                print(f"⚠ [watchdog] loop {name} morto — reiniciado", flush=True)
+            except Exception as e:
+                print(f"✗ [watchdog] falha ao reiniciar {name}: {e}", flush=True)
+    if dead:
+        print(f"⚠ [watchdog] {len(dead)} loop(s) morto(s) detectado(s): {', '.join(dead)}", flush=True)
+
+
 async def _wait_for_backend() -> None:
     """Bloqueia até o backend responder /health. start-all.cmd liga bot e
     backend em paralelo e o bot costuma ganhar a corrida — sem isto, o
@@ -197,11 +243,26 @@ async def on_ready() -> None:
         event_work_loop.start()
     if not offline_queue_loop.is_running():
         offline_queue_loop.start()
+    if not loop_watchdog.is_running():
+        loop_watchdog.start()
     # Catch-up em background: recriar threads de event_embeds, regear, lootlog,
     # nodes, audit_log etc. demora minutos e bloqueia o event loop — tasks.loop
     # (voice_presence, audit_log, etc.) não consegue tickar enquanto on_ready
     # não retorna. Rodar em asyncio.create_task libera o event loop imediatamente.
     asyncio.create_task(_catch_up())
+
+
+@loop_watchdog.before_loop
+async def _watchdog_before() -> None:
+    await bot.wait_until_ready()
+
+
+@loop_watchdog.error
+async def _watchdog_error(error: BaseException) -> None:
+    import traceback
+    print(f"✗ [watchdog] loop morreu: {type(error).__name__}: {error}", flush=True)
+    traceback.print_exception(type(error), error, error.__traceback__)
+    asyncio.get_running_loop().call_soon(lambda: loop_watchdog.start())
 
 
 async def _catch_up() -> None:
@@ -250,6 +311,13 @@ async def _catch_up() -> None:
         for guild in bot.guilds:
             try:
                 await audit_cog.sync_guild(guild)
+            except Exception:
+                pass
+    energy_cog = bot.get_cog("EnergyControl")
+    if energy_cog is not None:
+        for guild in bot.guilds:
+            try:
+                await energy_cog.refresh_energy_control(guild, force=True)
             except Exception:
                 pass
 
@@ -310,6 +378,7 @@ async def main() -> None:
         await bot.load_extension("cogs.forfeit")
         await bot.load_extension("cogs.member_sync")
         await bot.load_extension("cogs.massinfo_access")
+        await bot.load_extension("cogs.energy_control")
         try:
             await bot.start(TOKEN)
         finally:

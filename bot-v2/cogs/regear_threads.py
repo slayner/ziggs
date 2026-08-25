@@ -86,8 +86,8 @@ class RegearThreads(commands.Cog):
         channel = guild.get_channel(cid)
         if channel is None:
             try:
-                channel = await guild.fetch_channel(cid)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                channel = await dtimeout(guild.fetch_channel(cid))
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException, asyncio.TimeoutError):
                 print(f"[regear_threads] canal {cid} não encontrado/sem acesso "
                       f"em {guild.id} — configure um canal de texto válido")
                 return

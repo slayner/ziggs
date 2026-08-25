@@ -114,7 +114,9 @@ def _enqueue_ping(
       - status trigger (created/in_progress/review): sempre enqueue (bump);
         ping=True sse o gatilho está no conjunto habilitado da guilda.
       - pure-ping trigger (t10min): só enqueue se habilitado (ping=True).
-    O bot só lê `ping` de cada entrada — nunca decide sozinho."""
+    O bot só lê `ping` de cada entrada — nunca decide sozinho.
+    Poda: entradas com mais de 6h são descartadas (ping de evento passado
+    não faz sentido)."""
     g = db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         return
@@ -125,7 +127,13 @@ def _enqueue_ping(
     if is_pure and not ping:
         return  # t10min desligado: nem bump (não é mudança de estado, só barulho)
     outbox = list(settings.get("pending_ping_triggers") or [])
-    outbox.append({"event_id": ev.id, "trigger": trigger, "ping": ping})
+    # Poda por idade: descarta entradas com mais de 6h (evita burst pós-wedge).
+    now_mono = time.monotonic()
+    outbox = [e for e in outbox if now_mono - e.get("_ts", 0) < 21600]  # 6h
+    outbox.append({"event_id": ev.id, "trigger": trigger, "ping": ping, "_ts": now_mono})
+    # Cap absoluto de 50 entradas (segurança contra overflow).
+    if len(outbox) > 50:
+        outbox = outbox[-50:]
     settings["pending_ping_triggers"] = outbox
     g.settings = settings
     db.flush()

@@ -533,6 +533,14 @@ T: dict[str, dict[str, str]] = {
 
     # nodes.py
     "nodes_title": {"pt": "🌿  𝐍𝐎𝐃𝐄𝐒", "en": "🌿  NODES", "es": "🌿  NODOS"},
+
+    # energy_control.py
+    "energy_control_title": {"pt": "⚡  Controle de Energia", "en": "⚡  Energy Control", "es": "⚡  Control de Energía"},
+    "energy_control_empty": {
+        "pt": "Nenhum jogador com energia abaixo do limite.",
+        "en": "No players with energy below the threshold.",
+        "es": "Ningún jugador con energía por debajo del límite.",
+    },
     "nodes_empty": {
         "pt": "Nenhum node programado. Use o botão **Adicionar Node**.",
         "en": "No nodes scheduled. Use the **Add Node** button.",

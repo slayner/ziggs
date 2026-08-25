@@ -1,0 +1,13 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_AUTH_TOKEN": "router-local",
+    "ANTHROPIC_MODEL": "claude-hard",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-ultrahard",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-medium",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-easy",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-ultrahard",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+  }
+}

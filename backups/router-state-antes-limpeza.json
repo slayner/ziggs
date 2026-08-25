@@ -1,0 +1,27 @@
+{
+ "dead_keys": {
+  "ollama-1": {
+   "until": 1787540820.0,
+   "kind": "weekly",
+   "detail": "{\"error\":{\"message\":\"you (ssslayner) have reached your weekly usage limit, upgrade for higher limits: https://ollama.com/upgrade or add extra usage: https://ollama.com/settings (ref: 2ef1e580-45d3-4951-a0d5-601a44307485)\",\"type\":\"api_error\",\"param\":null,\"code\":null}}\n"
+  },
+  "ollama-2": {
+   "until": 1787540820.0,
+   "kind": "weekly",
+   "detail": "{\"error\":{\"message\":\"you (slayner) have reached your weekly usage limit, upgrade for higher limits: https://ollama.com/upgrade or add extra usage: https://ollama.com/settings (ref: b4896a9e-97ca-42f6-a447-ae1dd0b7c27c)\",\"type\":\"api_error\",\"param\":null,\"code\":null}}\n"
+  },
+  "zai": {
+   "until": 1787537612.4886806,
+   "kind": "auth",
+   "detail": "{\"error\":{\"code\":\"1000\",\"message\":\"Authentication Failed\"}}"
+  }
+ },
+ "dead_candidates": {},
+ "cursors": {},
+ "counters": {
+  "marcado:model": 4,
+  "marcado:generic429": 5,
+  "marcado:weekly": 2,
+  "marcado:auth": 1
+ }
+}

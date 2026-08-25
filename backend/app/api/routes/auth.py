@@ -38,6 +38,7 @@ from app.services import event_signups as event_signups_svc
 from app.services import events as events_svc
 from app.services import nodes as nodes_svc
 from app.services import comps as comps_svc
+from app.services import energy as energy_svc
 from app.api.schemas.events import EventCreate
 from app.services.events import ServiceError
 from app.services.player_tracker import HOSTS, make_client
@@ -543,6 +544,10 @@ class GuildSettingsIn(BaseModel):
     juicy_kill_min_silver: int | None = None       # default 50_000_000
     juicy_kill_min_fame: int | None = None         # 0 = não filtra por fama
     juicy_kill_regions: list[str] | None = None     # [] ou null = todas
+    # ── Energy Control: embed constante de saldos negativos (como mass-info).
+    # O bot mantém um embed edit in-place listando jogadores com saldo < threshold.
+    # Null = feature desligada. Ver cogs/energy_control.py.
+    energy_control_channel_id: str | None = None
 
 
 @router.patch("/auth/guild-settings/{guild_id}")
@@ -773,6 +778,13 @@ async def update_guild_settings(
     if "juicy_kill_regions" in body.model_fields_set:
         regs = [r for r in (body.juicy_kill_regions or []) if r in HOSTS]
         settings["juicy_kill_regions"] = regs  # [] = todas
+    if "energy_control_channel_id" in body.model_fields_set:
+        if body.energy_control_channel_id:
+            settings["energy_control_channel_id"] = body.energy_control_channel_id
+            settings["energy_control_dirty"] = True
+        else:
+            settings.pop("energy_control_channel_id", None)
+            settings["energy_control_dirty"] = True
     g.settings = settings
 
     await db.commit()
@@ -988,9 +1000,9 @@ async def remove_albion_link(
         s = g.settings or {}
         for k in ("events_channel_id", "event_review_channel_id", "regear_thread_channel_id",
                   "lootlog_thread_channel_id", "nodes_calendar_channel_id", "voice_cta_channel_id",
-                  "battle_feed_channel_id", "juicy_kill_channel_id", "register_role_id",
-                  "ally_role_id", "ally_allowed_guilds", "lootsplit_mode", "guild_tax_percent",
-                  "scout_bonus_source", "albion_guild_region"):
+                  "battle_feed_channel_id", "juicy_kill_channel_id", "energy_control_channel_id",
+                  "register_role_id", "ally_role_id", "ally_allowed_guilds", "lootsplit_mode",
+                  "guild_tax_percent", "scout_bonus_source", "albion_guild_region"):
             s.pop(k, None)
         g.settings = s
         await db.commit()
@@ -1315,6 +1327,8 @@ async def bot_guild_commands(
         "juicy_kill_hard_floor": _JUICY_KILL_HARD_FLOOR,
         "juicy_kill_min_fame": settings.get("juicy_kill_min_fame", 0),
         "juicy_kill_regions": settings.get("juicy_kill_regions", []),
+        "energy_control_channel_id": settings.get("energy_control_channel_id"),
+        "energy_alert_threshold": settings.get("energy_alert_threshold", 50),
         # Usuários com acesso ao canal mass-info que o bot NÃO deve anunciar como
         # "sem registro" (ver cogs/massinfo_access.py no bot-v2). Lista de IDs
         # Discord em string — o /bypass do bot adiciona/remove aqui.
@@ -1441,9 +1455,18 @@ async def bot_audit_log_work(
     _require_bot_secret(authorization)
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     since_id = (g.settings or {}).get("logs_last_sent_id", 0) if g else 0
+    # Cutoff de 48h: se o bot ficou offline/wedged por dias, descarta entradas
+    # antigas que não fazem mais sentido retransmitir. Avança o cursor
+    # automaticamente para o início da janela de 48h.
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
     rows = (await db.scalars(
         select(AuditLog)
-        .where(AuditLog.guild_id == guild_id, AuditLog.id > since_id)
+        .where(
+            AuditLog.guild_id == guild_id,
+            AuditLog.id > since_id,
+            AuditLog.created_at >= cutoff,
+        )
         .order_by(AuditLog.id.asc())
         .limit(_AUDIT_LOG_BATCH)
     )).all()
@@ -4448,3 +4471,67 @@ def _discord_avatar_url(user_id: int, avatar: str | None) -> str | None:
         return None
     ext = ".gif" if avatar.startswith("a_") else ".png"
     return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar}{ext}"
+
+
+# ── Energy Control (embed de saldos negativos) ───────────────────────────────
+@router.get("/bot/guilds/{guild_id}/energy-control")
+def bot_energy_control_get(guild_id: int, force: bool = False,
+                           authorization: str = Header(...),
+                           db: Session = Depends(deps.db_session)):
+    """Devolve o estado atual do embed de energy-control: channel_id,
+    message_id, rows (jogadores com saldo < threshold), dirty flag, e
+    new_uids (jogadores que entraram na lista desde a última sync —
+    o bot menciona esses 1x no content do reenvio).
+    ?force=true ignora o dirty check (usado no catch_up pós-restart)."""
+    _require_bot_secret(authorization)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    settings = (g.settings or {}) if g else {}
+    threshold = settings.get("energy_alert_threshold", 100)
+    try:
+        threshold = int(threshold)
+    except (TypeError, ValueError):
+        threshold = 100
+    channel_id, message_id = energy_svc.get_control_message(db, guild_id)
+    rows = energy_svc.control_rows(db, guild_id, threshold)
+    current_uids = {r["user_id"] for r in rows}
+    known_uids = set(settings.get("energy_control_known_uids") or [])
+    # new_uids = quem está na lista agora mas não estava antes.
+    # No force (catch_up pós-restart) não pinga ninguém — os known continuam known.
+    if force:
+        new_uids = set()
+    else:
+        new_uids = current_uids - known_uids
+    return {
+        "channel_id": str(channel_id) if channel_id else None,
+        "message_id": str(message_id) if message_id else None,
+        "threshold": threshold,
+        "rows": rows,
+        "new_uids": sorted(new_uids),
+        "dirty": bool(force or settings.get("energy_control_dirty")),
+    }
+
+
+class BotEnergyControlSyncedIn(BaseModel):
+    channel_id: str | None = None
+    message_id: str | None = None
+    known_uids: list[int] | None = None
+
+
+@router.post("/bot/guilds/{guild_id}/energy-control/synced")
+def bot_energy_control_synced(guild_id: int, body: BotEnergyControlSyncedIn,
+                              authorization: str = Header(...),
+                              db: Session = Depends(deps.db_session)):
+    """Persiste channel_id + message_id, atualiza known_uids e limpa o dirty."""
+    _require_bot_secret(authorization)
+    ch = int(body.channel_id) if body.channel_id else None
+    mid = int(body.message_id) if body.message_id else None
+    energy_svc.set_control_message(db, guild_id, ch, mid)
+    g = db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is not None:
+        settings = dict(g.settings or {})
+        settings.pop("energy_control_dirty", None)
+        if body.known_uids is not None:
+            settings["energy_control_known_uids"] = body.known_uids
+        g.settings = settings
+    db.commit()
+    return {"ok": True}

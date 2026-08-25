@@ -33,6 +33,61 @@ TIME_TOTAL_FAIXAS     = TIME_HORIZON_H * 60 // TIME_BUCKET_MIN + 1   # 87
 TIME_FAIXAS_PER_PAGE  = 23                              # 25 - 2 slots de navegação ◀️/▶️
 TIME_PAGES            = -(-TIME_TOTAL_FAIXAS // TIME_FAIXAS_PER_PAGE)  # ceil → 4
 
+# Catálogo de nodes default — espelha o frontend (GuildConfig.tsx).
+# Mapeia node_type (chave canônica do banco) → (emoji, {lang: nome traduzido}).
+# Usado quando o NodeDef do backend não tem emoji ou quando precisamos traduzir
+# o node_type cru ("wood_8.4") para o idioma da guilda.
+_NODE_CATALOG: dict[str, tuple[str, dict[str, str]]] = {
+    "wood_4.4":       ("🪵", {"pt": "Madeira 4.4",   "en": "Wood 4.4",    "es": "Madera 4.4"}),
+    "wood_5.4":       ("🪵", {"pt": "Madeira 5.4",   "en": "Wood 5.4",    "es": "Madera 5.4"}),
+    "wood_6.4":       ("🪵", {"pt": "Madeira 6.4",   "en": "Wood 6.4",    "es": "Madera 6.4"}),
+    "wood_7.4":       ("🪵", {"pt": "Madeira 7.4",   "en": "Wood 7.4",    "es": "Madera 7.4"}),
+    "wood_8.4":       ("🪵", {"pt": "Madeira 8.4",   "en": "Wood 8.4",    "es": "Madera 8.4"}),
+    "ore_4.4":        ("🪨", {"pt": "Minério 4.4",   "en": "Ore 4.4",     "es": "Mineral 4.4"}),
+    "ore_5.4":        ("🪨", {"pt": "Minério 5.4",   "en": "Ore 5.4",     "es": "Mineral 5.4"}),
+    "ore_6.4":        ("🪨", {"pt": "Minério 6.4",   "en": "Ore 6.4",     "es": "Mineral 6.4"}),
+    "ore_7.4":        ("🪨", {"pt": "Minério 7.4",   "en": "Ore 7.4",     "es": "Mineral 7.4"}),
+    "ore_8.4":        ("🪨", {"pt": "Minério 8.4",   "en": "Ore 8.4",     "es": "Mineral 8.4"}),
+    "fiber_4.4":      ("🌿", {"pt": "Fibra 4.4",     "en": "Fiber 4.4",   "es": "Fibra 4.4"}),
+    "fiber_5.4":      ("🌿", {"pt": "Fibra 5.4",     "en": "Fiber 5.4",   "es": "Fibra 5.4"}),
+    "fiber_6.4":      ("🌿", {"pt": "Fibra 6.4",     "en": "Fiber 6.4",   "es": "Fibra 6.4"}),
+    "fiber_7.4":      ("🌿", {"pt": "Fibra 7.4",     "en": "Fiber 7.4",   "es": "Fibra 7.4"}),
+    "fiber_8.4":      ("🌿", {"pt": "Fibra 8.4",     "en": "Fiber 8.4",   "es": "Fibra 8.4"}),
+    "hide_4.4":       ("🐗", {"pt": "Couro 4.4",     "en": "Hide 4.4",    "es": "Cuero 4.4"}),
+    "hide_5.4":       ("🐗", {"pt": "Couro 5.4",     "en": "Hide 5.4",    "es": "Cuero 5.4"}),
+    "hide_6.4":       ("🐗", {"pt": "Couro 6.4",     "en": "Hide 6.4",    "es": "Cuero 6.4"}),
+    "hide_7.4":       ("🐗", {"pt": "Couro 7.4",     "en": "Hide 7.4",    "es": "Cuero 7.4"}),
+    "hide_8.4":       ("🐗", {"pt": "Couro 8.4",     "en": "Hide 8.4",    "es": "Cuero 8.4"}),
+    "vortex_green":   ("🟩", {"pt": "Vortex Verde",  "en": "Green Vortex",  "es": "Vortex Verde"}),
+    "vortex_blue":    ("🟦", {"pt": "Vortex Azul",   "en": "Blue Vortex",   "es": "Vortex Azul"}),
+    "vortex_purple":  ("🟪", {"pt": "Vortex Roxo",   "en": "Purple Vortex", "es": "Vortex Morado"}),
+    "vortex_gold":    ("🟨", {"pt": "Vortex Dourado","en": "Gold Vortex",   "es": "Vortex Dorado"}),
+    "orb_green":      ("🟢", {"pt": "Orbe Verde",    "en": "Green Orb",     "es": "Orbe Verde"}),
+    "orb_blue":       ("🔵", {"pt": "Orbe Azul",     "en": "Blue Orb",      "es": "Orbe Azul"}),
+    "orb_purple":     ("🟣", {"pt": "Orbe Roxa",     "en": "Purple Orb",    "es": "Orbe Morada"}),
+    "orb_gold":       ("🟡", {"pt": "Orbe Dourada",  "en": "Gold Orb",      "es": "Orbe Dorada"}),
+}
+
+
+def _node_display_name(node_type: str, lang: str, emoji_map: dict[str, str] | None = None) -> str:
+    """Nome traduzido do node_type. Se há catálogo, usa o nome no idioma da
+    guilda; senão devolve o node_type cru (nome custom da guilda)."""
+    entry = _NODE_CATALOG.get(node_type)
+    if entry:
+        return entry[1].get(lang, entry[1].get("pt", node_type))
+    return node_type
+
+
+def _node_emoji(node_type: str, emoji_map: dict[str, str] | None = None) -> str:
+    """Emoji do node: prioritiza o emoji_map do backend (NodeDef.emoji),
+    cai pro catálogo default, senão 🌿."""
+    if emoji_map and emoji_map.get(node_type):
+        return emoji_map[node_type]
+    entry = _NODE_CATALOG.get(node_type)
+    if entry:
+        return entry[0]
+    return "🌿"
+
 
 def _fmt_eta(minutes: int) -> str:
     """Quanto falta, legível: '2 horas' · '2h25min' · '25 minutos' · 'agora'."""
@@ -107,9 +162,9 @@ def _build_calendar_embed(lang: str, events: list[dict], emoji_map: dict[str, st
             col_map.append("ㅤ")
             used += 2
         prev_ts = ts
-        emoji = emoji_map.get(e["node_type"]) or "🌿"
+        emoji = _node_emoji(e["node_type"], emoji_map)
         col_utc.append(f"**{_fmt_utc(dt)}**")
-        col_node.append(f"**{emoji}  {e['node_type']}**")
+        col_node.append(f"**{emoji}  {_node_display_name(e['node_type'], lang)}**")
         col_map.append(line_map)
         used += len(line_map) + 1
         shown += 1
@@ -165,7 +220,7 @@ class AddNodeView(discord.ui.View):
             return
         select = discord.ui.Select(
             placeholder=t(self.lang, "nodes_pick_type"),
-            options=[discord.SelectOption(label=f"{d.get('emoji') or '🌿'} {d['name']}", value=d["name"])
+            options=[discord.SelectOption(label=f"{_node_emoji(d['name'], None)} {_node_display_name(d['name'], self.lang)}", value=d["name"])
                      for d in self.defs[:25]],
         )
         select.callback = self._on_type_chosen
@@ -340,7 +395,7 @@ class AddNodeView(discord.ui.View):
             )
             return
         await interaction.response.edit_message(
-            content=t(self.lang, "nodes_added", node=self.node_type, mapa=self.map_name,
+            content=t(self.lang, "nodes_added", node=_node_display_name(self.node_type, self.lang), mapa=self.map_name,
                       hora=_fmt_utc(self.spawn_at)),
             view=None,
         )
@@ -362,7 +417,7 @@ class NodeRemoveView(discord.ui.View):
         select = discord.ui.Select(
             placeholder=t(lang, "nodes_pick_remove"),
             options=[discord.SelectOption(
-                label=f"{e['node_type']} · {e['map_name']} · {_fmt_utc(_parse_iso(e['spawn_at']))}",
+                label=f"{_node_display_name(e['node_type'], lang)} · {e['map_name']} · {_fmt_utc(_parse_iso(e['spawn_at']))}",
                 value=str(e["id"]),
             ) for e in events[:25]],
         )

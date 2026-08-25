@@ -26,6 +26,8 @@ export function CompList({ perms, compList, loadError, setCompList, onOpen }: {
   const [creatingComp, setCreatingComp] = useState(false);
   const [importMode, setImportMode] = useState(false);
   const [newCompName, setNewCompName] = useState("");
+  const [pastedCode, setPastedCode] = useState("");
+  const [showPasteBox, setShowPasteBox] = useState(false);
   const [deletingCompId, setDeletingCompId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copyingId, setCopyingId] = useState<number | null>(null);
@@ -82,12 +84,15 @@ export function CompList({ perms, compList, loadError, setCompList, onOpen }: {
   // no editor pra persistir de verdade).
   async function importCompFn() {
     if (!newCompName.trim()) return;
-    let text: string;
-    try {
-      text = await navigator.clipboard.readText();
-    } catch {
-      flashCodeMsg(t("buildCodePasteFail"));
-      return;
+    let text = pastedCode.trim();
+    if (!text) {
+      try {
+        text = (await navigator.clipboard.readText()).trim();
+      } catch {
+        setShowPasteBox(true);
+        flashCodeMsg(t("buildCodePasteFail"));
+        return;
+      }
     }
     const code = decodeCompCode(text);
     if (!code) {
@@ -97,7 +102,7 @@ export function CompList({ perms, compList, loadError, setCompList, onOpen }: {
     try {
       const c = await api.createComp({ name: newCompName.trim() });
       setCompList(prev => [...(prev ?? []), { id: c.id, name: c.name }]);
-      setCreatingComp(false); setImportMode(false); setNewCompName("");
+      setCreatingComp(false); setImportMode(false); setNewCompName(""); setPastedCode(""); setShowPasteBox(false);
       onOpen(c.id, compToDraft(c), true, code);
     } catch (e) {
       setError(e instanceof Error ? e.message : t("createCompError"));
@@ -273,9 +278,20 @@ export function CompList({ perms, compList, loadError, setCompList, onOpen }: {
               autoFocus
               onChange={e => setNewCompName(e.target.value)}
               onKeyDown={e => {
-                if (e.key === "Enter") importMode ? importCompFn() : createCompFn();
-                if (e.key === "Escape") { setCreatingComp(false); setImportMode(false); setNewCompName(""); }
+                if (e.key === "Enter" && !importMode) createCompFn();
+                if (e.key === "Escape") { setCreatingComp(false); setImportMode(false); setNewCompName(""); setPastedCode(""); setShowPasteBox(false); }
               }} />
+            {importMode && (
+              <textarea className="input comp-create-modal-pastebox"
+                placeholder={t("pasteCompCodeHere")}
+                value={pastedCode}
+                onChange={e => setPastedCode(e.target.value)}
+                rows={4}
+                autoFocus={showPasteBox} />
+            )}
+            {importMode && showPasteBox && (
+              <p className="comp-list-msg" style={{ fontSize: 12 }}>{t("buildCodePasteFail")}</p>
+            )}
             <div className="comp-create-modal-actions">
               {importMode ? (
                 <button className="btn primary" onClick={importCompFn} disabled={!newCompName.trim()}>

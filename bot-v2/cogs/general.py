@@ -47,6 +47,7 @@ async def _guild_command_config(guild_id: int) -> dict:
         "battle_feed_channel_id": None, "battle_feed_min_players": 10,
         "juicy_kill_channel_id": None, "juicy_kill_min_silver": 50_000_000,
         "juicy_kill_min_fame": 0, "juicy_kill_regions": [],
+        "energy_control_channel_id": None, "energy_alert_threshold": 50,
         "register_role_id": None,
         "massinfo_access_bypass_user_ids": [],
     }
@@ -82,6 +83,8 @@ async def _guild_command_config(guild_id: int) -> dict:
                     "juicy_kill_min_silver": data.get("juicy_kill_min_silver", 50_000_000),
                     "juicy_kill_min_fame": data.get("juicy_kill_min_fame", 0),
                     "juicy_kill_regions": data.get("juicy_kill_regions", []),
+                    "energy_control_channel_id": data.get("energy_control_channel_id"),
+                    "energy_alert_threshold": data.get("energy_alert_threshold", 50),
                     "register_role_id": data.get("register_role_id"),
                     "massinfo_access_bypass_user_ids": data.get("massinfo_access_bypass_user_ids", []),
                 }
