@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmZDQi92M3kwVnQyRVpoajc2Zys2OTlFUmdpb3VHa2VtOWNwRmowOTdGalloTWFMbFJHVWxVZEJ3c1NOZXh4enZ6LythVFI3WTBhOVVvQ3ZBRE9KTUFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3MjUzMjg1CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi45X3g2NC1zZXR1cC5leGUKQ1c2TjNadGpkTkUzV3ZLRGh5UnVWbG5BMFNkUVdMZ0FTZ01EWkRHTHBGWlJEc2tEeE5oT1J2TkhzbVdNQzF1TUlTL3NWbGFpdm02b0N1NmxCOEpHQVE9PQo=",
-                                             "url":  "https://ziggs.xyz/companion/Ziggs-Companion_0.2.9_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmR2TURtMmsyS29kRDV5ZGpFYlQ5bHpBd0Fqb2tWODAzM09MMkxRUE1BNVNibXlmdW9FMGwybjYzcDBRSUtNZVVVTGRNejViV3VmMW1LUHA1MXMxRmc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3Njg5OTgwCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4xMF94NjQtc2V0dXAuZXhlCno2UkVzQnoyTkZac2RONENUbVFicVRSUjNkK3ZCY0cxYUs1QnZWLzg3b0FqYmpvZS9wYkZrQkNuMSt4VUFQSXRMK1JLR1FhaDY4TnBsYzRDdzlNaENBPT0K",
+                                             "url":  "https://github.com/slayner/ziggs/releases/download/v0.2.10/Ziggs-Companion_0.2.10_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-20T16:15:18Z",
-    "version":  "0.2.9",
-    "notes":  "Remove lootlog auto-submit and filter INFO lines from the lootlog terminal. Manual lootlog submission still works as before."
+    "pub_date":  "2026-08-25T17:34:25Z",
+    "version":  "0.2.10",
+    "notes":  "UI cleanup: remove About card from settings, show version in title bar, simplify damage meter tab, point downloads to GitHub releases"
 }

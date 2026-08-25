@@ -1,7 +1,7 @@
 {
     "$schema":  "https://schema.tauri.app/config/2",
     "productName":  "Ziggs Companion",
-    "version":  "0.2.9",
+    "version":  "0.2.10",
     "identifier":  "xyz.ziggs.companion",
     "build":  {
                   "frontendDist":  "../dist",
@@ -38,11 +38,11 @@
                                 "icons/icon.ico",
                                 "icons/icon.png"
                             ],
-                    "resources":  [
-                                      "resources/wintun.dll",
-                                      "resources/WinDivert.dll",
-                                      "resources/WinDivert64.sys"
-                                  ],
+                   "resources":  [
+                                     "resources/wintun.dll",
+                                     "resources/WinDivert.dll",
+                                     "resources/WinDivert64.sys"
+                                 ],
                    "category":  "Utility",
                    "shortDescription":  "Ziggs Companion",
                    "longDescription":  "Distributed battle scanner, route/DNS optimizer and lootlog helper for the Ziggs platform.",
