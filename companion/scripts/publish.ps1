@@ -74,8 +74,9 @@ Write-Host "[2/3] Atualizando manifest..." -ForegroundColor Yellow
 # Le a assinatura (base64 do conteudo do .sig)
 $sigContent = Get-Content $sigPath -Raw
 
-# Nome do arquivo no release do GitHub
-$exeUrlName = "Ziggs-Companion_${version}_x64-setup.exe"
+# GitHub replaces spaces in asset names with dots, so "Ziggs Companion" becomes
+# "Ziggs.Companion" in the download URL.
+$exeUrlName = "Ziggs.Companion_${version}_x64-setup.exe"
 $downloadUrl = "https://github.com/slayner/ziggs/releases/download/v$version/$exeUrlName"
 
 $manifest = @{
