@@ -1,10 +1,9 @@
 #!/usr/bin/env powershell
 # companion/scripts/publish.ps1
 # Empacota o ultimo build do companion num release completo:
-#   1. GitHub release no slayner/ziggs (exe + sig)
-#   2. Copia exe + sig pra VPS de producao
-#   3. Atualiza companion-release.json no backend
-#   4. Commit + push no ziggs-site
+#   1. GitHub release no slayner/ziggs (publico, exe + sig)
+#   2. Atualiza companion-release.json (manifest do auto-updater, URL aponta pro GitHub)
+#   3. Commit + push no ziggs-site
 #
 # Uso: cd companion ; powershell -ExecutionPolicy Bypass -File scripts/publish.ps1 [-Notes "texto"]
 # Pre-requisito: build ja feito (npm run tauri build com signing key no env)
@@ -46,11 +45,11 @@ if (-not $Notes) {
     $Notes = "Companion v$version"
 }
 
-# --- 1. GitHub release no slayner/ziggs-site (privado) ---
+# --- 1. GitHub release on slayner/ziggs (public) ---
 Write-Host ""
 Write-Host "[1/4] GitHub release..." -ForegroundColor Yellow
 $tag = "v$version"
-$repo = "slayner/ziggs-site"
+$repo = "slayner/ziggs"
 
 # Deleta release anterior se existir (mesma tag)
 $existingTag = $null
@@ -66,32 +65,18 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRO: gh release create falhou" -ForegroundColor Red
     exit 1
 }
-Write-Host "  Release criado: https://github.com/slayner/ziggs-site/releases/tag/$tag"
+Write-Host "  Release criado: https://github.com/slayner/ziggs/releases/tag/$tag"
 
-# --- 2. Copia exe + sig pra VPS de producao ---
+# --- 2. Atualiza companion-release.json ---
 Write-Host ""
-Write-Host "[2/4] Upload pra VPS de producao..." -ForegroundColor Yellow
-$sshKey = "$env:USERPROFILE\.ssh\hetzner_ziggs"
-$prodHost = "root@167.233.241.191"
-$remoteDir = "/var/www/ziggs.xyz/companion"
-
-scp -i $sshKey $exePath "${prodHost}:$remoteDir/Ziggs-Companion_${version}_x64-setup.exe"
-scp -i $sshKey $sigPath "${prodHost}:$remoteDir/Ziggs-Companion_${version}_x64-setup.exe.sig"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERRO: scp falhou (VPS de producao)" -ForegroundColor Red
-    exit 1
-}
-Write-Host "  Copiado pra $remoteDir/"
-
-# --- 3. Atualiza companion-release.json ---
-Write-Host ""
-Write-Host "[3/4] Atualizando manifest..." -ForegroundColor Yellow
+Write-Host "[2/3] Atualizando manifest..." -ForegroundColor Yellow
 
 # Le a assinatura (base64 do conteudo do .sig)
 $sigContent = Get-Content $sigPath -Raw
 
-# Nome do arquivo na URL publica
+# Nome do arquivo no release do GitHub
 $exeUrlName = "Ziggs-Companion_${version}_x64-setup.exe"
+$downloadUrl = "https://github.com/slayner/ziggs/releases/download/v$version/$exeUrlName"
 
 $manifest = @{
     version = $version
@@ -100,7 +85,7 @@ $manifest = @{
     platforms = @{
         "windows-x86_64" = @{
             signature = $sigContent.Trim()
-            url = "https://ziggs.xyz/companion/$exeUrlName"
+            url = $downloadUrl
         }
     }
 }
@@ -110,13 +95,15 @@ $manifest | ConvertTo-Json -Depth 5 | Set-Content $manifestPath -NoNewline
 Write-Host "  $manifestPath atualizado"
 
 # Copia o manifest pra VPS de producao (backend data + static companion dir)
+$sshKey = "$env:USERPROFILE\.ssh\hetzner_ziggs"
+$prodHost = "root@167.233.241.191"
 scp -i $sshKey $manifestPath "${prodHost}:/home/ziggs/ziggs/backend/data/companion-release.json"
 ssh -i $sshKey $prodHost "cp /home/ziggs/ziggs/backend/data/companion-release.json /var/www/ziggs.xyz/companion/latest.json" 2>&1 | Out-Null
 Write-Host "  Manifest copiado pra VPS de producao"
 
-# --- 4. Commit + push no ziggs-site ---
+# --- 3. Commit + push no ziggs-site ---
 Write-Host ""
-Write-Host "[4/4] Commit no ziggs-site..." -ForegroundColor Yellow
+Write-Host "[3/3] Commit no ziggs-site..." -ForegroundColor Yellow
 Set-Location ..
 git add backend/data/companion-release.json companion/src-tauri/tauri.conf.json
 $commitMsg = "companion: release v$version"
@@ -130,6 +117,6 @@ Write-Host "  Backend reiniciado na producao"
 
 Write-Host ""
 Write-Host "=== Release v$version publicado! ===" -ForegroundColor Green
-Write-Host "  GitHub:  https://github.com/slayner/ziggs-site/releases/tag/$tag"
-Write-Host "  Download: https://ziggs.xyz/companion/$exeUrlName"
+Write-Host "  GitHub:  https://github.com/slayner/ziggs/releases/tag/$tag"
+Write-Host "  Download: $downloadUrl"
 Write-Host "  Auto-updater ativo - companions instalados vao atualizar sozinhos"

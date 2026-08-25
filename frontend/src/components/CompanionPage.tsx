@@ -5,7 +5,7 @@ import { Panel } from "./Panel";
 const GITHUB_URL = "https://github.com/slayner/ziggs";
 const PINGS_URL = "/companion/vps-pings";
 const RELEASE_URL = "/companion/latest.json";
-const WINDOWS_FALLBACK_URL = "https://ziggs.xyz/companion/Ziggs-Companion_0.1.10_x64-setup.exe";
+const WINDOWS_FALLBACK_URL = "https://github.com/slayner/ziggs/releases/latest";
 
 const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
 
