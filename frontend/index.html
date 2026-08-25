@@ -18,13 +18,22 @@
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/3.24.0/tabler-icons.min.css"
     />
-    <!-- Google AdSense — script global (conecta o domínio à conta durante a
-         revisão de aprovação; unidades veiculam só após aprovação). -->
+    <!-- Google AdSense — global script (connects domain to account during
+         approval review; units only serve after approval). -->
     <script
       async
       src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5616694158578299"
       crossorigin="anonymous"
     ></script>
+    <!-- Ezoic — privacy/consent scripts must load before the header script. -->
+    <script data-cfasync="false" src="https://cmp.gatekeeperconsent.com/min.js"></script>
+    <script data-cfasync="false" src="https://the.gatekeeperconsent.com/cmp.min.js"></script>
+    <script async src="//www.ezojs.com/ezoic/sa.min.js"></script>
+    <script>
+      window.ezstandalone = window.ezstandalone || {};
+      ezstandalone.cmd = ezstandalone.cmd || [];
+    </script>
+    <script src="//ezoicanalytics.com/analytics.js"></script>
   </head>
   <body>
     <div id="root"></div>
