@@ -423,6 +423,15 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .cs-slot-pick-name { font-size: 13px; font-weight: 600; }
 .cs-slot-pick-fns { display: inline-flex; gap: 3px; flex-wrap: wrap; align-items: center; }
 .cs-slot-pick-more { font-size: 10px; color: var(--gold); padding: 0 2px; }
+.cs-slot-pick-renders { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 3px; }
+.cs-slot-pick-render { position: relative; width: 28px; height: 28px; }
+.cs-slot-pick-render img { width: 28px; height: 28px; object-fit: contain; border-radius: 3px; }
+.cs-slot-pick-emoji {
+  position: absolute; bottom: -1px; right: -1px;
+  font-size: 9px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 50%; width: 14px; height: 14px;
+  display: flex; align-items: center; justify-content: center; line-height: 1;
+}
 
 /* ── Detalhe (modal) — build, skills, swaps. Reusado pelo modal de detalhe. */
 .cs-detail-section { display: flex; flex-direction: column; gap: 5px; }
@@ -555,6 +564,14 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   padding: 6px;
   margin-top: 4px;
   border-top-width: 1px;
+}
+/* Durante o drag de qualquer card, todos os hovers colapsam pra não atrapalhar. */
+.esc-rail-list:has(.esc-rail-card[draggable="true"]:active) .esc-rail-hover {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  padding: 0 6px !important;
+  margin-top: 0 !important;
+  border-top-width: 0 !important;
 }
 .esc-rail-hover-render {
   position: relative;

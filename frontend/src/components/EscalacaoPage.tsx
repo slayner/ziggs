@@ -584,6 +584,8 @@ function EscalationBoard(p: BoardProps) {
                 onPickCandidate={p.onPickCandidate}
                 onUnassignUser={p.onUnassignUser}
                 onOpenDetail={p.onOpenDetail}
+                weaponItemId={p.weaponItemId}
+                compTierMap={p.compTierMap}
                 t={t}
                 lang={p.lang}
               />
@@ -801,6 +803,8 @@ function PartyColumn(p: {
   onPickCandidate: (slotId: number, userId: number) => void;
   onUnassignUser: (userId: number) => void;
   onOpenDetail: (d: Detail) => void;
+  weaponItemId: Map<number, string>;
+  compTierMap: Map<string, string>;
   t: (k: TKey) => string;
   lang: Lang;
 }) {
@@ -822,6 +826,8 @@ function PartyColumn(p: {
             onPickCandidate={p.onPickCandidate}
             onUnassignUser={p.onUnassignUser}
             onOpenDetail={p.onOpenDetail}
+            weaponItemId={p.weaponItemId}
+            compTierMap={p.compTierMap}
             t={t}
             lang={p.lang}
           />
@@ -846,6 +852,8 @@ function SlotRow(p: {
   onPickCandidate: (slotId: number, userId: number) => void;
   onUnassignUser: (userId: number) => void;
   onOpenDetail: (d: Detail) => void;
+  weaponItemId: Map<number, string>;
+  compTierMap: Map<string, string>;
   t: (k: TKey) => string;
   lang: Lang;
 }) {
@@ -924,6 +932,9 @@ function SlotRow(p: {
             onToggle={() => p.setPopoverSlot(p.popoverSlot === slot.id ? null : slot.id)}
             onPick={(uid) => p.onPickCandidate(slot.id, uid)}
             dropHint={t("escDropHint")}
+            weaponItemId={p.weaponItemId}
+            compTierMap={p.compTierMap}
+            lang={lang}
           />
         ) : (
           <span className="esc-bracket esc-bracket-empty">{NA}</span>
@@ -1072,13 +1083,16 @@ function DetailModal({ detail, t, lang, onClose }: { detail: Detail; t: (k: TKey
 // modal de escolha (slot flex). Fecha ao clicar fora, ESC ou ao escolher.
 // ponytail: overlay simples com stopPropagation — sem portal, sem lib.
 function SlotCandidatePicker({
-  candidates, open, onToggle, onPick, dropHint,
+  candidates, open, onToggle, onPick, dropHint, weaponItemId, compTierMap, lang,
 }: {
   candidates: EscalationSignup[];
   open: boolean;
   onToggle: () => void;
   onPick: (userId: number) => void;
   dropHint: string;
+  weaponItemId: Map<number, string>;
+  compTierMap: Map<string, string>;
+  lang: Lang;
 }) {
   const btnRef = useRef<HTMLButtonElement>(null);
   // Coords do menu em position:fixed — escapa de qualquer overflow ancestral
@@ -1132,22 +1146,32 @@ function SlotCandidatePicker({
           <div className="cs-slot-pick-menu" style={{ position: "fixed", top: menuPos.top, left: menuPos.left }} onClick={(e) => e.stopPropagation()}>
             {count === 0
               ? <div className="hint cs-slot-pick-empty">Nenhum inscrito compatível</div>
-              : candidates.map(s => (
-                <button
-                  key={s.user_id}
-                  type="button"
-                  className="cs-slot-pick-item"
-                  onClick={() => onPick(s.user_id)}
-                >
-                  <span className="cs-slot-pick-name">{s.user_name || String(s.user_id)}</span>
-                  {s.functions.length > 0 && (
-                    <span className="cs-slot-pick-fns">
-                      {s.functions.slice(0, 3).map(f => <span key={f} className="esc-role-chip">{f}</span>)}
-                      {s.functions.length > 3 && <span className="cs-slot-pick-more">+{s.functions.length - 3}</span>}
-                    </span>
-                  )}
-                </button>
-              ))}
+              : candidates.map(s => {
+                const opts = signupWeaponOptions(s, weaponItemId, compTierMap, lang);
+                return (
+                  <button
+                    key={s.user_id}
+                    type="button"
+                    className="cs-slot-pick-item"
+                    onClick={() => onPick(s.user_id)}
+                  >
+                    <span className="cs-slot-pick-name">{s.user_name || String(s.user_id)}</span>
+                    {opts.length > 0 && (
+                      <div className="cs-slot-pick-renders">
+                        {opts.map((o, i) => {
+                          const fnDef = getFnDef(o.fnKey, DEFAULT_FN_TYPES);
+                          return (
+                            <div key={i} className="cs-slot-pick-render">
+                              <img src={itemRenderUrl(o.itemId, 1, 64)} alt={o.label} title={o.label} />
+                              {fnDef?.emoji && <span className="cs-slot-pick-emoji">{fnDef.emoji}</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
           </div>
         </>
       )}
