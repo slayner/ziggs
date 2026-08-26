@@ -2484,7 +2484,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 
 /* ── Affiliate leaderboard (728x90, assets oficiais servidos localmente) ──── */
 .aff-leaderboard {
-  max-width: 728px; margin: 24px auto 0; border-radius: 10px;
+  max-width: 728px; margin: 16px auto 0; border-radius: 10px;
   overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,.3);
 }
 .aff-leaderboard-link { display: block; text-decoration: none; color: inherit; }
@@ -2492,8 +2492,14 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 28px; height: 90px;
   background-size: cover; background-position: center;
+  position: relative;
 }
-.aff-leaderboard-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.aff-leaderboard-inner::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, rgba(0,0,0,.5) 0%, rgba(0,0,0,.2) 100%);
+  pointer-events: none;
+}
+.aff-leaderboard-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; position: relative; z-index: 1; }
 .aff-leaderboard-logo { height: 22px; width: auto; margin-bottom: 2px; }
 .aff-leaderboard-headline {
   font-size: 15px; font-weight: 700; color: #fff; letter-spacing: -.2px; line-height: 1.2;
@@ -2501,17 +2507,50 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   text-shadow: 0 1px 4px rgba(0,0,0,.5);
 }
 .aff-leaderboard-desc {
-  font-size: 12px; color: rgba(255,255,255,.65); line-height: 1.2;
+  font-size: 12px; color: rgba(255,255,255,.75); line-height: 1.2;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .aff-leaderboard-cta {
-  flex-shrink: 0; padding: 9px 20px; border-radius: 6px;
+  flex-shrink: 0; position: relative; z-index: 1;
+  padding: 9px 20px; border-radius: 6px;
   font-size: 12px; font-weight: 700; color: #fff; letter-spacing: .2px;
-  white-space: nowrap;
-  transition: transform .1s;
+  white-space: nowrap; transition: transform .1s;
 }
 .aff-leaderboard:hover .aff-leaderboard-cta { transform: scale(1.03); }
 .aff-leaderboard:active .aff-leaderboard-cta { transform: scale(.97); }
+
+/* ── Affiliate rectangle (300x250, para rails/sidebar) ───────────────────── */
+.aff-rect {
+  width: 300px; max-width: 100%; height: 250px; margin: 0 auto;
+  border-radius: 10px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,.3);
+}
+.aff-rect-link { display: block; width: 100%; height: 100%; text-decoration: none; color: inherit; position: relative; }
+.aff-rect-bg {
+  position: absolute; inset: 0; background-size: cover; background-position: center;
+  opacity: .5;
+}
+.aff-rect-bg::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(0,0,0,.4) 0%, rgba(0,0,0,.2) 100%);
+}
+.aff-rect-content {
+  position: relative; z-index: 1; height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 20px; gap: 6px; text-align: center;
+}
+.aff-rect-logo { height: 24px; width: auto; margin-bottom: 4px; }
+.aff-rect-headline {
+  font-size: 16px; font-weight: 700; color: #fff; line-height: 1.2;
+  text-shadow: 0 1px 4px rgba(0,0,0,.5);
+}
+.aff-rect-desc { font-size: 12px; color: rgba(255,255,255,.75); line-height: 1.3; }
+.aff-rect-cta {
+  margin-top: 4px; padding: 8px 22px; border-radius: 6px;
+  font-size: 13px; font-weight: 700; color: #fff; letter-spacing: .2px;
+  transition: transform .1s;
+}
+.aff-rect:hover .aff-rect-cta { transform: scale(1.03); }
+.aff-rect:active .aff-rect-cta { transform: scale(.97); }
 
 @media (max-width: 600px) {
   .aff-leaderboard-inner { padding: 12px 16px; height: auto; flex-direction: column; justify-content: center; align-items: center; gap: 8px; text-align: center; }

@@ -6,6 +6,7 @@ import { EquipGrid } from "./comp/EquipGrid";
 import { buildItemsToEquip, itemUrl, DEFAULT_FN_TYPES, getFnDef } from "./comp/helpers";
 import type { FnTypeDef } from "./comp/types";
 import AdBanner from "./AdBanner";
+import AffiliateBanner from "./AffiliateBanner";
 
 interface Props {
   token?: string;
@@ -707,6 +708,7 @@ function SignupRail({
       </div>
       <div className="esc-rail-ad">
         <AdBanner slot="escalacao-rail" variant="mediumRectangle" />
+        <AffiliateBanner variant="rectangle" />
       </div>
     </aside>
   );

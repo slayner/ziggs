@@ -822,6 +822,7 @@ export default function App() {
       {view !== "craft" && !pickingGuild && !(view === "management" && (!loggedIn || needsSetup)) && !(view === "config" && (!loggedIn || needsSetup)) && !eventRoute && !publicEventRoute && (
         <div style={{ padding: "10px 16px 0" }}>
           <AdBanner key={`top-${view}`} slot={`top-${view}`} variant="leaderboard" mobileVariant="mobileBanner" />
+          <AffiliateBanner variant="leaderboard" />
         </div>
       )}
       <ErrorBoundary>
@@ -876,9 +877,6 @@ export default function App() {
         )}
       </Suspense>
       </ErrorBoundary>
-      {/* Banner de afiliados — rotativo, sempre visível, sem precisar
-          de login ou de rede de ads. Mostra ExitLag/NordVPN/Surfshark. */}
-      <AffiliateBanner />
       </div>
       {!eventRoute && !publicEventRoute && <SiteFooter t={t} />}
       <CookieConsent />

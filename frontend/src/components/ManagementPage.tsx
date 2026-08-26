@@ -3,6 +3,7 @@ import { useT, type TKey } from "../i18n";
 import { api, type Permissions } from "../api";
 import { DOCS_URL } from "../docs-url";
 import AdBanner from "./AdBanner";
+import AffiliateBanner from "./AffiliateBanner";
 
 const CompBuilder = lazy(() => import("./CompBuilder"));
 const EventsPage = lazy(() => import("./EventsPage"));
@@ -119,7 +120,10 @@ export default function ManagementPage({ guildId, perms, active = true, empty }:
               ))}
               {docsLink(visible.length + 1)}
             </aside>
-            <AdBanner slot="management" variant="skyscraper" />
+            <div className="flex flex-col items-center gap-2">
+              <AdBanner slot="management" variant="skyscraper" />
+              <AffiliateBanner variant="rectangle" />
+            </div>
           </div>
         )}
         <div className="management-workspace">

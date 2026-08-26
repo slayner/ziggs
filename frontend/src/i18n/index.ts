@@ -45,11 +45,11 @@ const S = {
     adblockMessage: "Detectamos um bloqueador de anúncios. Considere desativá-lo pra esse espaço — ajuda a manter o Ziggs no ar.",
 
     // AffiliateBanner
-    affCta: "Ver oferta",
+    affCta: "Testar grátis",
     affExitlagTitle: "Reduza o ping no Albion",
-    affExitlagDesc: "Feito por brasileiros, focado em Albion Online",
-    affExitlagHeadline: "Ping alto no Albion?",
-    affExitlagCta: "Teste grátis por 3 dias",
+    affExitlagDesc: "Teste grátis por 3 dias · Sem cartão de crédito",
+    affExitlagHeadline: "Chega de lag no Albion",
+    affExitlagCta: "Testar grátis",
     affNordvpnTitle: "VPN rápida pra gaming",
     affNordvpnDesc: "Servidores otimizados para jogos online",
     affSurfsharkTitle: "VPN barata e confiável",
@@ -981,11 +981,11 @@ const S = {
     adblockMessage: "We detected an ad blocker. Consider disabling it for this space — it helps keep Ziggs running.",
 
     // AffiliateBanner
-    affCta: "View deal",
+    affCta: "Try free",
     affExitlagTitle: "Lower your ping in Albion",
-    affExitlagDesc: "Made by Brazilians, focused on Albion Online",
-    affExitlagHeadline: "High ping in Albion?",
-    affExitlagCta: "3-day free trial",
+    affExitlagDesc: "3-day free trial · No credit card required",
+    affExitlagHeadline: "No more lag in Albion",
+    affExitlagCta: "Try free",
     affNordvpnTitle: "Fast VPN for gaming",
     affNordvpnDesc: "Gaming-optimized servers",
     affSurfsharkTitle: "Cheap and reliable VPN",
@@ -1909,11 +1909,11 @@ const S = {
     adblockMessage: "Detectamos un bloqueador de anuncios. Considera desactivarlo para este espacio — ayuda a mantener Ziggs en línea.",
 
     // AffiliateBanner
-    affCta: "Ver oferta",
+    affCta: "Probar gratis",
     affExitlagTitle: "Reduce el ping en Albion",
-    affExitlagDesc: "Hecho por brasileños, enfocado en Albion Online",
-    affExitlagHeadline: "¿Ping alto en Albion?",
-    affExitlagCta: "Prueba gratis 3 días",
+    affExitlagDesc: "Prueba gratis 3 días · Sin tarjeta de crédito",
+    affExitlagHeadline: "Adiós al lag en Albion",
+    affExitlagCta: "Probar gratis",
     affNordvpnTitle: "VPN rápida para gaming",
     affNordvpnDesc: "Servidores optimizados para juegos online",
     affSurfsharkTitle: "VPN barata y confiable",

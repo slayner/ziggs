@@ -4,6 +4,7 @@ import { silver, silverShort, dateUTC } from "../lib/format";
 import { navigate } from "../router";
 import GlobalSearch, { RecentBattleRow, type RecentBattle } from "./GlobalSearch";
 import AdBanner from "./AdBanner";
+import AffiliateBanner from "./AffiliateBanner";
 import { Panel, PanelHeader } from "./Panel";
 
 // ── Patch notes (Steam News, ver app/api/routes/meta.py pro porquê) ────────
@@ -804,8 +805,9 @@ export default function Dashboard({ onOpenBattles, onOpenHighscores }: {
       <div className="mt-4">
         <CompanionStrip />
       </div>
-      <div className="mt-4 flex justify-center">
+      <div className="mt-4 flex flex-col items-center gap-2">
         <AdBanner slot="dashboard" variant="leaderboard" mobileVariant="mobileBanner" />
+        <AffiliateBanner variant="leaderboard" />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ServerHighlightsCard onSeeAll={onOpenHighscores} />

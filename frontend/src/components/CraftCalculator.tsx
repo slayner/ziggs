@@ -66,6 +66,7 @@ import {
 } from "../lib/craft/refining";
 import { findRoutes, transmuteOptions, baseCostFor, type TransmuteRoute, type TransmuteOption } from "../lib/craft/transmutation";
 import AdBanner from "./AdBanner";
+import AffiliateBanner from "./AffiliateBanner";
 
 const iconUrl = (id: string, size = 64, quality?: number) =>
   `/render/item/${encodeURIComponent(id)}?size=${size}${quality ? `&quality=${quality}` : ""}&v=2`;
@@ -1553,8 +1554,9 @@ function SettingsPanel({
 
     </aside>
     {/* Anúncio 300×250 — fora de qualquer quadrante, abaixo de especializações */}
-    <div className="mt-4">
+    <div className="mt-4 flex flex-col items-center gap-2">
       <AdBanner slot="craft" variant="mediumRectangle" />
+      <AffiliateBanner variant="rectangle" />
     </div>
     </>
   );
