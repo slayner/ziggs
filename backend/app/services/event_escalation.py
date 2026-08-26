@@ -193,6 +193,19 @@ def build_escalation(
         }
         for s in ev.signups
     ]
+    # Enriquece weapon_fns com item_id + weapon_name para a UI renderizar os
+    # ícones de arma sem precisar do weapon_id -> item_id das roles (que pode
+    # ser None em roles legadas).
+    signup_wids = {p["weapon_id"] for e in enlisted for p in e["weapon_fns"]}
+    signup_weapons: dict[int, Weapon] = {}
+    if signup_wids:
+        signup_weapons = {w.id: w for w in db.scalars(select(Weapon).where(Weapon.id.in_(signup_wids)))}
+    for entry in enlisted:
+        for p in entry["weapon_fns"]:
+            w = signup_weapons.get(p["weapon_id"])
+            if w:
+                p["item_id"] = w.item_id
+                p["weapon_name"] = w.name
     for entry in enlisted:
         entry["keys"] = [
             event_gates.pair_key(p["weapon_id"], p["fn"]) for p in entry["weapon_fns"]

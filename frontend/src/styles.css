@@ -493,7 +493,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   display: flex; flex-direction: column; align-items: center; gap: 8px;
 }
 .esc-rail-card {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+  display: flex; align-items: flex-start; flex-wrap: wrap; gap: 4px 8px;
   padding: 6px 10px; border-left: 3px solid var(--border); border-bottom: 1px solid var(--border);
   background: var(--surface); transition: background .12s, border-color .12s, box-shadow .12s;
   cursor: default; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
@@ -533,29 +533,29 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .esc-rail-more:hover { color: var(--gold); }
 /* Hover expand: bracket com renders grandes + emote do fn no canto inferior
-   direito de cada render. Some por padrão (max-height/opacity 0), aparece no
-   :hover do card. Expande pra baixo (inline no card, não overlay). Z-index
-   alto pra sobrepor o board. Quantidade de renders = nº de funções do signup
-   (grid wrap, sem nome de função — só render + emote). */
+   direito de cada render. Colapsado por padrão (max-height 0 + overflow hidden),
+   expande no :hover do card. Fica inline abaixo do card (não overlay). */
 .esc-rail-hover {
-  display: none;
   width: 100%;
-  margin-top: 4px;
-  padding: 6px;
+  max-height: 0;
+  overflow: hidden;
+  margin-top: 0;
+  padding: 0 6px;
   background: var(--surface-2);
-  border-top: 1px solid var(--border);
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  border-top: 0 solid var(--border);
+  display: grid;
   grid-template-columns: repeat(auto-fill, 56px);
   gap: 4px;
   opacity: 0;
-  pointer-events: none;
-  transition: opacity .12s;
+  transition: max-height .2s ease, opacity .15s ease, padding .2s ease, margin-top .2s ease, border-top-width .2s ease;
 }
 .esc-rail-card { position: relative; }
 .esc-rail-card:hover .esc-rail-hover {
-  display: grid;
+  max-height: 500px;
   opacity: 1;
-  pointer-events: none;
+  padding: 6px;
+  margin-top: 4px;
+  border-top-width: 1px;
 }
 .esc-rail-hover-render {
   position: relative;

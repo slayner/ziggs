@@ -286,8 +286,16 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
     const role = a.game_role_id != null
       ? slot.roles.find(r => r.id === a.game_role_id)
       : slot.roles[0];
-    if (!role || role.weapon_id == null) continue;
-    const itemId = weaponItemId.get(role.weapon_id);
+    if (!role) continue;
+    // weapon_id -> item_id (via mapa) ou direto do build_items da role
+    let itemId: string | undefined;
+    if (role.weapon_id != null) {
+      itemId = weaponItemId.get(role.weapon_id);
+    }
+    if (!itemId) {
+      const w = role.build_items.find(bi => bi.slot === "weapon");
+      if (w) itemId = w.item_id;
+    }
     if (itemId) assignedRoleRender.set(a.user_id, itemId);
   }
   // Slot onde o próprio usuário logado foi escalado (destaca a linha).
@@ -752,13 +760,13 @@ function signupWeaponOptions(s: EscalationSignup, weaponItemId: Map<number, stri
   const seen = new Set<string>();
   for (const wf of s.weapon_fns ?? []) {
     if (wf.weapon_id == null) continue;
-    const itemId = weaponItemId.get(wf.weapon_id);
+    const itemId = (wf as any).item_id as string | undefined ?? weaponItemId.get(wf.weapon_id);
     if (!itemId) continue;
     const key = pairKey(wf.weapon_id, wf.fn);
     if (seen.has(key)) continue;
     seen.add(key);
     const item = ITEM_BY_ID.get(itemId);
-    const weaponLabel = item ? itemLocalName(item, lang) : itemId;
+    const weaponLabel = item ? itemLocalName(item, lang) : ((wf as any).weapon_name ?? itemId);
     const fnLabel = wf.fn || "—";
     const label = `${weaponLabel} · ${fnLabel}`;
     out.push({ itemId, label, fnKey: fnKey(wf.fn) });
