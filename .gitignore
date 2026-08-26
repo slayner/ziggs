@@ -99,3 +99,4 @@ router/.env
 router/state.json
 router/logs/
 router/venv/
+frontend/dist-assets.tar.gz
