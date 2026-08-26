@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, Fragment } from "react";
+import { useEffect, useRef, useState, Fragment } from "react";
 import { api, type Me, type EscalationOut, type EscalationRole, type EscalationSlot, type EscalationSignup, type RegearItem } from "../api";
 import { useT, useLang, itemLocalName, type Lang, type TKey } from "../i18n";
 import { itemRenderUrl, ITEM_BY_ID, is2H } from "../data/albion-items";
@@ -468,25 +468,8 @@ function EscalationBoard(p: BoardProps) {
   };
   const stopEdgeScroll = () => { cancelAnimationFrame(autoScrollRaf.current); };
 
-  // Mede a altura real do topbar em runtime e aplica no esc-page-wrap.
-  // O topbar não tem altura fixa (flex-wrap no mobile) — hardcodear 56px
-  // faz a lista estourar a tela em monitores menores.
-  const wrapRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const measure = () => {
-      const topbar = document.querySelector(".topbar");
-      if (topbar && wrapRef.current) {
-        const h = (topbar as HTMLElement).offsetHeight;
-        wrapRef.current.style.height = `calc(100vh - ${h}px)`;
-      }
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, []);
-
   return (
-    <div className="esc-page-wrap" ref={wrapRef}>
+    <div className="esc-page-wrap">
       <div className={"esc-board-layout" + (canManage ? "" : " esc-board-readonly")}>
         <SignupRail
           data={data}
