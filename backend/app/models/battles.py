@@ -134,7 +134,7 @@ class BattleParticipant(Base):
     # aliança filtram por aqui.
     alliance_id: Mapped[str | None] = mapped_column(String(64), index=True)
     alliance_name: Mapped[str | None] = mapped_column(String(255))
-    side_id: Mapped[int | None] = mapped_column(ForeignKey("battle_sides.id", ondelete="SET NULL"))
+    side_id: Mapped[int | None] = mapped_column(ForeignKey("battle_sides.id", ondelete="SET NULL"), index=True)
 
     kills: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     deaths: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -171,13 +171,13 @@ class BattleKillEvent(Base):
     fame: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
 
     killer_participant_id: Mapped[int | None] = mapped_column(
-        ForeignKey("battle_participants.id", ondelete="SET NULL")
+        ForeignKey("battle_participants.id", ondelete="SET NULL"), index=True
     )
     victim_participant_id: Mapped[int | None] = mapped_column(
-        ForeignKey("battle_participants.id", ondelete="SET NULL")
+        ForeignKey("battle_participants.id", ondelete="SET NULL"), index=True
     )
-    killer_side_id: Mapped[int | None] = mapped_column(ForeignKey("battle_sides.id", ondelete="SET NULL"))
-    victim_side_id: Mapped[int | None] = mapped_column(ForeignKey("battle_sides.id", ondelete="SET NULL"))
+    killer_side_id: Mapped[int | None] = mapped_column(ForeignKey("battle_sides.id", ondelete="SET NULL"), index=True)
+    victim_side_id: Mapped[int | None] = mapped_column(ForeignKey("battle_sides.id", ondelete="SET NULL"), index=True)
 
     # Build do matador NESSE evento específico (snapshot da API no momento da
     # kill) — diferente de BattleParticipant.equipment, que acumula TODAS as
