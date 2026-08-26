@@ -445,16 +445,16 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 /* ── Escalacao board (redesign ago/2026): rail de inscritos à esquerda +
    faixa horizontal de colunas de party que NUNCA quebra em grid. ───────── */
 .esc-page { padding: 14px 16px; }
-/* Wrapper: board ocupa o que sobra da viewport depois do topbar.
-   Não usar calc(100vh - 56px) — o topbar não tem altura fixa (wrap no mobile).
-   Em vez disso, o .app-shell é flex column com min-height:100vh, o topbar
-   tem altura natural, e o .dash-root leva flex:1. O .esc-page-wrap pega
-   flex:1 do pai e overflow:hidden pra conter o board. */
-.esc-page-wrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-.esc-page-wrap .esc-board-layout { flex: 1 1 auto; min-height: 0; }
+/* Wrapper: board ocupa a tela inteira (o menu do evento mora na cabeça do rail). */
+.esc-page-wrap { display: flex; flex-direction: column; height: calc(100vh - 56px); min-height: 400px; }
+.esc-page-wrap .esc-board-layout { flex: 1 1 auto; height: auto; min-height: 0; }
 .esc-board-layout {
   display: flex; align-items: stretch; gap: 0;
-  height: 100%; min-height: 360px; overflow: hidden;
+  /* viewport-height: o rail e a faixa ocupam a altura disponível; a faixa
+     rola horizontal só dentro dela, o rail rola vertical só dentro dele.
+     Slots que excedem a altura scrollam dentro da coluna
+     (esc-party-slots overflow-y: auto). */
+  height: calc(100vh - 56px); min-height: 360px; overflow: hidden;
 }
 /* Manager: [rail fixo | faixa que rola horizontal]. Read-only: só a faixa. */
 .esc-board-readonly .esc-board-col { flex: 1 1 auto; }
@@ -2071,21 +2071,12 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    esticar até preencher o que sobra do viewport (e crescer além disso se o
    conteúdo for mais alto — flex-basis auto não capa o tamanho). */
 .app-shell { min-height: 100vh; display: flex; flex-direction: column; }
-/* Quando a página de escalação está ativa, o app-shell vira altura fixa
-   pra que o flex chain (dash-root → esc-page-wrap → board-layout → rail)
-   tenha uma altura real pra repartir. Sem isso, min-height: 100vh deixa
-   o dash-root crescer além do viewport e o rail estoura a tela.
-   A classe é adicionada via JS no App.tsx quando eventRoute/publicEventRoute
-   está ativo. */
-.app-shell.esc-active { height: 100vh; min-height: 0; overflow: hidden; }
 
 /* Grid centralizado (background-position: center) — ancorado na borda
    esquerda ele desalinha do conteúdo, que é centralizado. Tons puxados pro
    azul do --bg (#0e0f13) em vez de zinco neutro, pra ler como a mesma folha. */
 .dash-root {
   flex: 1 1 auto;
-  display: flex; flex-direction: column;
-  min-height: 0;
   background-image:
     radial-gradient(700px 240px at 50% -60px, rgba(245, 185, 66, 0.04), transparent 70%),
     linear-gradient(to right, rgba(148, 163, 184, 0.035) 1px, transparent 1px),
