@@ -390,7 +390,7 @@ export default function App() {
       legalPage === "cookies" ? <CookiesPage /> :
       legalPage === "about" ? <AboutPage /> : <ContactPage />;
     return (
-      <div className="app-shell">
+    <div className={"app-shell" + ((eventRoute || publicEventRoute) ? " esc-active" : "")}>
         <div className="dash-root">
           <div className="legal-back-bar">
             <button className="btn" onClick={() => navigate("/")}>
