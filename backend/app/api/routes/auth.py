@@ -851,26 +851,32 @@ async def guild_allies(
             if str(m.get("id")) not in owned_ids
         ]
 
-    # Fallback: BattleGuild (guilda recém-linkada, sem 1º ciclo do verifier).
-    rows = (await db.execute(
-        select(BattleGuild.albion_guild_id, BattleGuild.guild_name)
-        .where(
-            BattleGuild.alliance_id == g.albion_alliance_id,
-            BattleGuild.albion_guild_id.notin_(owned_ids),
-        )
-        .distinct()
-    )).all()
-    if not rows:
-        return []
-
+    # Fallback: 1 request à API de alianças em vez de N requests por guilda.
+    # Acontece só quando o cache está frio (guilda recém-linkada antes do 1º
+    # ciclo do guild_verifier, ou falha transiente que não achou membros).
     region = (g.settings or {}).get("albion_guild_region")
     alliance_id = g.albion_alliance_id
-    # Libera read tx antes do HTTP (gather de _is_guild_in_alliance chama Albion).
+    host = HOSTS.get(region) if region in HOSTS else None
+    hosts_to_try = [host] if host else list(HOSTS.values())
     await db.commit()
-    still_in = await asyncio.gather(*(
-        _is_guild_in_alliance(gid, alliance_id, region) for gid, _ in rows
-    ))
-    return [{"id": gid, "name": name} for (gid, name), ok in zip(rows, still_in) if ok]
+    fetched: list[dict] = []
+    async with make_client() as client:
+        for h in hosts_to_try:
+            try:
+                resp = await client.get(f"https://{h}/api/gameinfo/alliances/{alliance_id}")
+                if resp.status_code != 200:
+                    continue
+                raw = resp.json()
+                if not isinstance(raw, dict):
+                    continue
+                gs = raw.get("Guilds") or raw.get("guilds") or []
+                for gm in gs:
+                    if isinstance(gm, dict) and gm.get("Id") and str(gm["Id"]) not in owned_ids:
+                        fetched.append({"id": str(gm["Id"]), "name": gm.get("Name") or str(gm["Id"])})
+                break
+            except httpx.HTTPError:
+                continue
+    return fetched
 
 
 # ── Guildas de Albion vinculadas (multi-guilda por Discord) ───────────────────

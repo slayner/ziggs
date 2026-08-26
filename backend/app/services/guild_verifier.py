@@ -106,7 +106,8 @@ async def _verify_guild(client, db: Session, g: Guild) -> None:
             if g.albion_alliance_id:
                 members = await _fetch_alliance_members(client, host, g.albion_alliance_id)
                 s = g.settings if isinstance(g.settings, dict) else {}
-                s["alliance_members"] = members or []
+                if members is not None:
+                    s["alliance_members"] = members
                 g.settings = s
             else:
                 s = g.settings if isinstance(g.settings, dict) else {}
@@ -131,7 +132,8 @@ async def _verify_guild(client, db: Session, g: Guild) -> None:
                     g.albion_alliance_name = detail.get("AllianceName") or g.albion_alliance_name
                 members = await _fetch_alliance_members(client, host, g.albion_alliance_id)
                 s = g.settings if isinstance(g.settings, dict) else {}
-                s["alliance_members"] = members or []
+                if members is not None:
+                    s["alliance_members"] = members
                 g.settings = s
             else:
                 s = g.settings if isinstance(g.settings, dict) else {}
