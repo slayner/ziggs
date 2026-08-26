@@ -90,16 +90,17 @@ async def _guild_command_config(guild_id: int) -> dict:
                 }
                 _cmd_cache[guild_id] = (cfg, now)
                 return cfg
+            # non-200 (500/503 por sobrecarga): drena e reusa cache stale.
+            # Sem isso, a função retornava None e todo cog que fazia
+            # cfg.get(...) AttributeError → guild pulado até o cache expirar.
+            await r.read()
     except Exception:
-        # Backend fora/timeout: NÃO retorna `empty` se já temos um cache
-        # válido (mesmo expirado). O `empty` carrega voice_cta_channel_id=None,
-        # que faz o voice_presence achar que o canal não está configurado e
-        # pular os snapshots — exatamente durante a queda do backend, quando
-        # mais precisamos acumular. Reusa o cache anterior mesmo que stale.
-        cached = _cmd_cache.get(guild_id)
-        if cached:
-            return cached[0]
-        return empty
+        pass
+    # non-200 ou exception: reusa cache stale, senão empty.
+    cached = _cmd_cache.get(guild_id)
+    if cached:
+        return cached[0]
+    return empty
 
 
 async def guild_lang_for(guild_id: int) -> str:
