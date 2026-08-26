@@ -446,7 +446,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    faixa horizontal de colunas de party que NUNCA quebra em grid. ───────── */
 .esc-page { padding: 14px 16px; }
 /* Wrapper: board ocupa a tela inteira (o menu do evento mora na cabeça do rail). */
-.esc-page-wrap { display: flex; flex-direction: column; height: calc(100vh - 56px); min-height: 400px; }
+.esc-page-wrap { display: flex; flex-direction: column; min-height: 400px; }
 .esc-page-wrap .esc-board-layout { flex: 1 1 auto; height: auto; min-height: 0; }
 .esc-board-layout {
   display: flex; align-items: stretch; gap: 0;
