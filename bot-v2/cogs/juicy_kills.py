@@ -148,7 +148,11 @@ _cog_ref: "JuicyKills | None" = None
 class JuicyKills(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Watermark global (legado — max de todas as regiões)
         self._watermarks: dict[int, datetime] = {}
+        # Watermark por região — impede que kills da asia/europe (mais recentes)
+        # avancem o cursor das americas (mais antigas), que nunca seriam postadas.
+        self._wm_by_region: dict[int, dict[str, datetime]] = {}
         self._posted_ids: dict[int, set[int]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
 
@@ -193,6 +197,7 @@ class JuicyKills(commands.Cog):
         # mensagens do canal e ignora kills já postadas. Depois, o watermark
         # de timestamp (preenchido só após postar com sucesso) cuida do resto.
         wm = self._watermarks.get(guild.id)
+        wm_region = self._wm_by_region.setdefault(guild.id, {})
         posted_ids = self._posted_ids.get(guild.id)
         if posted_ids is None:
             bot_user = getattr(self.bot, "user", None)
@@ -204,7 +209,10 @@ class JuicyKills(commands.Cog):
             ts = _parse_ts(kill.get("timestamp"))
             if ts is None:
                 continue
+            region = kill.get("region") or "unknown"
             if wm is not None and ts <= wm:
+                continue
+            if (rwm := wm_region.get(region)) is not None and ts <= rwm:
                 continue
             if kill["id"] in posted_ids:
                 continue
@@ -224,12 +232,18 @@ class JuicyKills(commands.Cog):
                 break
             last_ts = ts
             self._watermarks[guild.id] = ts
+            wm_region[region] = ts
             self._posted_ids.setdefault(guild.id, set()).add(kill["id"])
 
         if last_ts is not None:
+            payload: dict = {"last_ts": last_ts.isoformat()}
+            if wm_region:
+                payload["last_ts_by_region"] = {
+                    r: ts.isoformat() for r, ts in wm_region.items()
+                }
             await http_client.post_json(
                 f"/bot/guilds/{guild.id}/juicy-kill/synced",
-                {"last_ts": last_ts.isoformat()}, tag="juicy_kills", attempts=2,
+                payload, tag="juicy_kills", attempts=2,
                 queue_on_failure=True,
             )
 

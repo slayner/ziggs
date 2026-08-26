@@ -747,22 +747,19 @@ async def update_guild_settings(
     if "juicy_kill_channel_id" in body.model_fields_set:
         if body.juicy_kill_channel_id:
             settings["juicy_kill_channel_id"] = body.juicy_kill_channel_id
+            now = datetime.now(timezone.utc)
+            # Inicializa watermark por região = agora na 1ª ativação do canal.
+            # Sem isso, o queue faz Index Scan from epoch em regiões sem watermark.
+            wm_raw = dict(settings.get("juicy_kill_last_ts_by_region") or {})
+            regs = settings.get("juicy_kill_regions") or list(HOSTS.keys())
+            for r in regs:
+                if r in HOSTS and r not in wm_raw:
+                    wm_raw[r] = now.isoformat()
+            if wm_raw:
+                settings["juicy_kill_last_ts_by_region"] = wm_raw
+            # Watermark global legado = agora também (compat)
             if "juicy_kill_last_ts" not in settings:
-                # Inicializa watermark no maior timestamp existente — senão
-                # trocar de canal despejaria histórico no canal novo. Backfill
-                # de settings legados: se existia juicy_kill_last_id, converte
-                # pra timestamp (max timestamp naquele id) uma única vez.
-                from app.models.players import PlayerKillEvent
-                legacy_id = settings.pop("juicy_kill_last_id", None)
-                if legacy_id:
-                    ts = await db.scalar(
-                        select(func.max(PlayerKillEvent.timestamp)).where(PlayerKillEvent.id <= legacy_id)
-                    ) or datetime.now(timezone.utc)
-                else:
-                    ts = await db.scalar(select(func.max(PlayerKillEvent.timestamp))) or datetime.now(timezone.utc)
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                settings["juicy_kill_last_ts"] = ts.isoformat()
+                settings["juicy_kill_last_ts"] = now.isoformat()
         else:
             settings.pop("juicy_kill_channel_id", None)
     if "juicy_kill_min_silver" in body.model_fields_set:
@@ -778,6 +775,15 @@ async def update_guild_settings(
     if "juicy_kill_regions" in body.model_fields_set:
         regs = [r for r in (body.juicy_kill_regions or []) if r in HOSTS]
         settings["juicy_kill_regions"] = regs  # [] = todas
+        # Inicializa watermark das regiões recém-adicionadas = agora.
+        # Regiões que já tinham watermark mantêm o seu (não resetam).
+        if regs:
+            now = datetime.now(timezone.utc)
+            wm_raw = dict(settings.get("juicy_kill_last_ts_by_region") or {})
+            for r in regs:
+                if r in HOSTS and r not in wm_raw:
+                    wm_raw[r] = now.isoformat()
+            settings["juicy_kill_last_ts_by_region"] = wm_raw
     if "energy_control_channel_id" in body.model_fields_set:
         if body.energy_control_channel_id:
             settings["energy_control_channel_id"] = body.energy_control_channel_id
@@ -3857,7 +3863,16 @@ async def bot_juicy_kill_queue(
     min_silver = max(settings.get("juicy_kill_min_silver", 50_000_000), _JUICY_KILL_HARD_FLOOR)
     min_fame = settings.get("juicy_kill_min_fame", 0)
     regions = settings.get("juicy_kill_regions") or []
-    watermark = _parse_watermark(settings.get("juicy_kill_last_ts"))
+
+    # Watermark por região — kills da asia/europe (mais recentes) não podem
+    # avançar o watermark passado kills das americas (mais antigas). Antes
+    # era um timestamp único global: guilda com 3 regiões nunca via kills
+    # das americas se a asia já tivesse avançado o watermark.
+    wm_by_region_raw = settings.get("juicy_kill_last_ts_by_region") or {}
+    wm_by_region: dict[str, datetime] = {}
+    for r, v in wm_by_region_raw.items():
+        if r in HOSTS:
+            wm_by_region[r] = _parse_watermark(v)
 
     # Cutoff por região: kills mais antigas que isso não são postadas.
     cutoffs = await postable_cutoffs_by_region(db, regions or list(HOSTS.keys()))
@@ -3871,27 +3886,26 @@ async def bot_juicy_kill_queue(
         # o LIMIT antes dela chegar — a kill grande nunca é retornada.
         _sql_or(PlayerKillEvent.silver_dropped.is_(None), PlayerKillEvent.silver_dropped >= min_silver),
     )
-    if watermark is not None:
-        q = q.where(PlayerKillEvent.timestamp > watermark)
     if min_fame > 0:
         q = q.where(PlayerKillEvent.fame >= min_fame)
-    # Filtro por região: cutoff individual + região configurada
-    if regions:
-        # OR por região com cutoff próprio
-        conds = []
-        for r in regions:
-            if c := cutoffs.get(r):
-                conds.append(_sql_and(PlayerKillEvent.region == r, PlayerKillEvent.timestamp >= c))
-            else:
-                conds.append(PlayerKillEvent.region == r)
+    # Filtro por região: watermark individual + cutoff individual
+    # Sempre tem um piso (cutoff) pra evitar Index Scan from epoch quando
+    # o watermark da região ainda não foi populado.
+    regions_to_query = regions or list(HOSTS.keys())
+    conds = []
+    for r in regions_to_query:
+        if r not in HOSTS:
+            continue
+        parts = [PlayerKillEvent.region == r]
+        c = cutoffs.get(r)
+        if c:
+            parts.append(PlayerKillEvent.timestamp >= c)
+        wm = wm_by_region.get(r)
+        if wm and (c is None or wm > c):
+            parts.append(PlayerKillEvent.timestamp > wm)
+        conds.append(_sql_and(*parts) if len(parts) > 1 else parts[0])
+    if conds:
         q = q.where(_sql_or(*conds))
-    else:
-        # Sem filtro de região = todas, mas ainda aplica cutoff por região
-        conds = []
-        for r, c in cutoffs.items():
-            conds.append(_sql_and(PlayerKillEvent.region == r, PlayerKillEvent.timestamp >= c))
-        if conds:
-            q = q.where(_sql_or(*conds))
 
     candidates = (await db.scalars(q.order_by(PlayerKillEvent.timestamp.asc()).limit(_JUICY_KILL_BATCH * 4))).all()
     if not candidates:
@@ -4033,6 +4047,7 @@ def _juicy_kill_build(ev, killer, victim, delay) -> dict:
 
 class JuicyKillSyncedIn(BaseModel):
     last_ts: datetime
+    last_ts_by_region: dict[str, datetime] | None = None
 
 
 @router.post("/bot/guilds/{guild_id}/juicy-kill/synced")
@@ -4042,19 +4057,33 @@ async def bot_juicy_kill_synced(
 ):
     """Avança o watermark após o bot postar as kills com sucesso.
 
-    Watermark = timestamp da última kill postada (não do id). Próximo poll
-    busca kills com timestamp > watermark, em ordem cronológica."""
+    Watermark por região: kills da asia/europe (mais recentes) não avançam o
+    cursor das americas (mais antigas). O bot envia last_ts_by_region com o
+    timestamp da última kill postada por região. Mantém also juicy_kill_last_ts
+    (legado) como o max de todos, pra compat."""
     _require_bot_secret(authorization)
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
     settings = dict(g.settings or {})
-    new_ts = body.last_ts
-    if new_ts.tzinfo is None:
-        new_ts = new_ts.replace(tzinfo=timezone.utc)
+    if body.last_ts.tzinfo is None:
+        body.last_ts = body.last_ts.replace(tzinfo=timezone.utc)
+    # Watermark global legado (max de todos)
     current = _parse_watermark(settings.get("juicy_kill_last_ts"))
-    if current is None or new_ts > current:
-        settings["juicy_kill_last_ts"] = new_ts.isoformat()
+    if current is None or body.last_ts > current:
+        settings["juicy_kill_last_ts"] = body.last_ts.isoformat()
+    # Watermark por região
+    if body.last_ts_by_region:
+        wm_raw = dict(settings.get("juicy_kill_last_ts_by_region") or {})
+        for r, ts in body.last_ts_by_region.items():
+            if r not in HOSTS:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            prev = _parse_watermark(wm_raw.get(r))
+            if prev is None or ts > prev:
+                wm_raw[r] = ts.isoformat()
+        settings["juicy_kill_last_ts_by_region"] = wm_raw
     g.settings = settings
     await db.commit()
     return {"ok": True}
