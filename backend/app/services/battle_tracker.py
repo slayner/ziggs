@@ -446,13 +446,6 @@ def _write_deep_data(battle_id: int, raw: dict | None, events: list[dict]) -> bo
             krow, vrow = _touch_participant(participants, killer), _touch_participant(participants, victim)
             killer_id = killer.get("Id") or killer.get("id")
 
-            # A API do Albion parou de retornar clusterName nas batalhas (sempre
-            # null desde ~ago/2026). Como fallback, usamos o KillArea do primeiro
-            # evento — não é o nome exato da zona, mas diferencia Open World de
-            # Crystal League etc.
-            if not battle.cluster and ev.get("KillArea"):
-                battle.cluster = ev["KillArea"]
-
             for p in (ev.get("Participants") or []):
                 prow = _touch_participant(participants, p)
                 if prow is not None:

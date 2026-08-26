@@ -92,17 +92,21 @@ def _heat_color(kills: int, max_kills: int, min_kills: int) -> tuple[int, int, i
 
 
 def _factions_summary(db: Session, battle_id: int) -> list[dict]:
-    """Mesma lógica de battles.py _factions_summary — sem import circular."""
+    """Mesma lógica de battles.py _factions_summary — sem import circular.
+    Fallback de rats: sem sides reais, usa todas as guildas."""
     real_side_ids = db.scalars(
         select(BattleSide.id).where(BattleSide.battle_id == battle_id, BattleSide.is_rats == False)
     ).all()
-    if not real_side_ids:
-        return []
-    guilds = db.scalars(
-        select(BattleGuild).where(
-            BattleGuild.battle_id == battle_id, BattleGuild.side_id.in_(real_side_ids)
-        )
-    ).all()
+    if real_side_ids:
+        guilds = db.scalars(
+            select(BattleGuild).where(
+                BattleGuild.battle_id == battle_id, BattleGuild.side_id.in_(real_side_ids)
+            )
+        ).all()
+    else:
+        guilds = db.scalars(
+            select(BattleGuild).where(BattleGuild.battle_id == battle_id)
+        ).all()
     if not guilds:
         return []
     player_counts = dict(
@@ -112,11 +116,19 @@ def _factions_summary(db: Session, battle_id: int) -> list[dict]:
             .group_by(BattleParticipant.guild_id)
         ).all()
     )
+    avg_ips = dict(
+        db.execute(
+            select(BattleParticipant.guild_id, func.avg(BattleParticipant.ip))
+            .where(BattleParticipant.battle_id == battle_id, BattleParticipant.guild_id.isnot(None))
+            .group_by(BattleParticipant.guild_id)
+        ).all()
+    )
     agg: dict[str, dict] = {}
     for g in guilds:
         key = g.alliance_id or f"g:{g.albion_guild_id}"
         row = agg.get(key)
         pc = player_counts.get(g.albion_guild_id, 0)
+        ip = float(avg_ips.get(g.albion_guild_id, 0) or 0)
         if row is None:
             agg[key] = {
                 "guild_name": g.guild_name,
@@ -124,12 +136,19 @@ def _factions_summary(db: Session, battle_id: int) -> list[dict]:
                 "kills": g.kills,
                 "deaths": g.deaths,
                 "player_count": pc,
+                "avg_ip": ip,
             }
         else:
             row["kills"] += g.kills
             row["deaths"] += g.deaths
             row["player_count"] += pc
-    rows = sorted(agg.values(), key=lambda r: r["kills"], reverse=True)
+            row["avg_ip"] = max(row["avg_ip"], ip)
+    rows = list(agg.values())
+    has_kills = any(r["kills"] > 0 for r in rows)
+    if has_kills:
+        rows.sort(key=lambda r: r["kills"], reverse=True)
+    else:
+        rows.sort(key=lambda r: (r["player_count"], r["avg_ip"]), reverse=True)
     return rows
 
 

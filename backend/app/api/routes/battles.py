@@ -122,20 +122,29 @@ _BIG_GUILD_PLAYER_CAP = 5  # com mais de 4 guildas na luta, esconde guildas "zer
 
 
 async def _factions_summary(db: AsyncSession, battle_id: int) -> list[dict]:
-    """Resumo combinado das guildas/alianças que lutaram (exclui o bucket de
-    ratos), ordenado por kills desc — usado pra etiqueta centralizada da
-    listagem (substitui o antigo "X vs Y" de contagem de jogadores)."""
+    """Resumo combinado das guildas/alianças que lutaram, ordenado por kills
+    desc — usado pra etiqueta centralizada da listagem.
+
+    Quando há sides reais (não-ratos), usa só as guildas desses sides (comportamento
+    normal). Quando TODOS estão em "rats" (batalha deep-processada antes da API
+    indexar os kill events), usa TODAS as guildas da batalha — melhor mostrar o
+    heatmap com quem estava na fight do que mostrar "Processing fight..."."""
     real_side_ids = (await db.scalars(
         select(BattleSide.id).where(BattleSide.battle_id == battle_id, BattleSide.is_rats == False)
     )).all()
-    if not real_side_ids:
-        return []
 
-    guilds = (await db.scalars(
-        select(BattleGuild).where(
-            BattleGuild.battle_id == battle_id, BattleGuild.side_id.in_(real_side_ids)
-        )
-    )).all()
+    if real_side_ids:
+        guilds = (await db.scalars(
+            select(BattleGuild).where(
+                BattleGuild.battle_id == battle_id, BattleGuild.side_id.in_(real_side_ids)
+            )
+        )).all()
+    else:
+        # Sem sides reais — pega todas as guildas da batalha
+        guilds = (await db.scalars(
+            select(BattleGuild).where(BattleGuild.battle_id == battle_id)
+        )).all()
+
     if not guilds:
         return []
 
@@ -147,15 +156,28 @@ async def _factions_summary(db: AsyncSession, battle_id: int) -> list[dict]:
         )).all()
     )
 
-    return _aggregate_factions(guilds, player_counts)
+    avg_ips = dict(
+        (await db.execute(
+            select(BattleParticipant.guild_id, func.avg(BattleParticipant.ip))
+            .where(BattleParticipant.battle_id == battle_id, BattleParticipant.guild_id.isnot(None))
+            .group_by(BattleParticipant.guild_id)
+        )).all()
+    )
+
+    return _aggregate_factions(guilds, player_counts, avg_ips)
 
 
 def _aggregate_factions(
     guilds: list[BattleGuild], player_counts: dict[str, int],
+    avg_ips: dict[str, float] | None = None,
 ) -> list[dict]:
     """Núcleo de _factions_summary: agrega guildas por aliança e aplica o corte
     de _BIG_GUILD_PLAYER_CAP. Separado pra _factions_summary_bulk reusar com
-    dados pré-carregados em 1 query (3 round-trips pra N batalhas → 3 fixo)."""
+    dados pré-carregados em 1 query (3 round-trips pra N batalhas → 3 fixo).
+
+    Ordenação: kills desc (normal). Quando todos têm 0 kills (batalha sem
+    kill events indexados), fallback pra player_count desc, depois avg_ip desc."""
+    avg_ips = avg_ips or {}
     # Agrupa por aliança (guildas sem aliança ficam cada uma no seu próprio
     # grupo) — senão uma aliança com várias guildas na luta aparece repetida
     # na bracket, uma vez por guilda, com kills/heatmap fragmentados.
@@ -164,6 +186,7 @@ def _aggregate_factions(
         key = g.alliance_id or f"g:{g.albion_guild_id}"
         row = agg.get(key)
         pc = player_counts.get(g.albion_guild_id, 0)
+        ip = avg_ips.get(g.albion_guild_id, 0) or 0
         if row is None:
             agg[key] = {
                 "guild_id": g.albion_guild_id,
@@ -171,10 +194,12 @@ def _aggregate_factions(
                 "alliance_name": g.alliance_name,
                 "kills": g.kills,
                 "player_count": pc,
+                "avg_ip": ip,
             }
         else:
             row["kills"] += g.kills
             row["player_count"] += pc
+            row["avg_ip"] = max(row["avg_ip"], ip)
     rows = list(agg.values())
 
     if len(rows) > 4:
@@ -191,17 +216,22 @@ def _aggregate_factions(
         if filtered:
             rows = filtered
 
-    rows.sort(key=lambda r: r["kills"], reverse=True)
+    # Ordenação: kills desc; se todos 0 kills, player_count desc; se empate, avg_ip desc
+    has_kills = any(r["kills"] > 0 for r in rows)
+    if has_kills:
+        rows.sort(key=lambda r: r["kills"], reverse=True)
+    else:
+        rows.sort(key=lambda r: (r["player_count"], r["avg_ip"]), reverse=True)
     return rows
 
 
 async def _factions_summary_bulk(db: AsyncSession, battle_ids: list[int]) -> dict[int, list[dict]]:
-    """Versão em lote de _factions_summary: 3 queries totais pra N batalhas,
-    em vez de 3 por batalha. Pra 10 batalhas na página: 30 queries → 3.
+    """Versão em lote de _factions_summary: 4 queries totais pra N batalhas,
+    em vez de 4 por batalha. Pra 10 batalhas na página: 40 queries → 4.
 
-    Retorna dict[battle_id, factions]. Batalhas sem sides reais / sem guildas
-    devolvem []. Mesma semântica de _factions_summary (exclui is_rats, corta
-    zergs > 4 facções, ordena por kills desc)."""
+    Retorna dict[battle_id, factions]. Batalhas sem sides reais usam TODAS as
+    guildas (fallback de rats). Corta zergs > 4 facções, ordena por kills desc
+    (fallback player_count/avg_ip quando 0 kills)."""
     ids = [b for b in battle_ids if b]
     if not ids:
         return {}
@@ -214,22 +244,23 @@ async def _factions_summary_bulk(db: AsyncSession, battle_ids: list[int]) -> dic
     sides_by_battle: dict[int, list[int]] = {}
     for side_id, bid in real_sides:
         sides_by_battle.setdefault(bid, []).append(side_id)
-    if not sides_by_battle:
-        return {bid: [] for bid in ids}
 
-    # 2 query: guildas desses sides. Filtra por battle_id (INDEXADO) e mantém
-    # só os sides reais em Python — battle_guilds.side_id NÃO tem índice, então
-    # WHERE side_id IN (...) varria a tabela INTEIRA (~160ms por chamada, em
-    # toda busca global e listagem de batalha, não só aqui). battle_id já é
-    # indexado e a lista de ids já está em mãos; o resultado é idêntico.
+    # 2 query: TODAS as guildas das batalhas (filtra sides reais em Python).
+    # Batalhas sem sides real usam todas as guildas (fallback de rats).
     real_side_ids = {sid for sides in sides_by_battle.values() for sid in sides}
     guilds = (await db.scalars(
         select(BattleGuild).where(BattleGuild.battle_id.in_(ids))
     )).all()
     guilds_by_battle: dict[int, list[BattleGuild]] = {}
     for g in guilds:
-        if g.side_id in real_side_ids:
-            guilds_by_battle.setdefault(g.battle_id, []).append(g)
+        bid = g.battle_id
+        if bid in sides_by_battle:
+            # Tem side real: só guildas de sides reais
+            if g.side_id in real_side_ids:
+                guilds_by_battle.setdefault(bid, []).append(g)
+        else:
+            # Sem side real: usa todas
+            guilds_by_battle.setdefault(bid, []).append(g)
 
     # 3 query: contagem de jogadores por guilda, agrupada por (battle, guild).
     player_counts_rows = (await db.execute(
@@ -247,13 +278,28 @@ async def _factions_summary_bulk(db: AsyncSession, battle_ids: list[int]) -> dic
     for bid, gid, cnt in player_counts_rows:
         pc_by_battle.setdefault(bid, {})[gid] = cnt
 
+    # 4 query: IP médio por guilda, agrupado por (battle, guild).
+    avg_ip_rows = (await db.execute(
+        select(
+            BattleParticipant.battle_id, BattleParticipant.guild_id,
+            func.avg(BattleParticipant.ip),
+        )
+        .where(
+            BattleParticipant.battle_id.in_(ids), BattleParticipant.guild_id.isnot(None)
+        )
+        .group_by(BattleParticipant.battle_id, BattleParticipant.guild_id)
+    )).all()
+    ip_by_battle: dict[int, dict[str, float]] = {}
+    for bid, gid, avgip in avg_ip_rows:
+        ip_by_battle.setdefault(bid, {})[gid] = float(avgip) if avgip else 0
+
     out: dict[int, list[dict]] = {}
     for bid in ids:
         g_list = guilds_by_battle.get(bid, [])
         if not g_list:
             out[bid] = []
             continue
-        out[bid] = _aggregate_factions(g_list, pc_by_battle.get(bid, {}))
+        out[bid] = _aggregate_factions(g_list, pc_by_battle.get(bid, {}), ip_by_battle.get(bid, {}))
     return out
 
 
