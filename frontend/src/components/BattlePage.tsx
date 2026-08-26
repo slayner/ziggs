@@ -3,7 +3,7 @@ import { itemRenderUrl, ITEM_BY_ID, NO_WEAPON_ICON_ID, is2H } from "../data/albi
 import { imgRetry } from "../api";
 import { navigate, navigateReplace } from "../router";
 import { EquipGrid, PriceHistoryChart, type DraftEquip } from "./CompBuilder";
-import { useT, type TKey } from "../i18n";
+import { useT, type TKey, factionTag as makeTag } from "../i18n";
 import { searchIncludes } from "../lib/search";
 import { Panel, PanelHeader } from "./Panel";
 
@@ -1578,7 +1578,7 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
     for (const s of battle.sides) {
       const seen = new Set<string>();
       for (const f of s.factions) {
-        const tag = f.alliance_name ? `[${f.alliance_name}]` : f.guild_name;
+        const tag = makeTag(f.alliance_name, f.guild_name);
         if (tag && !seen.has(tag)) { seen.add(tag); tags.push(tag); }
       }
     }

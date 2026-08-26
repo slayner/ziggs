@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
-import { useLang, useT, REGION_LABELS, zoneLabel, type GameServer } from "../i18n";
+import { useLang, useT, REGION_LABELS, zoneLabel, factionTag as makeTag, type GameServer } from "../i18n";
 import { timeAgo as timeAgoFmt } from "../lib/format";
 import GlobalSearch from "./GlobalSearch";
 
@@ -71,10 +71,13 @@ function CompactDateInput({ value, onChange }: { value: string; onChange: (v: st
   );
 }
 
-/** Tag de exibição: aliança entre colchetes, ou o nome puro da guilda quando ela não tem aliança. */
+/** Tag de exibição: aliança entre colchetes, ou o nome puro da guilda quando ela não tem aliança.
+ *  Nomes longos (>12 chars) viram sigla pra não quebrar o heatmap. */
 function factionTag(f: Faction): string {
-  return f.alliance_name ? `[${f.alliance_name}]` : f.guild_name;
+  return makeTag(f.alliance_name, f.guild_name);
 }
+
+const MAX_DISPLAY_FACTIONS = 5;
 
 // Heatmap de kills: quem mais matou fica perto de HEAT_MAX, quem menos matou fica perto de HEAT_MIN.
 const HEAT_MAX: [number, number, number] = [0x66, 0x71, 0x60]; // #667160
@@ -471,7 +474,7 @@ export default function BattleTracker({
               <span className="flex-1 min-w-0 text-center">
                 {b.factions.length > 0 ? (
                   <span className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-sm font-semibold">
-                    {b.factions.map(f => (
+                    {b.factions.slice(0, MAX_DISPLAY_FACTIONS).map(f => (
                       <span key={f.guild_id} className="flex flex-col items-center leading-tight">
                         <span style={{ color: heatColor(f.kills, maxFactionKills, minFactionKills) }}>
                           {factionTag(f)}

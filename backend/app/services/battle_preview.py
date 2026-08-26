@@ -36,7 +36,31 @@ S = 2
 # Dimensões — largura de banner/tira, altura compacta (cresce só com o conteúdo)
 IMG_W = int(600 * S)
 PADDING = int(18 * S)
-MAX_FACTIONS = 4
+MAX_FACTIONS = 3  # embed do Discord: máximo 3 guildas no header "vs"
+
+
+def _to_acronym(name: str) -> str:
+    """Sigla do nome: iniciais maiúsculas de cada palavra, ou primeiras
+    consoantes se uma palavra só. Ex: "The Brazilian Storm" → "TBS"."""
+    words = name.strip().split()
+    if len(words) >= 2:
+        return "".join(w[0] for w in words if w).upper()[:5]
+    upper = "".join(c for c in name.upper() if c.isalpha())
+    cons = upper.replace("AEIOU", "")
+    return (cons or upper)[:4]
+
+
+def _faction_tag(f: dict) -> str:
+    """Tag de exibição: aliança entre colchetes, ou nome da guilda.
+    Nomes longos (>12 chars) viram sigla pra não quebrar o header."""
+    alliance = f.get("alliance_name")
+    guild = f.get("guild_name", "")
+    raw = f"[{alliance}]" if alliance else guild
+    if len(raw) <= 12:
+        return raw
+    if alliance:
+        return _to_acronym(alliance)
+    return _to_acronym(guild)
 
 # Fontes (carregadas em _load_fonts)
 _FONT_HEADER = None      # título "vs" — Cascadia Code (com stroke pra simular bold)
@@ -301,13 +325,10 @@ def render_battle_preview(db: Session, public_id: str) -> Path | None:
     # ── Cabeçalho: factions vs factions com heatmap ──
     # Cada tag pega a cor de heat da sua guilda — quem matou mais brilha mais.
     # Sem truncagem por char: mede a largura real e encurta só se não couber.
-    def _faction_tag(f):
-        if f["alliance_name"]:
-            return f"[{f['alliance_name']}]"
-        return f["guild_name"]
+    # (usa _faction_tag global — sigla automática pra nomes longos)
 
     # Calcula espaço total disponível e distribui entre as tags
-    raw_tags = [(_faction_tag(f), _heat_color(f["kills"], max_kills, min_kills)) for f in factions[:4]]
+    raw_tags = [(_faction_tag(f), _heat_color(f["kills"], max_kills, min_kills)) for f in factions[:MAX_FACTIONS]]
     # stroke_width simula bold no Cascadia Code (fonte variável sem peso bold
     # selecionável pelo PIL). Espessura proporcional à escala.
     stroke = max(1, int(S))
@@ -363,7 +384,7 @@ def render_battle_preview(db: Session, public_id: str) -> Path | None:
 
     # ── Linhas das factions com heatmap no nome ──
     for f in factions:
-        raw_name = f"[{f['alliance_name']}]" if f["alliance_name"] else f["guild_name"]
+        raw_name = _faction_tag(f)
         name = _truncate_to_w(draw, raw_name, name_max_w, _FONT_LIST)
         kills = f["kills"]
         deaths = f.get("deaths", 0)

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useLang, useT, REGION_LABELS, zoneLabel } from "../i18n";
+import { useLang, useT, REGION_LABELS, zoneLabel, factionTag as makeTag } from "../i18n";
 import { timeAgo } from "../lib/format";
 import { navigate } from "../router";
 
@@ -24,7 +24,7 @@ function battleHeatColor(kills: number, maxKills: number, minKills: number): str
 }
 
 function battleFactionTag(f: RecentFaction): string {
-  return f.alliance_name ? `[${f.alliance_name}]` : f.guild_name;
+  return makeTag(f.alliance_name, f.guild_name);
 }
 
 function battleFameShort(n: number): string {

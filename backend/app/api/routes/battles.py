@@ -202,7 +202,7 @@ def _aggregate_factions(
             row["avg_ip"] = max(row["avg_ip"], ip)
     rows = list(agg.values())
 
-    if len(rows) > 4:
+    if len(rows) > 5:
         # Só aplica o corte se sobrar alguém — numa ZvZ legítima de centenas de
         # jogadores é normal TODA guilda passar de _BIG_GUILD_PLAYER_CAP, e
         # zerar a lista inteira fazia a bracket cair pro fallback de cluster

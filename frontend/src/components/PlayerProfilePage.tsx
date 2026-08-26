@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
 import { silver, dateUTC, monthYearUTC } from "../lib/format";
 import { itemRenderUrl, NO_WEAPON_ICON_ID } from "../data/albion-items";
-import { useLang, useT, REGION_LABELS, zoneLabel } from "../i18n";
+import { useLang, useT, REGION_LABELS, zoneLabel, factionTag as makeTag } from "../i18n";
 import { Panel } from "./Panel";
 import LoadProgress from "./LoadProgress";
 
@@ -548,7 +548,7 @@ function battleHeatColor(kills: number, maxKills: number, minKills: number): str
 }
 
 function battleFactionTag(f: ZiggsBattle["factions"][number]): string {
-  return f.alliance_name ? `[${f.alliance_name}]` : f.guild_name;
+  return makeTag(f.alliance_name, f.guild_name);
 }
 
 function battleFameShort(n: number): string {

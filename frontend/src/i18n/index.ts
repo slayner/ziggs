@@ -2960,3 +2960,21 @@ export function zoneLabel(cluster: string | null | undefined, t: (k: TKey) => st
   if (key) return t(key);
   return cluster;
 }
+
+export function toAcronym(name: string): string {
+  const words = name.trim().split(/\s+/);
+  if (words.length >= 2) {
+    return words.map(w => w[0]).join("").toUpperCase().slice(0, 5);
+  }
+  const upper = name.toUpperCase().replace(/[^A-Z]/g, "");
+  const cons = upper.replace(/[AEIOU]/g, "");
+  return (cons || upper).slice(0, 4);
+}
+
+export function factionTag(allianceName: string | null, guildName: string | null): string {
+  const guild = guildName ?? "";
+  const raw = allianceName ? `[${allianceName}]` : guild;
+  if (raw.length <= 12) return raw;
+  if (allianceName) return toAcronym(allianceName);
+  return toAcronym(guild);
+}

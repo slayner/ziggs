@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
 import { dateUTC } from "../lib/format";
 import { RoleIcon } from "./RoleIcons";
-import { useLang, useT, REGION_LABELS, zoneLabel } from "../i18n";
+import { useLang, useT, REGION_LABELS, zoneLabel, factionTag as makeTag } from "../i18n";
 import { Panel } from "./Panel";
 import LoadProgress from "./LoadProgress";
 
@@ -150,7 +150,7 @@ function FactionHeatmap({ factions }: { factions: BattleFaction[] }) {
       {factions.map(f => (
         <span key={f.guild_id} className="flex flex-col items-center leading-tight">
           <span style={{ color: heatColor(f.kills, maxK, minK) }}>
-            {f.alliance_name ? `[${f.alliance_name}]` : f.guild_name}
+            {makeTag(f.alliance_name, f.guild_name)}
           </span>
           <span className="text-[10px] font-normal text-zinc-600">{f.player_count}</span>
         </span>
