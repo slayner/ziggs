@@ -273,6 +273,23 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
   );
   const assignedUserIds = new Set(data.assignments.map(a => a.user_id));
   const weaponItemId = buildWeaponItemIdMap(data);
+  // Mapa: user_id -> item_id da arma da role em que foi escalado. Usa o slot
+  // do assignment, pega a role cujo game_role_id bate (assignment.game_role_id)
+  // ou a primeira role do slot, e resolve o weapon_id -> item_id.
+  const slotById = new Map<number, EscalationSlot>();
+  for (const p of data.parties) for (const s of p.slots) slotById.set(s.id, s);
+  const assignedRoleRender = new Map<number, string>();
+  for (const a of data.assignments) {
+    if (a.slot_id == null) continue;
+    const slot = slotById.get(a.slot_id);
+    if (!slot) continue;
+    const role = a.game_role_id != null
+      ? slot.roles.find(r => r.id === a.game_role_id)
+      : slot.roles[0];
+    if (!role || role.weapon_id == null) continue;
+    const itemId = weaponItemId.get(role.weapon_id);
+    if (itemId) assignedRoleRender.set(a.user_id, itemId);
+  }
   // Slot onde o próprio usuário logado foi escalado (destaca a linha).
   const mySlotId = me ? (data.assignments.find(a => a.slot_id != null && String(a.user_id) === me.id)?.slot_id ?? null) : null;
 
@@ -338,6 +355,7 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
           canManage={canManage}
           mySlotId={mySlotId}
           weaponItemId={weaponItemId}
+          assignedRoleRender={assignedRoleRender}
           assignedBySlot={assignedBySlot}
           candidatesBySlot={candidatesBySlot}
           popoverSlot={popoverSlot}
@@ -428,6 +446,7 @@ interface BoardProps {
   canManage: boolean;
   mySlotId: number | null;
   weaponItemId: Map<number, string>;
+  assignedRoleRender: Map<number, string>;
   assignedBySlot: Map<number, EscalationOut["assignments"][number]>;
   candidatesBySlot: Map<number, EscalationSignup[]>;
   popoverSlot: number | null;
@@ -475,6 +494,7 @@ function EscalationBoard(p: BoardProps) {
           data={data}
           weaponItemId={p.weaponItemId}
           assignedUserIds={new Set(data.assignments.map(a => a.user_id))}
+          assignedRoleRender={p.assignedRoleRender}
           canManage={canManage}
           autoFillBusy={p.autoFillBusy}
           undoRunId={p.undoRunId}
@@ -552,12 +572,13 @@ function EscalationBoard(p: BoardProps) {
 // DPS vs Longbow Support) são renders distintos só quando a fn desambigua —
 // o title/aria-label carrega o nome da role concreta. Escalados sempre verdes.
 function SignupRail({
-  data, weaponItemId, assignedUserIds, canManage, autoFillBusy, undoRunId,
+  data, weaponItemId, assignedUserIds, assignedRoleRender, canManage, autoFillBusy, undoRunId,
   onAutofill, onUndoAutofill, onToggleRelease, t, lang, onDrop,
 }: {
   data: EscalationOut;
   weaponItemId: Map<number, string>;
   assignedUserIds: Set<number>;
+  assignedRoleRender: Map<number, string>;
   canManage: boolean;
   autoFillBusy: boolean;
   undoRunId: string | null;
@@ -659,6 +680,14 @@ function SignupRail({
               onDoubleClick={canManage && placed ? () => onDrop(dragPayload("slot", s.user_id)) : undefined}
             >
               {draggable && <i className="ti ti-grip-horizontal esc-rail-grip" />}
+              {placed && assignedRoleRender.has(s.user_id) && (
+                <img
+                  className="esc-rail-placedrender"
+                  src={itemRenderUrl(assignedRoleRender.get(s.user_id)!, 1)}
+                  title={t("escPlacedRole")}
+                  alt={t("escPlacedRole")}
+                />
+              )}
               <span className="esc-rail-name">{s.user_name || String(s.user_id)}</span>
               <div className="esc-rail-weapons">
                 {shown.map((o, i) => (

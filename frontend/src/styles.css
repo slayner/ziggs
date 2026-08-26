@@ -446,15 +446,11 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    faixa horizontal de colunas de party que NUNCA quebra em grid. ───────── */
 .esc-page { padding: 14px 16px; }
 /* Wrapper: board ocupa a tela inteira (o menu do evento mora na cabeça do rail). */
-.esc-page-wrap { display: flex; flex-direction: column; height: calc(100dvh - 56px); min-height: 400px; }
+.esc-page-wrap { display: flex; flex-direction: column; height: calc(100dvh - 80px); min-height: 400px; overflow: hidden; }
 .esc-page-wrap .esc-board-layout { flex: 1 1 auto; min-height: 0; }
 .esc-board-layout {
   display: flex; align-items: stretch; gap: 0;
-  /* viewport-height: o rail e a faixa ocupam a altura disponível; a faixa
-     rola horizontal só dentro dela, o rail rola vertical só dentro dele.
-     Slots que excedem a altura scrollam dentro da coluna
-     (esc-party-slots overflow-y: auto). */
-  height: calc(100vh - 56px); min-height: 360px; overflow: hidden;
+  height: 100%; min-height: 360px; overflow: hidden;
 }
 /* Manager: [rail fixo | faixa que rola horizontal]. Read-only: só a faixa. */
 .esc-board-readonly .esc-board-col { flex: 1 1 auto; }
@@ -462,7 +458,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 /* ── Rail de inscritos (manager) — fora do container de scroll horizontal. */
 .esc-rail {
   flex: 0 0 280px; width: 280px; min-width: 280px; max-width: 280px;
-  display: flex; flex-direction: column; height: calc(100dvh - 56px);
+  display: flex; flex-direction: column; height: calc(100dvh - 80px);
   border-right: 1px solid var(--border); background: var(--surface);
   overflow: hidden; position: sticky; left: 0; z-index: 5;
 }
@@ -521,6 +517,11 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   font-size: 13px; font-weight: 600; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto;
 }
+.esc-rail-placedrender {
+  width: 24px; height: 24px; object-fit: contain; border-radius: 3px;
+  background: var(--surface-2); border: 1px solid var(--green);
+  flex-shrink: 0;
+}
 .esc-rail-weapons { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; }
 .esc-rail-weapon {
   width: 28px; height: 28px; object-fit: contain; border-radius: 3px;
@@ -533,24 +534,19 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .esc-rail-more:hover { color: var(--gold); }
 /* Hover expand: bracket com renders grandes + emote do fn no canto inferior
    direito de cada render. Some por padrão (max-height/opacity 0), aparece no
-   :hover do card. Expande pra direita e pra baixo (position absolute, top:0,
-   left:100%). Z-index alto pra sobrepor o board. Quantidade de renders = nº
-   de funções do signup (grid wrap, sem nome de função — só render + emote). */
+   :hover do card. Expande pra baixo (inline no card, não overlay). Z-index
+   alto pra sobrepor o board. Quantidade de renders = nº de funções do signup
+   (grid wrap, sem nome de função — só render + emote). */
 .esc-rail-hover {
   display: none;
-  position: absolute;
-  top: 0; left: 100%;
-  margin-left: 6px;
-  z-index: 100;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 16px rgba(0,0,0,.4);
-  padding: 8px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, 64px);
-  gap: 6px;
-  max-width: 360px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  grid-template-columns: repeat(auto-fill, 56px);
+  gap: 4px;
   opacity: 0;
   pointer-events: none;
   transition: opacity .12s;
@@ -563,10 +559,10 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .esc-rail-hover-render {
   position: relative;
-  width: 64px; height: 64px;
+  width: 56px; height: 56px;
 }
 .esc-rail-hover-render img {
-  width: 64px; height: 64px;
+  width: 56px; height: 56px;
   object-fit: contain;
   border-radius: 4px;
   background: var(--surface-2);
