@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
-import { useLang, useT, REGION_LABELS, type GameServer } from "../i18n";
+import { useLang, useT, REGION_LABELS, zoneLabel, type GameServer } from "../i18n";
 import { timeAgo as timeAgoFmt } from "../lib/format";
 import GlobalSearch from "./GlobalSearch";
 
@@ -484,7 +484,7 @@ export default function BattleTracker({
                   </span>
                 ) : (
                   <div className="text-sm text-zinc-200 truncate" title={b.cluster ?? ""}>
-                    {b.cluster ?? t("unknownZone")}
+                    {zoneLabel(b.cluster, t)}
                   </div>
                 )}
               </span>

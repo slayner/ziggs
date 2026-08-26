@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useLang, useT, REGION_LABELS } from "../i18n";
+import { useLang, useT, REGION_LABELS, zoneLabel } from "../i18n";
 import { timeAgo } from "../lib/format";
 import { navigate } from "../router";
 
@@ -86,7 +86,7 @@ export function RecentBattleRow({ b, isNew, onGlowEnd }: { b: RecentBattle; isNe
           </span>
         ) : (
           <div className="truncate text-sm text-zinc-200" title={b.cluster ?? ""}>
-            {b.cluster ?? t("unknownZone")}
+            {zoneLabel(b.cluster, t)}
           </div>
         )}
       </span>

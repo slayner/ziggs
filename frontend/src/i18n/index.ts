@@ -306,6 +306,9 @@ const S = {
     loadingBattles: "Carregando batalhas…",
     noBattlesFoundFilters: "Tente ajustar os filtros — o feed é sincronizado automaticamente.",
     unknownZone: "Processando luta…", killsSuffix: "kills",
+    zoneOpenWorld: "Mundo Aberto", zoneCrystalLeague: "Liga Cristal",
+    zoneCorruptedLair: "Covil Corrompido", zoneHellgate: "Hellgate",
+    zoneArena: "Arena",
     agoMinutes: "m atrás", agoHours: "h atrás", agoDays: "d atrás",
     guildWordSingular: "guilda", guildWordPlural: "guildas",
 
@@ -1234,6 +1237,9 @@ const S = {
     loadingBattles: "Loading battles…",
     noBattlesFoundFilters: "Try adjusting the filters — the feed syncs automatically.",
     unknownZone: "Processing fight…", killsSuffix: "kills",
+    zoneOpenWorld: "Open World", zoneCrystalLeague: "Crystal League",
+    zoneCorruptedLair: "Corrupted Lair", zoneHellgate: "Hellgate",
+    zoneArena: "Arena",
     agoMinutes: "m ago", agoHours: "h ago", agoDays: "d ago",
     guildWordSingular: "guild", guildWordPlural: "guilds",
 
@@ -2161,6 +2167,9 @@ const S = {
     loadingBattles: "Cargando batallas…",
     noBattlesFoundFilters: "Intenta ajustar los filtros — el feed se sincroniza automáticamente.",
     unknownZone: "Procesando pelea…", killsSuffix: "kills",
+    zoneOpenWorld: "Mundo Abierto", zoneCrystalLeague: "Liga de Cristal",
+    zoneCorruptedLair: "Guarida Corrupta", zoneHellgate: "Hellgate",
+    zoneArena: "Arena",
     agoMinutes: "m", agoHours: "h", agoDays: "d",
     guildWordSingular: "gremio", guildWordPlural: "gremios",
 
@@ -2935,4 +2944,19 @@ export function itemLocalName(item: AlbionItem, lang: Lang): string {
     if (base) return `${prefix} ${base}`.trim();
   }
   return item.name;
+}
+
+const _ZONE_MAP: Record<string, keyof typeof S.pt> = {
+  OPEN_WORLD: "zoneOpenWorld",
+  CRYSTAL_LEAGUE: "zoneCrystalLeague",
+  CORRUPTED_LAIR: "zoneCorruptedLair",
+  HELLGATE: "zoneHellgate",
+  ARENA: "zoneArena",
+};
+
+export function zoneLabel(cluster: string | null | undefined, t: (k: TKey) => string): string {
+  if (!cluster) return t("unknownZone");
+  const key = _ZONE_MAP[cluster];
+  if (key) return t(key);
+  return cluster;
 }

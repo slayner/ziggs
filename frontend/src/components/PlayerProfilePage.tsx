@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
 import { silver, dateUTC, monthYearUTC } from "../lib/format";
 import { itemRenderUrl, NO_WEAPON_ICON_ID } from "../data/albion-items";
-import { useLang, useT, REGION_LABELS } from "../i18n";
+import { useLang, useT, REGION_LABELS, zoneLabel } from "../i18n";
 import { Panel } from "./Panel";
 import LoadProgress from "./LoadProgress";
 
@@ -603,7 +603,7 @@ function BattleRow({ b, isNew, onGlowEnd }: { b: ZiggsBattle; isNew?: boolean; o
           <FactionHeatmap factions={b.factions} />
         ) : (
           <div className="truncate text-sm text-zinc-200" title={b.cluster ?? ""}>
-            {b.cluster ?? t("unknownZone")}
+            {zoneLabel(b.cluster, t)}
           </div>
         )}
       </span>
@@ -1089,7 +1089,7 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
   const filteredBattles = (z?.battle_history ?? []).filter(b => includesFilter(
     b.factions.length
       ? [REGION_LABELS[lang][b.region] ?? b.region, ...b.factions.map(battleFactionTag)]
-      : [REGION_LABELS[lang][b.region] ?? b.region, b.cluster ?? t("unknownZone")],
+      : [REGION_LABELS[lang][b.region] ?? b.region, zoneLabel(b.cluster, t)],
     tabFilters.battles,
   ));
   const filteredHistory = (z?.guild_history ?? []).filter(h => includesFilter(

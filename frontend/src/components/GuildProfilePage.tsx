@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
 import { dateUTC } from "../lib/format";
 import { RoleIcon } from "./RoleIcons";
-import { useLang, useT, REGION_LABELS } from "../i18n";
+import { useLang, useT, REGION_LABELS, zoneLabel } from "../i18n";
 import { Panel } from "./Panel";
 import LoadProgress from "./LoadProgress";
 
@@ -203,7 +203,7 @@ function GuildBattleRow({ b }: { b: ProfileBattle }) {
       <span className="flex-1 min-w-0 text-center">
         {b.factions.length > 0
           ? <FactionHeatmap factions={b.factions} />
-          : <span className="truncate text-sm text-zinc-300">{b.cluster ?? t("unknownZone")}</span>}
+          : <span className="truncate text-sm text-zinc-300">{zoneLabel(b.cluster, t)}</span>}
       </span>
 
       <span className="flex items-center gap-2 shrink-0">
