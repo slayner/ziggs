@@ -454,7 +454,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
      rola horizontal só dentro dela, o rail rola vertical só dentro dele.
      Slots que excedem a altura scrollam dentro da coluna
      (esc-party-slots overflow-y: auto). */
-  height: calc(100vh - 56px); min-height: 360px;
+  height: calc(100vh - 56px); min-height: 360px; overflow: hidden;
 }
 /* Manager: [rail fixo | faixa que rola horizontal]. Read-only: só a faixa. */
 .esc-board-readonly .esc-board-col { flex: 1 1 auto; }
@@ -462,7 +462,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 /* ── Rail de inscritos (manager) — fora do container de scroll horizontal. */
 .esc-rail {
   flex: 0 0 280px; width: 280px; min-width: 280px; max-width: 280px;
-  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column; min-height: 0; height: 100%; overflow: hidden;
   border-right: 1px solid var(--border); background: var(--surface);
   overflow: hidden; position: sticky; left: 0; z-index: 5;
 }
