@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, Fragment } from "react";
 import { api, type Me, type EscalationOut, type EscalationRole, type EscalationSlot, type EscalationSignup, type RegearItem } from "../api";
 import { useT, useLang, itemLocalName, type Lang, type TKey } from "../i18n";
-import { itemRenderUrl, ITEM_BY_ID, is2H } from "../data/albion-items";
+import { itemRenderUrl, ITEM_BY_ID, is2H, wBase } from "../data/albion-items";
 import { EquipGrid } from "./comp/EquipGrid";
 import { buildItemsToEquip, itemUrl, DEFAULT_FN_TYPES, getFnDef } from "./comp/helpers";
 import type { FnTypeDef } from "./comp/types";
@@ -131,11 +131,33 @@ function pairKey(weaponId: number, fn: string | null | undefined): string {
   return `w${weaponId}:${fnKey(fn)}`;
 }
 
-// weapon_id -> item_id: deriva das roles da comp (cada role com weapon_id tem
-// build_items contendo o slot "weapon" com o item_id canônico do Albion).
-// Sem backend novo — a UI monta o mapa uma vez por render.
+// Mapa: base_item -> item_id_com_tier_da_comp. Percorre todas as roles da
+// comp e mapeia a base (sem tier/enchant) pro item_id real do build_items.
+// Permite casar weapon_fns (item_id canônico T4_2H_MACE) com o tier da comp
+// (T6_2H_MACE@1) pela base "2H_MACE".
+function buildCompTierMap(data: EscalationOut): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const p of data.parties) {
+    for (const s of p.slots) {
+      for (const r of s.roles) {
+        const w = r.build_items.find(bi => bi.slot === "weapon");
+        if (w) {
+          const base = wBase(w.item_id);
+          if (!m.has(base)) m.set(base, w.item_id);
+        }
+      }
+    }
+  }
+  return m;
+}
+
+// weapon_id -> item_id (com tier da comp): percorre as roles da comp, pega o
+// build_items.weapon de cada role e casa pela base do item (sem tier/enchant)
+// com o item_id canônico dos weapon_fns do signup. Roles legadas sem
+// weapon_id ainda assim casam pela base do build_items.
 function buildWeaponItemIdMap(data: EscalationOut): Map<number, string> {
   const m = new Map<number, string>();
+  // Primeiro: roles com weapon_id (caminho direto)
   for (const p of data.parties) {
     for (const s of p.slots) {
       for (const r of s.roles) {
@@ -273,6 +295,7 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
   );
   const assignedUserIds = new Set(data.assignments.map(a => a.user_id));
   const weaponItemId = buildWeaponItemIdMap(data);
+  const compTierMap = buildCompTierMap(data);
   // Mapa: user_id -> item_id da arma da role em que foi escalado. Usa o slot
   // do assignment, pega a role cujo game_role_id bate (assignment.game_role_id)
   // ou a primeira role do slot, e resolve o weapon_id -> item_id.
@@ -363,6 +386,7 @@ export default function EscalacaoPage({ token, guildId: legacyGuildId, eventId: 
           canManage={canManage}
           mySlotId={mySlotId}
           weaponItemId={weaponItemId}
+          compTierMap={compTierMap}
           assignedRoleRender={assignedRoleRender}
           assignedBySlot={assignedBySlot}
           candidatesBySlot={candidatesBySlot}
@@ -454,6 +478,7 @@ interface BoardProps {
   canManage: boolean;
   mySlotId: number | null;
   weaponItemId: Map<number, string>;
+  compTierMap: Map<string, string>;
   assignedRoleRender: Map<number, string>;
   assignedBySlot: Map<number, EscalationOut["assignments"][number]>;
   candidatesBySlot: Map<number, EscalationSignup[]>;
@@ -501,6 +526,7 @@ function EscalationBoard(p: BoardProps) {
         <SignupRail
           data={data}
           weaponItemId={p.weaponItemId}
+          compTierMap={p.compTierMap}
           assignedUserIds={new Set(data.assignments.map(a => a.user_id))}
           assignedRoleRender={p.assignedRoleRender}
           canManage={canManage}
@@ -580,11 +606,12 @@ function EscalationBoard(p: BoardProps) {
 // DPS vs Longbow Support) são renders distintos só quando a fn desambigua —
 // o title/aria-label carrega o nome da role concreta. Escalados sempre verdes.
 function SignupRail({
-  data, weaponItemId, assignedUserIds, assignedRoleRender, canManage, autoFillBusy, undoRunId,
+  data, weaponItemId, compTierMap, assignedUserIds, assignedRoleRender, canManage, autoFillBusy, undoRunId,
   onAutofill, onUndoAutofill, onToggleRelease, t, lang, onDrop,
 }: {
   data: EscalationOut;
   weaponItemId: Map<number, string>;
+  compTierMap: Map<string, string>;
   assignedUserIds: Set<number>;
   assignedRoleRender: Map<number, string>;
   canManage: boolean;
@@ -596,10 +623,7 @@ function SignupRail({
   t: (k: TKey) => string;
   lang: Lang;
   onDrop: (raw: string) => void;
-}) {
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  // Fn types da guilda (com emojis) — carregados uma vez. Usados no hover
-  // expand pra mostrar o emote do tipo de função sobre o render da arma.
+  }) {
   const [fnTypes, setFnTypes] = useState<FnTypeDef[]>(DEFAULT_FN_TYPES);
   useEffect(() => {
     api.getCompFnTypes()
@@ -619,10 +643,6 @@ function SignupRail({
   const withdrawn = data.assignments
     .filter(a => !enlistedIds.has(a.user_id))
     .filter((a, i, arr) => arr.findIndex(x => x.user_id === a.user_id) === i);
-
-  const toggle = (uid: number) => setExpanded(prev => {
-    const n = new Set(prev); n.has(uid) ? n.delete(uid) : n.add(uid); return n;
-  });
 
   return (
     <aside
@@ -669,10 +689,7 @@ function SignupRail({
         {data.enlisted.length === 0 && withdrawn.length === 0 && <div className="hint esc-empty">{t("escEmpty")}</div>}
         {sorted.map(s => {
           const placed = assignedUserIds.has(s.user_id);
-          const opts = signupWeaponOptions(s, weaponItemId, lang);
-          const isExpanded = expanded.has(s.user_id);
-          const shown = isExpanded ? opts : opts.slice(0, 5);
-          const extra = opts.length - shown.length;
+          const opts = signupWeaponOptions(s, weaponItemId, compTierMap, lang);
           const draggable = !placed;
           return (
             <div
@@ -683,7 +700,6 @@ function SignupRail({
               className={"esc-rail-card" + (placed ? " esc-rail-placed" : "")}
               draggable={canManage && !placed}
               onDragStart={(e) => { if (canManage && draggable) { e.dataTransfer.setData("text/plain", dragPayload("enlisted", s.user_id)); e.dataTransfer.effectAllowed = "move"; } }}
-              onClick={canManage && opts.length > 5 ? () => toggle(s.user_id) : undefined}
               title={placed ? t("escUnassignDblClick") : (canManage && draggable ? t("escDragHint") : "")}
               onDoubleClick={canManage && placed ? () => onDrop(dragPayload("slot", s.user_id)) : undefined}
             >
@@ -697,27 +713,14 @@ function SignupRail({
                 />
               )}
               <span className="esc-rail-name">{s.user_name || String(s.user_id)}</span>
-              <div className="esc-rail-weapons">
-                {shown.map((o, i) => (
-                  <img
-                    key={i}
-                    className="esc-rail-weapon"
-                    src={itemRenderUrl(o.itemId, 1)}
-                    title={o.label}
-                    alt={o.label}
-                    aria-label={o.label}
-                  />
-                ))}
-                {extra > 0 && <span className="esc-rail-more" title={t("escMoreWeapons")}>…</span>}
-              </div>
-              {opts.length > 0 && (
+              {!placed && opts.length > 0 && (
                 <div className="esc-rail-hover">
                   {opts.map((o, i) => {
                     const fnDef = getFnDef(o.fnKey, fnTypes);
                     return (
                       <div key={i} className="esc-rail-hover-render">
                         <img
-                          src={itemRenderUrl(o.itemId, 1, 256)}
+                          src={itemRenderUrl(o.itemId, 1, 128)}
                           alt="" aria-hidden="true"
                         />
                         {fnDef?.emoji && (
@@ -755,26 +758,30 @@ function SignupRail({
 // fn diferente vira duas entradas (Longbow DPS e Longbow Support). O label
 // carrega o nome localizado da arma + fn pra desambiguar pares de mesma arma.
 // `fnKey` é a chave normalizada do fn (casefold/strip) pra casar com FnTypeDef.
-function signupWeaponOptions(s: EscalationSignup, weaponItemId: Map<number, string>, lang: Lang): { itemId: string; label: string; fnKey: string }[] {
+function signupWeaponOptions(
+  s: EscalationSignup,
+  weaponItemId: Map<number, string>,
+  compTierMap: Map<string, string>,
+  lang: Lang,
+): { itemId: string; label: string; fnKey: string }[] {
   const out: { itemId: string; label: string; fnKey: string }[] = [];
   const seen = new Set<string>();
   for (const wf of s.weapon_fns ?? []) {
     if (wf.weapon_id == null) continue;
-    const itemId = (wf as any).item_id as string | undefined ?? weaponItemId.get(wf.weapon_id);
-    if (!itemId) continue;
+    const canonicalItemId = (wf as any).item_id as string | undefined ?? weaponItemId.get(wf.weapon_id);
+    if (!canonicalItemId) continue;
+    // Casa pela base do item para respeitar o tier da comp
+    const base = wBase(canonicalItemId);
+    const tieredItemId = compTierMap.get(base) ?? canonicalItemId;
     const key = pairKey(wf.weapon_id, wf.fn);
     if (seen.has(key)) continue;
     seen.add(key);
-    const item = ITEM_BY_ID.get(itemId);
-    const weaponLabel = item ? itemLocalName(item, lang) : ((wf as any).weapon_name ?? itemId);
+    const item = ITEM_BY_ID.get(tieredItemId);
+    const weaponLabel = item ? itemLocalName(item, lang) : ((wf as any).weapon_name ?? tieredItemId);
     const fnLabel = wf.fn || "—";
     const label = `${weaponLabel} · ${fnLabel}`;
-    out.push({ itemId, label, fnKey: fnKey(wf.fn) });
+    out.push({ itemId: tieredItemId, label, fnKey: fnKey(wf.fn) });
   }
-  // Fallback legado: sem weapon_fns (evento finalizado sem backfill). Sem
-  // como mapear nome->weapon_id confiável aqui, ficamos sem renders e o nome
-  // da role aparece só no title do card. ponytail: cobertura parcial é melhor
-  // que render errado.
   return out;
 }
 

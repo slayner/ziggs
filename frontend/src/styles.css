@@ -518,8 +518,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto;
 }
 .esc-rail-placedrender {
-  width: 24px; height: 24px; object-fit: contain; border-radius: 3px;
-  background: var(--surface-2); border: 1px solid var(--green);
+  width: 28px; height: 28px; object-fit: contain;
   flex-shrink: 0;
 }
 .esc-rail-weapons { display: inline-flex; align-items: center; gap: 2px; flex-wrap: wrap; }
@@ -544,8 +543,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   background: var(--surface-2);
   border-top: 0 solid var(--border);
   display: grid;
-  grid-template-columns: repeat(auto-fill, 56px);
-  gap: 4px;
+  grid-template-columns: repeat(auto-fill, 40px);
+  gap: 3px;
   opacity: 0;
   transition: max-height .2s ease, opacity .15s ease, padding .2s ease, margin-top .2s ease, border-top-width .2s ease;
 }
@@ -559,23 +558,21 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .esc-rail-hover-render {
   position: relative;
-  width: 56px; height: 56px;
+  width: 40px; height: 40px;
 }
 .esc-rail-hover-render img {
-  width: 56px; height: 56px;
+  width: 40px; height: 40px;
   object-fit: contain;
-  border-radius: 4px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  border-radius: 3px;
 }
 .esc-rail-hover-emoji {
   position: absolute;
   bottom: -2px; right: -2px;
-  font-size: 16px;
+  font-size: 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 50%;
-  width: 22px; height: 22px;
+  width: 18px; height: 18px;
   display: flex; align-items: center; justify-content: center;
   line-height: 1;
   box-shadow: 0 1px 3px rgba(0,0,0,.3);
