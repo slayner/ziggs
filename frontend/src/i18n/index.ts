@@ -305,7 +305,7 @@ const S = {
     periodLabel: "Período", playersFilterLabel: "Jogadores", killsFilterLabel: "Kills",
     loadingBattles: "Carregando batalhas…",
     noBattlesFoundFilters: "Tente ajustar os filtros — o feed é sincronizado automaticamente.",
-    unknownZone: "Zona desconhecida", killsSuffix: "kills",
+    unknownZone: "Processando luta…", killsSuffix: "kills",
     agoMinutes: "m atrás", agoHours: "h atrás", agoDays: "d atrás",
     guildWordSingular: "guilda", guildWordPlural: "guildas",
 
@@ -1233,7 +1233,7 @@ const S = {
     periodLabel: "Period", playersFilterLabel: "Players", killsFilterLabel: "Kills",
     loadingBattles: "Loading battles…",
     noBattlesFoundFilters: "Try adjusting the filters — the feed syncs automatically.",
-    unknownZone: "Unknown zone", killsSuffix: "kills",
+    unknownZone: "Processing fight…", killsSuffix: "kills",
     agoMinutes: "m ago", agoHours: "h ago", agoDays: "d ago",
     guildWordSingular: "guild", guildWordPlural: "guilds",
 
@@ -2160,7 +2160,7 @@ const S = {
     periodLabel: "Período", playersFilterLabel: "Jugadores", killsFilterLabel: "Kills",
     loadingBattles: "Cargando batallas…",
     noBattlesFoundFilters: "Intenta ajustar los filtros — el feed se sincroniza automáticamente.",
-    unknownZone: "Zona desconocida", killsSuffix: "kills",
+    unknownZone: "Procesando pelea…", killsSuffix: "kills",
     agoMinutes: "m", agoHours: "h", agoDays: "d",
     guildWordSingular: "gremio", guildWordPlural: "gremios",
 
