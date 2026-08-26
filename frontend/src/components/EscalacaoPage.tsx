@@ -1158,7 +1158,7 @@ function SlotCandidatePicker({
                     <span className="cs-slot-pick-name">{s.user_name || String(s.user_id)}</span>
                     {opts.length > 0 && (
                       <div className="cs-slot-pick-renders">
-                        {opts.map((o, i) => {
+                        {opts.slice(0, 6).map((o, i) => {
                           const fnDef = getFnDef(o.fnKey, DEFAULT_FN_TYPES);
                           return (
                             <div key={i} className="cs-slot-pick-render">
@@ -1167,6 +1167,7 @@ function SlotCandidatePicker({
                             </div>
                           );
                         })}
+                        {opts.length > 6 && <span className="cs-slot-pick-more">+{opts.length - 6}</span>}
                       </div>
                     )}
                   </button>
