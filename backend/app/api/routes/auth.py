@@ -1531,7 +1531,7 @@ async def bot_audit_log_synced(
 
 # ── Bot: battle feed (mensageiro de batalhas) ──────────────────────────────
 
-from app.models.battles import Battle, BattleGuild, BattleParticipant
+from app.models.battles import Battle, BattleGuild, BattleParticipant, BattleKillEvent
 from app.services import battle_groups
 
 
@@ -1574,8 +1574,21 @@ async def bot_battle_feed(
     feed_regions = [guild_region] if guild_region and guild_region in HOSTS else list(HOSTS.keys())
     cutoffs = await postable_cutoffs_by_region(db, feed_regions)
 
+    # Só posta batalhas deep-processadas COM kill events — sem isso, o bot
+    # posta o link antes do render estar pronto (batalha "light" ou "deep"
+    # sem eventos indexados ainda), o Discord crawler busca a página, não
+    # encontra og:image e não gera embed. O Discord não refaz o fetch de
+    # links já postados, então o embed fica faltando pra sempre.
+    deep_with_kills = (
+        select(BattleKillEvent.battle_id)
+        .where(BattleKillEvent.battle_id == Battle.id)
+        .correlate(Battle)
+        .limit(1)
+    )
     q = select(Battle).where(
         Battle.is_lethal.is_(True),
+        Battle.processing_tier == "deep",
+        deep_with_kills.exists(),
     )
     if watermark is not None:
         q = q.where(Battle.start_time > watermark)

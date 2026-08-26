@@ -596,6 +596,12 @@ def _write_deep_data(battle_id: int, raw: dict | None, events: list[dict]) -> bo
             return True  # deep-processou de verdade (e descartou)
 
         _t_c0 = _t.monotonic()
+        # Se a batalha tem kills no resumo (kill_count > 0) mas NENHUM evento
+        # foi gravado (events=[] da API ainda não indexou), marca pra reprocessar.
+        # Sem isso, a batalha fica "deep" com todos em "rats" e sem render (404
+        # no preview), e nunca é reprocessada porque retornou True.
+        if battle.kill_count > 0 and not kill_rows:
+            battle.reprocess_reason = REPROCESS_REASON_EMPTY
         db.commit()
         _t_commit = _t.monotonic() - _t_c0
         _dt = _t.monotonic() - _t0
