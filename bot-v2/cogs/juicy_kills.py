@@ -149,6 +149,7 @@ class JuicyKills(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._watermarks: dict[int, datetime] = {}
+        self._posted_ids: dict[int, set[int]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
 
     async def cog_load(self) -> None:
@@ -185,24 +186,27 @@ class JuicyKills(commands.Cog):
         # Backend já filtra por watermark, mas mantemos um local também pra
         # tolerar race (poll pegou kills, bot reinicia antes de ackar, próximo
         # poll rebusca as mesmas — o watermark local evita re-post duplo).
+        # NÃO usamos _history_last_kill_ts (message.created_at) aqui porque o
+        # horário do post no Discord é SEMPRE mais recente que o timestamp da
+        # kill no jogo — isso bloquearia kills legítimas na fila do backend.
+        # Dedup por ID: no 1º poll após restart, lê os IDs das últimas 200
+        # mensagens do canal e ignora kills já postadas. Depois, o watermark
+        # de timestamp (preenchido só após postar com sucesso) cuida do resto.
         wm = self._watermarks.get(guild.id)
-        if wm is None:
-            # 1º poll após restart: watermark local está vazio. Lê o histórico
-            # do canal pra descobrir o último timestamp postado e usar como
-            # watermark — sem isso, kills postadas mas não ackadas (bot caiu
-            # antes de chamar /synced) seriam re-postadas no próximo ciclo.
+        posted_ids = self._posted_ids.get(guild.id)
+        if posted_ids is None:
             bot_user = getattr(self.bot, "user", None)
             bot_id = bot_user.id if bot_user else 0
-            hist_ts = await _history_last_kill_ts(channel, bot_id)
-            if hist_ts is not None:
-                self._watermarks[guild.id] = hist_ts
-                wm = hist_ts
+            posted_ids = await _history_kill_ids(channel, bot_id)
+            self._posted_ids[guild.id] = posted_ids
         last_ts = None
         for kill in kills:
             ts = _parse_ts(kill.get("timestamp"))
             if ts is None:
                 continue
             if wm is not None and ts <= wm:
+                continue
+            if kill["id"] in posted_ids:
                 continue
             image = await http_client.get_bytes(
                 f"/bot/guilds/{guild.id}/juicy-kill/{kill['id']}/image",
@@ -220,6 +224,7 @@ class JuicyKills(commands.Cog):
                 break
             last_ts = ts
             self._watermarks[guild.id] = ts
+            self._posted_ids.setdefault(guild.id, set()).add(kill["id"])
 
         if last_ts is not None:
             await http_client.post_json(
