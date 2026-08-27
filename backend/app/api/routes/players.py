@@ -68,8 +68,20 @@ COLD_LOAD_TIMEOUT = timedelta(minutes=15)
 async def _queue_refresh_if_stale(db: AsyncSession, player: AlbionPlayer) -> None:
     if player.refresh_requested_at is not None:
         return  # já enfileirado
-    if datetime.now(timezone.utc) - _aware(player.last_seen_at) > PROFILE_STALE_AFTER:
-        player.refresh_requested_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    stale = now - _aware(player.last_seen_at) > PROFILE_STALE_AFTER
+    # Albion às vezes retorna zeros no primeiro fetch — se o perfil tem
+    # lifetime_statistics (foi carregado) mas TODAS as famas são 0, provavelmente
+    # é um fetch ruim. Enfileira refresh imediatamente em vez de esperar 15 dias.
+    all_zero = (
+        (player.kill_fame or 0) == 0
+        and (player.death_fame or 0) == 0
+        and (player.pve_fame or 0) == 0
+        and (player.gathering_fame or 0) == 0
+        and (player.crafting_fame or 0) == 0
+    )
+    if stale or all_zero:
+        player.refresh_requested_at = now
         await db.commit()
 
 
