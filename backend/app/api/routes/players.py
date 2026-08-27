@@ -877,19 +877,6 @@ async def _cold_load_player(region: str, name: str, host: str) -> None:
         _cold_load_tasks.pop(progress_key, None)
 
 
-async def _sync_kills_background(host: str, region: str, albion_id: str) -> None:
-    """Sync de kills/deaths em background — não bloqueia a request HTTP.
-    O usuário já vê o perfil completo (com stats) sem precisar esperar
-    a sync de kills (2 requests HTTP lentos)."""
-    try:
-        async with make_client() as c:
-            async with albion_scope(PROFILE):
-                async with AsyncSessionLocal() as db:
-                    await sync_player_kills(c, db, host, region, albion_id)
-    except Exception:
-        pass
-
-
 @router.get("/by-name/{region}/{name}")
 async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Resolve `/am/Slayner` etc: busca o nome exato na região indicada,
@@ -940,16 +927,23 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
                             timeout=8.0,
                         )
                     if raw is not None:
-                        # Upsert síncrono (rápido — é só DB) + kills em background
-                        # (2 requests HTTP lentos). Assim o usuário vê stats
-                        # completas na mesma request sem esperar a sync de kills.
+                        # Upsert síncrono (rápido — é só DB) + kills via warmer
+                        # em background. Assim o usuário vê stats completas na
+                        # mesma request sem esperar a sync de kills (2 requests
+                        # HTTP lentos que segurariam conexão do pool DB).
                         await upsert_player(db, raw, region)
                         await db.commit()
-                        asyncio.create_task(_sync_kills_background(host, region, raw["Id"]))
                         refreshed = await db.scalar(
                             select(AlbionPlayer).where(AlbionPlayer.albion_id == raw["Id"], AlbionPlayer.region == region)
                         )
                         if refreshed is not None:
+                            # Marca pra o warmer sincronizar kills em background
+                            # (tem seu próprio controle de pool/concorrência).
+                            try:
+                                refreshed.refresh_requested_at = datetime.now(timezone.utc)
+                                await db.commit()
+                            except Exception:
+                                pass
                             return await _build_profile_payload(db, refreshed, raw)
             except (asyncio.TimeoutError, httpx.RequestError, Exception):
                 pass  # cai pro cold load async abaixo
@@ -1036,11 +1030,15 @@ async def get_player(albion_id: str, region: str | None = None, db: AsyncSession
                     if raw is not None:
                         await upsert_player(db, raw, cached.region)
                         await db.commit()
-                        asyncio.create_task(_sync_kills_background(host, cached.region, albion_id))
                         refreshed = await db.scalar(
                             select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id)
                         )
                         if refreshed is not None:
+                            try:
+                                refreshed.refresh_requested_at = datetime.now(timezone.utc)
+                                await db.commit()
+                            except Exception:
+                                pass
                             return await _build_profile_payload(db, refreshed, raw)
             except (asyncio.TimeoutError, httpx.RequestError, Exception):
                 pass  # cai pro fluxo live abaixo
