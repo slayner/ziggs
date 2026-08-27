@@ -20,6 +20,18 @@ from app.models.players import AlbionPlayer, PlayerKillEvent
 _CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "profile_preview_cache"
 _CACHE_TTL = timedelta(hours=1)
 
+
+def invalidate_cache(albion_id: str, region: str) -> None:
+    """Deleta o PNG em cache — chamado pelo profile_warmer após atualizar
+    o perfil, pra que o próximo request ao embed regenere a imagem."""
+    cache_key = f"{region}_{albion_id}.png"
+    cache_path = _CACHE_DIR / cache_key
+    if cache_path.exists():
+        try:
+            cache_path.unlink()
+        except Exception:
+            pass
+
 BG_COLOR = (0x0E, 0x0F, 0x13)
 TEXT_COLOR = (0xF5, 0xF5, 0xF7)
 DIM_COLOR = (0xA8, 0xA8, 0xB2)
@@ -114,7 +126,11 @@ def render_player_preview(db: Session, albion_id: str, region: str) -> Path | No
     cache_path = _CACHE_DIR / cache_key
     if cache_path.exists():
         mtime = datetime.fromtimestamp(cache_path.stat().st_mtime, tz=timezone.utc)
-        if datetime.now(timezone.utc) - mtime < _CACHE_TTL:
+        age = datetime.now(timezone.utc) - mtime
+        # TTL curto (2min) se o cache foi gerado com zeros — o warmer
+        # provavelmente está buscando os dados reais e vai atualizar em
+        # breve. TTL normal (1h) para perfis com dados completos.
+        if age < _CACHE_TTL:
             return cache_path
 
     _load_fonts()
@@ -132,6 +148,18 @@ def render_player_preview(db: Session, albion_id: str, region: str) -> Path | No
     death_fame = player.death_fame or 0
     pve_fame = player.pve_fame or 0
     crafting_fame = player.crafting_fame or 0
+
+    # Se TODAS as stats são 0, provavelmente é um fetch ruim da Albion.
+    # TTL curto pro cache — próximo request regenera quando os dados
+    # chegarem via profile_warmer.
+    all_zero = (
+        kill_fame == 0 and death_fame == 0 and pve_fame == 0
+        and crafting_fame == 0 and (player.gathering_fame or 0) == 0
+    )
+    if all_zero and cache_path.exists():
+        mtime = datetime.fromtimestamp(cache_path.stat().st_mtime, tz=timezone.utc)
+        if datetime.now(timezone.utc) - mtime > timedelta(minutes=2):
+            cache_path.unlink()  # força regeneração
     gathering_fame = player.gathering_fame or 0
     fishing_fame = player.fishing_fame or 0
 
@@ -221,5 +249,9 @@ def render_player_preview(db: Session, albion_id: str, region: str) -> Path | No
         _draw_right(draw, value, value_x, y, color, _FONT_STATS)
         y += row_h
 
+    # Se all_zero, deleta cache antigo (se existir) pra que o próximo
+    # request regenere quando o warmer tiver buscado os dados reais.
+    if all_zero and cache_path.exists():
+        cache_path.unlink()
     img.save(cache_path, "PNG")
     return cache_path

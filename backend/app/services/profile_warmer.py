@@ -105,6 +105,10 @@ async def _warm_player(client, db: AsyncSession, host: str, region: str, albion_
         await upsert_player(db, raw, region)
         _refresh_progress[albion_id] = "kills"
         await sync_player_kills(client, db, host, region, albion_id)
+        # Invalida cache do PNG de embed — os dados do perfil mudaram,
+        # o próximo request ao embed vai regenerar a imagem.
+        from app.services.profile_preview import invalidate_cache
+        invalidate_cache(albion_id, region)
         log.info("warm: player %s (%s) — %s aquecido", raw.get("Name") or albion_id, region, "refresh" if force else "backfill")
         return True
     except Exception as e:
