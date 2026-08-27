@@ -877,14 +877,27 @@ async def _cold_load_player(region: str, name: str, host: str) -> None:
         _cold_load_tasks.pop(progress_key, None)
 
 
+async def _sync_kills_background(host: str, region: str, albion_id: str) -> None:
+    """Sync de kills/deaths em background — não bloqueia a request HTTP.
+    O usuário já vê o perfil completo (com stats) sem precisar esperar
+    a sync de kills (2 requests HTTP lentos)."""
+    try:
+        async with make_client() as c:
+            async with albion_scope(PROFILE):
+                async with AsyncSessionLocal() as db:
+                    await sync_player_kills(c, db, host, region, albion_id)
+    except Exception:
+        pass
+
+
 @router.get("/by-name/{region}/{name}")
 async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Resolve `/am/Slayner` etc: busca o nome exato na região indicada,
     depois carrega o perfil completo já sabendo o host certo.
 
-    Cache-first: se já temos esse jogador (visto antes, ver profile_warmer),
-    mostra na hora o que já sabemos — sem chamada à Albion. Só busca ao vivo
-    quando é a primeira vez que vemos esse nome (nada pra mostrar ainda).
+    Cache-first: se já temos esse jogador (ver profile_warmer), mostra na hora
+    o que já sabemos — sem chamada à Albion. Só busca ao vivo quando é a
+    primeira vez que vemos esse nome (nada pra mostrar ainda).
 
     Cold load desacoplado da request: o fetch pesado (search + profile + kills
     na Albion) roda como asyncio.create_task em background — sobrevive ao
@@ -909,6 +922,44 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
         await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
+
+    if cached is not None and cached.lifetime_statistics is None:
+        # Cache incompleto (visto via feed/search mas nunca warmed). Tenta
+        # buscar o perfil completo SÍNCRONO com timeout curto — se a Albion
+        # responder rápido, o usuário vê o perfil completo na mesma request,
+        # sem stub nem polling. Se falhar/timeout, cai pro cold load async.
+        # PULA se já tem cold load em andamento (não compete por slot do pool).
+        progress_key = f"{region}:{name.lower()}"
+        existing_task = _cold_load_tasks.get(progress_key)
+        if cached.albion_id and (existing_task is None or existing_task.done()):
+            try:
+                async with make_client() as c:
+                    async with albion_scope(PROFILE):
+                        raw = await asyncio.wait_for(
+                            _fetch_player_raw(c, host, cached.albion_id),
+                            timeout=8.0,
+                        )
+                    if raw is not None:
+                        # Upsert síncrono (rápido — é só DB) + kills em background
+                        # (2 requests HTTP lentos). Assim o usuário vê stats
+                        # completas na mesma request sem esperar a sync de kills.
+                        await upsert_player(db, raw, region)
+                        await db.commit()
+                        asyncio.create_task(_sync_kills_background(host, region, raw["Id"]))
+                        refreshed = await db.scalar(
+                            select(AlbionPlayer).where(AlbionPlayer.albion_id == raw["Id"], AlbionPlayer.region == region)
+                        )
+                        if refreshed is not None:
+                            return await _build_profile_payload(db, refreshed, raw)
+            except (asyncio.TimeoutError, httpx.RequestError, Exception):
+                pass  # cai pro cold load async abaixo
+        # Síncrono falhou (ou já tem task rodando) — enfileira warm no
+        # profile_warmer (não depende de o usuário ficar polling).
+        if cached.albion_id:
+            try:
+                await request_refresh(db, cached.albion_id, region)
+            except Exception:
+                pass
 
     # Cold load: dispara task em background (ou junta-se a uma em andamento).
     # Se já tem task rodando, só retorna o stage atual — a barra continua de
@@ -968,6 +1019,31 @@ async def get_player(albion_id: str, region: str | None = None, db: AsyncSession
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
         await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
+
+    if cached is not None and cached.lifetime_statistics is None and cached.region:
+        # Cache incompleto (visto via feed/search mas nunca warmed). Tenta
+        # buscar o perfil completo SÍNCRONO com timeout curto — mesma
+        # estratégia de get_player_by_name. Se falhar, cai pro fluxo live abaixo.
+        host = HOSTS.get(cached.region)
+        if host:
+            try:
+                async with make_client() as c:
+                    async with albion_scope(PROFILE):
+                        raw = await asyncio.wait_for(
+                            _fetch_player_raw(c, host, albion_id),
+                            timeout=8.0,
+                        )
+                    if raw is not None:
+                        await upsert_player(db, raw, cached.region)
+                        await db.commit()
+                        asyncio.create_task(_sync_kills_background(host, cached.region, albion_id))
+                        refreshed = await db.scalar(
+                            select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id)
+                        )
+                        if refreshed is not None:
+                            return await _build_profile_payload(db, refreshed, raw)
+            except (asyncio.TimeoutError, httpx.RequestError, Exception):
+                pass  # cai pro fluxo live abaixo
 
     async with make_client() as c:
         async with albion_scope(PROFILE):
@@ -1062,37 +1138,50 @@ async def request_player_refresh(albion_id: str, db: AsyncSession = Depends(deps
 
 
 @router.get("/{albion_id}/kills")
-async def get_player_kills(albion_id: str, offset: int = 0, limit: int = 10):
+async def get_player_kills(albion_id: str, offset: int = 0, limit: int = 10, region: str | None = None):
     """Proxy direto do Albion — complementa o ledger próprio (PlayerKillEvent)
-    com histórico de antes do ledger existir."""
+    com histórico de antes do ledger existir. Usa o host da região do jogador
+    (cada ID só existe numa região); sem região, tenta as 3 até achar."""
+    hosts = [HOSTS[region]] if region and region in HOSTS else list(HOSTS.values())
     async with make_client() as c:
         async with albion_scope(PROFILE):
-            try:
-                async with slot("gameinfo.albiononline.com"):
-                    resp = await c.get(
-                        f"https://gameinfo.albiononline.com/api/gameinfo/players/{albion_id}/kills",
-                        params={"offset": offset, "limit": limit},
-                    )
-                resp.raise_for_status()
-            except httpx.RequestError as e:
-                raise HTTPException(status_code=502, detail=str(e))
-    return resp.json()
+            for host in hosts:
+                try:
+                    async with slot(host):
+                        resp = await c.get(
+                            f"https://{host}/api/gameinfo/players/{albion_id}/kills",
+                            params={"offset": offset, "limit": limit},
+                        )
+                    if resp.status_code == 200:
+                        return resp.json()
+                    if resp.status_code == 404:
+                        continue
+                    resp.raise_for_status()
+                except httpx.RequestError:
+                    continue
+            raise HTTPException(status_code=502, detail="Erro de conexão com a Albion API")
 
 
 @router.get("/{albion_id}/deaths")
-async def get_player_deaths(albion_id: str, offset: int = 0, limit: int = 10):
+async def get_player_deaths(albion_id: str, offset: int = 0, limit: int = 10, region: str | None = None):
+    hosts = [HOSTS[region]] if region and region in HOSTS else list(HOSTS.values())
     async with make_client() as c:
         async with albion_scope(PROFILE):
-            try:
-                async with slot("gameinfo.albiononline.com"):
-                    resp = await c.get(
-                        f"https://gameinfo.albiononline.com/api/gameinfo/players/{albion_id}/deaths",
-                        params={"offset": offset, "limit": limit},
-                    )
-                resp.raise_for_status()
-            except httpx.RequestError as e:
-                raise HTTPException(status_code=502, detail=str(e))
-    return resp.json()
+            for host in hosts:
+                try:
+                    async with slot(host):
+                        resp = await c.get(
+                            f"https://{host}/api/gameinfo/players/{albion_id}/deaths",
+                            params={"offset": offset, "limit": limit},
+                        )
+                    if resp.status_code == 200:
+                        return resp.json()
+                    if resp.status_code == 404:
+                        continue
+                    resp.raise_for_status()
+                except httpx.RequestError:
+                    continue
+            raise HTTPException(status_code=502, detail="Erro de conexão com a Albion API")
 
 
 @router.get("/{albion_id}/versus")
