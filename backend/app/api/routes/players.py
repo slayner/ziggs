@@ -1346,6 +1346,19 @@ async def player_preview_png(region: str, name: str):
                         raise HTTPException(404, "Jogador não encontrado")
                 async with AsyncSessionLocal() as db:
                     await upsert_player(db, raw, region)
+                    # Marca pra o warmer sincronizar kills/deaths em background
+                    # — o embed só busca o perfil (stats), mas as atividades
+                    # (kills/deaths) precisam de sync_player_kills (2 requests
+                    # HTTP lentos). Sem isso, o site abre o perfil e vê 0
+                    # atividades mesmo com lifetime_statistics populado.
+                    p = await db.scalar(
+                        select(AlbionPlayer).where(
+                            AlbionPlayer.albion_id == raw["Id"],
+                            AlbionPlayer.region == region,
+                        )
+                    )
+                    if p is not None and p.refresh_requested_at is None:
+                        p.refresh_requested_at = datetime.now(timezone.utc)
                     await db.commit()
                 player = await asyncio.to_thread(_lookup)
         except HTTPException:
