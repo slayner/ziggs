@@ -1338,19 +1338,32 @@ async def player_preview_png(region: str, name: str):
                         match = next((p for p in candidates if p.get("Name", "").lower() == name_decoded.lower()), None)
                     if match is None:
                         raise HTTPException(404, "Jogador não encontrado")
-                    raw = await asyncio.wait_for(
-                        _fetch_player_raw(c, host, match["Id"]),
-                        timeout=8.0,
-                    )
-                    if raw is None:
-                        raise HTTPException(404, "Jogador não encontrado")
+                    # Busca o perfil — se a Albion retornar zeros (bug
+                    # intermitente dela), tenta de novo até 3x antes de
+                    # desistir. O Discord crawler espera ~10s, e cada fetch
+                    # leva ~1-2s no rate limit.
+                    raw = None
+                    for attempt in range(3):
+                        raw = await asyncio.wait_for(
+                            _fetch_player_raw(c, host, match["Id"]),
+                            timeout=8.0,
+                        )
+                        if raw is None:
+                            raise HTTPException(404, "Jogador não encontrado")
+                        kf = raw.get("KillFame") or 0
+                        df = raw.get("DeathFame") or 0
+                        ls = raw.get("LifetimeStatistics")
+                        has_data = kf > 0 or df > 0 or (
+                            isinstance(ls, dict) and
+                            ((ls.get("PvE") or {}).get("Total", 0) > 0 or
+                             (ls.get("Gathering") or {}).get("All", {}).get("Total", 0) > 0 or
+                             (ls.get("Crafting") or {}).get("Total", 0) > 0)
+                        )
+                        if has_data or attempt == 2:
+                            break
+                        await asyncio.sleep(1)
                 async with AsyncSessionLocal() as db:
                     await upsert_player(db, raw, region)
-                    # Marca pra o warmer sincronizar kills/deaths em background
-                    # — o embed só busca o perfil (stats), mas as atividades
-                    # (kills/deaths) precisam de sync_player_kills (2 requests
-                    # HTTP lentos). Sem isso, o site abre o perfil e vê 0
-                    # atividades mesmo com lifetime_statistics populado.
                     p = await db.scalar(
                         select(AlbionPlayer).where(
                             AlbionPlayer.albion_id == raw["Id"],
@@ -1365,6 +1378,29 @@ async def player_preview_png(region: str, name: str):
             raise
         except (asyncio.TimeoutError, httpx.RequestError, Exception):
             raise HTTPException(502, "Erro ao buscar perfil na Albion API")
+
+    # Se o player já existe mas tem all-zero stats, tenta re-buscar
+    # antes de renderizar (mesmo bug da Albion retornando zeros).
+    if player is not None:
+        kf = player.kill_fame or 0
+        df = player.death_fame or 0
+        pve = player.pve_fame or 0
+        if kf == 0 and df == 0 and pve == 0:
+            try:
+                async with make_client() as c:
+                    async with albion_scope(PROFILE):
+                        raw = await asyncio.wait_for(
+                            _fetch_player_raw(c, host, player.albion_id),
+                            timeout=8.0,
+                        )
+                    if raw is not None:
+                        await asyncio.to_thread(lambda: None)  # yield
+                        async with AsyncSessionLocal() as db:
+                            await upsert_player(db, raw, region)
+                            await db.commit()
+                        player = await asyncio.to_thread(_lookup)
+            except (asyncio.TimeoutError, httpx.RequestError, Exception):
+                pass  # usa os dados que temos
 
     if player is None:
         raise HTTPException(404, "Jogador não encontrado")
