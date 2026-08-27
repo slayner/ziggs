@@ -43,9 +43,15 @@ async def _og_for_path(path: str, query: str = "") -> tuple[str, str, str | None
     m = _PLAYER_RE.match(path)
     if m:
         from urllib.parse import unquote
+        from app.config import get_settings
         name = unquote(m.group(2))
-        return (f"{name} · Albion {_REGION_NAME[m.group(1)]}",
-                "", None)
+        region_code = m.group(1)
+        region_map = {"am": "americas", "eu": "europe", "as": "asia"}
+        region = region_map.get(region_code, "americas")
+        s = get_settings()
+        image_url = f"{s.frontend_url}/players/embed/{region}/{unquote(m.group(2))}.png"
+        return (f"{name} · Albion {_REGION_NAME[region_code]}",
+                "", image_url)
 
     m = _EVENT_RE.match(path)
     if m:

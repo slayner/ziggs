@@ -1266,3 +1266,62 @@ def _summarize_versus(events: list[PlayerKillEvent]) -> list[dict]:
         "victim_guild_name": ev.victim_guild_name,
         "killer_guild_name": ev.killer_guild_name,
     } for ev in events]
+
+
+# ── Embed de perfil (PNG para Discord) ────────────────────────────────────
+
+async def _render_profile_preview(albion_id: str, region: str):
+    from app.services.profile_preview import render_player_preview
+    def _run():
+        sdb = SyncSessionLocal()
+        try:
+            return render_player_preview(sdb, albion_id, region)
+        finally:
+            sdb.close()
+    return await asyncio.to_thread(_run)
+
+
+@router.get("/embed/{region}/{name}.png")
+async def player_preview_png(region: str, name: str):
+    """PNG de perfil do jogador pra embeds do Discord. Cacheado em disco (1h TTL)."""
+    from urllib.parse import unquote
+    from fastapi.responses import FileResponse
+
+    if region not in HOSTS:
+        raise HTTPException(400, "Região inválida")
+    name_decoded = unquote(name)
+
+    def _lookup():
+        sdb = SyncSessionLocal()
+        try:
+            return sdb.scalar(
+                select(AlbionPlayer).where(
+                    AlbionPlayer.region == region,
+                    func.lower(AlbionPlayer.name) == name_decoded.lower(),
+                )
+            )
+        finally:
+            sdb.close()
+
+    player = await asyncio.to_thread(_lookup)
+    if player is None:
+        raise HTTPException(404, "Jogador não encontrado")
+    path = await _render_profile_preview(player.albion_id, region)
+    if path is None:
+        raise HTTPException(404, "Não foi possível gerar o preview")
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.get("/embed/id/{albion_id}.png")
+async def player_preview_png_by_id(albion_id: str, region: str = "americas"):
+    """PNG de perfil do jogador por albion_id (pra OG tags do spa.py)."""
+    from fastapi.responses import FileResponse
+
+    if region not in HOSTS:
+        raise HTTPException(400, "Região inválida")
+    path = await _render_profile_preview(albion_id, region)
+    if path is None:
+        raise HTTPException(404, "Jogador não encontrado")
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"})
