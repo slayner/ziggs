@@ -1283,13 +1283,16 @@ async def _render_profile_preview(albion_id: str, region: str):
 
 @router.get("/embed/{region}/{name}.png")
 async def player_preview_png(region: str, name: str):
-    """PNG de perfil do jogador pra embeds do Discord. Cacheado em disco (1h TTL)."""
+    """PNG de perfil do jogador pra embeds do Discord. Cacheado em disco (1h TTL).
+    Se o player não está no DB, faz cold load síncrono (busca na Albion) pra
+    que o embed do Discord sempre tenha uma imagem, mesmo pra perfis novos."""
     from urllib.parse import unquote
     from fastapi.responses import FileResponse
 
     if region not in HOSTS:
         raise HTTPException(400, "Região inválida")
     name_decoded = unquote(name)
+    host = HOSTS[region]
 
     def _lookup():
         sdb = SyncSessionLocal()
@@ -1304,6 +1307,40 @@ async def player_preview_png(region: str, name: str):
             sdb.close()
 
     player = await asyncio.to_thread(_lookup)
+
+    # Player não está no DB — faz cold load síncrono (o Discord crawler
+    # só espera alguns segundos, mas é melhor tentar do que devolver 404).
+    if player is None:
+        try:
+            async with make_client() as c:
+                async with albion_scope(PROFILE):
+                    resp = await _get_with_retry(
+                        c, f"https://{host}/api/gameinfo/search",
+                        params={"q": name_decoded},
+                    )
+                    if resp.status_code != 200:
+                        raise HTTPException(404, "Jogador não encontrado")
+                    candidates = resp.json().get("players", [])
+                    match = next((p for p in candidates if p.get("Name") == name_decoded), None)
+                    if match is None:
+                        match = next((p for p in candidates if p.get("Name", "").lower() == name_decoded.lower()), None)
+                    if match is None:
+                        raise HTTPException(404, "Jogador não encontrado")
+                    raw = await asyncio.wait_for(
+                        _fetch_player_raw(c, host, match["Id"]),
+                        timeout=8.0,
+                    )
+                    if raw is None:
+                        raise HTTPException(404, "Jogador não encontrado")
+                async with AsyncSessionLocal() as db:
+                    await upsert_player(db, raw, region)
+                    await db.commit()
+                player = await asyncio.to_thread(_lookup)
+        except HTTPException:
+            raise
+        except (asyncio.TimeoutError, httpx.RequestError, Exception):
+            raise HTTPException(502, "Erro ao buscar perfil na Albion API")
+
     if player is None:
         raise HTTPException(404, "Jogador não encontrado")
     path = await _render_profile_preview(player.albion_id, region)
