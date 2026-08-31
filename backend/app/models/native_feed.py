@@ -24,6 +24,8 @@ class NativeFeedStream(Base):
     captured_head_source_id: Mapped[str | None] = mapped_column(String(64))
     scan_anchor_source_id: Mapped[str | None] = mapped_column(String(64))
     scan_anchor_occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    anchor_offset_estimate: Mapped[int | None] = mapped_column(Integer)
+    anchor_offset_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scan_head_source_id: Mapped[str | None] = mapped_column(String(64))
     scan_id: Mapped[str | None] = mapped_column(String(36))
     scan_resolution: Mapped[str | None] = mapped_column(String(16))

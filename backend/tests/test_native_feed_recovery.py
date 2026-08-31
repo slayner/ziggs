@@ -935,6 +935,49 @@ def test_busca_exponencial_retoma_do_ultimo_offset_entre_ciclos():
     asyncio.run(run())
 
 
+def test_estimativa_de_offset_semeia_a_busca_apos_restart():
+    """A posição confirmada da âncora é hint durável: após restart, a busca
+    começa perto dela mas ainda só conclui ao encontrar o ID."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        page_size = 2
+        offset_limit = 20
+        pages = _make_pages(10, page_size, now + timedelta(minutes=20))
+        anchor_time = pages[8][0]["TimeStamp"]
+        seen: list[int] = []
+
+        async def fetch(offset, _limit):
+            seen.append(offset)
+            return pages.get(offset, [])
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="asia", completed_head_source_id="id-8",
+                captured_head_source_id="id-8", anchor_offset_estimate=8,
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="asia", source_id="id-8",
+                occurred_at=datetime.fromisoformat(anchor_time), payload=pages[8][0], status="applied",
+            ))
+            await db.commit()
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            result = await capture_native_stream(
+                db, kind=KIND_KILL, region="asia", page_size=page_size,
+                offset_limit=offset_limit, page_budget=30,
+                fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+            )
+            stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "asia"})
+            assert result.completed and stream is not None
+            assert seen[1] == 8  # primeiro é a sonda da última página
+            assert stream.anchor_offset_estimate == 8
+
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
 def test_lock_de_captura_ocupado_nao_inani_a_regiao_seguinte():
     """Regressão do incidente 31/08 (inanição de lock): uma varredura de fundo
     pendurada segurando o lock de captura de uma região não pode bloquear a

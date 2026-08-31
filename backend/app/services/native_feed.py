@@ -110,6 +110,23 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+def _estimated_start_offset(stream: NativeFeedStream, page_size: int, offset_limit: int) -> int:
+    estimate = stream.anchor_offset_estimate
+    if estimate is None:
+        return 0
+    return max(0, min(offset_limit - page_size, estimate // page_size * page_size))
+
+
+def _record_anchor_offset(stream: NativeFeedStream, offset: int) -> None:
+    stream.anchor_offset_estimate = offset
+    stream.anchor_offset_observed_at = _now()
+
+
+def _clear_anchor_offset(stream: NativeFeedStream) -> None:
+    stream.anchor_offset_estimate = None
+    stream.anchor_offset_observed_at = None
+
+
 async def _stream(db: AsyncSession, kind: str, region: str) -> NativeFeedStream:
     stream = await db.get(NativeFeedStream, {"kind": kind, "region": region})
     if stream is None:
@@ -308,6 +325,7 @@ async def capture_native_stream(
             stream.blocked_reason = None
             stream.scan_active = True
             stream.scan_head_source_id = None
+            _clear_anchor_offset(stream)
             stream.next_offset = 0
             stream.scan_started_at = _now()
             stream.scan_phase = "locating"
@@ -338,14 +356,14 @@ async def capture_native_stream(
             stream.scan_last_progress_at = _now()
             stream.search_low_offset = 0
             stream.search_high_offset = -1
-            stream.next_offset = 0
+            stream.next_offset = _estimated_start_offset(stream, page_size, offset_limit)
             stream.scan_started_at = _now()
             await db.commit()
             log.info(
                 "event=native_feed_scan_started scan_id=%s kind=%s region=%s "
-                "anchor_id=%s anchor_time=%s phase=locating",
+                "anchor_id=%s anchor_time=%s initial_offset=%d phase=locating",
                 stream.scan_id, kind, region, stream.scan_anchor_source_id,
-                stream.scan_anchor_occurred_at,
+                stream.scan_anchor_occurred_at, stream.next_offset,
             )
 
         anchor_id = stream.scan_anchor_source_id
@@ -437,6 +455,7 @@ async def _locate_anchor(
                 stream.scan_anchor_occurred_at = None
                 stream.next_offset = 0
                 stream.scan_resolution = "outside_window"
+                _clear_anchor_offset(stream)
                 stream.scan_phase = None
                 stream.scan_last_progress_at = _now()
                 stream.search_low_offset = 0
@@ -455,10 +474,11 @@ async def _locate_anchor(
                 return pages, head_payload, None
             # Encontrou o ID exato na última página
             if anchor_id in last_probe.ids:
+                _record_anchor_offset(stream, last_probe.offset)
+                await db.commit()
                 # A âncora está na última página — captura linear simples
                 return pages, head_payload, last_probe.offset
         stream.search_high_offset = 0
-        stream.next_offset = 0
         stream.scan_last_progress_at = _now()
         await db.commit()
         if pages >= page_budget:
@@ -498,6 +518,8 @@ async def _locate_anchor(
             )
 
             if anchor_id in probe.ids:
+                _record_anchor_offset(stream, exp_offset)
+                await db.commit()
                 return pages, head_payload, exp_offset
 
             if probe.returned == 0:
@@ -519,6 +541,7 @@ async def _locate_anchor(
                     stream.scan_resolution = "outside_window"
                     stream.scan_phase = None
                     stream.scan_last_progress_at = _now()
+                    _clear_anchor_offset(stream)
                     stream.captured_head_source_id = stream.scan_head_source_id
                     stream.scan_head_source_id = None
                     await db.commit()
@@ -576,6 +599,8 @@ async def _locate_anchor(
         )
 
         if anchor_id in probe.ids:
+            _record_anchor_offset(stream, mid)
+            await db.commit()
             return pages, head_payload, mid
 
         if probe.returned == 0:
@@ -743,6 +768,10 @@ async def _capture_to_target(
         past_target = next_offset > capture_target + page_size
 
         if found_anchor or reaches_anchor_time or exhausted or past_target:
+            if found_anchor:
+                _record_anchor_offset(stream, offset)
+            elif reaches_anchor_time or exhausted or past_target:
+                _clear_anchor_offset(stream)
             resolution = (
                 "exact_id" if found_anchor
                 else "temporal" if reaches_anchor_time
