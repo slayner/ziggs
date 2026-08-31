@@ -46,7 +46,7 @@ from app.services.battle_tracker import (
     fetch_events,
 )
 from app.services.albion_gate import OTHER, slot
-from app.models.native_feed import NativeFeedItem
+from app.models.native_feed import NativeFeedItem, NativeFeedStream
 from app.services.native_feed import KIND_BATTLE, KIND_KILL, capture_discovered_items
 
 from app.services.player_tracker import (
@@ -1542,16 +1542,18 @@ async def get_worker_stats(db: AsyncSession) -> dict:
             entry["pending"] = int(entry["pending"]) + (count or 0)
             entry["latest_pending_at"] = latest.isoformat() if latest else None
 
-    # Última batalha deep/light processada por região (para debugging de progresso)
-    processing_latest: dict[str, dict[str, object]] = {}
-    for region, tier, albion_id, start_time in (await db.execute(
-        select(Battle.region, Battle.processing_tier, Battle.albion_id, Battle.start_time)
-        .where(Battle.processing_tier.in_(("light", "deep")))
-        .order_by(Battle.region, Battle.processing_tier, Battle.start_time.desc())
-    )).all():
-        processing_latest.setdefault(region, {"light": None, "deep": None})
-        if processing_latest[region][tier] is None:
-            processing_latest[region][tier] = {"albion_id": albion_id, "start_time": start_time.isoformat() if start_time else None}
+    feed_pointers = {}
+    for stream in (await db.scalars(select(NativeFeedStream))).all():
+        feed_pointers[f"{stream.region}/{stream.kind}s"] = {
+            "active": stream.scan_active,
+            "blocked": stream.scan_blocked,
+            "phase": stream.scan_phase,
+            "resolution": stream.scan_resolution,
+            "next_offset": stream.next_offset,
+            "last_progress_at": stream.scan_last_progress_at.isoformat() if stream.scan_last_progress_at else None,
+            "last_completed_at": stream.last_completed_at.isoformat() if stream.last_completed_at else None,
+            "reason": stream.blocked_reason,
+        }
 
     return {
         "workers": rows,
@@ -1567,7 +1569,7 @@ async def get_worker_stats(db: AsyncSession) -> dict:
         "affinity": affinity,
         "processing": processing,
         "inbox": inbox,
-        "processing_latest": processing_latest,
+        "feed_pointers": feed_pointers,
         "strategy": {
             "active_vps": active,
             "mode": "fallback" if active == 0 else "assist" if backend_is_idle() else "coordinator",

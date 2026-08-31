@@ -51,6 +51,17 @@ def _stream_line(s: dict, ckt: dict) -> str:
     return f"{icon} head {_fmt_age(s.get('recent_age_s'))}"
 
 
+def _pointer_line(pointer: dict) -> str:
+    if pointer.get("blocked"):
+        return "🔴 erro"
+    if pointer.get("active"):
+        phase = {"locating": "procurando", "capturing": "capturando"}.get(pointer.get("phase"), "trabalhando")
+        return f"🔎 {phase} · off `{pointer.get('next_offset', 0)}`"
+    if pointer.get("resolution"):
+        return "✅ encontrado"
+    return "⚪ aguardando"
+
+
 def _build_embed(data: dict) -> discord.Embed:
     sla = data.get("sla") or {}
     circuits = data.get("circuits") or {}
@@ -88,21 +99,11 @@ def _build_embed(data: dict) -> discord.Embed:
             lines.append(f"**{label}** {_stream_line(s, ckt)}")
         embed.add_field(name=f"{flag} {region.title()}", value="\n".join(lines), inline=True)
 
-    # ── Processamento de batalhas (light vs deep) ──
     proc_lines: list[str] = []
-    latest_lines: list[str] = []
-    inbox_lines: list[str] = []
+    pointer_lines: list[str] = []
     total_light = 0
     total_deep = 0
-    processing_latest = data.get("processing_latest") or {}
-    def _fmt_ts(ts: str | None) -> str:
-        if not ts:
-            return "—"
-        try:
-            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            return dt.strftime("%m-%d %H:%M")
-        except Exception:
-            return "—"
+    feed_pointers = data.get("feed_pointers") or {}
 
     for region, flag in (("americas", "🌎"), ("europe", "🌍"), ("asia", "🌏")):
         p = processing.get(region) or {}
@@ -113,17 +114,9 @@ def _build_embed(data: dict) -> discord.Embed:
         pct = round(deep / (light + deep) * 100) if (light + deep) > 0 else 100
         queued = (inbox.get(region) or {}).get("pending", 0)
         proc_lines.append(f"{flag} `{queued}` inbox · `{light}` light→deep · `{deep}` deep · {pct}%")
-        inbox_lines.append(f"{flag} última recebida {_fmt_ts((inbox.get(region) or {}).get('latest_pending_at'))}")
-        # Latest deep/light battle IDs with timestamps
-        latest = processing_latest.get(region) or {}
-        deep_info = latest.get("deep") or {}
-        light_info = latest.get("light") or {}
-        deep_id = deep_info.get("albion_id") if deep_info else None
-        light_id = light_info.get("albion_id") if light_info else None
-        deep_ts = deep_info.get("start_time") if deep_info else None
-        light_ts = light_info.get("start_time") if light_info else None
-        latest_lines.append(
-            f"{flag} deep `{deep_id or '—'}` ({_fmt_ts(deep_ts)}) · light `{light_id or '—'}` ({_fmt_ts(light_ts)})"
+        pointer_lines.append(
+            f"{flag} Btl {_pointer_line(feed_pointers.get(f'{region}/battles') or {})} · "
+            f"Kls {_pointer_line(feed_pointers.get(f'{region}/kills') or {})}"
         )
     embed.add_field(
         name=f"⚙️ Processamento ({total_deep} deep · {total_light} light)",
@@ -131,13 +124,8 @@ def _build_embed(data: dict) -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="🆔 Última batalha por tier",
-        value="\n".join(latest_lines),
-        inline=False,
-    )
-    embed.add_field(
-        name="📥 Última descoberta no inbox",
-        value="\n".join(inbox_lines),
+        name="🧭 Ponteiros do inbox",
+        value="\n".join(pointer_lines),
         inline=False,
     )
 
