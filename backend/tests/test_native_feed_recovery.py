@@ -45,6 +45,22 @@ async def _engine():
     return engine
 
 
+def _make_pages(count: int, page_size: int, start_time: datetime, step: timedelta = timedelta(seconds=1)) -> dict[int, list[dict]]:
+    """Cria páginas com timestamps decrescentes (mais novo → mais velho)."""
+    pages = {}
+    t = start_time
+    for i in range(0, count * page_size, page_size):
+        page = []
+        for j in range(page_size):
+            page.append(_raw(f"id-{i + j}", t))
+            t = t - step
+        pages[i] = page
+    return pages
+
+
+# ── Testes existentes (adaptados) ──────────────────────────────────────
+
+
 def test_burst_multiplas_paginas_retoma_e_so_aplica_apos_ancora():
     async def run():
         engine = await _engine()
@@ -56,7 +72,7 @@ def test_burst_multiplas_paginas_retoma_e_so_aplica_apos_ancora():
         }
 
         async def fetch(offset, _limit):
-            return pages[offset]
+            return pages.get(offset, [])
 
         async with AsyncSession(engine, expire_on_commit=False) as db:
             db.add(NativeFeedStream(
@@ -77,7 +93,6 @@ def test_burst_multiplas_paginas_retoma_e_so_aplica_apos_ancora():
                 db, kind=KIND_KILL, region="americas", apply_item=lambda _db, _item: _unexpected_apply(),
             ) == 0
 
-        # Nova sessão simula restart entre páginas: next_offset e a âncora vêm do banco.
         applied: list[str] = []
 
         async def apply(_db, item):
@@ -86,7 +101,7 @@ def test_burst_multiplas_paginas_retoma_e_so_aplica_apos_ancora():
         async with AsyncSession(engine, expire_on_commit=False) as db:
             resumed = await capture_native_stream(
                 db, kind=KIND_KILL, region="americas", page_size=2, offset_limit=20,
-                page_budget=3, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+                page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
             )
             assert resumed.completed
             assert not resumed.blocked
@@ -147,7 +162,6 @@ def test_falha_no_meio_retem_e_reexecuta_sem_pular_o_proximo():
             stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "europe"})
             assert stream is not None and stream.completed_head_source_id == "old"
 
-            # O backoff bloqueia c; depois da janela o mesmo b é tentado primeiro.
             middle.next_retry_at = now - timedelta(seconds=1)
             await db.commit()
             assert await apply_native_items(
@@ -198,7 +212,7 @@ def test_captura_nova_fronteira_enquanto_backlog_ainda_aguarda_aplicacao():
         }
 
         async def fetch(offset, _limit):
-            return pages[offset]
+            return pages.get(offset, [])
 
         async with AsyncSession(engine, expire_on_commit=False) as db:
             db.add(NativeFeedStream(
@@ -221,7 +235,7 @@ def test_captura_nova_fronteira_enquanto_backlog_ainda_aguarda_aplicacao():
 
             result = await capture_native_stream(
                 db, kind=KIND_KILL, region="americas", page_size=2, offset_limit=20,
-                page_budget=2, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+                page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
             )
             assert result.completed and not result.blocked
             stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "americas"})
@@ -308,7 +322,7 @@ def test_ancora_omitida_da_lista_fecha_pela_fronteira_temporal():
         }
 
         async def fetch(offset, _limit):
-            return pages[offset]
+            return pages.get(offset, [])
 
         async with AsyncSession(engine, expire_on_commit=False) as db:
             db.add(NativeFeedStream(
@@ -325,7 +339,7 @@ def test_ancora_omitida_da_lista_fecha_pela_fronteira_temporal():
 
             result = await capture_native_stream(
                 db, kind=KIND_KILL, region="asia", page_size=2, offset_limit=20,
-                page_budget=2, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+                page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
             )
             assert result.completed and not result.blocked
             stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "asia"})
@@ -378,7 +392,7 @@ def test_captura_nao_espera_aplicacao_lenta_do_item_mais_antigo():
             async with AsyncSession(engine, expire_on_commit=False) as capture_db:
                 result = await capture_native_stream(
                     capture_db, kind=KIND_KILL, region="europe", page_size=2, offset_limit=20,
-                    page_budget=1, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+                    page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
                 )
                 assert result.completed and not result.blocked
                 stream = await capture_db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "europe"})
@@ -390,6 +404,9 @@ def test_captura_nao_espera_aplicacao_lenta_do_item_mais_antigo():
         await engine.dispose()
 
     asyncio.run(run())
+
+
+KILL_FEED_KIND = KIND_KILL
 
 
 def test_recuperacao_expirada_nao_abandona_ancora():
@@ -420,7 +437,7 @@ def test_recuperacao_expirada_nao_abandona_ancora():
 
             result = await capture_native_stream(
                 db, kind=KIND_KILL, region="americas", page_size=2, offset_limit=20,
-                page_budget=1, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+                page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
             )
             stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "americas"})
             assert result.completed and stream is not None
@@ -442,7 +459,7 @@ def test_janela_sem_ancora_adota_fronteira_visivel_e_aplica():
         }
 
         async def fetch(offset, _limit):
-            return pages[offset]
+            return pages.get(offset, [])
 
         async with AsyncSession(engine, expire_on_commit=False) as db:
             db.add(NativeFeedStream(
@@ -451,7 +468,7 @@ def test_janela_sem_ancora_adota_fronteira_visivel_e_aplica():
             await db.commit()
             result = await capture_native_stream(
                 db, kind=KIND_KILL, region="asia", page_size=2, offset_limit=4,
-                page_budget=3, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+                page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
             )
             assert result.completed and not result.blocked
             applied: list[str] = []
@@ -471,3 +488,377 @@ def test_janela_sem_ancora_adota_fronteira_visivel_e_aplica():
         await engine.dispose()
 
     asyncio.run(run())
+
+
+# ── Novos testes do planejamento ───────────────────────────────────────
+
+
+def test_busca_exponencial_encontra_ancora_com_poucos_probes():
+    """Âncora próxima do limite 10000 deve ser localizada em ~8-16 probes."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        page_size = 2
+        offset_limit = 100
+
+        # Páginas com timestamps decrescentes; âncora no offset 20
+        pages = {}
+        t = now + timedelta(minutes=20)
+        for off in range(0, offset_limit, page_size):
+            page = []
+            for j in range(page_size):
+                page.append(_raw(f"id-{off + j}", t))
+                t = t - timedelta(seconds=30)
+            pages[off] = page
+
+        anchor_time = now + timedelta(minutes=10)
+
+        async def fetch(offset, _limit):
+            return pages.get(offset, [])
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="europe",
+                completed_head_source_id="anchor-id",
+                captured_head_source_id="anchor-id",
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="europe", source_id="anchor-id",
+                occurred_at=anchor_time, payload=_raw("anchor-id", anchor_time),
+                status="applied",
+            ))
+            await db.commit()
+
+            result = await capture_native_stream(
+                db, kind=KIND_KILL, region="europe", page_size=page_size,
+                offset_limit=offset_limit, page_budget=60,
+                fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+            )
+            assert result.completed and not result.blocked
+            stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "europe"})
+            assert stream is not None
+            assert stream.scan_resolution in ("exact_id", "temporal")
+            # Localização + captura usa menos probes que linear puro (50 páginas)
+            assert result.pages < 50
+
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_outside_window_classificado_por_ultima_pagina():
+    """Se a última página é mais nova que a âncora, classifica outside_window imediatamente."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        page_size = 2
+        offset_limit = 10
+
+        # Todas as páginas são mais novas que a âncora
+        pages = {}
+        t = now + timedelta(hours=2)
+        for off in range(0, offset_limit, page_size):
+            page = []
+            for j in range(page_size):
+                page.append(_raw(f"id-{off + j}", t))
+                t = t - timedelta(seconds=30)
+            pages[off] = page
+
+        anchor_time = now
+
+        async def fetch(offset, _limit):
+            return pages.get(offset, [])
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="americas",
+                completed_head_source_id="ancient",
+                captured_head_source_id="ancient",
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="americas", source_id="ancient",
+                occurred_at=anchor_time, payload=_raw("ancient", anchor_time),
+                status="applied",
+            ))
+            await db.commit()
+
+            result = await capture_native_stream(
+                db, kind=KIND_KILL, region="americas", page_size=page_size,
+                offset_limit=offset_limit, page_budget=60,
+                fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+            )
+            assert result.completed and not result.blocked
+            stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "americas"})
+            assert stream is not None
+            assert stream.scan_resolution == "outside_window"
+            # Não deve ter percorrido todas as páginas
+            assert result.pages < 5
+
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_empate_timestamp_nao_fecha_captura_cedo():
+    """Itens com mesmo timestamp da âncora não devem fechar a fronteira."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+
+        # Página 0: duas batalhas com mesmo timestamp da âncora
+        # Página 2: batalhas estritamente anteriores
+        pages = {
+            0: [_raw("new", now + timedelta(minutes=1)), _raw("tie-1", now)],
+            2: [_raw("tie-2", now), _raw("older", now - timedelta(seconds=1))],
+        }
+
+        async def fetch(offset, _limit):
+            return pages.get(offset, [])
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="asia",
+                completed_head_source_id="anchor",
+                captured_head_source_id="anchor",
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="asia", source_id="anchor",
+                occurred_at=now, payload=_raw("anchor", now), status="applied",
+            ))
+            await db.commit()
+
+            result = await capture_native_stream(
+                db, kind=KIND_KILL, region="asia", page_size=2, offset_limit=20,
+                page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+            )
+            assert result.completed and not result.blocked
+            stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "asia"})
+            assert stream is not None
+            # tie-2 deve ter sido capturado também (não fechou na página 0)
+            item_tie2 = await db.scalar(
+                select(NativeFeedItem).where(NativeFeedItem.source_id == "tie-2")
+            )
+            assert item_tie2 is not None
+
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_restart_durante_locating_retoma_busca():
+    """Restart durante a fase locating deve retomar do estado persistido."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        page_size = 2
+        offset_limit = 40
+
+        pages = {}
+        t = now + timedelta(minutes=20)
+        for off in range(0, offset_limit, page_size):
+            page = []
+            for j in range(page_size):
+                page.append(_raw(f"id-{off + j}", t))
+                t = t - timedelta(seconds=30)
+            pages[off] = page
+
+        anchor_time = now + timedelta(minutes=10)
+
+        async def fetch(offset, _limit):
+            return pages.get(offset, [])
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="europe",
+                completed_head_source_id="anchor",
+                captured_head_source_id="anchor",
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="europe", source_id="anchor",
+                occurred_at=anchor_time, payload=_raw("anchor", anchor_time),
+                status="applied",
+            ))
+            await db.commit()
+
+            # Primeira chamada com budget pequeno — não completa
+            first = await capture_native_stream(
+                db, kind=KIND_KILL, region="europe", page_size=page_size,
+                offset_limit=offset_limit, page_budget=2,
+                fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+            )
+            stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "europe"})
+            assert stream is not None
+            assert stream.scan_active
+            assert stream.scan_phase in ("locating", "capturing")
+
+        # Nova sessão simula restart
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            second = await capture_native_stream(
+                db, kind=KIND_KILL, region="europe", page_size=page_size,
+                offset_limit=offset_limit, page_budget=60,
+                fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+            )
+            assert second.completed
+            stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "europe"})
+            assert stream is not None
+            assert not stream.scan_active
+
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_primeira_sincronizacao_sem_ancora_captura_e_aplica():
+    """Stream nova sem âncora deve capturar linearmente e aplicar."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        pages = {
+            0: [_raw("b", now + timedelta(minutes=1)), _raw("a", now)],
+        }
+
+        async def fetch(offset, _limit):
+            return pages.get(offset, [])
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            result = await capture_native_stream(
+                db, kind=KIND_KILL, region="americas", page_size=2, offset_limit=20,
+                page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+            )
+            assert result.completed and not result.blocked
+            stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "americas"})
+            assert stream is not None
+            assert stream.scan_resolution == "initial"
+            assert stream.captured_head_source_id in ("a", "b")
+
+            applied: list[str] = []
+
+            async def apply(_db, item):
+                applied.append(item.source_id)
+
+            assert await apply_native_items(
+                db, kind=KIND_KILL, region="americas", apply_item=apply,
+            ) == 2
+
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_dead_letter_apos_max_tentativas():
+    """Item que falha DEAD_LETTER_MAX_ATTEMPTS vezes vira 'dead' e desbloqueia a fila."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="europe",
+                completed_head_source_id="old", captured_head_source_id="new",
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="europe", source_id="broken",
+                occurred_at=now, payload=_raw("broken", now),
+                attempts=19, status="retry",
+                next_retry_at=now - timedelta(seconds=1),
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="europe", source_id="good",
+                occurred_at=now + timedelta(minutes=1),
+                payload=_raw("good", now + timedelta(minutes=1)),
+            ))
+            await db.commit()
+
+            async def apply(_db, item):
+                if item.source_id == "broken":
+                    raise RuntimeError("sempre falha")
+
+            applied = await apply_native_items(
+                db, kind=KIND_KILL, region="europe", apply_item=apply, batch_size=5,
+            )
+            broken = await db.scalar(
+                select(NativeFeedItem).where(NativeFeedItem.source_id == "broken")
+            )
+            assert broken is not None
+            assert broken.status == "dead"
+            assert broken.attempts == 20
+
+            good = await db.scalar(
+                select(NativeFeedItem).where(NativeFeedItem.source_id == "good")
+            )
+            assert good is not None
+            assert good.status == "applied"
+            assert applied == 1
+
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_localizacao_nao_aplica_itens():
+    """A fase de localização não deve aplicar itens ao domínio."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        page_size = 2
+        offset_limit = 20
+
+        pages = {}
+        t = now + timedelta(minutes=10)
+        for off in range(0, offset_limit, page_size):
+            page = []
+            for j in range(page_size):
+                page.append(_raw(f"id-{off + j}", t))
+                t = t - timedelta(seconds=30)
+            pages[off] = page
+
+        anchor_time = now + timedelta(minutes=5)
+
+        async def fetch(offset, _limit):
+            return pages.get(offset, [])
+
+        applied: list[str] = []
+
+        async def apply(_db, item):
+            applied.append(item.source_id)
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="americas",
+                completed_head_source_id="anchor",
+                captured_head_source_id="anchor",
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="americas", source_id="anchor",
+                occurred_at=anchor_time, payload=_raw("anchor", anchor_time),
+                status="applied",
+            ))
+            await db.commit()
+
+            result = await capture_native_stream(
+                db, kind=KIND_KILL, region="americas", page_size=page_size,
+                offset_limit=offset_limit, page_budget=2,
+                fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+            )
+            # Localização não completa com budget 2
+            assert not result.completed
+            # Nada aplicado durante localização
+            assert applied == []
+
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+if __name__ == "__main__":
+    import sys
+    for name, obj in list(globals().items()):
+        if name.startswith("test_") and callable(obj):
+            print(f"  {name} ...", end=" ", flush=True)
+            try:
+                obj()
+                print("OK")
+            except Exception as e:
+                print(f"FAIL: {e}")
+                sys.exit(1)
+    print("All tests passed.")

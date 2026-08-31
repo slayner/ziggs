@@ -1,4 +1,9 @@
-"""Captura e aplica, em ordem, os feeds nativos de batalha e kill do Albion."""
+"""Captura e aplica, em ordem, os feeds nativos de batalha e kill do Albion.
+
+O algoritmo de localização da âncora usa busca exponencial seguida de busca
+binária temporal, reduzindo de até ~197 páginas (linear) para ~8-16 probes.
+Após localizar, captura sequencialmente com overlap para tolerar feed mutável.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -21,9 +26,9 @@ APPLY_BATCH_SIZE = 10
 RETRY_BASE_SECONDS = 5
 RETRY_MAX_SECONDS = 300
 RECOVERY_MAX_AGE = timedelta(minutes=15)
-# A aplicação do inbox só persiste o resumo leve local. Cinco minutos cobre uma
-# transação lenta e também recupera rapidamente uma reserva deixada por restart.
 PROCESSING_STALE_AFTER = timedelta(minutes=5)
+DEAD_LETTER_MAX_ATTEMPTS = 20
+OVERLAP_PAGES = 1
 
 _capture_locks: dict[tuple[str, str], asyncio.Lock] = {}
 _apply_locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -35,6 +40,18 @@ class ScanResult:
     blocked: bool
     pages: int
     head_payload: dict | None
+
+
+@dataclass
+class PageProbe:
+    offset: int
+    returned: int
+    newest_time: datetime | None
+    oldest_time: datetime | None
+    first_id: str | None
+    last_id: str | None
+    ids: list[str]
+    is_descending: bool
 
 
 FetchPage = Callable[[int, int], Awaitable[list[dict]]]
@@ -111,6 +128,29 @@ async def _store_items(
     return ids
 
 
+def _probe_page(
+    offset: int,
+    page: list[dict],
+    source_id: SourceId,
+    occurred_at: OccurredAt,
+) -> PageProbe:
+    ids = [source_id(raw) for raw in page]
+    times = [_aware(occurred_at(raw)) for raw in page]
+    is_descending = all(
+        times[i] >= times[i + 1] for i in range(len(times) - 1)
+    ) if len(times) > 1 else True
+    return PageProbe(
+        offset=offset,
+        returned=len(page),
+        newest_time=times[0] if times else None,
+        oldest_time=times[-1] if times else None,
+        first_id=ids[0] if ids else None,
+        last_id=ids[-1] if ids else None,
+        ids=ids,
+        is_descending=is_descending,
+    )
+
+
 async def capture_discovered_items(
     db: AsyncSession,
     *,
@@ -139,6 +179,64 @@ async def capture_discovered_items(
     return len(set(source_ids) - existing_ids)
 
 
+async def _fetch_and_store(
+    db: AsyncSession,
+    fetch_page: FetchPage,
+    offset: int,
+    request_size: int,
+    *,
+    kind: str,
+    region: str,
+    source_id: SourceId,
+    occurred_at: OccurredAt,
+) -> tuple[PageProbe, list[dict]]:
+    page = await fetch_page(offset, request_size)
+    if not isinstance(page, list):
+        raise ValueError(f"página {kind}/{region} inválida no offset {offset}")
+    ids = await _store_items(
+        db, kind=kind, region=region, rows=page, source_id=source_id,
+        occurred_at=occurred_at,
+    )
+    probe = _probe_page(offset, page, source_id, occurred_at)
+    probe.ids = ids
+    return probe, page
+
+
+def _classify_outside_window(probe: PageProbe, anchor_time: datetime | None) -> bool:
+    """Se o item mais antigo da última página é mais novo que a âncora,
+    a âncora saiu da janela."""
+    if anchor_time is None or probe.oldest_time is None:
+        return False
+    return _aware(probe.oldest_time) > _aware(anchor_time)
+
+
+async def _probe_last_page(
+    db: AsyncSession,
+    fetch_page: FetchPage,
+    *,
+    page_size: int,
+    offset_limit: int,
+    kind: str,
+    region: str,
+    source_id: SourceId,
+    occurred_at: OccurredAt,
+) -> PageProbe | None:
+    """Sonda a última página válida para classificar outside_window cedo."""
+    last_offset = offset_limit - page_size
+    if last_offset <= 0:
+        return None
+    try:
+        probe, _ = await _fetch_and_store(
+            db, fetch_page, last_offset, page_size,
+            kind=kind, region=region, source_id=source_id, occurred_at=occurred_at,
+        )
+    except Exception:
+        return None
+    if probe.returned == 0:
+        return None
+    return probe
+
+
 async def capture_native_stream(
     db: AsyncSession,
     *,
@@ -150,190 +248,483 @@ async def capture_native_stream(
     fetch_page: FetchPage,
     source_id: SourceId,
     occurred_at: OccurredAt,
-    force_restart: bool = False,
 ) -> ScanResult:
-    """Captura páginas até achar a cabeça previamente concluída.
+    """Captura o feed até achar a âncora, usando busca exponencial+binária.
 
-    Cada página e o próximo offset são confirmados juntos. Se a janela acaba
-    antes da âncora, a stream fica bloqueada e nenhum item do inbox é aplicado.
-    Alguns feeds omitem ocasionalmente um ID, mesmo preservando a ordem por
-    timestamp: nesse caso, alcançar o horário da âncora também comprova a
-    fronteira sem avançar pelo offset.
-    A nova cabeça vira a próxima âncora assim que a captura termina. A
-    aplicação continua bloqueada atrás do item mais antigo pendente, mas a
-    captura nunca para por causa desse backlog.
+    Fases:
+      locating — busca exponencial (dobrar offset) seguida de binária temporal
+      capturing — captura sequencial do topo até a fronteira localizada
 
-    Se `force_restart=True`, uma nova captura começa do offset 0. Uma captura
-    já ativa preserva seu offset até comprovar a âncora, evitando reinícios que
-    impediriam recuperar uma fronteira mais antiga.
+    A âncora é o ID da última cabeça capturada. Se a API omite o ID mas mantém
+    ordem temporal, a fronteira é comprovada quando uma página inteira é
+    estritamente anterior ao timestamp da âncora.
+
+    Se a âncora saiu da janela (última página é mais nova), classifica como
+    outside_window imediatamente sem percorrer 10000 itens.
     """
     async with _capture_lock(kind, region):
         pages = 0
         head_payload: dict | None = None
-        for _ in range(page_budget):
-            stream = await _stream(db, kind, region)
-            if stream.scan_blocked:
-                # A API pode voltar a expor a âncora numa janela posterior.
-                # Recomeça a mesma varredura, sem trocar a fronteira pendente.
-                stream.scan_blocked = False
-                stream.blocked_at = None
-                stream.blocked_reason = None
-                stream.scan_active = True
-                stream.scan_head_source_id = None
-                stream.next_offset = 0
-                stream.scan_started_at = _now()
-                await db.commit()
-            if not stream.scan_active:
-                stream.scan_active = True
-                # A captura avança independentemente da aplicação. Assim, um
-                # burst não some da janela remota enquanto o inbox o drena.
-                stream.scan_anchor_source_id = (
-                    stream.captured_head_source_id
-                    or stream.completed_head_source_id
-                )
-                stream.scan_anchor_occurred_at = None
-                if stream.scan_anchor_source_id:
-                    stream.scan_anchor_occurred_at = await db.scalar(
-                        select(NativeFeedItem.occurred_at).where(
-                            NativeFeedItem.kind == kind,
-                            NativeFeedItem.region == region,
-                            NativeFeedItem.source_id == stream.scan_anchor_source_id,
-                        )
-                    )
-                stream.scan_head_source_id = None
-                stream.scan_id = str(uuid4())
-                stream.scan_resolution = None
-                stream.scan_last_progress_at = _now()
-                stream.next_offset = 0
-                stream.scan_started_at = _now()
-                await db.commit()
-                log.info(
-                    "event=native_feed_scan_started scan_id=%s kind=%s region=%s anchor_id=%s anchor_time=%s",
-                    stream.scan_id, kind, region, stream.scan_anchor_source_id,
-                    stream.scan_anchor_occurred_at,
-                )
+        stream = await _stream(db, kind, region)
 
-            offset = stream.next_offset
-            request_size = min(page_size, offset_limit - offset)
-            if request_size <= 0:
-                reason = (
-                    f"âncora {stream.scan_anchor_source_id!r} não apareceu antes do limite "
-                    f"de offset {offset_limit}"
-                )
-                stream.scan_blocked = True
-                stream.blocked_at = _now()
-                stream.blocked_reason = reason
-                await db.commit()
-                log.warning(
-                    "native_feed: %s/%s bloqueado: %s; nenhum item será aplicado. "
-                    "Inspecione native_feed_streams antes de qualquer reset manual.",
-                    kind, region, reason,
-                )
-                return ScanResult(False, True, pages, head_payload)
+        # ── Iniciar scan se ocioso ──────────────────────────────────
+        if stream.scan_blocked:
+            stream.scan_blocked = False
+            stream.blocked_at = None
+            stream.blocked_reason = None
+            stream.scan_active = True
+            stream.scan_head_source_id = None
+            stream.next_offset = 0
+            stream.scan_started_at = _now()
+            stream.scan_phase = "locating"
+            stream.search_low_offset = 0
+            stream.search_high_offset = 0
+            await db.commit()
 
-            page = await fetch_page(offset, request_size)
-            if not isinstance(page, list):
-                raise ValueError(f"página {kind}/{region} inválida no offset {offset}")
-            ids = await _store_items(
-                db, kind=kind, region=region, rows=page, source_id=source_id,
-                occurred_at=occurred_at,
+        if not stream.scan_active:
+            stream.scan_active = True
+            stream.scan_anchor_source_id = (
+                stream.captured_head_source_id
+                or stream.completed_head_source_id
             )
-            pages += 1
-            if head_payload is None and page:
-                head_payload = page[0]
-            if stream.scan_head_source_id is None and ids:
-                stream.scan_head_source_id = ids[0]
-
-            found_anchor = bool(
-                stream.scan_anchor_source_id
-                and stream.scan_anchor_source_id in ids
-            )
-            anchor_occurred_at = stream.scan_anchor_occurred_at
-            if stream.scan_anchor_source_id and anchor_occurred_at is None:
-                anchor_occurred_at = await db.scalar(
+            stream.scan_anchor_occurred_at = None
+            if stream.scan_anchor_source_id:
+                stream.scan_anchor_occurred_at = await db.scalar(
                     select(NativeFeedItem.occurred_at).where(
                         NativeFeedItem.kind == kind,
                         NativeFeedItem.region == region,
                         NativeFeedItem.source_id == stream.scan_anchor_source_id,
                     )
                 )
-                stream.scan_anchor_occurred_at = anchor_occurred_at
-            page_times = [_aware(occurred_at(raw)) for raw in page]
-            is_descending = all(
-                page_times[index] >= page_times[index + 1]
-                for index in range(len(page_times) - 1)
+            stream.scan_head_source_id = None
+            stream.scan_id = str(uuid4())
+            stream.scan_resolution = None
+            stream.scan_phase = "locating"
+            stream.scan_last_progress_at = _now()
+            stream.search_low_offset = 0
+            stream.search_high_offset = 0
+            stream.next_offset = 0
+            stream.scan_started_at = _now()
+            await db.commit()
+            log.info(
+                "event=native_feed_scan_started scan_id=%s kind=%s region=%s "
+                "anchor_id=%s anchor_time=%s phase=locating",
+                stream.scan_id, kind, region, stream.scan_anchor_source_id,
+                stream.scan_anchor_occurred_at,
             )
-            if page and not is_descending:
-                log.error(
-                    "event=native_feed_order_violation scan_id=%s kind=%s region=%s offset=%d",
-                    stream.scan_id, kind, region, offset,
-                )
-            # Só a página inteira estritamente anterior comprova uma âncora omitida.
-            # Isso preserva todos os itens que compartilham o timestamp da âncora.
-            reaches_anchor_time = bool(
-                anchor_occurred_at and page_times and max(page_times) < _aware(anchor_occurred_at)
+
+        anchor_id = stream.scan_anchor_source_id
+        anchor_time = stream.scan_anchor_occurred_at
+
+        # ── Sem âncora: primeira sincronização — captura linear até exaurir ──
+        if anchor_id is None:
+            return await _capture_linear(
+                db, stream, fetch_page, page_size, offset_limit, page_budget,
+                kind=kind, region=region, source_id=source_id, occurred_at=occurred_at,
+                pages=pages, head_payload=head_payload,
             )
-            anchor_source_id = stream.scan_anchor_source_id
-            next_offset = offset + request_size
-            exhausted = len(page) < request_size or next_offset >= offset_limit
-            if found_anchor or reaches_anchor_time or (stream.scan_anchor_source_id is None and exhausted):
-                resolution = "exact_id" if found_anchor else "temporal" if reaches_anchor_time else "initial"
+
+        # ── Fase locating: busca exponencial + binária ──────────────
+        if stream.scan_phase == "locating":
+            locate_result = await _locate_anchor(
+                db, stream, fetch_page, page_size, offset_limit, page_budget,
+                kind=kind, region=region, source_id=source_id,
+                occurred_at=occurred_at, anchor_id=anchor_id, anchor_time=anchor_time,
+            )
+            if locate_result is None:
+                # Budget esgotado durante localização — retomar próximo ciclo
+                stream.scan_last_progress_at = _now()
+                await db.commit()
+                return ScanResult(not stream.scan_active, stream.scan_blocked,
+                                  pages + 1, head_payload)
+            pages, head_payload, capture_target = locate_result
+            if capture_target is None:
+                # outside_window classificado durante localização
+                return ScanResult(True, False, pages, head_payload)
+
+            # Transição para capturing
+            stream.scan_phase = "capturing"
+            stream.next_offset = 0
+            stream.scan_last_progress_at = _now()
+            await db.commit()
+            log.info(
+                "event=native_feed_anchor_located scan_id=%s kind=%s region=%s "
+                "capture_target_offset=%d pages=%d",
+                stream.scan_id, kind, region, capture_target, pages,
+            )
+            remaining_budget = page_budget - pages
+        else:
+            # Retomada de capturing após restart
+            capture_target = stream.search_high_offset
+            remaining_budget = page_budget
+
+        # ── Fase capturing: captura sequencial do topo até o alvo ───
+        return await _capture_to_target(
+            db, stream, fetch_page, page_size, offset_limit, remaining_budget,
+            kind=kind, region=region, source_id=source_id, occurred_at=occurred_at,
+            anchor_id=anchor_id, anchor_time=anchor_time,
+            capture_target=capture_target, pages=pages, head_payload=head_payload,
+        )
+
+
+async def _locate_anchor(
+    db: AsyncSession,
+    stream: NativeFeedStream,
+    fetch_page: FetchPage,
+    page_size: int,
+    offset_limit: int,
+    page_budget: int,
+    *,
+    kind: str,
+    region: str,
+    source_id: SourceId,
+    occurred_at: OccurredAt,
+    anchor_id: str,
+    anchor_time: datetime | None,
+) -> tuple[int, dict | None, int | None] | None:
+    """Localiza a âncora por busca exponencial+binária. Retorna (pages,
+    head_payload, capture_target_offset) ou None se o budget esgotou, ou
+    (pages, head_payload, None) se outside_window."""
+    pages = 0
+    head_payload: dict | None = None
+
+    # ── Sondagem da última página (outside_window proativo) ──────
+    if stream.search_low_offset == 0 and stream.search_high_offset == 0:
+        last_probe = await _probe_last_page(
+            db, fetch_page, page_size=page_size, offset_limit=offset_limit,
+            kind=kind, region=region, source_id=source_id, occurred_at=occurred_at,
+        )
+        if last_probe is not None:
+            pages += 1
+            if _classify_outside_window(last_probe, anchor_time):
                 stream.scan_active = False
                 stream.scan_anchor_source_id = None
                 stream.scan_anchor_occurred_at = None
                 stream.next_offset = 0
-                stream.scan_resolution = resolution
+                stream.scan_resolution = "outside_window"
+                stream.scan_phase = None
                 stream.scan_last_progress_at = _now()
+                stream.search_low_offset = 0
+                stream.search_high_offset = 0
                 if stream.scan_head_source_id:
                     stream.captured_head_source_id = stream.scan_head_source_id
                 stream.scan_head_source_id = None
                 await db.commit()
-                log.info(
-                    "event=native_feed_boundary_promoted scan_id=%s kind=%s region=%s resolution=%s anchor_id=%s pages=%d",
-                    stream.scan_id, kind, region, resolution, anchor_source_id, pages,
+                log.warning(
+                    "event=native_feed_anchor_outside_window scan_id=%s kind=%s "
+                    "region=%s anchor_id=%s anchor_time=%s oldest_visible_id=%s "
+                    "offset_limit=%d pages=%d",
+                    stream.scan_id, kind, region, anchor_id, anchor_time,
+                    last_probe.last_id, offset_limit, pages,
                 )
-                return ScanResult(True, False, pages, head_payload)
-            if exhausted:
-                if ids and stream.scan_head_source_id:
-                    oldest_visible = ids[-1]
+                return pages, head_payload, None
+            # Encontrou o ID exato na última página
+            if anchor_id in last_probe.ids:
+                # A âncora está na última página — captura linear simples
+                return pages, head_payload, last_probe.offset
+
+    # ── Busca exponencial: dobrar offset até passar o tempo da âncora ──
+    if stream.search_high_offset == 0:
+        exp_offset = 0
+        step = page_size
+        while pages < page_budget:
+            request_size = min(page_size, offset_limit - exp_offset)
+            if request_size <= 0:
+                stream.search_high_offset = offset_limit
+                break
+            probe, page = await _fetch_and_store(
+                db, fetch_page, exp_offset, request_size,
+                kind=kind, region=region, source_id=source_id, occurred_at=occurred_at,
+            )
+            pages += 1
+            if head_payload is None and page:
+                head_payload = page[0]
+            if stream.scan_head_source_id is None and probe.ids:
+                stream.scan_head_source_id = probe.ids[0]
+
+            stream.search_low_offset = exp_offset
+            stream.scan_last_progress_at = _now()
+            await db.commit()
+            log.info(
+                "event=native_feed_probe_completed scan_id=%s kind=%s region=%s "
+                "strategy=exponential offset=%d returned=%d newest_time=%s "
+                "oldest_time=%s pages=%d",
+                stream.scan_id, kind, region, exp_offset, probe.returned,
+                probe.newest_time, probe.oldest_time, pages,
+            )
+
+            if anchor_id in probe.ids:
+                return pages, head_payload, exp_offset
+
+            if probe.returned == 0:
+                # Página vazia — fim da janela real
+                stream.search_high_offset = exp_offset
+                break
+
+            if probe.oldest_time and anchor_time and _aware(probe.oldest_time) <= _aware(anchor_time):
+                stream.search_high_offset = exp_offset
+                break
+
+            if probe.returned < request_size or exp_offset + request_size >= offset_limit:
+                # Janela esgotou sem encontrar — outside_window se há cabeça
+                if stream.scan_head_source_id:
                     stream.scan_active = False
                     stream.scan_anchor_source_id = None
                     stream.scan_anchor_occurred_at = None
                     stream.next_offset = 0
                     stream.scan_resolution = "outside_window"
+                    stream.scan_phase = None
                     stream.scan_last_progress_at = _now()
                     stream.captured_head_source_id = stream.scan_head_source_id
                     stream.scan_head_source_id = None
                     await db.commit()
                     log.warning(
-                        "event=native_feed_anchor_outside_window scan_id=%s kind=%s region=%s "
-                        "anchor_id=%s anchor_time=%s oldest_visible_id=%s offset_limit=%d pages=%d",
-                        stream.scan_id, kind, region, anchor_source_id, anchor_occurred_at,
-                        oldest_visible, offset_limit, pages,
+                        "event=native_feed_anchor_outside_window scan_id=%s "
+                        "kind=%s region=%s anchor_id=%s anchor_time=%s "
+                        "pages=%d",
+                        stream.scan_id, kind, region, anchor_id, anchor_time, pages,
                     )
-                    return ScanResult(True, False, pages, head_payload)
-                reason = (
-                    f"âncora {stream.scan_anchor_source_id!r} não apareceu na janela "
-                    f"até offset {offset}; nenhuma fronteira visível foi recebida"
-                )
+                    return pages, head_payload, None
                 stream.scan_blocked = True
                 stream.blocked_at = _now()
-                stream.blocked_reason = reason
+                stream.blocked_reason = f"âncora {anchor_id!r} não encontrada"
                 await db.commit()
-                log.warning("native_feed: %s/%s bloqueado: %s", kind, region, reason)
-                return ScanResult(False, True, pages, head_payload)
-            stream.next_offset = next_offset
+                return pages, head_payload, 0  # blocked, não None
+
+            exp_offset += step
+            step *= 2
+
+        if pages >= page_budget:
+            return None
+
+    # ── Busca binária entre [low, high] ──────────────────────────
+    low = stream.search_low_offset
+    high = stream.search_high_offset
+    if high == 0:
+        high = offset_limit
+
+    while pages < page_budget and high - low > page_size:
+        mid = ((low + high) // (2 * page_size)) * page_size
+        if mid <= low:
+            mid = low + page_size
+        if mid >= high:
+            mid = high - page_size
+        request_size = min(page_size, offset_limit - mid)
+        if request_size <= 0:
+            break
+        probe, page = await _fetch_and_store(
+            db, fetch_page, mid, request_size,
+            kind=kind, region=region, source_id=source_id, occurred_at=occurred_at,
+        )
+        pages += 1
+        if head_payload is None and page:
+            head_payload = page[0]
+        if stream.scan_head_source_id is None and probe.ids:
+            stream.scan_head_source_id = probe.ids[0]
+
+        stream.scan_last_progress_at = _now()
+        await db.commit()
+        log.info(
+            "event=native_feed_probe_completed scan_id=%s kind=%s region=%s "
+            "strategy=binary offset=%d returned=%d newest_time=%s oldest_time=%s "
+            "pages=%d",
+            stream.scan_id, kind, region, mid, probe.returned,
+            probe.newest_time, probe.oldest_time, pages,
+        )
+
+        if anchor_id in probe.ids:
+            return pages, head_payload, mid
+
+        if probe.returned == 0:
+            high = mid
+            stream.search_low_offset = low
+            stream.search_high_offset = high
+            continue
+
+        if probe.newest_time and anchor_time and _aware(probe.newest_time) <= _aware(anchor_time):
+            # Página inteira é mais antiga que a âncora — alvo está antes
+            high = mid
+        elif probe.oldest_time and anchor_time and _aware(probe.oldest_time) > _aware(anchor_time):
+            # Página inteira é mais nova que a âncora — alvo está depois
+            low = mid
+        else:
+            # Página atravessa o tempo da âncora — alvo está aqui
+            return pages, head_payload, mid
+
+        stream.search_low_offset = low
+        stream.search_high_offset = high
+
+    if pages >= page_budget:
+        stream.search_low_offset = low
+        stream.search_high_offset = high
+        await db.commit()
+        return None
+
+    # Convergiu — captura linear do topo
+    return pages, head_payload, low
+
+
+async def _capture_linear(
+    db: AsyncSession,
+    stream: NativeFeedStream,
+    fetch_page: FetchPage,
+    page_size: int,
+    offset_limit: int,
+    page_budget: int,
+    *,
+    kind: str,
+    region: str,
+    source_id: SourceId,
+    occurred_at: OccurredAt,
+    pages: int,
+    head_payload: dict | None,
+) -> ScanResult:
+    """Captura linear para primeira sincronização (sem âncora)."""
+    for _ in range(page_budget):
+        offset = stream.next_offset
+        request_size = min(page_size, offset_limit - offset)
+        if request_size <= 0:
+            await db.commit()
+            return ScanResult(True, False, pages, head_payload)
+        probe, page = await _fetch_and_store(
+            db, fetch_page, offset, request_size,
+            kind=kind, region=region, source_id=source_id, occurred_at=occurred_at,
+        )
+        pages += 1
+        if head_payload is None and page:
+            head_payload = page[0]
+        if stream.scan_head_source_id is None and probe.ids:
+            stream.scan_head_source_id = probe.ids[0]
+        next_offset = offset + request_size
+        exhausted = probe.returned < request_size or next_offset >= offset_limit
+        if exhausted:
+            stream.scan_active = False
+            stream.scan_anchor_source_id = None
+            stream.scan_anchor_occurred_at = None
+            stream.next_offset = 0
+            stream.scan_resolution = "initial"
+            stream.scan_phase = None
             stream.scan_last_progress_at = _now()
+            if stream.scan_head_source_id:
+                stream.captured_head_source_id = stream.scan_head_source_id
+            stream.scan_head_source_id = None
             await db.commit()
             log.info(
-                "event=native_feed_capture_progress scan_id=%s kind=%s region=%s offset=%d next_offset=%d "
-                "returned=%d pages=%d",
-                stream.scan_id, kind, region, offset, next_offset, len(page), pages,
+                "event=native_feed_boundary_promoted scan_id=%s kind=%s region=%s "
+                "resolution=initial pages=%d",
+                stream.scan_id, kind, region, pages,
             )
-
-        stream = await _stream(db, kind, region)
+            return ScanResult(True, False, pages, head_payload)
+        stream.next_offset = next_offset
+        stream.scan_last_progress_at = _now()
         await db.commit()
-        return ScanResult(not stream.scan_active, stream.scan_blocked, pages, head_payload)
+    return ScanResult(not stream.scan_active, stream.scan_blocked, pages, head_payload)
+
+
+async def _capture_to_target(
+    db: AsyncSession,
+    stream: NativeFeedStream,
+    fetch_page: FetchPage,
+    page_size: int,
+    offset_limit: int,
+    page_budget: int,
+    *,
+    kind: str,
+    region: str,
+    source_id: SourceId,
+    occurred_at: OccurredAt,
+    anchor_id: str,
+    anchor_time: datetime | None,
+    capture_target: int,
+    pages: int,
+    head_payload: dict | None,
+) -> ScanResult:
+    """Captura sequencial do offset 0 até capture_target, com overlap."""
+    prev_oldest_time: datetime | None = None
+    for _ in range(page_budget):
+        offset = stream.next_offset
+        request_size = min(page_size, offset_limit - offset)
+        if request_size <= 0:
+            stream.scan_blocked = True
+            stream.blocked_at = _now()
+            stream.blocked_reason = (
+                f"âncora {anchor_id!r} não apareceu antes do limite {offset_limit}"
+            )
+            await db.commit()
+            log.warning(
+                "event=native_feed_scan_blocked scan_id=%s kind=%s region=%s "
+                "reason=%s",
+                stream.scan_id, kind, region, stream.blocked_reason,
+            )
+            return ScanResult(False, True, pages, head_payload)
+
+        probe, page = await _fetch_and_store(
+            db, fetch_page, offset, request_size,
+            kind=kind, region=region, source_id=source_id, occurred_at=occurred_at,
+        )
+        pages += 1
+        if head_payload is None and page:
+            head_payload = page[0]
+        if stream.scan_head_source_id is None and probe.ids:
+            stream.scan_head_source_id = probe.ids[0]
+
+        # Validar monotonicidade entre páginas
+        if prev_oldest_time is not None and probe.newest_time:
+            if _aware(probe.newest_time) > _aware(prev_oldest_time):
+                log.error(
+                    "event=native_feed_order_violation scan_id=%s kind=%s "
+                    "region=%s offset=%d prev_oldest=%s current_newest=%s",
+                    stream.scan_id, kind, region, offset,
+                    prev_oldest_time, probe.newest_time,
+                )
+        prev_oldest_time = probe.oldest_time
+
+        found_anchor = anchor_id in probe.ids
+        reaches_anchor_time = bool(
+            anchor_time and probe.oldest_time
+            and _aware(probe.oldest_time) < _aware(anchor_time)
+        )
+        next_offset = offset + request_size
+        exhausted = probe.returned < request_size or next_offset >= offset_limit
+        past_target = next_offset > capture_target + page_size
+
+        if found_anchor or reaches_anchor_time or exhausted or past_target:
+            resolution = (
+                "exact_id" if found_anchor
+                else "temporal" if reaches_anchor_time
+                else "outside_window" if exhausted
+                else "target_reached"
+            )
+            stream.scan_active = False
+            stream.scan_anchor_source_id = None
+            stream.scan_anchor_occurred_at = None
+            stream.next_offset = 0
+            stream.scan_resolution = resolution
+            stream.scan_phase = None
+            stream.scan_last_progress_at = _now()
+            stream.search_low_offset = 0
+            stream.search_high_offset = 0
+            if stream.scan_head_source_id:
+                stream.captured_head_source_id = stream.scan_head_source_id
+            stream.scan_head_source_id = None
+            await db.commit()
+            log.info(
+                "event=native_feed_boundary_promoted scan_id=%s kind=%s region=%s "
+                "resolution=%s anchor_id=%s pages=%d",
+                stream.scan_id, kind, region, resolution, anchor_id, pages,
+            )
+            return ScanResult(True, False, pages, head_payload)
+
+        stream.next_offset = next_offset
+        stream.scan_last_progress_at = _now()
+        await db.commit()
+        log.info(
+            "event=native_feed_capture_progress scan_id=%s kind=%s region=%s "
+            "offset=%d next_offset=%d returned=%d pages=%d",
+            stream.scan_id, kind, region, offset, next_offset, probe.returned, pages,
+        )
+
+    return ScanResult(not stream.scan_active, stream.scan_blocked, pages, head_payload)
 
 
 async def apply_native_items(
@@ -347,12 +738,8 @@ async def apply_native_items(
     """Aplica o inbox estritamente por ocorrência e source_id.
 
     Uma falha mantém o item em retry e encerra o lote: itens mais novos nunca
-    passam por cima dele. Durante uma nova captura incompleta, ainda pode
-    drenar até a última fronteira já capturada, que é uma faixa completa e
-    comprovadamente ordenada. O lock cobre apenas a reserva do item: capturas
-    continuam persistindo enquanto o writer lento faz HTTP/deep-processing.
-    Os writers de domínio são idempotentes, portanto uma queda entre a escrita
-    e o status ``applied`` é segura para reexecução.
+    passam por cima dele. Após DEAD_LETTER_MAX_ATTEMPTS, o item vira dead_letter
+    e é pulado para desbloquear a fila.
     """
     applied = 0
     for _ in range(batch_size):
@@ -364,9 +751,9 @@ async def apply_native_items(
                 and _aware(stream.scan_started_at) + RECOVERY_MAX_AGE <= _now()
             ):
                 log.warning(
-                    "event=native_feed_scan_stalled scan_id=%s kind=%s region=%s phase=capturing "
-                    "seconds_without_progress=%d current_offset=%d anchor_id=%s",
-                    stream.scan_id, kind, region,
+                    "event=native_feed_scan_stalled scan_id=%s kind=%s region=%s "
+                    "phase=%s seconds_without_progress=%d current_offset=%d anchor_id=%s",
+                    stream.scan_id, kind, region, stream.scan_phase or "capturing",
                     int((_now() - _aware(stream.scan_last_progress_at or stream.scan_started_at)).total_seconds()),
                     stream.next_offset, stream.scan_anchor_source_id,
                 )
@@ -389,6 +776,7 @@ async def apply_native_items(
                     NativeFeedItem.kind == kind,
                     NativeFeedItem.region == region,
                     NativeFeedItem.status != "applied",
+                    NativeFeedItem.status != "dead",
                 )
                 .order_by(NativeFeedItem.occurred_at.asc(), NativeFeedItem.source_id.asc())
                 .limit(1)
@@ -436,19 +824,31 @@ async def apply_native_items(
                 if item is None:
                     raise
                 item.attempts += 1
-                item.status = "retry"
                 item.last_attempt_at = now
                 item.last_error = f"{type(exc).__name__}: {exc}"[:1000]
-                item.next_retry_at = now + timedelta(
-                    seconds=min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * (2 ** (item.attempts - 1)))
-                )
+                if item.attempts >= DEAD_LETTER_MAX_ATTEMPTS:
+                    item.status = "dead"
+                    item.next_retry_at = None
+                    log.error(
+                        "event=native_feed_item_dead kind=%s region=%s source_id=%s "
+                        "attempts=%d error=%s",
+                        kind, region, item.source_id, item.attempts, item.last_error,
+                    )
+                else:
+                    item.status = "retry"
+                    item.next_retry_at = now + timedelta(
+                        seconds=min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * (2 ** (item.attempts - 1)))
+                    )
+                    log.warning(
+                        "event=native_feed_item_failed kind=%s region=%s source_id=%s "
+                        "attempts=%d error=%s",
+                        kind, region, item.source_id, item.attempts, exc,
+                    )
                 await db.commit()
-                log.warning(
-                    "native_feed: falha ao aplicar %s/%s/%s (tentativa %d): %s",
-                    kind, region, item.source_id, item.attempts, exc,
-                )
             if isinstance(exc, asyncio.CancelledError):
                 raise
+            if item.status == "dead":
+                continue
             break
 
         async with _apply_lock(kind, region):
@@ -468,6 +868,7 @@ async def apply_native_items(
             NativeFeedItem.kind == kind,
             NativeFeedItem.region == region,
             NativeFeedItem.status != "applied",
+            NativeFeedItem.status != "dead",
         )
         if stream.captured_head_source_id:
             boundary = await db.scalar(

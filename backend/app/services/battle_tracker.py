@@ -774,7 +774,6 @@ async def _capture_and_apply_battle_stream(
     *,
     page_budget: int,
     priority: int,
-    force_restart: bool = False,
 ) -> int:
     async with albion_scope(priority):
         result = await capture_native_stream(
@@ -787,12 +786,7 @@ async def _capture_and_apply_battle_stream(
             fetch_page=lambda offset, limit: fetch_battles(client, host, limit=limit, offset=offset),
             source_id=_battle_source_id,
             occurred_at=_battle_occurred_at,
-            force_restart=force_restart,
         )
-    # O delay é medido pelo sync_recent (batalha mais recente do feed vs agora).
-    # O backfill também mede (head_payload ≠ None), mas com force_restart=False ele
-    # NÃO começa do topo do feed — é intencional pra não interferir no delay medido.
-    # ponytail: delay só é útil pro sync_recent; backfill não precisa medir.
     if result.head_payload:
         try:
             end = result.head_payload.get("endTime")
@@ -1098,11 +1092,8 @@ def publish_delay_status() -> dict:
 
 
 async def sync_recent() -> int:
-    """Captura o feed recente e só aplica após concluir a fronteira anterior.
-
-    Usa force_restart=True pra sempre começar do offset 0 (topo do feed).
-    O backfill continua usando o cursor persistido (force_restart=False).
-    """
+    """Captura o feed recente. A busca exponencial/binária localiza a âncora
+    em ~8-16 probes em vez de ~197 lineares."""
     count = 0
     async with AsyncSessionLocal() as db:
         async with make_client() as client:
@@ -1112,7 +1103,6 @@ async def sync_recent() -> int:
                         client, db, region, host,
                         page_budget=_pages_for_delay(region),
                         priority=NEW_ELIGIBLE,
-                        force_restart=True,
                     )
                 except Exception as e:
                     log.warning("battle_tracker: falha no feed recente (%s): %r", region, e)
