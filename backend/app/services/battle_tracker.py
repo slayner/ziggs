@@ -1116,6 +1116,7 @@ async def sync_recent() -> int:
                     )
                 except Exception as e:
                     log.warning("battle_tracker: falha no feed recente (%s): %r", region, e)
+                    await db.rollback()
     return count
 
 
