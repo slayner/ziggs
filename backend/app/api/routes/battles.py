@@ -19,7 +19,7 @@ from app.models.dashboard_cache import DashboardCache
 from app.models.players import PlayerCountSnapshot, PlayerKillEvent
 from app.models.prices import GoldPriceSnapshot
 from app.services import battle_groups, battle_sides, battle_tracker, prices
-from app.services.battle_preview import render_battle_preview
+from app.services.battle_preview import faction_tag, render_battle_preview
 from app.services.player_activity import active_player_count
 from app.services.search_norm import norm_sql, normalize as norm_name
 
@@ -165,6 +165,22 @@ async def _factions_summary(db: AsyncSession, battle_id: int) -> list[dict]:
     )
 
     return _aggregate_factions(guilds, player_counts, avg_ips)
+
+
+async def battle_faction_title(db: AsyncSession, battle_ids: list[int]) -> str:
+    """Título compacto do card: até quatro facções, com siglas quando necessário."""
+    factions_by_name: dict[str, dict] = {}
+    for battle_id in battle_ids:
+        for faction in await _factions_summary(db, battle_id):
+            key = faction["alliance_name"] or faction["guild_name"]
+            current = factions_by_name.get(key)
+            if current is None:
+                factions_by_name[key] = dict(faction)
+            else:
+                current["kills"] += faction["kills"]
+    factions = sorted(factions_by_name.values(), key=lambda faction: faction["kills"], reverse=True)[:4]
+    tags = [faction_tag(faction) for faction in factions]
+    return " vs ".join(tags) if tags else "Battle"
 
 
 def _aggregate_factions(
@@ -603,12 +619,13 @@ async def list_battles(
     from app.services.dashboard_cache import DEFAULT_MIN_KILLS, DEFAULT_MIN_PLAYERS
 
     # Formato "cacheável" = exatamente o que o BattlesCard do dashboard pede
-    # (sem busca/filtro de data, primeira página, filtros default). Precompute
+    # (sem busca/filtro de data e filtros default). Precompute
     # de 1min (dashboard_cache) evita recomputar isso a cada visita.
     cacheable = (
-        offset == 0 and not search and not date_from and not date_to
+        not search and not date_from and not date_to
         and min_players == DEFAULT_MIN_PLAYERS and min_kills == DEFAULT_MIN_KILLS
     )
+    cached_total: int | None = None
     if cacheable:
         cached_row = await db.get(DashboardCache, "recent_battles")
         if cached_row is not None:
@@ -636,8 +653,13 @@ async def list_battles(
                 total = sum(counts.get(r, 0) for r in regions_for_total)
             else:
                 total = len(rows)
-            rows = rows[:limit]
-            return {"battles": rows, "total": total}
+            # O cache guarda uma janela por região. Enquanto a página cabe
+            # nela, serve o mesmo contrato paginado sem disparar COUNT no
+            # histórico inteiro; fora dela, reutiliza o total pré-calculado.
+            if offset < len(rows):
+                return {"battles": rows[offset:offset + limit], "total": total}
+            if counts:
+                cached_total = total
 
     q = select(Battle)
 
@@ -659,20 +681,11 @@ async def list_battles(
     q = q.where(Battle.processing_tier == "deep", Battle.is_lethal.is_(True))
 
     if min_players > 0:
-        # "jogadores mínimos" = alguma guilda da batalha tinha pelo menos N
-        # jogadores — não o total de jogadores da batalha (Battle.players_total).
-        # Batalhas light (sem BattleParticipant ainda) passam pelo players_total
-        # do resumo da API, pra aparecerem no feed antes do deep-process completar.
-        big_guild_battle_ids = (
-            select(BattleParticipant.battle_id)
-            .where(BattleParticipant.guild_id.isnot(None))
-            .group_by(BattleParticipant.battle_id, BattleParticipant.guild_id)
-            .having(func.count(BattleParticipant.id) >= min_players)
-        )
-        q = q.where(or_(
-            Battle.id.in_(big_guild_battle_ids),
-            Battle.players_total >= min_players,
-        ))
+        # Uma guilda não pode ter mais participantes que a batalha inteira.
+        # O subselect agrupando todos os participantes era, portanto,
+        # redundante com esta condição e impedia o índice do feed de atender
+        # a paginação e o cache.
+        q = q.where(Battle.players_total >= min_players)
 
     if search:
         nq = norm_name(search)
@@ -684,7 +697,9 @@ async def list_battles(
         matching_battle_ids = set((await db.scalars(guild_battle_ids)).all()) | set((await db.scalars(player_battle_ids)).all())
         q = q.where(or_(Battle.id.in_(matching_battle_ids), Battle.cluster.ilike(f"%{search}%")))
 
-    total = await db.scalar(select(func.count()).select_from(q.subquery())) or 0
+    total = cached_total
+    if total is None:
+        total = await db.scalar(select(func.count()).select_from(q.subquery())) or 0
     battles = (await db.scalars(q.order_by(Battle.start_time.desc()).limit(limit).offset(offset))).all()
 
     # Toda batalha que aparece no feed ganha um link público (se ainda não tiver)
@@ -829,6 +844,7 @@ async def _combined_detail(db: AsyncSession, battle_ids: list[int], public_id: s
             "victim_equipment": ev.victim_equipment,
             "killer_inventory": ev.killer_inventory,
             "victim_inventory": ev.victim_inventory,
+            "silver_dropped": ev.silver_dropped,
         })
     kill_timeline.sort(key=lambda e: e["t"])
 
@@ -1083,11 +1099,7 @@ async def battle_embed_html(public_id: str, db: AsyncSession = Depends(deps.asyn
         with PILImage.open(path) as img:
             img_h = img.height
 
-    # Título: dados básicos da batalha pra mostrar no card do Discord
-    b = await db.get(Battle, battle_ids[0])
-    title = f"{b.players_total} players · {b.kill_count} kills" if b else "Battle"
-    if b and b.cluster:
-        title += f" · {b.cluster}"
+    title = await battle_faction_title(db, battle_ids)
     image_url = f"{s.frontend_url}/battles/preview/{public_id}.png"
     canonical = f"{s.frontend_url}/{public_id}"
 

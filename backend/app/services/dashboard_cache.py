@@ -12,11 +12,11 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
 from app.db import SyncSessionLocal, AsyncSessionLocal
-from app.models.battles import Battle, BattleParticipant
+from app.models.battles import Battle
 from app.models.dashboard_cache import DashboardCache
 from app.services import battle_groups
 
@@ -43,19 +43,9 @@ def _upsert(db, key: str, payload) -> None:
 
 
 async def refresh_recent_battles() -> dict:
-    from app.api.routes.battles import _aware, _factions_summary
+    from app.api.routes.battles import _aware, _factions_summary_bulk
 
     rows: list[dict] = []
-    big_guild_battle_ids = (
-        select(BattleParticipant.battle_id)
-        .where(BattleParticipant.guild_id.isnot(None))
-        .group_by(BattleParticipant.battle_id, BattleParticipant.guild_id)
-        .having(func.count(BattleParticipant.id) >= DEFAULT_MIN_PLAYERS)
-    )
-    min_players_filter = or_(
-        Battle.id.in_(big_guild_battle_ids),
-        Battle.players_total >= DEFAULT_MIN_PLAYERS,
-    )
     counts: dict[str, int] = {}
     async with AsyncSessionLocal() as db:
         for region in REGIONS:
@@ -66,12 +56,13 @@ async def refresh_recent_battles() -> dict:
                     Battle.processing_tier == "deep",
                     Battle.is_lethal.is_(True),
                     Battle.kill_count >= DEFAULT_MIN_KILLS,
-                    min_players_filter,
+                    Battle.players_total >= DEFAULT_MIN_PLAYERS,
                 )
                 .order_by(Battle.start_time.desc())
                 .limit(RECENT_BATTLES_PER_REGION)
             )).all()
             groups = await battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
+            factions_by_battle = await _factions_summary_bulk(db, [b.id for b in battles])
             for b in battles:
                 group = groups[b.id]
                 rows.append({
@@ -84,7 +75,7 @@ async def refresh_recent_battles() -> dict:
                     "cluster": b.cluster,
                     "players_total": b.players_total,
                     "is_zvz": b.is_zvz,
-                    "factions": await _factions_summary(db, b.id),
+                    "factions": factions_by_battle.get(b.id, []),
                 })
             counts[region] = await db.scalar(
                 select(func.count(Battle.id)).where(
@@ -92,7 +83,7 @@ async def refresh_recent_battles() -> dict:
                     Battle.processing_tier == "deep",
                     Battle.is_lethal.is_(True),
                     Battle.kill_count >= DEFAULT_MIN_KILLS,
-                    min_players_filter,
+                    Battle.players_total >= DEFAULT_MIN_PLAYERS,
                 )
             ) or 0
     rows.sort(key=lambda r: r["start_time"], reverse=True)

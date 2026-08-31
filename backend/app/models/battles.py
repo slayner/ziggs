@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import sqlalchemy as sa
 from sqlalchemy import (
-    Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
+    Boolean, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint, func
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -160,7 +161,13 @@ class BattleParticipant(Base):
 
 class BattleKillEvent(Base):
     __tablename__ = "battle_kill_events"
-    __table_args__ = (UniqueConstraint("battle_id", "albion_event_id"),)
+    __table_args__ = (
+        UniqueConstraint("battle_id", "albion_event_id"),
+        Index(
+            "ix_bke_unpriced_queue", "timestamp", "id",
+            postgresql_where=sa.text("silver_dropped IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = pk()
     battle_id: Mapped[int] = mapped_column(
@@ -193,6 +200,9 @@ class BattleKillEvent(Base):
     # lista de mortes do horizonte, somado ao que está equipado.
     killer_inventory: Mapped[list[dict] | None] = mapped_column(json_type())
     victim_inventory: Mapped[list[dict] | None] = mapped_column(json_type())
+    # Mesmo cálculo de PlayerKillEvent.silver_dropped. NULL enquanto o worker
+    # de preço ainda não terminou; 0 significa morte já precificada sem valor.
+    silver_dropped: Mapped[int | None] = mapped_column(BigInt(), nullable=True)
 
 
 class BattleGroup(Base):

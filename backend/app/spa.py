@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -25,13 +25,17 @@ _DIST = _ROOT / "frontend" / "dist"
 _BATTLE_CODE_RE = re.compile(r"^[a-z0-9]{7}$")
 _BATTLE_IDS_RE = re.compile(r"^\d+(?:,\d+)*$")
 _PLAYER_RE = re.compile(r"^(am|as|eu)/([^/]+)$")
+_GUILD_RE = re.compile(r"^guild/([^/]+)$")
+_ALLIANCE_RE = re.compile(r"^alliance/([^/]+)$")
 _EVENT_RE = re.compile(r"^(?:eventos|events)/(\d+)/(\d+)(?:/(?:escalacao|escalation))?$")
 _PUBLIC_EVENT_RE = re.compile(r"^e/[A-Za-z0-9_-]{32}$")
 
-_REGION_NAME = {"am": "Americas", "as": "Asia", "eu": "Europe"}
+_DISCORD_PREFETCH_WAIT_SECONDS = 6
 
 
-async def _og_for_path(path: str, query: str = "") -> tuple[str, str, str | None]:
+async def _og_for_path(
+    path: str, query: str = "", *, wait_for_player_preview: bool = False,
+) -> tuple[str, str, str | None]:
     """(title, description, image_url|None) da rota — só com a URL, sem DB.
 
     Batalha por código busca o resumo no banco: /{code} é tanto a URL pública
@@ -48,10 +52,21 @@ async def _og_for_path(path: str, query: str = "") -> tuple[str, str, str | None
         region_code = m.group(1)
         region_map = {"am": "americas", "eu": "europe", "as": "asia"}
         region = region_map.get(region_code, "americas")
+        image_version = None
+        try:
+            from app.api.routes.players import prefetch_player_preview
+            image_version = await prefetch_player_preview(
+                region,
+                name,
+                wait_seconds=_DISCORD_PREFETCH_WAIT_SECONDS if wait_for_player_preview else 0,
+            )
+        except Exception:
+            pass
         s = get_settings()
-        image_url = f"{s.frontend_url}/players/embed/{region}/{unquote(m.group(2))}.png"
-        return (f"{name} · Albion {_REGION_NAME[region_code]}",
-                "", image_url)
+        image_url = f"{s.frontend_url}/players/embed/{region}/{quote(name, safe='')}.png"
+        if image_version:
+            image_url += f"?v={image_version}"
+        return ("", "", image_url)
 
     m = _EVENT_RE.match(path)
     if m:
@@ -77,6 +92,26 @@ async def _og_for_path(path: str, query: str = "") -> tuple[str, str, str | None
         title, image = await _battle_summary(path)
         return (title, "", image)
 
+    m = _GUILD_RE.match(path)
+    if m:
+        from app.api.routes.profiles import guild_preview_metadata
+        from app.config import get_settings
+        metadata = await guild_preview_metadata(m.group(1))
+        if metadata is not None:
+            _, image_version = metadata
+            s = get_settings()
+            return ("", "", f"{s.frontend_url}/public/guilds/embed/{quote(m.group(1), safe='')}.png?v={image_version}")
+
+    m = _ALLIANCE_RE.match(path)
+    if m:
+        from app.config import get_settings
+        from app.api.routes.profiles import alliance_preview_metadata
+        s = get_settings()
+        metadata = await alliance_preview_metadata(m.group(1))
+        if metadata is not None:
+            _, image_version = metadata
+            return ("", "", f"{s.frontend_url}/public/alliances/embed/{quote(m.group(1), safe='')}.png?v={image_version}")
+
     if path.startswith(("guild/", "alliance/")):
         return ("Perfil de guilda — Ziggs", "", None)
 
@@ -90,7 +125,7 @@ async def _group_summary(db, battle_ids: list[int]) -> tuple[str, str | None]:
     from app.config import get_settings
     from app.models.battles import Battle
     from app.services import battle_groups
-    from app.api.routes.battles import _factions_summary
+    from app.api.routes.battles import battle_faction_title
     from sqlalchemy import select
 
     if not battle_ids:
@@ -102,22 +137,7 @@ async def _group_summary(db, battle_ids: list[int]) -> tuple[str, str | None]:
     # — OG genérico (sem imagem). O embed só vale a pena quando a batalha está pronta.
     if any(b.processing_tier != "deep" for b in battles):
         return ("", None)
-    b = battles[0]
-    # Tags das factions vs (mesmo formato da imagem de preview)
-    all_factions: dict[str, dict] = {}
-    for bid in battle_ids:
-        for f in await _factions_summary(db, bid):
-            key = f["alliance_name"] or f["guild_name"]
-            if key in all_factions:
-                all_factions[key]["kills"] += f["kills"]
-            else:
-                all_factions[key] = dict(f)
-    top = sorted(all_factions.values(), key=lambda r: r["kills"], reverse=True)[:4]
-    tags = []
-    for f in top:
-        tag = f"[{f['alliance_name']}]" if f["alliance_name"] else f["guild_name"]
-        tags.append(tag[:12])
-    title = "  vs  ".join(tags) if tags else f"{b.players_total} players · {b.kill_count} kills"
+    title = await battle_faction_title(db, battle_ids)
     group = await battle_groups.get_or_create_group(db, battle_ids)
     image = f"{get_settings().frontend_url}/battles/preview/{group.public_id}.png"
     return (title, image)
@@ -163,21 +183,35 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
 
-async def _inject_og(index_html: str, path: str, query: str = "") -> str:
-    title, desc, image = await _og_for_path(path, query)
+async def _inject_og(
+    index_html: str, path: str, query: str = "", *, wait_for_player_preview: bool = False,
+) -> str:
+    title, desc, image = await _og_for_path(
+        path, query, wait_for_player_preview=wait_for_player_preview,
+    )
     if not title and not image:
         return index_html
     html = index_html
-    html = re.sub(r"<title>[^<]*</title>", f"<title>{_esc(title)}</title>", html, count=1)
-    html = re.sub(r'(property="og:title" content=")[^"]*(")', rf"\g<1>{_esc(title)}\g<2>", html, count=1)
-    html = re.sub(r'(property="og:description" content=")[^"]*(")', rf"\g<1>{_esc(desc)}\g<2>", html, count=1)
-    html = re.sub(r'(name="description" content=")[^"]*(")', rf"\g<1>{_esc(desc)}\g<2>", html, count=1)
+    if title:
+        html = re.sub(r"<title>[^<]*</title>", f"<title>{_esc(title)}</title>", html, count=1)
+        html = re.sub(r'(property="og:title" content=")[^"]*(")', rf"\g<1>{_esc(title)}\g<2>", html, count=1)
+    else:
+        html = re.sub(r"<title>[^<]*</title>", "<title></title>", html, count=1)
+        html = re.sub(r'<meta\s+property="og:title"[^>]*/?>', "", html)
+        html = re.sub(r'<meta\s+property="og:site_name"[^>]*/?>', "", html)
+    if desc:
+        html = re.sub(r'(property="og:description" content=")[^"]*(")', rf"\g<1>{_esc(desc)}\g<2>", html, count=1)
+        html = re.sub(r'(name="description" content=")[^"]*(")', rf"\g<1>{_esc(desc)}\g<2>", html, count=1)
+    else:
+        html = re.sub(r'<meta\s+property="og:description"[^>]*/?>', "", html)
+        html = re.sub(r'<meta\s+name="description"[^>]*/?>', "", html)
     if image:
         # Remove o og:image padrão (/logo.png) pra o crawler não pegar o 1º.
         # Sem og:image:width/height e sem twitter:card — o Discord busca a
         # imagem e usa as dimensões reais sem forçar um aspect ratio (que
         # amassa a tira 3.3:1 no card grande esperado 1.91:1).
         html = re.sub(r'<meta\s+property="og:image"[^>]*/?>', "", html)
+        html = re.sub(r'<meta\s+property="og:site_name"[^>]*/?>', "", html)
         html = re.sub(r'<meta\s+name="twitter:card"[^>]*/?>', "", html)
         tags = [
             f'<meta property="og:image" content="{_esc(image)}" />',
@@ -233,5 +267,11 @@ def install(app: FastAPI) -> None:
         if docs_file.is_file() and docs_host and request_host == docs_host:
             return FileResponse(docs_file)
         # Frontend deploys replace dist without restarting the API process.
-        return HTMLResponse(await _inject_og(index_file.read_text(encoding="utf-8"), full_path, request.url.query),
+        is_discord_crawler = "discordbot" in request.headers.get("user-agent", "").lower()
+        return HTMLResponse(await _inject_og(
+            index_file.read_text(encoding="utf-8"),
+            full_path,
+            request.url.query,
+            wait_for_player_preview=is_discord_crawler,
+        ),
                             headers={"Cache-Control": "no-cache"})

@@ -464,7 +464,7 @@ export interface VerificationStep {
 
 export interface Participant {
   id: number;
-  user_id: number;
+  user_id: string;
   user_name: string | null;
   percent: number;
   base_percent: number;
@@ -642,7 +642,7 @@ export interface UnifiedReconcile {
 
 export interface EventSignup {
   id: number;
-  user_id: number;
+  user_id: string;
   user_name: string | null;
   functions: string[];
   created_at: string;
@@ -651,7 +651,7 @@ export interface EventSignup {
 // Registrado (/register) visto numa batalha real da guilda na janela do
 // evento, mas sem nenhum EventParticipant — nem call, nem inscrição.
 export interface BattleAbsentee {
-  user_id: number;
+  user_id: string;
   user_name: string | null;
 }
 
@@ -1212,13 +1212,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  addParticipant: (id: number, payload: { user_id: number; user_name?: string; percent?: number; is_valid?: boolean }) =>
+  addParticipant: (id: number, payload: { user_id: string; user_name?: string; percent?: number; is_valid?: boolean }) =>
     req<EventDetail>(`/guilds/${g()}/events/${id}/participants`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
   searchMembers: (q: string) =>
-    req<{ user_id: number; username: string; global_name: string | null; avatar: string | null; in_game_name: string | null }[]>(
+    req<{ user_id: string; username: string; global_name: string | null; avatar: string | null; in_game_name: string | null }[]>(
       `/guilds/${g()}/members/search?q=${encodeURIComponent(q)}`,
     ),
   updateParticipant: (id: number, participantId: number, payload: { game_role_id?: number | null; percent?: number; is_trial?: boolean; is_valid?: boolean }) =>

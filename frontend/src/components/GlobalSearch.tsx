@@ -16,6 +16,7 @@ export interface RecentBattle {
 // Heatmap de kills — mesmas cores/lógica da listagem de batalhas (ver BattleTracker.tsx).
 const BATTLE_HEAT_MAX: [number, number, number] = [0x66, 0x71, 0x60];
 const BATTLE_HEAT_MIN: [number, number, number] = [0x52, 0x52, 0x5c];
+const MAX_DISPLAY_FACTIONS = 4;
 
 function battleHeatColor(kills: number, maxKills: number, minKills: number): string {
   const t = maxKills === minKills ? 0 : (maxKills - kills) / (maxKills - minKills);
@@ -75,7 +76,7 @@ export function RecentBattleRow({ b, isNew, onGlowEnd }: { b: RecentBattle; isNe
       <span className="flex-1 min-w-0 text-center">
         {b.factions.length > 0 ? (
           <span className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-sm font-semibold">
-            {b.factions.map(f => (
+            {b.factions.slice(0, MAX_DISPLAY_FACTIONS).map(f => (
               <span key={f.guild_id} className="flex flex-col items-center leading-tight">
                 <span style={{ color: battleHeatColor(f.kills, maxFactionKills, minFactionKills) }}>
                   {battleFactionTag(f)}

@@ -83,7 +83,7 @@ class LootlogSubmitView(discord.ui.View):
     @discord.ui.button(label="📤 Enviar log", style=discord.ButtonStyle.primary,
                        custom_id=SUBMIT_CID)
     async def enviar(self, interaction: discord.Interaction, _btn: discord.ui.Button):
-        lang = guild_lang_for(interaction.guild.id) if interaction.guild else "pt"
+        lang = await guild_lang_for(interaction.guild.id) if interaction.guild else "pt"
         try:
             await interaction.response.send_modal(EnviarLogModal(lang))
         except discord.HTTPException as e:

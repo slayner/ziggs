@@ -17,7 +17,7 @@ from app.models.audit import AuditLog  # noqa: F401
 from app.models.loot import EventLootEntry, GuildChestEntry, ItemPriceCache, LootVerification  # noqa: F401
 from app.models.prices import ItemPrice, ItemPriceLatest, ItemPriceHistory, MarketSnapshot  # noqa: F401
 from app.models.players import (  # noqa: F401
-    AlbionPlayer, PlayerSnapshot, PlayerKillEvent, PlayerWeaponStat, PlayerCountSnapshot,
+    AlbionPlayer, PlayerSnapshot, PlayerKillEvent, JuicyKillDelivery, PlayerWeaponStat, PlayerCountSnapshot,
     KillIdProbe, KillSyncCursor,
 )
 from app.models.dashboard_cache import DashboardCache  # noqa: F401
@@ -42,6 +42,7 @@ from app.models.guild_profiles import GuildProfile, AllianceProfile  # noqa: F40
 from app.models.profile_media import ProfileMediaSubmission  # noqa: F401
 from app.models.craft import CraftCart  # noqa: F401
 from app.models.renders import RenderMiss  # noqa: F401
+from app.models.native_feed import NativeFeedItem, NativeFeedStream  # noqa: F401
 
 __all__ = [
     "Base",
@@ -53,7 +54,7 @@ __all__ = [
     "AuditLog",
     "EventLootEntry", "GuildChestEntry", "ItemPriceCache", "LootVerification",
     "ItemPrice", "ItemPriceLatest", "ItemPriceHistory", "MarketSnapshot",
-    "AlbionPlayer", "PlayerSnapshot", "PlayerKillEvent", "PlayerWeaponStat", "PlayerCountSnapshot",
+    "AlbionPlayer", "PlayerSnapshot", "PlayerKillEvent", "JuicyKillDelivery", "PlayerWeaponStat", "PlayerCountSnapshot",
     "KillIdProbe", "KillSyncCursor",
     "DashboardCache",
     "Battle", "BattleGuild", "BattleSide", "BattleParticipant", "BattleKillEvent",
@@ -71,4 +72,5 @@ __all__ = [
     "ProfileMediaSubmission",
     "CraftCart",
     "RenderMiss",
+    "NativeFeedItem", "NativeFeedStream",
 ]

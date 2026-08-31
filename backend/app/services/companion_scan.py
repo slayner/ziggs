@@ -4,8 +4,8 @@ Sem auth. Gera tarefas a partir dos buracos na sequência de IDs por região
 (igual ao battle_sweeper), mas em vez de sondar síncrono aqui, entrega o
 range pro companion fazer a sondagem distribuída e reportar de volta.
 
-Reaproveita upsert_battle_light e BattleIdProbe do battle_tracker/sweeper —
-mesma lógica de captura, só muda QUEM faz a sondagem HTTP.
+Reaproveita a captura crua e BattleIdProbe do battle_tracker/sweeper — só muda
+QUEM faz a sondagem HTTP.
 """
 from __future__ import annotations
 
@@ -23,7 +23,8 @@ from app.models.companion import (
 )
 from app.db import AsyncSessionLocal
 from app.services.battle_sweeper import _probe_detail, _region_candidates
-from app.services.battle_tracker import upsert_battle_light, REPROCESS_REASON_SWEEPER
+from app.services.battle_tracker import _battle_occurred_at, _battle_source_id
+from app.services.native_feed import KIND_BATTLE, capture_discovered_items
 from app.services.player_tracker import HOSTS, make_client
 
 log = logging.getLogger(__name__)
@@ -252,25 +253,22 @@ async def report_task(
     verified_missing = 0
     verified_errors = 0
     for aid, (status, raw) in zip(reported, verified):
-        battle = None
+        captured = False
         try:
             if status == "found" and raw is not None and str(raw.get("id")) == str(aid):
-                is_new = nick is not None and await db.scalar(
-                    select(Battle.id).where(
-                        Battle.region == region, Battle.albion_id == str(aid)
-                    )
-                ) is None
-                battle = await upsert_battle_light(db, raw, region)
-                if battle is not None:
-                    battle.reprocess_reason = REPROCESS_REASON_SWEEPER
-                    if is_new:
-                        battle.found_by = nick
-                        log.info("scan: batalha %s (%s) encontrada por %s — %d jogadores",
-                                 battle.albion_id, region, nick, battle.players_total or 0)
+                captured = bool(await capture_discovered_items(
+                    db,
+                    kind=KIND_BATTLE,
+                    region=region,
+                    rows=[raw],
+                    source_id=_battle_source_id,
+                    occurred_at=_battle_occurred_at,
+                    discovered_by=nick,
+                ))
+                if captured:
                     accepted += 1
-                else:
-                    # A API confirmou o ID, mas lutas pequenas não são armazenadas.
-                    status = "found"
+                    if nick:
+                        log.info("scan: batalha %s (%s) capturada por %s", aid, region, nick)
             elif status == "missing":
                 verified_missing += 1
             else:
@@ -286,12 +284,11 @@ async def report_task(
             if probe is None:
                 db.add(BattleIdProbe(
                     albion_id=str(aid), status=status, region=region,
-                    battle_id=battle.id if battle else None, probed_at=_now(),
+                    probed_at=_now(),
                 ))
             else:
                 probe.status = status
                 probe.region = region
-                probe.battle_id = battle.id if battle else None
                 probe.probed_at = _now()
 
     task.status = "done"

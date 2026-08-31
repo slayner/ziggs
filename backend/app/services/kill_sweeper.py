@@ -14,7 +14,7 @@ Por ciclo:
   1. Por região: enumera buracos entre EventIds conhecidos (do mais novo pro
      mais antigo), mais uma janela abaixo do menor ID.
   2. Sonda cada candidato no host da própria região.
-  3. Ingeri os válidos via _record_kill_event (mesmo pipeline do player_tracker).
+   3. Captura os válidos no inbox da stream de kills.
   4. Memoriza cada ID em KillIdProbe (found/missing) pra nunca re-sondar.
 """
 from __future__ import annotations
@@ -30,8 +30,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
 from app.models.players import PlayerKillEvent, KillIdProbe
-from app.services.albion_gate import OTHER, albion_scope, slot
-from app.services.player_tracker import HOSTS, make_client, _record_kill_event, _upsert_event_players
+from app.services.albion_gate import OTHER, albion_scope, background_allowed, slot
+from app.services.native_feed import KIND_KILL, capture_discovered_items
+from app.services.player_tracker import HOSTS, make_client, _event_occurred_at, _event_source_id
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ BELOW_MIN_WINDOW = 200
 MAX_CANDIDATES_PER_CYCLE = 600
 CYCLE_INTERVAL = 180
 MAX_429_RETRIES = 3
+PROBE_CONCURRENCY = 6
 
 # Companion-aware: quando há companions ativos sondando kills, o sweeper reduz
 # seus candidatos — eles cobrem os mesmos buracos de graça (IP deles).
@@ -163,14 +165,16 @@ async def _probe_and_ingest(
         return False
 
     async with db_lock:
+        captured = False
         if status == "found" and raw is not None:
-            try:
-                await _upsert_event_players(db, raw, region)
-                await _record_kill_event(db, raw, region, commit=False)
-            except Exception as e:
-                log.debug("kill_sweeper: erro ao ingerir event %s (%s): %s", eid, region, e)
-                await db.rollback()
-                status = "missing"
+            captured = bool(await capture_discovered_items(
+                db,
+                kind=KIND_KILL,
+                region=region,
+                rows=[raw],
+                source_id=_event_source_id,
+                occurred_at=_event_occurred_at,
+            ))
 
         existing = await db.get(KillIdProbe, eid)
         if existing is None:
@@ -184,7 +188,7 @@ async def _probe_and_ingest(
             existing.region = region
             existing.probed_at = datetime.now(timezone.utc)
         await db.commit()
-    return status == "found"
+    return captured
 
 
 async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
@@ -196,6 +200,7 @@ async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
     except Exception:
         pass
     candidates = await generate_kill_candidates(db, active)
+    candidates = [(region, event_id) for region, event_id in candidates if background_allowed(HOSTS[region])]
     if not candidates:
         log.info("kill_sweeper: sem candidatos novos")
         return {"candidates": 0, "found": 0}
@@ -209,13 +214,18 @@ async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
     db_lock = asyncio.Lock()
 
     async def _one(region: str, eid: int) -> bool:
+        if not background_allowed(HOSTS[region]):
+            return False
         try:
             return await _probe_and_ingest(client, db, db_lock, region, eid)
         except Exception as e:
             log.warning("kill_sweeper: falha ao sondar %s (%s): %r", eid, region, e)
             return False
 
-    results = await asyncio.gather(*(_one(r, c) for r, c in candidates))
+    results: list[bool] = []
+    for start in range(0, len(candidates), PROBE_CONCURRENCY):
+        batch = candidates[start:start + PROBE_CONCURRENCY]
+        results.extend(await asyncio.gather(*(_one(r, c) for r, c in batch)))
     found = sum(1 for r in results if r)
     log.info("kill_sweeper: ciclo — %d candidatos, %d achados", len(candidates), found)
     return {"candidates": len(candidates), "found": found}

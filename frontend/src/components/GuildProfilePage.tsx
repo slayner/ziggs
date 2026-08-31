@@ -14,7 +14,6 @@ const PAGE_SIZE = 20;
 /* ── Types ──────────────────────────────────────────────────────── */
 
 interface WindowStat { "7d": number; "30d": number; all: number }
-type Win = "7d" | "30d" | "all";
 
 interface BattleFaction {
   guild_id: string; guild_name: string; alliance_name: string | null;
@@ -59,6 +58,17 @@ interface RosterEvent {
   roster_after: RosterGuild[];
 }
 
+interface MemberStats {
+  kill_fame: number; death_fame: number;
+  gathering_fame: number; crafting_fame: number;
+  pve_fame: number; fishing_fame: number;
+  gather_wood: number; gather_hide: number; gather_ore: number;
+  gather_rock: number; gather_fiber: number;
+  gather_ranks?: Record<string, number>;
+}
+
+interface TimerSlot { timer: string; battles: number; weight: number }
+
 interface GuildProfile {
   albion_id: string; name: string;
   alliance_id: string | null; alliance_name: string | null;
@@ -69,6 +79,8 @@ interface GuildProfile {
   kills_total: number; deaths_total: number;
   kill_fame: WindowStat; silver_dropped: WindowStat; battles: WindowStat;
   members: GuildMember[];
+  member_stats?: MemberStats;
+  timer_heatmap?: TimerSlot[];
   battles_count: number;
   alliance_history: AllianceEvent[];
   // Primeira página da aba Batalhas (page=0, filtros padrão) — já vem pronta
@@ -447,7 +459,6 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
   const [data, setData] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [win, setWin] = useState<Win>("30d");
   const [tab, setTab] = useState<Tab>("members");
   const [battlesPage, setBattlesPage] = useState<BattlesPage | null>(null);
   const [battlesLoading, setBattlesLoading] = useState(false);
@@ -749,7 +760,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
   }
 
   const members = ("members" in data ? data.members : data.guilds) ?? [];
-  const { kill_fame, silver_dropped, battles, battles_count } = data;
+  const { silver_dropped, battles_count } = data;
   const allianceHistory = mode === "guild" ? (data as GuildProfile).alliance_history ?? [] : [];
   const rosterLog = mode === "alliance" ? (data as AllianceProfile).roster_log ?? [] : [];
 
@@ -794,9 +805,6 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
                 </p>
               );
             })()}
-            <p className="mt-1 text-sm text-zinc-500">
-              {data.kills_total.toLocaleString("pt-BR")} {t("killsSuffix")} · {data.deaths_total.toLocaleString("pt-BR")} {t("deathsWord")}
-            </p>
             <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-600">
               <button
                 onClick={forceRefresh}
@@ -817,30 +825,100 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
             </div>
           </div>
 
-          {/* window selector */}
-          <div className="flex gap-1 text-xs">
-            {(["7d", "30d", "all"] as Win[]).map(w => (
-              <button key={w} onClick={() => setWin(w)}
-                className={`dash-chip ${win === w ? "dash-chip-on" : ""}`}>
-                {w === "all" ? t("rangeAll") : w}
-              </button>
-            ))}
-          </div>
+          {/* heatmap de timers — posição do TopWeaponsWidget do perfil de player.
+              A cor é aplicada no CARACTERE (texto do timer), não num quadrado.
+              Mesma fórmula heatColor do battle heatmap: mais batalhas = mais quente. */}
+          {mode === "guild" && (data as GuildProfile).timer_heatmap && (data as GuildProfile).timer_heatmap!.length > 0 && (() => {
+            const slots = (data as GuildProfile).timer_heatmap!;
+            const maxBattles = Math.max(...slots.map(s => s.battles), 1);
+            const minBattles = Math.min(...slots.map(s => s.battles), 0);
+            return (
+              <div className="flex shrink-0 flex-col gap-1.5">
+                <div className="flex gap-2.5">
+                  {slots.map(slot => {
+                    const t01 = maxBattles === minBattles ? 0 : (maxBattles - slot.battles) / (maxBattles - minBattles);
+                    const [hr, hg, hb] = [0x66, 0x71, 0x60];
+                    const [lr, lg, lb] = [0x52, 0x52, 0x5c];
+                    const r = Math.round(hr + (lr - hr) * t01);
+                    const g = Math.round(hg + (lg - hg) * t01);
+                    const b = Math.round(hb + (lb - hb) * t01);
+                    return (
+                      <span
+                        key={slot.timer}
+                        style={{ fontFamily: "'Cascadia Code', 'Cascadia Mono', Consolas, monospace", color: `rgb(${r},${g},${b})`, fontSize: "1.5rem", lineHeight: 1 }}
+                        className="font-bold tabular-nums"
+                        title={`${slot.battles} batalhas · ${fameShort(slot.weight)} fame`}
+                      >
+                        {slot.timer}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
-        {/* stat cards */}
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2">
-          {[
-            { label: "Kill Fame", value: fameShort(kill_fame[win]) },
-            { label: t("silverDroppedLabel"), value: fameShort(silver_dropped[win]) },
-            { label: t("battles"), value: String(battles[win]) },
-          ].map(s => (
-            <div key={s.label} className="flex flex-col items-center justify-center gap-0.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5">
-              <span className="text-[10px] uppercase tracking-wide text-zinc-500">{s.label}</span>
-              <span className="text-sm font-bold tabular-nums text-zinc-100">{s.value}</span>
+        {/* brackets linha 1: kill fame, death fame, ratio, silver dropped, battles, pve fame, crafting */}
+        {mode === "guild" && (data as GuildProfile).member_stats && (() => {
+          const ms = (data as GuildProfile).member_stats!;
+          const ratio = ms.death_fame > 0 ? ms.kill_fame / ms.death_fame : Infinity;
+          const cards = [
+            { label: "Kill Fame", value: fameShort(ms.kill_fame) },
+            { label: "Death Fame", value: fameShort(ms.death_fame) },
+            { label: "Ratio", value: ratio === Infinity ? "INF" : ratio.toFixed(2) },
+            { label: t("silverDroppedLabel"), value: fameShort(silver_dropped.all) },
+            { label: "PvE Fame", value: fameShort(ms.pve_fame) },
+            { label: "Crafting", value: fameShort(ms.crafting_fame) },
+          ];
+          return (
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(100px,1fr))] gap-2">
+              {cards.map(s => (
+                <div key={s.label} className="flex flex-col items-center justify-center gap-0.5 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+                  <span className="text-[10px] uppercase tracking-wide text-zinc-500">{s.label}</span>
+                  <span className="text-sm font-bold tabular-nums text-zinc-100">{s.value}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          );
+        })()}
+
+        {/* gathering por recurso — mesma estrutura do perfil de player:
+            uma única bracket com borda, fama dividida por 200 (estimativa T8),
+            rank #N em amber abaixo do número. */}
+        {mode === "guild" && (data as GuildProfile).member_stats && (() => {
+          const ms = (data as GuildProfile).member_stats!;
+          const ranks = ms.gather_ranks || {};
+          const resources = [
+            { label: t("resourceWood"), fame: ms.gather_wood, rank: ranks.gather_wood },
+            { label: t("resourceHide"), fame: ms.gather_hide, rank: ranks.gather_hide },
+            { label: t("resourceOre"), fame: ms.gather_ore, rank: ranks.gather_ore },
+            { label: t("resourceRock"), fame: ms.gather_rock, rank: ranks.gather_rock },
+            { label: t("resourceFiber"), fame: ms.gather_fiber, rank: ranks.gather_fiber },
+            { label: t("resourceFish"), fame: ms.fishing_fame, rank: ranks.fishing },
+          ];
+          const anyNonZero = resources.some(r => r.fame > 0);
+          if (!anyNonZero) return null;
+          return (
+            <div className="relative mt-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+              <i className="ti ti-info-circle absolute right-2 top-2 text-zinc-600" title={t("gatheringEstimateTooltip")} />
+              <div className="grid grid-cols-[repeat(auto-fit,minmax(90px,1fr))] gap-2">
+                {resources.map(r => {
+                  const count = Math.floor(r.fame / 200);
+                  return (
+                    <div key={r.label} className="flex flex-col items-center justify-center gap-0.5">
+                      <span className="text-[10px] uppercase tracking-wide text-zinc-500">{r.label}</span>
+                      <span className="text-sm font-bold tabular-nums text-zinc-100">{count < 1 ? 0 : count}</span>
+                      {r.rank && r.rank > 0 && (
+                        <span className="text-[9px] text-amber-400/70 tabular-nums">#{r.rank}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
       </Panel>
 
       {/* tabs + filter */}

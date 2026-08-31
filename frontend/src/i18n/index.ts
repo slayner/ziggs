@@ -363,6 +363,7 @@ const S = {
     // GuildProfilePage
     killsAbbr: "k", deathsAbbr: "m", deathsWord: "mortes",
     gpGuildWord: "Guilda", gpAllianceWord: "Aliança", gpAllianceLabel: "Aliança:",
+    timerHeatmapLabel: "Batalhas por timer",
     gpGuildNotFound: "Guilda não encontrada.", gpAllianceNotFound: "Aliança não encontrada.",
     gpLoadError: "Erro ao carregar perfil",
     colPlayer: "Jogador", colLastSeen: "Último",
@@ -1294,6 +1295,7 @@ const S = {
     // GuildProfilePage
     killsAbbr: "k", deathsAbbr: "d", deathsWord: "deaths",
     gpGuildWord: "Guild", gpAllianceWord: "Alliance", gpAllianceLabel: "Alliance:",
+    timerHeatmapLabel: "Battles by timer",
     gpGuildNotFound: "Guild not found.", gpAllianceNotFound: "Alliance not found.",
     gpLoadError: "Error loading profile",
     colPlayer: "Player", colLastSeen: "Last seen",
@@ -2224,6 +2226,7 @@ const S = {
     // GuildProfilePage
     killsAbbr: "k", deathsAbbr: "m", deathsWord: "muertes",
     gpGuildWord: "Gremio", gpAllianceWord: "Alianza", gpAllianceLabel: "Alianza:",
+    timerHeatmapLabel: "Batallas por timer",
     gpGuildNotFound: "Gremio no encontrado.", gpAllianceNotFound: "Alianza no encontrada.",
     gpLoadError: "Error al cargar el perfil",
     colPlayer: "Jugador", colLastSeen: "Última vez",

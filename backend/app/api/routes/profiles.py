@@ -12,11 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.api.routes.battles import _as_builds, _classify_role, _factions_summary, _factions_summary_bulk, _weapon_function_map, _wbase
-from app.db import AsyncSessionLocal
+from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import Battle, BattleGuild, BattleParticipant, BattleSide
 from app.models.dashboard_cache import DashboardCache
 from app.models.guild_profiles import AllianceProfile, GuildProfile
 from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, SearchEntry
+from app.domain.albion_timers import timer_heatmap
 from app.services import battle_groups
 from app.services.search_norm import match as search_match, normalize as norm_name, prefix_range
 
@@ -1191,6 +1192,100 @@ async def _overlay_refresh_state(cached: dict, db: AsyncSession, model, albion_i
             _aware(row.refresh_requested_at).isoformat() if row.refresh_requested_at else None}
 
 
+async def _guild_member_stats(db: AsyncSession, guild_id: str) -> dict:
+    """Agrega kill_fame, death_fame, gathering_fame, crafting_fame, pve_fame e
+    fishing_fame de todos os AlbionPlayer que pertencem à guilda. Usado para as
+    brackets no header do perfil de guilda."""
+    rows = (await db.execute(
+        select(
+            func.coalesce(func.sum(AlbionPlayer.kill_fame), 0).label("kill_fame"),
+            func.coalesce(func.sum(AlbionPlayer.death_fame), 0).label("death_fame"),
+            func.coalesce(func.sum(AlbionPlayer.gathering_fame), 0).label("gathering_fame"),
+            func.coalesce(func.sum(AlbionPlayer.crafting_fame), 0).label("crafting_fame"),
+            func.coalesce(func.sum(AlbionPlayer.pve_fame), 0).label("pve_fame"),
+            func.coalesce(func.sum(AlbionPlayer.fishing_fame), 0).label("fishing_fame"),
+            func.coalesce(func.sum(AlbionPlayer.gather_wood), 0).label("gather_wood"),
+            func.coalesce(func.sum(AlbionPlayer.gather_hide), 0).label("gather_hide"),
+            func.coalesce(func.sum(AlbionPlayer.gather_ore), 0).label("gather_ore"),
+            func.coalesce(func.sum(AlbionPlayer.gather_rock), 0).label("gather_rock"),
+            func.coalesce(func.sum(AlbionPlayer.gather_fiber), 0).label("gather_fiber"),
+        ).where(AlbionPlayer.guild_id == guild_id)
+    )).first()
+    if rows is None:
+        return {"kill_fame": 0, "death_fame": 0, "gathering_fame": 0, "crafting_fame": 0, "pve_fame": 0, "fishing_fame": 0,
+                "gather_wood": 0, "gather_hide": 0, "gather_ore": 0, "gather_rock": 0, "gather_fiber": 0, "gather_ranks": {}}
+    stats = {
+        "kill_fame": rows.kill_fame or 0,
+        "death_fame": rows.death_fame or 0,
+        "gathering_fame": rows.gathering_fame or 0,
+        "crafting_fame": rows.crafting_fame or 0,
+        "pve_fame": rows.pve_fame or 0,
+        "fishing_fame": rows.fishing_fame or 0,
+        "gather_wood": rows.gather_wood or 0,
+        "gather_hide": rows.gather_hide or 0,
+        "gather_ore": rows.gather_ore or 0,
+        "gather_rock": rows.gather_rock or 0,
+        "gather_fiber": rows.gather_fiber or 0,
+    }
+    stats["gather_ranks"] = await _guild_gather_ranks(db, guild_id, stats)
+    return stats
+
+
+_GUILD_GATHER_KINDS = {
+    "gather_wood": "gather_wood",
+    "gather_hide": "gather_hide",
+    "gather_ore": "gather_ore",
+    "gather_rock": "gather_rock",
+    "gather_fiber": "gather_fiber",
+    "fishing": "fishing_fame",
+    "crafting": "crafting_fame",
+}
+
+_GUILD_RANK_TOP_N = 500
+
+
+async def _guild_gather_ranks(db: AsyncSession, guild_id: str, stats: dict) -> dict[str, int]:
+    """Posição (1-indexed) da guilda no ranking de cada tipo de coleta/crafting,
+    top500 só. 0 = fora do top500 (não mostra). Soma por guild_name (igual
+    highscores._guild_gather_rankings) e compara com o total da guilda."""
+    guild_name = await db.scalar(
+        select(AlbionPlayer.guild_name).where(AlbionPlayer.guild_id == guild_id).limit(1)
+    )
+    if not guild_name:
+        return {}
+    out: dict[str, int] = {}
+    for kind, col_name in _GUILD_GATHER_KINDS.items():
+        own = stats.get(kind if kind in stats else col_name, 0)
+        if own <= 0:
+            continue
+        col = getattr(AlbionPlayer, col_name)
+        # Conta guildas com soma maior — mesma lógica do player _gather_rank_of.
+        higher = (await db.scalar(
+            select(func.count()).select_from(
+                select(func.sum(col).label("s"))
+                .where(col > 0, AlbionPlayer.guild_name.isnot(None), AlbionPlayer.guild_name != "")
+                .group_by(AlbionPlayer.guild_name)
+                .having(func.sum(col) > own)
+            )
+        )) or 0
+        rank = int(higher) + 1
+        if rank <= _GUILD_RANK_TOP_N:
+            out[kind] = rank
+    return out
+
+
+async def _guild_timer_heatmap(db: AsyncSession, guild_id: str, region: str) -> list[dict]:
+    """Heatmap de batalhas por timer de prime time da região da guilda.
+    Conta batalhas e soma kill_fame por timer."""
+    rows = (await db.execute(
+        select(Battle.start_time, BattleGuild.kill_fame)
+        .join(BattleGuild, BattleGuild.battle_id == Battle.id)
+        .where(BattleGuild.albion_guild_id == guild_id, *_LETHAL_BIG, Battle.region == region)
+    )).all()
+    battle_times = [(row[0], row[1] or 0) for row in rows if row[0] is not None]
+    return timer_heatmap(region, battle_times)
+
+
 async def _build_guild_payload(db: AsyncSession, albion_id: str) -> dict:
     """Monta o payload completo do perfil de guilda a partir do DB. Assíncrono,
     chamado pela task de cold load e pela rota quando já está no cache."""
@@ -1226,6 +1321,15 @@ async def _build_guild_payload(db: AsyncSession, albion_id: str) -> dict:
         # frontend só refaz a busca se o usuário mudar o filtro.
         members = await _members(db, albion_id, min_players=25, min_kills=5)
         _load_progress[key] = (token, "history")
+        member_stats = await _guild_member_stats(db, albion_id)
+        # Região da guilda: da batalha mais recente ou do primeiro membro.
+        timer_region = (await db.scalar(
+            select(Battle.region)
+            .join(BattleGuild, BattleGuild.battle_id == Battle.id)
+            .where(BattleGuild.albion_guild_id == albion_id)
+            .order_by(Battle.id.desc()).limit(1)
+        )) or (members[0]["region"] if members else "americas")
+        timer_heatmap_data = await _guild_timer_heatmap(db, albion_id, timer_region)
         battles_count = (await db.scalar(
             select(func.count(func.distinct(BattleGuild.battle_id)))
             .join(Battle, Battle.id == BattleGuild.battle_id)
@@ -1261,6 +1365,8 @@ async def _build_guild_payload(db: AsyncSession, albion_id: str) -> dict:
         "silver_dropped": silver_dropped,
         "battles": battle_windows,
         "members": members,
+        "member_stats": member_stats,
+        "timer_heatmap": timer_heatmap_data,
         "battles_count": battles_count,
         "alliance_history": alliance_history,
         "battles_page0": {
@@ -1342,6 +1448,43 @@ def get_entity_refresh_progress(entity_type: str, albion_id: str):
     return {"stage": _refresh_progress.get(f"{prefix}{albion_id}")}
 
 
+MEMBER_WARM_MAX_AGE = timedelta(days=14)
+
+
+async def _enqueue_guild_member_warm(guild_id: str, region: str) -> None:
+    """Após refresh da guilda, enfileira warm de baixa prioridade (LOW_WARM)
+    para membros cujo perfil nunca foi carregado (lifetime_statistics IS NULL)
+    ou cujo stats_updated_at é mais antigo que 14 dias. Bypass perfis
+    verificados há menos de 14 dias para evitar fila imensa."""
+    from app.services.profile_warmer import request_refresh
+    from app.services.albion_gate import LOW_WARM
+    from sqlalchemy import or_
+
+    try:
+        async with AsyncSessionLocal() as db:
+            cutoff = datetime.now(timezone.utc) - MEMBER_WARM_MAX_AGE
+            players = (await db.scalars(
+                select(AlbionPlayer).where(
+                    AlbionPlayer.guild_id == guild_id,
+                    or_(
+                        AlbionPlayer.lifetime_statistics.is_(None),
+                        AlbionPlayer.stats_updated_at.is_(None),
+                        AlbionPlayer.stats_updated_at < cutoff,
+                    ),
+                )
+            )).all()
+            for p in players:
+                if p.refresh_requested_at is None:
+                    p.refresh_requested_at = datetime.now(timezone.utc)
+            await db.commit()
+        if players:
+            log.info("guild warm: enfileirados %d membros de %s (%s) para warm de baixa prioridade",
+                     len(players), guild_id, region)
+            request_refresh()
+    except Exception as e:
+        log.debug("guild warm: falha ao enfileirar membros de %s: %s", guild_id, e)
+
+
 @router.post("/guilds/{albion_id}/refresh")
 async def refresh_guild(albion_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Enfileira refresh da guilda no profile_warmer. Cooldown de 5min,
@@ -1384,6 +1527,10 @@ async def refresh_guild(albion_id: str, db: AsyncSession = Depends(deps.async_db
     await db.commit()
     _refresh_progress[f"g:{albion_id}"] = "queued"
     request_refresh()
+    # Dispara warm de baixa prioridade para membros da guilda cujo perfil
+    # nunca foi carregado ou está genuinamente antigo (>14 dias). Bypass
+    # perfis com stats_updated_at < 14d para evitar fila imensa.
+    asyncio.create_task(_enqueue_guild_member_warm(albion_id, region))
     return {"queued": True, "refreshing": True, "cooldown_seconds": 0}
 
 
@@ -1391,7 +1538,6 @@ async def refresh_guild(albion_id: str, db: AsyncSession = Depends(deps.async_db
 async def refresh_alliance(albion_id: str, db: AsyncSession = Depends(deps.async_db_session)):
     """Enfileira refresh da aliança no profile_warmer. Mesmo padrão de
     /guilds/{id}/refresh."""
-    from app.services.profile_warmer import _refresh_progress, request_refresh
 
     region = await _resolve_region_for_alliance(db, albion_id)
     if region is None:
@@ -1464,6 +1610,104 @@ async def guild_profile(albion_id: str, db: AsyncSession = Depends(deps.async_db
 
     # Retorna stub — o front detecta _cold_load e continua polling.
     return {"_cold_load": True, "albion_id": albion_id}
+
+
+# ── Embed de perfil de guilda (PNG para Discord) ───────────────────────────
+
+async def guild_preview_metadata(albion_id: str) -> tuple[str, str] | None:
+    """Nome atual e revisão do PNG para a OG tag da URL natural da guilda."""
+    from app.services.guild_profile_preview import PREVIEW_RENDER_VERSION
+
+    async with AsyncSessionLocal() as db:
+        gp = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == albion_id))
+        bg = await db.scalar(
+            select(BattleGuild)
+            .where(BattleGuild.albion_guild_id == albion_id)
+            .order_by(BattleGuild.id.desc())
+            .limit(1)
+        )
+        if bg is None:
+            return None
+        version_at = gp.last_seen_at if gp is not None else await db.scalar(
+            select(func.max(Battle.fetched_at))
+            .join(BattleGuild, BattleGuild.battle_id == Battle.id)
+            .where(BattleGuild.albion_guild_id == albion_id)
+        )
+        version = int(_aware(version_at).timestamp()) if version_at is not None else 0
+        return (bg.guild_name or albion_id, f"{version}-r{PREVIEW_RENDER_VERSION}")
+
+
+async def _render_guild_preview(albion_id: str):
+    """Render síncrono isolado da rota async, como o preview de player."""
+    from app.services.guild_profile_preview import render_guild_preview
+
+    def _run():
+        sdb = SyncSessionLocal()
+        try:
+            return render_guild_preview(sdb, albion_id)
+        finally:
+            sdb.close()
+
+    return await asyncio.to_thread(_run)
+
+
+@router.get("/guilds/embed/{albion_id}.png")
+async def guild_preview_png(albion_id: str):
+    """PNG do cabeçalho de guilda para o embed do Discord."""
+    from fastapi.responses import FileResponse
+
+    path = await _render_guild_preview(albion_id)
+    if path is None:
+        raise HTTPException(404, "Guild não encontrada")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+
+
+async def alliance_preview_metadata(albion_id: str) -> tuple[str, str] | None:
+    """Nome atual e revisão do PNG para a OG tag da URL natural da aliança."""
+    from app.services.guild_profile_preview import PREVIEW_RENDER_VERSION
+
+    async with AsyncSessionLocal() as db:
+        ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
+        bg = await db.scalar(
+            select(BattleGuild)
+            .where(BattleGuild.alliance_id == albion_id)
+            .order_by(BattleGuild.id.desc())
+            .limit(1)
+        )
+        if bg is None:
+            return None
+        version_at = ap.last_seen_at if ap is not None else await db.scalar(
+            select(func.max(Battle.fetched_at))
+            .join(BattleGuild, BattleGuild.battle_id == Battle.id)
+            .where(BattleGuild.alliance_id == albion_id)
+        )
+        version = int(_aware(version_at).timestamp()) if version_at is not None else 0
+        return (bg.alliance_name or albion_id, f"{version}-r{PREVIEW_RENDER_VERSION}")
+
+
+async def _render_alliance_preview(albion_id: str):
+    """Render síncrono de aliança isolado da rota async."""
+    from app.services.guild_profile_preview import render_alliance_preview
+
+    def _run():
+        sdb = SyncSessionLocal()
+        try:
+            return render_alliance_preview(sdb, albion_id)
+        finally:
+            sdb.close()
+
+    return await asyncio.to_thread(_run)
+
+
+@router.get("/alliances/embed/{albion_id}.png")
+async def alliance_preview_png(albion_id: str):
+    """PNG do cabeçalho de aliança para o embed do Discord."""
+    from fastapi.responses import FileResponse
+
+    path = await _render_alliance_preview(albion_id)
+    if path is None:
+        raise HTTPException(404, "Aliança não encontrada")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
 
 async def _build_alliance_payload(db: AsyncSession, albion_id: str) -> dict:

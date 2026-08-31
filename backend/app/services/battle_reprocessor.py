@@ -22,7 +22,7 @@ from sqlalchemy import case, select, update
 
 from app.db import AsyncSessionLocal
 from app.models.battles import Battle
-from app.services.albion_gate import NEW_ELIGIBLE, battle_priority
+from app.services.albion_gate import background_allowed, battle_priority
 from app.services.battle_tracker import (
     REPROCESS_REASON_EMPTY, REPROCESS_REASON_FAILED, _backfill_deep_fetch_all,
     _is_frozen, _write_deep_data,
@@ -84,13 +84,21 @@ async def _reprocess_batch(client, db) -> int:
                 b.reprocess_reason = None
             await db.commit()
             continue
-        # Grupo inteiro urgente (batalha nova, ver _URGENT_REASONS) → NEW_ELIGIBLE
-        # (topo do bg pool, atrás só de perfil/claim/regear que usam reserved).
-        # Grupo misto/não-urgente → OLD_* pelo frozen (campanha histórica de fundo).
-        if all(b.reprocess_reason in _URGENT_REASONS for b in region_battles):
-            priority_fn = lambda _b: NEW_ELIGIBLE
-        else:
-            priority_fn = lambda b: battle_priority(b, is_new=not _is_frozen(b, now))
+        # Só falhas de descoberta ainda recentes podem furar a fila. Uma
+        # batalha histórica marcada como failed não deve ganhar prioridade nova
+        # para sempre nem disputar uma Albion degradada com o feed atual.
+        if not background_allowed(host):
+            region_battles = [
+                b for b in region_battles
+                if b.reprocess_reason in _URGENT_REASONS and not _is_frozen(b, now)
+            ]
+            if not region_battles:
+                continue
+
+        def priority_fn(b: Battle) -> int:
+            is_live_retry = b.reprocess_reason in _URGENT_REASONS and not _is_frozen(b, now)
+            return battle_priority(b, is_new=is_live_retry)
+
         for result in await _backfill_deep_fetch_all(client, host, region_battles, priority_fn=priority_fn):
             battle = result[0]
             battle_id = battle.id

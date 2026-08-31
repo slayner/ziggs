@@ -1,13 +1,16 @@
 """Fila de prioridade para requests ao API gameinfo do Albion.
 
-O site ficava lento ao abrir perfis porque 14 tasks de background saturavam o
-gameinfo (~15 concorrentes) e os requests on-demand de perfil competiam no
-mesmo pool. Aqui centralizamos a concorrência em 2 pools:
+O site ficava lento ao abrir perfis porque tasks de background saturavam o
+gameinfo e os requests on-demand competiam no mesmo pool. Aqui centralizamos a
+concorrência em camadas:
 
 - **reserved** (16 slots): alta prioridade (perfis, registers, claims, regear).
   Background NÃO usa → perfil nunca espera atrás de backfill/sweeper.
 - **bg** (20 slots, heap por prioridade): processamento de batalhas e outros.
-  Maior prioridade é servida primeiro quando um slot libera.
+   Maior prioridade é servida primeiro quando um slot libera.
+- **host** (2 slots por host): impede que requests lentos de fundo se acumulem
+  na Albion. Um slot adicional e exclusivo de **embed** mantém o primeiro card
+  disponível mesmo quando os dois normais estão em voo.
 
 ``_rate_limiter`` abaixo é o teto REAL de carga na Albion (requests/segundo
 agregado) — mesma fila de prioridade dos pools, só que o "slot" é devolvido por
@@ -16,16 +19,9 @@ termina. Concorrência sozinha não limita TAXA (9 slots com requests de ~100ms
 sustentam dezenas de req/s — foi o que gerou 429 em cascata antes do rate
 limiter existir, ver battle_tracker.py).
 
-**Dimensionamento dos pools (por que 16/20, não 3/6):** o slot de concorrência é
-segurado durante a request INTEIRA (read timeout até 40s). Com N slots e request
-de T segundos, a vazão máx do pool é N/T. Se N/T < rate, o POOL vira o gargalo —
-não o rate limiter — e a taxa efetiva cai ABAIXO do limite mesmo com milhares de
-requests pendentes (era o caso com 3/6: bg 6/40s = 0.15 req/s < rate; reserved
-3/40s = 0.075). O pool só precisa cobrir a concorrência NORMAL no rate atual
-(rate × T_típico ≈ 0.7 × ~4s ≈ 3) com folga; 16/20 sobram. Se a Albion degrada e
-tudo bate no timeout de 40s, o pool enche e a vazão cai — backoff de fato, certo
-quando a API sofre. Pool maior NÃO aumenta a carga na Albion: o rate limiter
-segue liberando no mesmo ritmo; só evita que request lenta trave a fila.
+Os pools globais mantêm o backend responsivo; o limite efetivo de requests em
+voo fica no host. Assim, uma degradação de 40s na Albion não transforma o rate
+normal em dezenas de conexões penduradas no mesmo servidor.
 
 **Uso:** tasks/routes envolvem o corpo com ``async with albion_scope(P):``; cada
 ``client.get`` contra gameinfo envolve com ``async with slot():``. A prioridade
@@ -49,6 +45,7 @@ log = logging.getLogger(__name__)
 # pode furar a descoberta de batalha nova (era o que derrubava "batalhas
 # encontradas": o warm de fundo rodava ACIMA das batalhas, em PROFILE=0).
 # Espaçadas pras SMALL = ELIGIBLE+1 (ver battle_priority).
+EMBED = -1           # preview Discord: crawler espera poucos segundos
 PROFILE = 0          # perfil USER-FACING: cold-load da página + ⟳ manual (humano esperando)
 BOT_REGISTER = 1
 CLAIM_VERIFY = 1      # user: mesmo nível dos registers (membro esperando)
@@ -61,6 +58,7 @@ GUILD_VERIFY = 5
 NEW_ELIGIBLE = 10     # batalha NOVA (descoberta/deep-fetch) — topo da cadeia de fundo
 NEW_SMALL = 11
 WARM = 12            # profile_warmer de FUNDO (companion warm + backfill de participantes)
+LOW_WARM = 13       # warm de membros de guilda após refresh — abaixo do backfill normal
 OLD_ELIGIBLE = 14     # batalha ANTIGA (backfill) — abaixo do warmer
 OLD_SMALL = 15
 OTHER = 20            # sweeper / diversos — piso
@@ -77,6 +75,11 @@ _HIGH_MAX = 1          # prio <= _HIGH_MAX → reserved pool
 # backoff de fato, que é o certo quando a API sofre. Subiu o teto? Suba estes.
 _RESERVED_SLOTS = 16
 _BG_SLOTS = 20
+# A Albion passa a atrasar respostas quando muitas chamadas ficam penduradas.
+# Dois fluxos normais preservam vazão em condições saudáveis; o terceiro slot é
+# exclusivo de EMBED e nunca é consumido pelo backfill.
+_HOST_SLOTS = 1
+_EMBED_HOST_SLOTS = 1
 
 _current = contextvars.ContextVar("albion_prio", default=OTHER)
 
@@ -131,6 +134,10 @@ class _PriorityPool:
 
 _reserved = _PriorityPool(_RESERVED_SLOTS)
 _bg = _PriorityPool(_BG_SLOTS)
+_host_pools: dict[str, _PriorityPool] = {}
+_embed_host_pools: dict[str, _PriorityPool] = {}
+_default_host_pool = _PriorityPool(_HOST_SLOTS)
+_default_embed_host_pool = _PriorityPool(_EMBED_HOST_SLOTS)
 
 
 class _RateLimiter:
@@ -142,10 +149,12 @@ class _RateLimiter:
     os status da Albion (ver ``observe`` e RATE_MAX). ``burst`` = quantos
     requests podem estar "em resfriamento" ao mesmo tempo."""
 
-    def __init__(self, rate: float, burst: int):
+    def __init__(self, rate: float, burst: int, *, min_rate: float | None = None):
         self._pool = _PriorityPool(burst)
         self._rate = rate
+        self._min_rate = RATE_MIN if min_rate is None else min_rate
         self._last_decrease = float("-inf")  # 1º recuo sempre permitido
+        self._background_paused = False
 
     async def acquire(self, prio: int) -> None:
         await self._pool.acquire(prio)
@@ -159,6 +168,7 @@ class _RateLimiter:
             self._decrease()
         elif 200 <= status < 300 and self._rate < RATE_MAX:
             self._rate = min(RATE_MAX, self._rate + RATE_INCREASE)
+            self._update_background_mode()
 
     def _decrease(self) -> None:
         # No máx um recuo por rodada (1/rate): uma cascata de N erros concorrentes
@@ -168,11 +178,26 @@ class _RateLimiter:
         if now - self._last_decrease < 1.0 / self._rate:
             return
         self._last_decrease = now
-        new_rate = max(RATE_MIN, self._rate * RATE_DECREASE)
+        new_rate = max(self._min_rate, self._rate * RATE_DECREASE)
         if new_rate != self._rate:
             log.info("albion_gate: sobrecarga (Albion) — recuo %.2f → %.2f req/s",
                      self._rate, new_rate)
             self._rate = new_rate
+            self._update_background_mode()
+
+    def _update_background_mode(self) -> None:
+        if not self._background_paused and self._rate <= BACKGROUND_PAUSE_RATE:
+            self._background_paused = True
+            log.warning(
+                "albion_gate: manutenção de fundo pausada até recuperar acima de %.2f req/s",
+                BACKGROUND_RESUME_RATE,
+            )
+        elif self._background_paused and self._rate >= BACKGROUND_RESUME_RATE:
+            self._background_paused = False
+            log.info("albion_gate: manutenção de fundo retomada (%.2f req/s)", self._rate)
+
+    def allows_background(self) -> bool:
+        return not self._background_paused
 
 
 # ── Rate limiter ADAPTATIVO (AIMD) ─────────────────────────────────────────
@@ -196,6 +221,10 @@ RATE_INCREASE = 0.01  # +req/s por resposta 2xx (recuperação gradual até o te
 RATE_DECREASE = 0.5   # ×req/s por rodada com sobrecarga (backoff)
 _RATE_ERROR_CODES = frozenset({429, 502, 503, 504})  # sinais de sobrecarga da Albion
 ALBION_RATE_BURST = 1  # sem rajada — cada request espaçado em 1/rate segundos
+# Trabalho histórico só volta depois de uma sequência sustentada de respostas
+# boas. Sem histerese, um único 200 entre 502 faria sweepers reencherem a fila.
+BACKGROUND_PAUSE_RATE = 0.35
+BACKGROUND_RESUME_RATE = 0.55
 
 # O limitador é POR HOST, não global: os 3 gameinfo (americas/europe/asia) são
 # servidores independentes com saúde independente — 504 da americas não diz
@@ -204,8 +233,15 @@ ALBION_RATE_BURST = 1  # sem rajada — cada request espaçado em 1/rate segundo
 # europa/ásia ficaram 12h atrasadas enquanto só a americas 504ava. Teto por
 # host de 0.7 mantém a carga POR SERVIDOR igual à de antes (o pior caso
 # agregado 3×0.7 fica espalhado em 3 destinos diferentes, não num só).
-# Call site sem host à mão usa o limitador default compartilhado (comportamento
-# antigo) — ponytail: ok pra rotas user-facing de baixo volume.
+#
+# Dentro de cada host, separamos DOIS buckets independentes:
+# - CRITICAL (prioridade <= NEW_ELIGIBLE=10): feed discovery (battle_tracker
+#   sync_recent, player_tracker sync_recent). NUNCA pausa; floor = 0.35
+#   (BACKGROUND_RESUME_RATE) pra garantir descoberta contínua mesmo sob carga.
+# - BACKGROUND (prioridade > NEW_ELIGIBLE): backfill, scan fallback, sweepers,
+#   reprocessors. Pode pausar quando rate <= BACKGROUND_PAUSE_RATE (0.35).
+# EMBED usa o bucket CRITICAL (prioridade -1). Call site sem host usa
+# limitador default compartilhado (single bucket).
 _host_limiters: dict[str, _RateLimiter] = {}
 _default_limiter = _RateLimiter(RATE_MAX, ALBION_RATE_BURST)
 
@@ -214,22 +250,57 @@ def _limiters() -> list[_RateLimiter]:
     return [_default_limiter, *_host_limiters.values()]
 
 
-def _limiter_for(host: str | None) -> _RateLimiter:
+def _limiter_for(host: str | None, prio: int | None = None) -> _RateLimiter:
+    """Retorna o rate limiter adequado para o host e prioridade.
+
+    Se prio <= NEW_ELIGIBLE (10): bucket CRITICAL (feed discovery, embed).
+    Se prio > NEW_ELIGIBLE: bucket BACKGROUND (backfill, sweepers, fallback).
+    Sem host: limitador default compartilhado (single bucket)."""
     if not host:
         return _default_limiter
-    lim = _host_limiters.get(host)
-    if lim is None:
-        lim = _RateLimiter(RATE_MAX, ALBION_RATE_BURST)
-        _host_limiters[host] = lim
-    return lim
+    limiter = _host_limiters.get(host)
+    if limiter is None:
+        limiter = _RateLimiter(RATE_MAX, ALBION_RATE_BURST, min_rate=RATE_MIN)
+        _host_limiters[host] = limiter
+    return limiter
+
+
+def _host_pool_for(host: str | None, prio: int) -> _PriorityPool:
+    """Reserva uma conexão por host para o primeiro preview do Discord."""
+    pools = _embed_host_pools if prio == EMBED else _host_pools
+    default = _default_embed_host_pool if prio == EMBED else _default_host_pool
+    if not host:
+        return default
+    pool = pools.get(host)
+    if pool is None:
+        pool = _PriorityPool(_EMBED_HOST_SLOTS if prio == EMBED else _HOST_SLOTS)
+        pools[host] = pool
+    return pool
 
 
 def observe_response(host: str | None, status: int) -> None:
     """Alimenta o rate limiter adaptativo do HOST com o status de UM response
     do gameinfo. Chamado pelo response hook do make_client (player_tracker) —
     todo request ao gameinfo passa por ele, então o feedback cobre o tráfego
-    todo sem nenhum call site precisar reportar nada."""
-    _limiter_for(host).observe(status)
+    todo sem nenhum call site precisar reportar nada.
+
+    O feedback vai para AMBOS os buckets (critical e background) do host,
+    pois a saúde do servidor é a mesma. O bucket critical tem floor mais alto
+    e não pausa; o background pode pausar."""
+    if not host:
+        _default_limiter.observe(status)
+        return
+    limiter = _host_limiters.get(host)
+    if limiter is not None:
+        limiter.observe(status)
+
+
+def background_allowed(host: str | None) -> bool:
+    """Se o host suporta manutenção (bucket BACKGROUND) sem atrasar o feed."""
+    if not host:
+        return True
+    limiter = _host_limiters.get(host)
+    return limiter is None or limiter.allows_background()
 
 
 def rate_status() -> dict:
@@ -237,12 +308,21 @@ def rate_status() -> dict:
     `rate` = pior host (o min) pra o card geral não otimista; detalhe por host
     em `hosts`. `queue` = requests bloqueados esperando slot/rate agora."""
     lims = _limiters()
+    hosts_detail = {}
+    for h, limiter in _host_limiters.items():
+        hosts_detail[h] = {
+            "rate": round(limiter._rate, 3),
+            "background_paused": not limiter.allows_background(),
+        }
     return {
         "rate": round(min(l._rate for l in lims), 3),
         "ceiling": RATE_MAX,
         "floor": RATE_MIN,
         "queue": queue_depth(OTHER),
-        "hosts": {h: round(l._rate, 3) for h, l in _host_limiters.items()},
+        "hosts": hosts_detail,
+        "background_paused_hosts": sorted(
+            h for h, limiter in _host_limiters.items() if not limiter.allows_background()
+        ),
     }
 
 
@@ -252,14 +332,28 @@ async def slot(host: str | None = None):
     token do limitador de taxa do HOST. Envolver CADA ``client.get`` contra
     gameinfo com isto; passe o ``host`` pra isolar o backoff por região (504
     da americas não estrangula europa/ásia). Sem host, usa o limitador
-    default compartilhado."""
+    default compartilhado.
+
+    O bucket (critical/background) é escolhido pela prioridade corrente:
+    prio <= NEW_ELIGIBLE (10) -> critical; caso contrário -> background."""
     prio = _current.get()
     pool = _reserved if prio <= _HIGH_MAX else _bg
+    host_pool = _host_pool_for(host, prio)
+    started = asyncio.get_running_loop().time() if prio == EMBED else None
     await pool.acquire(prio)
+    host_acquired = False
     try:
-        await _limiter_for(host).acquire(prio)
+        await host_pool.acquire(prio)
+        host_acquired = True
+        await _limiter_for(host, prio).acquire(prio)
+        if started is not None:
+            waited = asyncio.get_running_loop().time() - started
+            if waited >= 1:
+                log.info("albion_gate: embed aguardou %.1fs (%s)", waited, host)
         yield
     finally:
+        if host_acquired:
+            host_pool.release()
         pool.release()
 
 
@@ -271,7 +365,7 @@ def queue_depth(prio: int = OTHER) -> int:
     enquanto o refresh já estava sendo servido). Conta só os waiters que empatam
     ou superam `prio` (prio_do_waiter <= prio, pois heap serve por prioridade
     crescente) no pool relevante àquela prioridade + no rate limiter
-    (compartilhado). Lê os heaps direto — contar não precisa de ordem; pula
+    (agora separado por bucket). Lê os heaps direto — contar não precisa de ordem; pula
     future cancelado (mesma checagem do release)."""
     def ahead(pool: _PriorityPool) -> int:
         return sum(1 for wp, _s, fut in pool._waiters if wp <= prio and not fut.done())
@@ -298,9 +392,13 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         # (a)-(c) testam só os pools de concorrência — troca os rate limiters
         # por uns bem generosos pra essas asserções de timing não dependerem
         # do burst/rate de produção (testado isoladamente no (e)).
-        global _default_limiter
+        global _default_limiter, _default_host_pool, _default_embed_host_pool
         _default_limiter = _RateLimiter(rate=1000, burst=1000)
         _host_limiters.clear()
+        _host_pools.clear()
+        _embed_host_pools.clear()
+        _default_host_pool = _PriorityPool(1000)
+        _default_embed_host_pool = _PriorityPool(1000)
 
         # (a) bg pool cheio: 7º OTHER bloqueia
         holds = [await _hold(OTHER) for _ in range(_BG_SLOTS)]
@@ -333,7 +431,36 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         for cm in holds:
             await cm.__aexit__(None, None, None)
 
-        # (c) prioridade entre waiters bg: NEW_ELIGIBLE(10) vence OTHER(20)
+        # (c) mesmo com tráfego normal pendurado num host, EMBED usa a conexão
+        # reservada e entra sem esperar o request de fundo terminar.
+        _default_host_pool = _PriorityPool(1)
+        _default_embed_host_pool = _PriorityPool(1)
+        normal_release = asyncio.Event()
+        normal_entered = asyncio.Event()
+
+        async def _normal_host_request():
+            async with albion_scope(OTHER):
+                async with slot():
+                    normal_entered.set()
+                    await normal_release.wait()
+
+        normal = asyncio.create_task(_normal_host_request())
+        await asyncio.wait_for(normal_entered.wait(), timeout=1)
+        embed_done = asyncio.Event()
+
+        async def _embed_host_request():
+            async with albion_scope(EMBED):
+                async with slot():
+                    embed_done.set()
+
+        await asyncio.wait_for(asyncio.create_task(_embed_host_request()), timeout=1)
+        assert embed_done.is_set(), "EMBED não pode esperar request normal no mesmo host"
+        normal_release.set()
+        await asyncio.wait_for(normal, timeout=1)
+        _default_host_pool = _PriorityPool(1000)
+        _default_embed_host_pool = _PriorityPool(1000)
+
+        # (d) prioridade entre waiters bg: NEW_ELIGIBLE(10) vence OTHER(20)
         holds = [await _hold(OTHER) for _ in range(_BG_SLOTS)]  # bg cheio
         started: list[int] = []
         gate = asyncio.Event()  # segura o slot do admitido até depois da asserção
@@ -356,7 +483,7 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         for cm in holds[1:]:
             await cm.__aexit__(None, None, None)
 
-        # (d) battle_priority + cadeia de prioridade (novas > warmer > antigas)
+        # (e) battle_priority + cadeia de prioridade (novas > warmer > antigas)
         assert PROFILE < NEW_ELIGIBLE < WARM < OLD_ELIGIBLE < OTHER, "cadeia de prioridade quebrada"
 
         class B:
@@ -367,7 +494,7 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         assert battle_priority(B(5), is_new=False) == OLD_SMALL
         assert battle_priority(B(None), is_new=True) == NEW_SMALL  # None → 0 → small
 
-        # (e) rate limiter: burst dispara na hora, o (burst+1)º espera ~1/rate
+        # (f) rate limiter: burst dispara na hora, o (burst+1)º espera ~1/rate
         rl = _RateLimiter(rate=20, burst=3)
         t0 = asyncio.get_running_loop().time()
         for _ in range(3):
@@ -377,7 +504,7 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         elapsed = asyncio.get_running_loop().time() - t0
         assert elapsed >= 1 / 20, f"4º request deveria esperar ~1/rate, levou {elapsed}s"
 
-        # (f) queue_depth é POR PRIORIDADE: waiters OTHER no bg não contam pra um
+        # (g) queue_depth é POR PRIORIDADE: waiters OTHER no bg não contam pra um
         # request PROFILE (fura a fila) — era o bug do '1208 na fila' no refresh.
         holds = [await _hold(OTHER) for _ in range(_BG_SLOTS)]  # bg cheio
         gate2 = asyncio.Event()
@@ -396,7 +523,7 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
             await cm.__aexit__(None, None, None)
         await asyncio.wait_for(asyncio.gather(*bgs), timeout=1)
 
-        # (g) rate limiter AIMD: 2xx recupera até o teto, erro recua, cascata na
+        # (h) rate limiter AIMD: 2xx recupera até o teto, erro recua, cascata na
         # mesma rodada = 1 backoff, e clamp no piso.
         rl2 = _RateLimiter(rate=RATE_MAX, burst=1)
         rl2.observe(200)                                  # já no teto → não passa
@@ -404,16 +531,21 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         rl2.observe(504)                                  # recua ×RATE_DECREASE
         after1 = RATE_MAX * RATE_DECREASE
         assert rl2._rate == after1, rl2._rate
+        assert rl2.allows_background() is False
         rl2.observe(504)                                  # 2º erro na mesma rodada: ignorado
         assert rl2._rate == after1, "cascata deve contar como 1 recuo"
         rl2.observe(200)                                  # recupera de leve
         assert rl2._rate == min(RATE_MAX, after1 + RATE_INCREASE), rl2._rate
+        for _ in range(40):
+            rl2.observe(200)
+        assert rl2.allows_background() is True
         for _ in range(40):                               # muitos erros → clamp no piso
             rl2._last_decrease = float("-inf")            # fura o cooldown pra testar o clamp
             rl2.observe(504)
         assert rl2._rate == RATE_MIN, rl2._rate
+        assert rl2.allows_background() is False
 
-        # (h) isolamento por host: 504 da americas não recua o limiter da
+        # (i) isolamento por host: 504 da americas não recua o limiter da
         # europa (o defeito do incidente 14/ago/2026), e observe_response
         # roteia pro host certo.
         observe_response("gameinfo.albiononline.com", 504)
@@ -421,10 +553,13 @@ if __name__ == "__main__":  # ponytail: 1 self-check runnable, sem framework
         am = _limiter_for("gameinfo.albiononline.com")
         am._last_decrease = float("-inf")
         observe_response("gameinfo.albiononline.com", 504)
+
         eu = _limiter_for("gameinfo-ams.albiononline.com")
         assert am._rate < RATE_MAX, am._rate
         assert eu._rate == RATE_MAX, eu._rate
-        assert rate_status()["hosts"]["gameinfo.albiononline.com"] < RATE_MAX
+        am_status = rate_status()["hosts"]["gameinfo.albiononline.com"]
+        assert isinstance(am_status, dict) and "rate" in am_status
+        assert am_status["rate"] < RATE_MAX, f"host deveria ter recuado: {am_status['rate']}"
 
         print("albion_gate OK")
 

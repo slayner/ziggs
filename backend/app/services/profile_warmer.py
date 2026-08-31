@@ -21,7 +21,7 @@ from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import Battle, BattleParticipant
 from app.models.guild_profiles import AllianceProfile, GuildProfile
 from app.models.players import AlbionPlayer
-from app.services.albion_gate import PROFILE, WARM, albion_scope, slot
+from app.services.albion_gate import PROFILE, WARM, albion_scope, background_allowed, slot
 from app.services.player_tracker import HOSTS, make_client, sync_player_kills, upsert_player
 
 log = logging.getLogger(__name__)
@@ -102,13 +102,21 @@ async def _warm_player(client, db: AsyncSession, host: str, region: str, albion_
         # feed de atividade, que já vem quase todo do feed global. `skip_id` no
         # sync_player_kills garante que ele não sobrescreve este upsert com o
         # snapshot (mais velho) embutido nos eventos.
-        await upsert_player(db, raw, region)
-        _refresh_progress[albion_id] = "kills"
-        await sync_player_kills(client, db, host, region, albion_id)
-        # Invalida cache do PNG de embed — os dados do perfil mudaram,
-        # o próximo request ao embed vai regenerar a imagem.
+        # stats_verified só quando o snapshot da Albion é real (Timestamp
+        # presente); caso contrário upsert_player já trata como ausente e
+        # preserva as stats existentes.
+        from app.api.routes.players import _raw_has_profile_data
+        valid_snapshot = _raw_has_profile_data(raw)
+        await upsert_player(db, raw, region, stats_verified=valid_snapshot)
+        if not valid_snapshot:
+            log.info("warm: player %s (%s) — snapshot da Albion sem Timestamp; preservando stats existentes", albion_id, region)
+            return False
+        # O card pode ser compartilhado enquanto kills/deaths ainda sincronizam.
+        # Invalida já com os stats novos, sem fazer o próximo embed esperar isso.
         from app.services.profile_preview import invalidate_cache
         invalidate_cache(albion_id, region)
+        _refresh_progress[albion_id] = "kills"
+        await sync_player_kills(client, db, host, region, albion_id)
         log.info("warm: player %s (%s) — %s aquecido", raw.get("Name") or albion_id, region, "refresh" if force else "backfill")
         return True
     except Exception as e:
@@ -140,15 +148,26 @@ def _trim_member(m: dict) -> dict:
     }
 
 
-async def _upsert_guild_profile(db: AsyncSession, raw: dict, region: str, members: list | None) -> None:
+async def _upsert_guild_profile(db: AsyncSession, raw: dict, region: str, members: list | None) -> bool:
     """Grava/atualiza o perfil de guilda a partir do payload cru da Albion.
 
     `members` vem de uma chamada SEPARADA (`_warm_guild`): /gameinfo/guilds/{id}
     não traz lista de membros embutida — só /gameinfo/guilds/{id}/members traz.
     Confirmado contra a API real em 21/07/2026; antes lia `raw.get("members")`,
     que não existe nesse payload e sempre voltava None (`GuildProfile.members`
-    nunca era preenchido)."""
+    nunca era preenchido).
+
+    Retorna False quando o snapshot da Albion está vazio (sem nome, sem
+    killFame/DeathFame e sem membros) — mesmo padrão do _raw_has_profile_data
+    de players: nunca sobrescreve dados bons com zeros."""
     gp = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == raw["Id"]))
+    new_kill = int(raw.get("killFame") or 0)
+    new_death = int(raw.get("DeathFame") or 0)
+    has_name = bool(raw.get("Name"))
+    has_stats = new_kill > 0 or new_death > 0 or (members is not None and len(members) > 0)
+    # Snapshot vazio: preserva dados existentes, não sobrescreve com zeros.
+    if not has_name and not has_stats:
+        return False
     if gp is None:
         gp = GuildProfile(albion_id=raw["Id"], name=raw.get("Name", raw["Id"]), region=region)
         db.add(gp)
@@ -161,23 +180,34 @@ async def _upsert_guild_profile(db: AsyncSession, raw: dict, region: str, member
     # vivo) — "KillFame" nunca batia e gp.kill_fame ficava sempre 0.
     # DeathFame, ao contrário, vem maiúsculo — a Albion é inconsistente entre
     # os dois campos no MESMO payload, não é typo nosso.
-    gp.kill_fame = int(raw.get("killFame") or 0)
-    gp.death_fame = int(raw.get("DeathFame") or 0)
+    gp.kill_fame = new_kill
+    gp.death_fame = new_death
     gp.members = [_trim_member(m) for m in members] if members else None
     gp.founder_id = str(raw.get("FounderId") or "") or None
     gp.last_seen_at = datetime.now(timezone.utc)
     await db.commit()
+    return True
 
 
-async def _upsert_alliance_profile(db: AsyncSession, raw: dict, region: str) -> None:
+async def _upsert_alliance_profile(db: AsyncSession, raw: dict, region: str) -> bool:
     """Grava/atualiza o perfil de aliança a partir do payload cru da Albion.
 
     A chave primária do payload de aliança é "AllianceId", não "Id" (só o
     payload de GUILDA usa "Id") — confirmado ao vivo em 21/07/2026. Com "Id"
     o lookup abaixo levantava KeyError toda vez (o caller já filtra por
     raw.get("AllianceId") antes de chamar, mas o bug ficava aqui se alguém
-    reusasse a função)."""
+    reusasse a função).
+
+    Retorna False quando o snapshot da Albion está vazio (sem nome e sem
+    guildas) — a Albion devolve [] com frequência mesmo pra aliança com
+    guildas conhecidas (confirmado ao vivo). Preserva a lista existente."""
     ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == raw["AllianceId"]))
+    new_guilds = raw.get("Guilds")
+    has_name = bool(raw.get("AllianceName"))
+    has_guilds = isinstance(new_guilds, list) and len(new_guilds) > 0
+    # Snapshot vazio: preserva dados existentes, não sobrescreve com None/[].
+    if not has_name and not has_guilds:
+        return False
     if ap is None:
         ap = AllianceProfile(albion_id=raw["AllianceId"], name=raw.get("AllianceName", raw["AllianceId"]), region=region)
         db.add(ap)
@@ -188,11 +218,14 @@ async def _upsert_alliance_profile(db: AsyncSession, raw: dict, region: str) -> 
     # corrigido, a Albion devolve [] com frequência mesmo pra aliança com
     # guildas conhecidas (confirmado ao vivo) — o campo é best-effort, não
     # confiável; a lista de guildas mostrada no site continua vindo do
-    # tracking próprio (_guilds_in_alliance), não daqui.
-    ap.guilds = raw.get("Guilds") or None
+    # tracking próprio (_guilds_in_alliance), não daqui. Só sobrescreve
+    # quando a Albion realmente trouxe uma lista.
+    if has_guilds:
+        ap.guilds = new_guilds
     ap.founder_id = str(raw.get("FounderId") or "") or None
     ap.last_seen_at = datetime.now(timezone.utc)
     await db.commit()
+    return True
 
 
 async def _warm_guild(client, db: AsyncSession, host: str, region: str, albion_id: str) -> bool:
@@ -225,7 +258,12 @@ async def _warm_guild(client, db: AsyncSession, host: str, region: str, albion_i
         except Exception as e:
             log.debug("profile_warmer: members de guild %s (%s) falhou: %s", albion_id, region, e)
         _refresh_progress[f"g:{albion_id}"] = "building"
-        await _upsert_guild_profile(db, raw, region, members)
+        ok = await _upsert_guild_profile(db, raw, region, members)
+        if not ok:
+            log.info("warm: guild %s (%s) — snapshot vazio da Albion; preservando dados existentes", albion_id, region)
+            return False
+        from app.services.guild_profile_preview import invalidate_cache
+        invalidate_cache(albion_id)
         log.info("warm: guild %s (%s) — %s aquecida (%d membros)",
                  raw.get("Name") or albion_id, region, "refresh",
                  len(members) if members else 0)
@@ -254,7 +292,12 @@ async def _warm_alliance(client, db: AsyncSession, host: str, region: str, albio
             log.info("warm: alliance %s (%s) — payload vazio", albion_id, region)
             return False
         _refresh_progress[f"a:{albion_id}"] = "building"
-        await _upsert_alliance_profile(db, raw, region)
+        ok = await _upsert_alliance_profile(db, raw, region)
+        if not ok:
+            log.info("warm: alliance %s (%s) — snapshot vazio da Albion; preservando dados existentes", albion_id, region)
+            return False
+        from app.services.guild_profile_preview import invalidate_alliance_cache
+        invalidate_alliance_cache(albion_id)
         log.info("warm: alliance %s (%s) — %s aquecida",
                  raw.get("AllianceName") or albion_id, region, "refresh")
         return True
@@ -517,7 +560,9 @@ async def warm_by_name(name: str, region: str) -> dict:
                     # routes/players.py): sem a linha do jogador no banco, as
                     # kills/deaths ingeridas ficam com FK NULL e o dedupe por
                     # event_id orfana pra sempre.
-                    await upsert_player(db, raw, region)
+                    from app.api.routes.players import _raw_has_profile_data
+                    valid = _raw_has_profile_data(raw)
+                    await upsert_player(db, raw, region, stats_verified=valid)
                     await sync_player_kills(client, db, host, region, raw["Id"])
             log.info("warm: %s (%s) — bootstrap de %s", name, region, raw["Id"])
             return {"status": "bootstrapped"}
@@ -585,13 +630,20 @@ async def sync_once() -> int:
             for battle_id, region in battle_ids:
                 host = HOSTS.get(region)
                 if host is not None:
+                    if not background_allowed(host):
+                        return processed
                     player_ids = (await db.scalars(
                         select(BattleParticipant.albion_player_id).where(BattleParticipant.battle_id == battle_id)
                     )).all()
                     # Commit antes do HTTP: libera read tx do SELECT de player_ids.
                     await db.commit()
+                    completed = True
                     for albion_id in player_ids:
-                        await _warm_player(client, db, host, region, albion_id)
+                        if not await _warm_player(client, db, host, region, albion_id):
+                            completed = False
+                            break
+                    if not completed:
+                        return processed
                 # Rebusca a battle pra marcar profiles_synced (não guardar ORM
                 # obsoleto da SELECT inicial, já commited e expirado).
                 b = await db.get(Battle, battle_id)

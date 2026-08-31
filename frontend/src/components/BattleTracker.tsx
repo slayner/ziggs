@@ -77,7 +77,7 @@ function factionTag(f: Faction): string {
   return makeTag(f.alliance_name, f.guild_name);
 }
 
-const MAX_DISPLAY_FACTIONS = 5;
+const MAX_DISPLAY_FACTIONS = 4;
 
 // Heatmap de kills: quem mais matou fica perto de HEAT_MAX, quem menos matou fica perto de HEAT_MIN.
 const HEAT_MAX: [number, number, number] = [0x66, 0x71, 0x60]; // #667160

@@ -93,7 +93,7 @@ def test_warm_player_grava_nucleo_antes_da_sync_de_kills():
     poll durante o refresh, então os dados principais aparecem após 1 request
     em vez dos 3 — a sync de kills só completa o feed de atividade."""
     src = inspect.getsource(pw._warm_player)
-    assert src.index("upsert_player(db, raw, region)") < src.index("sync_player_kills("), \
+    assert src.index("await upsert_player(") < src.index("sync_player_kills("), \
         "upsert do núcleo do perfil deve vir ANTES da sync de kills"
 
 
@@ -108,9 +108,12 @@ def test_cold_load_grava_nucleo_antes_da_sync_de_kills():
     produção: perfil mostrava fame (escalar, salva pelo upsert final) mas
     as listas de kills/deaths vinham vazias até a galera clicar em ⟳ — que
     também não resolvia. Mesma ordem do _warm_player (ver teste acima)."""
-    src = inspect.getsource(pl._cold_load_player)
-    assert src.index("upsert_player(db, raw, region)") < src.index("sync_player_kills("), \
-        "cold load deve gravar o núcleo do perfil (upsert_player) ANTES da sync de kills"
+    cold_load_src = inspect.getsource(pl._cold_load_player)
+    assert cold_load_src.index("await upsert_player(") < cold_load_src.index(
+        "_sync_cold_load_activities("
+    ), "cold load deve gravar o núcleo antes de disparar a sync de kills"
+    activities_src = inspect.getsource(pl._sync_cold_load_activities)
+    assert "sync_player_kills(" in activities_src, "a task separada deve sincronizar kills/deaths"
 
 
 def test_get_player_by_id_grava_nucleo_antes_da_sync_de_kills():
@@ -128,7 +131,7 @@ def test_warm_by_name_grava_nucleo_antes_da_sync_de_kills():
     então o upsert primeiro é OBRIGATÓRIO — sem ele, TODA kill da primeira
     sincronização fica órfã."""
     src = inspect.getsource(pw.warm_by_name)
-    assert src.index("upsert_player(db, raw, region)") < src.index("sync_player_kills("), \
+    assert src.index("await upsert_player(") < src.index("sync_player_kills("), \
         "warm_by_name (bootstrap) deve gravar o núcleo ANTES da sync de kills"
 
 
@@ -169,7 +172,7 @@ def test_cold_load_de_player_desacoplado_da_request():
     assert hasattr(pl, "_cold_load_player"), "deve ter _cold_load_player (task em background)"
     assert hasattr(pl, "_cold_load_tasks"), "deve ter dict de tasks em background"
     src = inspect.getsource(pl.get_player_by_name)
-    assert "asyncio.create_task" in src, "deve disparar task em background"
+    assert "_start_cold_load" in src, "deve disparar task em background"
     assert "_cold_load" in src, "deve retornar stub com _cold_load=true"
 
 
@@ -196,6 +199,105 @@ def test_timeout_em_fila_nao_conta():
     src = inspect.getsource(pw._warm_with_timeout)
     assert "asyncio.wait_for" in src, "timeout envolve o _warm_* (por-item)"
     assert "PROCESSING_TIMEOUT" in src, "usa o timeout de processamento"
+
+
+def test_embed_usa_snapshot_verificado_e_nao_rejeita_famas_zero():
+    """Um GET direto válido pode conter todas as famas zeradas. O embed deve
+    usar esse snapshot e só aquecer de novo quando stats_updated_at passa de 8h,
+    nunca tratar os zeros como se o perfil não tivesse carregado."""
+    # Snapshot real: Timestamp presente, famas podem ser zero legitimamente.
+    assert pl._raw_has_profile_data({"LifetimeStatistics": {"PvE": {"Total": 0}, "Timestamp": "2026-01-01T00:00:00"}})
+    # Snapshot bugado da Albion: Timestamp null → rejeita e reintenta.
+    assert not pl._raw_has_profile_data({"LifetimeStatistics": {"PvE": {"Total": 0}, "Timestamp": None}})
+    assert not pl._raw_has_profile_data({"LifetimeStatistics": {"PvE": {"Total": 0}}})
+    assert hasattr(pl, "_player_has_bad_snapshot"), "debe ter helper para detectar snapshot bugado"
+    preview_src = inspect.getsource(pl._preview_version)
+    assert "stats_updated_at" in preview_src
+    assert "_player_has_all_zero_stats" not in preview_src
+    assert "PREVIEW_RENDER_VERSION" in preview_src
+    assert "_player_has_bad_snapshot" in preview_src
+    embed_queue_src = inspect.getsource(pl._queue_embed_refresh_if_stale)
+    assert "EMBED_STATS_MAX_AGE" in embed_queue_src
+    assert "stats_updated_at" in embed_queue_src
+
+
+def test_preview_arma_usa_render_real_antes_do_png():
+    """A imagem não pode desenhar uma arma inventada quando o cache está frio:
+    resolve primeiro o mesmo T7 excelente que o widget do perfil pede."""
+    src = inspect.getsource(pl._render_profile_preview)
+    assert "render_item_for_card" in src
+    assert "available_weapon_bases" in src
+    import app.services.profile_preview as pp
+    preview_src = inspect.getsource(pp.render_player_preview)
+    assert 'label = "T7"' not in preview_src
+    assert "PREVIEW_RENDER_VERSION" in inspect.getsource(pp._cache_path)
+    assert "SegUIVar.ttf" in inspect.getsource(pp._load_fonts)
+    font_src = inspect.getsource(pp._load_fonts)
+    assert "cascadia_code.ttf" in font_src
+    assert "_FONT_STATS = load_cascadia" in font_src
+    render_src = inspect.getsource(pp.render_player_preview)
+    assert '("Crafting",' in render_src
+    assert '("Crafting Fame"' not in render_src
+    assert '("Madeira"' not in render_src
+    assert '("Wood"' in render_src
+    assert "stroke_width" not in inspect.getsource(pp._draw_metric)
+    assert preview_src.count("_draw_metric(") == 2
+    assert "_age_label(player.last_seen_at)" not in preview_src
+    assert '("Ratio",' in preview_src
+    assert "grid_step" not in preview_src
+
+
+def test_preview_crafting_fica_a_direita_de_pve_e_cache_de_armas_e_reutilizado(monkeypatch):
+    """PvE não some com zero e ícones prontos não voltam a consultar a CDN."""
+    import app.services.profile_preview as pp
+
+    preview_src = inspect.getsource(pp.render_player_preview)
+    assert 'if pve_fame:' not in preview_src
+    assert preview_src.index('("PvE Fame"') < preview_src.index('("Crafting"')
+
+    monkeypatch.setattr(pp, "_item_icon", lambda base: object() if base == "2H_KNUCKLES_SET2" else None)
+    assert pp.cached_preview_weapon_bases(["2H_KNUCKLES_SET2", "2H_ARCANESTAFF"]) == {"2H_KNUCKLES_SET2"}
+
+
+def test_upsert_player_rejeita_snapshot_sem_timestamp():
+    """A Albion retorna intermitentemente LifetimeStatistics com Timestamp
+    null e todas as contagens zeradas. upsert_player deve tratar isso como
+    ausente (has_lifetime=False) para nunca sobrescrever stats boas com
+    zeros — independente do caller passar stats_verified=True."""
+    src = inspect.getsource(pt.upsert_player)
+    assert "Timestamp" in src, "upsert_player deve checar Timestamp no LifetimeStatistics"
+    # Todos os callers com stats_verified=True devem usar _raw_has_profile_data
+    warm_src = inspect.getsource(pw._warm_player)
+    assert "_raw_has_profile_data" in warm_src, "_warm_player deve validar snapshot"
+    warm_by_name_src = inspect.getsource(pw.warm_by_name)
+    assert "_raw_has_profile_data" in warm_by_name_src, "warm_by_name deve validar snapshot"
+    get_player_src = inspect.getsource(pl.get_player)
+    assert get_player_src.count("_raw_has_profile_data") >= 2, "get_player deve validar snapshot em ambos os caminhos"
+    get_by_name_src = inspect.getsource(pl.get_player_by_name)
+    assert "_raw_has_profile_data" in get_by_name_src, "get_player_by_name deve validar snapshot"
+    # O profile JSON (cache-first) também precisa detectar snapshot bugado
+    assert "_player_has_bad_snapshot" in get_by_name_src, "get_player_by_name cache-first deve checar snapshot bugado"
+    assert "_player_has_bad_snapshot" in get_player_src, "get_player cache-first deve checar snapshot bugado"
+
+
+def test_upsert_guild_e_alliance_rejeita_snapshot_vazio():
+    """Guildas e alianças também sofrem com snapshots vazios da Albion.
+    _upsert_guild_profile e _upsert_alliance_profile devem retornar False
+    quando o snapshot não tem nome nem stats/membros, preservando dados
+    existentes em vez de sobrescrever com zeros."""
+    guild_src = inspect.getsource(pw._upsert_guild_profile)
+    assert "return False" in guild_src, "_upsert_guild_profile deve retornar False em snapshot vazio"
+    assert "has_name" in guild_src, "deve checar se tem nome"
+    assert "has_stats" in guild_src, "deve checar se tem stats/membros"
+    alliance_src = inspect.getsource(pw._upsert_alliance_profile)
+    assert "return False" in alliance_src, "_upsert_alliance_profile deve retornar False em snapshot vazio"
+    assert "has_name" in alliance_src, "deve checar se tem nome"
+    assert "has_guilds" in alliance_src, "deve checar se tem guildas"
+    # _warm_guild e _warm_alliance devem propagar o False
+    warm_guild_src = inspect.getsource(pw._warm_guild)
+    assert "if not ok:" in warm_guild_src, "_warm_guild deve checar retorno do upsert"
+    warm_alliance_src = inspect.getsource(pw._warm_alliance)
+    assert "if not ok:" in warm_alliance_src, "_warm_alliance deve checar retorno do upsert"
 
 
 if __name__ == "__main__":

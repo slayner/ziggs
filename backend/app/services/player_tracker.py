@@ -14,6 +14,9 @@ from app.db import AsyncSessionLocal
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerSnapshot, KillSyncCursor
 from app.services import search_index
 from app.services.albion_gate import NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, albion_scope, observe_response, slot
+from app.services.native_feed import (
+    KIND_KILL, NativeFeedItem, apply_native_items, capture_native_stream,
+)
 
 log = logging.getLogger(__name__)
 
@@ -27,15 +30,15 @@ HOSTS = {
 
 TIMEOUT = httpx.Timeout(20.0, read=40.0)  # ponytail: read 40s — API do Albion (Américas) estoura 20s sob carga; connect/pool/write ficam em 20s
 POLL_INTERVAL = 120  # 2 min — kill feed atualiza rápido; antes era 300s (5min) e kills demoravam 5x mais que batalhas pra serem descobertas
+DRAIN_INTERVAL = 3  # aplica inbox persistido sem esperar o próximo poll remoto
+DRAIN_BATCH_SIZE = 10
 SNAPSHOT_MAX_AGE = timedelta(hours=24)  # resolução do gráfico de crescimento de fama
 FEED_LIMIT = 51  # máximo que a API devuelve por página
 FEED_MAX_PAGES = 8  # mínimo de páginas (408 events) por poll — piso
-FEED_PAGES_MAX = 60  # teto: ~3000 events/poll. Mesma lógica do sync_recent:
-                     # quando a API atrasa, o feed enche de eventos já conhecidos
-                     # no topo e os novos ficam nas páginas mais fundas. Sem
-                     # escalar, essas páginas somem do feed antes do próximo
-                     # ciclo e caem acima do maior ID conhecido — buraco que o
-                     # kill_sweeper não cobre (só sonda entre IDs conhecidos).
+# A API aceita apenas páginas cujo offset + limit seja <= 1000. Acima disso o
+# poll desperdiçava uma request inválida em offset=1020 a cada ciclo atrasado.
+EVENTS_API_OFFSET_LIMIT = 1000
+FEED_PAGES_MAX = EVENTS_API_OFFSET_LIMIT // FEED_LIMIT
 
 
 def _pages_for_region(region: str) -> int:
@@ -70,19 +73,22 @@ async def _observe_albion(response: httpx.Response) -> None:
 def make_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=TIMEOUT,
-        headers={"User-Agent": "ziggs-platform"},
-        verify=False,
+        headers={"User-Agent": "ZiggsCompanion/0.1 (https://ziggs.xyz)"},
         event_hooks={"response": [_observe_albion]},
     )
 
 
-async def upsert_player(db: AsyncSession, data: dict, region: str, *, commit: bool = True) -> AlbionPlayer:
+async def upsert_player(
+    db: AsyncSession, data: dict, region: str, *, commit: bool = True, stats_verified: bool = False,
+) -> AlbionPlayer:
     """Salva/atualiza jogador e tira snapshot quando a guilda muda (ou quando
     o último snapshot já passou de SNAPSHOT_MAX_AGE — dá resolução pro
     gráfico de crescimento de fama sem precisar de um job dedicado, já que
     o polling reativo toca em qualquer jogador ativo a cada POLL_INTERVAL).
 
-    `commit=False` deixa o commit pro caller (poll_once/sync_player_kills fazem
+    `stats_verified=True` só é usado pelo endpoint direto de perfil da Albion;
+    ele marca a idade real do snapshot exibido em embeds. `commit=False` deixa
+    o commit pro caller (poll_once/sync_player_kills fazem
     commit por evento, não por jogador — antes eram ~765 commits síncronos no
     event loop por ciclo, wedging o backend inteiro; SQLite serializa writers
     e cada commit é um fsync bloqueante no loop)."""
@@ -99,6 +105,12 @@ async def upsert_player(db: AsyncSession, data: dict, region: str, *, commit: bo
     avatar = data.get("Avatar") or data.get("avatar") or None
 
     lifetime = data.get("LifetimeStatistics")
+    # A Albion retorna intermitentemente um LifetimeStatistics com todas as
+    # contagens zeradas e Timestamp null — não é um snapshot real. Trata como
+    # ausente para nunca sobrescrever stats boas com zeros (todos os callers
+    # confiam que has_lifetime=True implica dados reais).
+    if isinstance(lifetime, dict) and lifetime and not lifetime.get("Timestamp"):
+        lifetime = None
     has_lifetime = isinstance(lifetime, dict) and bool(lifetime)
     kill_fame = data.get("KillFame") or 0
     death_fame = data.get("DeathFame") or 0
@@ -145,6 +157,7 @@ async def upsert_player(db: AsyncSession, data: dict, region: str, *, commit: bo
             fishing_fame=fishing_fame or 0,
             lifetime_statistics=lifetime if has_lifetime else None,
             first_seen_at=now, last_seen_at=now,
+            stats_updated_at=now if stats_verified else None,
         )
         db.add(player)
         await db.flush()
@@ -181,6 +194,8 @@ async def upsert_player(db: AsyncSession, data: dict, region: str, *, commit: bo
             player.gather_fiber = gather["fiber"]
             player.fishing_fame = fishing_fame
         player.last_seen_at = now
+        if stats_verified:
+            player.stats_updated_at = now
         player.is_deleted = False
 
     last_snapshot_stale = False
@@ -263,6 +278,69 @@ async def _record_kill_event(db: AsyncSession, ev: dict, region: str, *, commit:
     db.add(row)
     if commit:
         await db.commit()
+
+
+def _event_source_id(raw: dict) -> str:
+    return str(raw.get("EventId") or "")
+
+
+def _event_occurred_at(raw: dict) -> datetime:
+    value = raw.get("TimeStamp")
+    if not value:
+        raise ValueError("evento sem TimeStamp")
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+async def _fetch_kill_page(client: httpx.AsyncClient, host: str, offset: int, limit: int) -> list[dict]:
+    async with slot(host):
+        response = await client.get(
+            f"https://{host}/api/gameinfo/events",
+            params={"limit": limit, "offset": offset},
+        )
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, list):
+        raise ValueError(f"feed de kills inválido em offset {offset}")
+    return data
+
+
+async def _apply_kill_item(db: AsyncSession, item: NativeFeedItem) -> None:
+    """Reaplica de forma idempotente o write-path já usado pelo feed global."""
+    await _upsert_event_players(db, item.payload, item.region)
+    await _record_kill_event(db, item.payload, item.region, commit=False)
+
+
+async def _capture_and_apply_kill_stream(
+    client: httpx.AsyncClient,
+    db: AsyncSession,
+    region: str,
+    host: str,
+    *,
+    page_budget: int,
+    priority: int,
+    force_restart: bool = False,
+) -> int:
+    async with albion_scope(priority):
+        result = await capture_native_stream(
+            db,
+            kind=KIND_KILL,
+            region=region,
+            page_size=FEED_LIMIT,
+            offset_limit=EVENTS_API_OFFSET_LIMIT,
+            page_budget=page_budget,
+            fetch_page=lambda offset, limit: _fetch_kill_page(client, host, offset, limit),
+            source_id=_event_source_id,
+            occurred_at=_event_occurred_at,
+            force_restart=force_restart,
+        )
+    if not result.completed:
+        return 0
+    return await apply_native_items(
+        db,
+        kind=KIND_KILL,
+        region=region,
+        apply_item=_apply_kill_item,
+    )
 
 
 PLAYER_SYNC_LIMIT = 50  # kills/mortes buscados por sincronização ativa, sem paginar mais que isso
@@ -352,87 +430,51 @@ async def sync_player_kills(client: httpx.AsyncClient, db: AsyncSession, host: s
 
 
 async def poll_once() -> int:
-    """Busca o kill feed das 3 regiões uma vez, paginando até não achar eventos
-    novos (ou atingir o teto escalado pelo delay). Upserta jogadores e registra
-    cada kill no ledger. Retorna contagem de jogadores upsertados."""
+    """Captura e aplica o feed global das três regiões com âncora durável."""
     count = 0
     async with AsyncSessionLocal() as db:
         async with make_client() as c:
             for region, host in HOSTS.items():
-                seen_event_ids: set[str] = set()
                 max_pages = _pages_for_region(region)
-                # Delay alto: NÃO confia no break de "0 novos nesta página" —
-                # quando a API atrasa, o feed enche de eventos já conhecidos no
-                # topo e os novos ficam mais fundo. Parar na primeira página com
-                # 0 novos perde tudo que apareceu durante o delay. Em dia normal
-                # (delay baixo), o break continua valendo — poupa requests.
-                from app.services.battle_tracker import publish_delay_status
-                delays = publish_delay_status()
-                delay_secs = (delays.get(region) or {}).get("delay_secs") or 0
-                trust_zero_break = delay_secs <= POLL_INTERVAL * 2
-                page = 0
-                for page in range(max_pages):
-                    offset = page * FEED_LIMIT
-                    try:
-                        async with albion_scope(NEW_ELIGIBLE):
-                            async with slot(host):
-                                resp = await c.get(
-                                    f"https://{host}/api/gameinfo/events",
-                                    params={"limit": FEED_LIMIT, "offset": offset},
-                                )
-                        resp.raise_for_status()
-                        events = resp.json()
-                    except Exception as e:
-                        log.warning("player_tracker: falha ao buscar kill feed (%s, offset=%d): %s", region, offset, e)
-                        break
-                    if not isinstance(events, list) or not events:
-                        break
-
-                    new_count = 0
-                    for ev in events:
-                        event_id = str(ev.get("EventId") or "")
-                        if not event_id or event_id in seen_event_ids:
-                            continue
-                        seen_event_ids.add(event_id)
-
-                        # Dedupe contra o banco: se já temos este event_id,
-                        # pula o upsert pesado (igual sync_player_kills faz).
-                        if await db.scalar(
-                            select(PlayerKillEvent.id).where(
-                                PlayerKillEvent.region == region,
-                                PlayerKillEvent.albion_event_id == event_id,
-                            )
-                        ) is not None:
-                            continue
-
-                        try:
-                            for role in ("Killer", "Victim"):
-                                p = ev.get(role)
-                                if p and p.get("Id"):
-                                    await upsert_player(db, p, region, commit=False)
-                                    count += 1
-                            for assist in (ev.get("Participants") or []):
-                                if assist and assist.get("Id"):
-                                    await upsert_player(db, assist, region, commit=False)
-                                    count += 1
-                            await _record_kill_event(db, ev, region, commit=False)
-                            await db.commit()
-                            new_count += 1
-                        except Exception as e:
-                            await db.rollback()
-                            log.debug("player_tracker: skip event %s (%s): %s", event_id, region, e)
-
-                    # Se esta página não teve eventos novos, não vale a pena
-                    # paginar mais — as próximas páginas são tudo já conhecido.
-                    # EXCETO em delay alto: o feed está represado e os novos
-                    # podem estar mais fundo (ver trust_zero_break acima).
-                    if new_count == 0 and trust_zero_break:
-                        break
-
-                log.debug("player_tracker: %s — %d eventos novos em %d páginas (max=%d, delay=%ds)",
-                          region, len(seen_event_ids), page + 1, max_pages, delay_secs)
+                try:
+                    count += await _capture_and_apply_kill_stream(
+                        c, db, region, host, page_budget=max_pages, priority=NEW_ELIGIBLE,
+                        force_restart=True,
+                    )
+                except Exception as e:
+                    log.warning("player_tracker: falha no feed de kills (%s): %s", region, e)
 
     return count
+
+
+async def drain_pending_once() -> int:
+    """Drena kills já capturadas; a ordem fica a cargo do inbox nativo."""
+    count = 0
+    async with AsyncSessionLocal() as db:
+        for region in HOSTS:
+            try:
+                count += await apply_native_items(
+                    db,
+                    kind=KIND_KILL,
+                    region=region,
+                    batch_size=DRAIN_BATCH_SIZE,
+                    apply_item=_apply_kill_item,
+                )
+            except Exception as e:
+                log.warning("player_tracker: falha ao drenar inbox (%s): %s", region, e)
+                await db.rollback()
+    return count
+
+
+async def run_drain_forever() -> None:
+    """Consome backlog persistido mesmo enquanto a captura remota continua."""
+    log.info("player_tracker: dreno ordenado iniciado (intervalo=%ds)", DRAIN_INTERVAL)
+    while True:
+        try:
+            await drain_pending_once()
+        except Exception as e:
+            log.error("player_tracker: erro no dreno ordenado: %s", e)
+        await asyncio.sleep(DRAIN_INTERVAL)
 
 
 async def run_forever() -> None:
@@ -469,75 +511,19 @@ async def _get_kill_cursor(db: AsyncSession, region: str) -> KillSyncCursor:
 
 
 async def backfill_kills_step(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str) -> None:
-    """Avança a paginação de events da região dentro da janela de ~1000.
-    Processa events que o poll recente não pegou (dedup por event_id).
-    Ao completar uma volta, reseta o cursor e recomeça."""
-    cursor = await _get_kill_cursor(db, region)
+    """Mantém o antigo loop de backfill dentro da mesma varredura ancorada."""
+    from app.services.albion_gate import background_allowed
 
-    async with albion_scope(OLD_ELIGIBLE):
-        for _ in range(KILL_BACKFILL_PAGES_PER_CYCLE):
-            if cursor.next_offset + KILL_BACKFILL_PAGE_SIZE > KILL_BACKFILL_OFFSET_LIMIT:
-                cursor.done = True
-                cursor.next_offset = 0
-                await db.commit()
-                return
-
-            try:
-                async with slot(host):
-                    resp = await client.get(
-                        f"https://{host}/api/gameinfo/events",
-                        params={"limit": KILL_BACKFILL_PAGE_SIZE, "offset": cursor.next_offset},
-                    )
-                resp.raise_for_status()
-                events = resp.json()
-            except Exception as e:
-                log.warning("player_tracker: falha no backfill de kills (%s, offset=%d): %s",
-                            region, cursor.next_offset, e)
-                return
-
-            if not isinstance(events, list) or not events:
-                cursor.done = True
-                cursor.next_offset = 0
-                await db.commit()
-                return
-
-            new_count = 0
-            for ev in events:
-                event_id = str(ev.get("EventId") or "")
-                if not event_id:
-                    continue
-                if await db.scalar(
-                    select(PlayerKillEvent.id).where(
-                        PlayerKillEvent.region == region,
-                        PlayerKillEvent.albion_event_id == event_id,
-                    )
-                ) is not None:
-                    continue
-                try:
-                    for role in ("Killer", "Victim"):
-                        p = ev.get(role)
-                        if p and p.get("Id"):
-                            await upsert_player(db, p, region, commit=False)
-                    for assist in (ev.get("Participants") or []):
-                        if assist and assist.get("Id"):
-                            await upsert_player(db, assist, region, commit=False)
-                    await _record_kill_event(db, ev, region, commit=False)
-                    await db.commit()
-                    new_count += 1
-                except Exception as e:
-                    await db.rollback()
-                    log.debug("player_tracker: skip backfill event %s (%s): %s", event_id, region, e)
-
-            cursor.next_offset += len(events)
-            if len(events) < KILL_BACKFILL_PAGE_SIZE:
-                cursor.done = True
-                cursor.next_offset = 0
-                await db.commit()
-                return
-            await db.commit()
-
-    if new_count:
-        log.info("player_tracker: backfill kills %s offset=%d — %d events novos", region, cursor.next_offset, new_count)
+    if not background_allowed(host):
+        return
+    try:
+        await _capture_and_apply_kill_stream(
+            client, db, region, host,
+            page_budget=KILL_BACKFILL_PAGES_PER_CYCLE,
+            priority=OLD_ELIGIBLE,
+        )
+    except Exception as e:
+        log.warning("player_tracker: falha no backfill de kills (%s): %s", region, e)
 
 
 async def backfill_kills_cycle() -> None:

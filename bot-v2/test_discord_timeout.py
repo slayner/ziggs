@@ -61,6 +61,9 @@ def test_juicy_kills_nao_trava_com_channel_send_pendurado():
         def get_channel(self, _cid):
             return HangingChannel()
 
+        async def fetch_channel(self, _cid):
+            return HangingChannel()
+
         filesize_limit = 8 * 1024 * 1024
 
     queue = {"kills": [{

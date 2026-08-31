@@ -50,6 +50,7 @@ interface KillEvent {
   victim_guild: string | null; victim_alliance: string | null;
   killer: string; victim: string | null;
   fame: number;
+  silver_dropped: number | null;
   weapon: string | null; victim_weapon: string | null;
   killer_equipment: Build | null; victim_equipment: Build | null;
   killer_inventory: InventoryItem[] | null; victim_inventory: InventoryItem[] | null;
@@ -1213,6 +1214,10 @@ function buildValue(items: { id: string; qty: number }[], prices: Map<string, nu
   return items.reduce((sum, it) => sum + (prices.get(it.id) ?? 0) * it.qty, 0);
 }
 
+function killValue(event: KillEvent, prices: Map<string, number>): number {
+  return event.silver_dropped ?? buildValue(victimItems(event), prices);
+}
+
 // preço de loot pra batalhas — vai pro nosso backend (não direto na API
 // pública), que cacheia pra sempre no banco: a ideia é nunca re-consultar um
 // item já visto, "o preço da época" já é o suficiente (pedido explícito) e
@@ -1364,7 +1369,7 @@ function KillFeed({ events, prices }: { events: KillEvent[]; prices: Map<string,
   }, [expanded]);
 
   const rows = useMemo(
-    () => events.map((e, i) => ({ e, i, value: buildValue(victimItems(e), prices) })),
+    () => events.map((e, i) => ({ e, i, value: killValue(e, prices) })),
     [events, prices],
   );
 
@@ -1605,7 +1610,7 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
   }, [battle]);
 
   const killValues = useMemo(
-    () => battle ? battle.kill_timeline.map(e => ({ e, value: buildValue(victimItems(e), prices) })) : [],
+    () => battle ? battle.kill_timeline.map(e => ({ e, value: killValue(e, prices) })) : [],
     [battle, prices],
   );
   const totalSilver = useMemo(() => killValues.reduce((s, k) => s + k.value, 0), [killValues]);

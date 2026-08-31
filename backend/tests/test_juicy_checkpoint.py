@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.base import Base
 import app.models  # noqa: F401 — registra tudo no Base.metadata
-from app.models.players import AlbionPlayer, PlayerKillEvent
+from app.models.players import AlbionPlayer, JuicyKillDelivery, PlayerKillEvent
 from app.models.tenancy import Guild
 from app.models.battles import Battle
 
@@ -80,6 +80,17 @@ def _seed_kills(session, kills):
     session.commit()
 
 
+def _delivery(guild_id, kill_id, timestamp, region="americas", fame=1_000_000, silver=60_000_000):
+    return JuicyKillDelivery(
+        guild_id=guild_id,
+        kill_id=kill_id,
+        occurred_at=timestamp,
+        region=region,
+        fame=fame,
+        silver_dropped=silver,
+    )
+
+
 def test_juicy_queue_ordena_por_timestamp_nao_por_id():
     """Bug 1: kill com id maior mas timestamp menor (descoberta tardia) deve
     aparecer PRIMEIRO no queue (ordem cronológica), não depois."""
@@ -114,12 +125,15 @@ def test_juicy_queue_ordena_por_timestamp_nao_por_id():
                 timestamp=t_old, fame=1_000_000, silver_dropped=70_000_000,
                 participant_count=5, is_solo=False, group_member_count=5,
             ))
+            session.add_all([
+                _delivery(1, 10, t_new),
+                _delivery(1, 20, t_old),
+            ])
             await session.commit()
 
             # Mock: sem cutoff (kills recentes demais pra cair no cutoff)
             with patch("app.services.postable.postable_cutoffs_by_region",
-                        new=AsyncMock(return_value={"americas": datetime(2020, 1, 1, tzinfo=timezone.utc)})), \
-                 patch("app.api.routes.auth._price_kills_on_demand", new=AsyncMock()):
+                         new=AsyncMock(return_value={"americas": datetime(2020, 1, 1, tzinfo=timezone.utc)})):
                 authorization = f"Bearer {get_settings().bot_api_secret}"
                 resp = await auth.bot_juicy_kill_queue(1, authorization, session)
 
@@ -132,9 +146,8 @@ def test_juicy_queue_ordena_por_timestamp_nao_por_id():
     print("checkpoint por timestamp OK — ordem cronológica respeitada")
 
 
-def test_juicy_queue_precifica_null_on_demand():
-    """Bug 2: kill com silver_dropped=NULL dentro do horizonte deve ser
-    precificada on-demand (não ignorada pra sempre)."""
+def test_juicy_queue_le_somente_delivery_materializada():
+    """Kill sem delivery não é varrida pelo poll; só a outbox entra na fila."""
     from app.api.routes import auth
     from app.config import get_settings
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -147,7 +160,7 @@ def test_juicy_queue_precifica_null_on_demand():
         async with AsyncSession(engine) as session:
             guild = _make_guild(1, juicy_kill_last_ts=(datetime.now(timezone.utc) - timedelta(hours=5)).isoformat())
             session.add(guild)
-            # Kill com silver_dropped=NULL — seria perdida no cursor por id.
+            # Kill sem preço ainda não pode aparecer no poll do bot.
             session.add(PlayerKillEvent(
                 id=10, region="americas", albion_event_id="10_ev",
                 timestamp=datetime.now(timezone.utc) - timedelta(hours=1),
@@ -155,24 +168,60 @@ def test_juicy_queue_precifica_null_on_demand():
                 participant_count=5, is_solo=False, group_member_count=5,
                 victim_equipment={"MainHand": {"Type": "T8_2H_BOW@4"}},
             ))
+            # Uma segunda kill já precificada e materializada é a única entregue.
+            ready_at = datetime.now(timezone.utc) - timedelta(minutes=30)
+            session.add(PlayerKillEvent(
+                id=20, region="americas", albion_event_id="20_ev",
+                timestamp=ready_at, fame=1_000_000, silver_dropped=60_000_000,
+                participant_count=5, is_solo=False, group_member_count=5,
+            ))
+            session.add(_delivery(1, 20, ready_at))
             await session.commit()
 
-            async def fake_price(db, events):
-                for ev in events:
-                    ev.silver_dropped = 60_000_000
-
             with patch("app.services.postable.postable_cutoffs_by_region",
-                        new=AsyncMock(return_value={"americas": datetime(2020, 1, 1, tzinfo=timezone.utc)})), \
-                 patch("app.api.routes.auth._price_kills_on_demand", new=fake_price):
+                        new=AsyncMock(return_value={"americas": datetime(2020, 1, 1, tzinfo=timezone.utc)})):
                 authorization = f"Bearer {get_settings().bot_api_secret}"
                 resp = await auth.bot_juicy_kill_queue(1, authorization, session)
 
-        # Kill foi precificada on-demand e retornada (não perdida).
-        assert len(resp["kills"]) == 1, f"kill NULL deveria ser precificada e retornada: {resp}"
+        assert [kill["id"] for kill in resp["kills"]] == [20]
         assert resp["kills"][0]["silver_dropped"] == 60_000_000
 
     asyncio.run(run())
-    print("precificação on-demand OK — kill NULL não é perdida")
+    print("outbox materializada OK — poll não varre kill sem preço")
+
+
+def test_precificacao_materializa_delivery_uma_vez():
+    """A escrita de preço fanouta a kill elegível sem depender do poll do bot."""
+    from app.services.juicy_kill_delivery import enqueue_priced_events
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+    engine = create_async_engine("sqlite+aiosqlite://", future=True)
+
+    async def run():
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda c: Base.metadata.create_all(c))
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            timestamp = datetime.now(timezone.utc) - timedelta(minutes=1)
+            guild = _make_guild(1)
+            event = PlayerKillEvent(
+                id=10, region="americas", albion_event_id="10_ev", timestamp=timestamp,
+                fame=1_000_000, silver_dropped=60_000_000,
+                participant_count=5, is_solo=False, group_member_count=5,
+                victim_equipment={"MainHand": {"Type": "T8_2H_BOW@4"}},
+            )
+            session.add_all([guild, event])
+            await session.commit()
+            cutoffs = {region: datetime(2020, 1, 1, tzinfo=timezone.utc) for region in ("americas", "europe", "asia")}
+            with patch("app.services.juicy_kill_delivery.postable_cutoffs_by_region", new=AsyncMock(return_value=cutoffs)):
+                await enqueue_priced_events(session, [event])
+                await enqueue_priced_events(session, [event])
+            await session.commit()
+            deliveries = (await session.scalars(select(JuicyKillDelivery))).all()
+            assert [(delivery.guild_id, delivery.kill_id) for delivery in deliveries] == [(1, 10)]
+
+    asyncio.run(run())
+    print("fanout de preço para outbox OK")
 
 
 def test_juicy_queue_filtra_por_postable_cutoff():
@@ -204,11 +253,14 @@ def test_juicy_queue_filtra_por_postable_cutoff():
                 fame=1_000_000, silver_dropped=60_000_000,
                 participant_count=5, is_solo=False, group_member_count=5,
             ))
+            session.add_all([
+                _delivery(1, 10, datetime.now(timezone.utc) - timedelta(hours=72)),
+                _delivery(1, 20, datetime.now(timezone.utc) - timedelta(hours=1)),
+            ])
             await session.commit()
 
             with patch("app.services.postable.postable_cutoffs_by_region",
-                        new=AsyncMock(return_value={"americas": cutoff})), \
-                 patch("app.api.routes.auth._price_kills_on_demand", new=AsyncMock()):
+                        new=AsyncMock(return_value={"americas": cutoff})):
                 authorization = f"Bearer {get_settings().bot_api_secret}"
                 resp = await auth.bot_juicy_kill_queue(1, authorization, session)
 
@@ -219,36 +271,65 @@ def test_juicy_queue_filtra_por_postable_cutoff():
     print("postable_cutoff OK — kill velha filtrada")
 
 
-def test_juicy_synced_watermark_monotonic():
-    """Watermark só avança pra frente (timestamp maior), nunca pra trás."""
+def test_juicy_synced_confirma_delivery_individual():
+    """ACK individual marca só a delivery enviada, sem cursor temporal global."""
     from app.api.routes import auth
     from app.config import get_settings
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-    guild = SimpleNamespace(settings={"juicy_kill_last_ts": "2026-06-01T00:00:00+00:00"})
+    engine = create_async_engine("sqlite+aiosqlite://", future=True)
 
-    class Db:
-        async def scalar(self, _q):
-            return guild
-        async def commit(self):
-            pass
+    async def run():
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda c: Base.metadata.create_all(c))
+        async with AsyncSession(engine) as session:
+            ts = datetime.now(timezone.utc) - timedelta(minutes=1)
+            session.add(_make_guild(1))
+            session.add(PlayerKillEvent(
+                id=10, region="americas", albion_event_id="10_ev", timestamp=ts,
+                fame=1_000_000, silver_dropped=60_000_000,
+            ))
+            session.add(_delivery(1, 10, ts))
+            await session.commit()
+            await auth.bot_juicy_kill_synced(
+                1, auth.JuicyKillSyncedIn(kill_ids=[10]),
+                f"Bearer {get_settings().bot_api_secret}", session,
+            )
+            delivery = await session.scalar(select(JuicyKillDelivery).where(JuicyKillDelivery.kill_id == 10))
+            assert delivery.state == "sent"
 
-    authz = f"Bearer {get_settings().bot_api_secret}"
+    asyncio.run(run())
+    print("ACK individual da outbox OK")
 
-    # Timestamp MENOR → não avança (mantém watermark atual).
-    asyncio.run(auth.bot_juicy_kill_synced(
-        1, auth.JuicyKillSyncedIn(last_ts=datetime(2026, 1, 1, tzinfo=timezone.utc)),
-        authz, Db(),
-    ))
-    assert guild.settings["juicy_kill_last_ts"] == "2026-06-01T00:00:00+00:00"
 
-    # Timestamp MAIOR → avança.
-    asyncio.run(auth.bot_juicy_kill_synced(
-        1, auth.JuicyKillSyncedIn(last_ts=datetime(2026, 7, 1, tzinfo=timezone.utc)),
-        authz, Db(),
-    ))
-    assert guild.settings["juicy_kill_last_ts"] == "2026-07-01T00:00:00+00:00"
+def test_desativar_juicy_suprime_pendencias():
+    """Desligar o canal não pode publicar backlog em uma futura reativação."""
+    from app.services.juicy_kill_delivery import suppress_incompatible_pending
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-    print("watermark monotônico OK")
+    engine = create_async_engine("sqlite+aiosqlite://", future=True)
+
+    async def run():
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda c: Base.metadata.create_all(c))
+        async with AsyncSession(engine) as session:
+            ts = datetime.now(timezone.utc) - timedelta(minutes=1)
+            session.add(_make_guild(1))
+            session.add(PlayerKillEvent(
+                id=10, region="americas", albion_event_id="10_ev", timestamp=ts,
+                fame=1_000_000, silver_dropped=60_000_000,
+            ))
+            session.add(_delivery(1, 10, ts))
+            await session.commit()
+            await suppress_incompatible_pending(session, 1, {})
+            await session.commit()
+            delivery = await session.scalar(select(JuicyKillDelivery).where(JuicyKillDelivery.kill_id == 10))
+            assert delivery.state == "suppressed"
+
+    asyncio.run(run())
+    print("desativação suprime pendências da outbox OK")
 
 
 def test_parse_watermark_nao_quebra_com_none_ou_garbage():
@@ -266,8 +347,10 @@ def test_parse_watermark_nao_quebra_com_none_ou_garbage():
 
 if __name__ == "__main__":
     test_parse_watermark_nao_quebra_com_none_ou_garbage()
-    test_juicy_synced_watermark_monotonic()
+    test_juicy_synced_confirma_delivery_individual()
+    test_desativar_juicy_suprime_pendencias()
     test_juicy_queue_ordena_por_timestamp_nao_por_id()
-    test_juicy_queue_precifica_null_on_demand()
+    test_juicy_queue_le_somente_delivery_materializada()
+    test_precificacao_materializa_delivery_uma_vez()
     test_juicy_queue_filtra_por_postable_cutoff()
     print("checkpoint por timestamp: OK")

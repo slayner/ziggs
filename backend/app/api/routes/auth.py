@@ -563,6 +563,7 @@ async def update_guild_settings(
         raise HTTPException(404)
 
     settings = dict(g.settings or {})
+    had_juicy_kill_channel = bool(settings.get("juicy_kill_channel_id"))
     # Libera read tx antes do HTTP (_lookup_albion_guild chama a API do Albion).
     # expire_on_commit=False: g permanece válido após commit.
     await db.commit()
@@ -748,15 +749,22 @@ async def update_guild_settings(
         if body.juicy_kill_channel_id:
             settings["juicy_kill_channel_id"] = body.juicy_kill_channel_id
             now = datetime.now(timezone.utc)
-            # Inicializa watermark por região = agora na 1ª ativação do canal.
-            # Sem isso, o queue faz Index Scan from epoch em regiões sem watermark.
+            # Uma ativação (inclusive após desligar) começa no presente. Não
+            # despeja pendências acumuladas enquanto o canal estava desligado.
             wm_raw = dict(settings.get("juicy_kill_last_ts_by_region") or {})
+            delivery_from = dict(settings.get("juicy_kill_delivery_from_by_region") or {})
             regs = settings.get("juicy_kill_regions") or list(HOSTS.keys())
             for r in regs:
-                if r in HOSTS and r not in wm_raw:
+                if r not in HOSTS:
+                    continue
+                if not had_juicy_kill_channel or r not in wm_raw:
                     wm_raw[r] = now.isoformat()
+                if not had_juicy_kill_channel or r not in delivery_from:
+                    delivery_from[r] = now.isoformat()
             if wm_raw:
                 settings["juicy_kill_last_ts_by_region"] = wm_raw
+            if delivery_from:
+                settings["juicy_kill_delivery_from_by_region"] = delivery_from
             # Watermark global legado = agora também (compat)
             if "juicy_kill_last_ts" not in settings:
                 settings["juicy_kill_last_ts"] = now.isoformat()
@@ -780,10 +788,14 @@ async def update_guild_settings(
         if regs:
             now = datetime.now(timezone.utc)
             wm_raw = dict(settings.get("juicy_kill_last_ts_by_region") or {})
+            delivery_from = dict(settings.get("juicy_kill_delivery_from_by_region") or {})
             for r in regs:
                 if r in HOSTS and r not in wm_raw:
                     wm_raw[r] = now.isoformat()
+                if r in HOSTS and r not in delivery_from:
+                    delivery_from[r] = now.isoformat()
             settings["juicy_kill_last_ts_by_region"] = wm_raw
+            settings["juicy_kill_delivery_from_by_region"] = delivery_from
     if "energy_control_channel_id" in body.model_fields_set:
         if body.energy_control_channel_id:
             settings["energy_control_channel_id"] = body.energy_control_channel_id
@@ -791,6 +803,9 @@ async def update_guild_settings(
         else:
             settings.pop("energy_control_channel_id", None)
             settings["energy_control_dirty"] = True
+    if any(name.startswith("juicy_kill_") for name in body.model_fields_set):
+        from app.services.juicy_kill_delivery import suppress_incompatible_pending
+        await suppress_incompatible_pending(db, guild_id, settings)
     g.settings = settings
 
     await db.commit()
@@ -1389,6 +1404,30 @@ async def _audit_console_entries(db: AsyncSession, rows: list[AuditLog]) -> list
 
 class LogsChannelIn(BaseModel):
     channel_id: str
+
+
+class BotChannelUnavailableIn(BaseModel):
+    setting: str
+    channel_id: str
+
+
+@router.post("/bot/guilds/{guild_id}/channel-unavailable")
+async def bot_clear_unavailable_channel(
+    guild_id: int, body: BotChannelUnavailableIn,
+    authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
+):
+    _require_bot_secret(authorization)
+    if body.setting not in {"events_channel_id", "event_review_channel_id", "regear_thread_channel_id", "lootlog_thread_channel_id", "nodes_calendar_channel_id", "voice_cta_channel_id", "juicy_kill_channel_id", "battle_feed_channel_id", "energy_control_channel_id", "logs_channel_id"}:
+        raise HTTPException(400, "configuração de canal inválida")
+    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
+    if g is None:
+        raise HTTPException(404)
+    settings = dict(g.settings or {})
+    if str(settings.get(body.setting) or "") == body.channel_id:
+        settings.pop(body.setting, None)
+        g.settings = settings
+        await db.commit()
+    return {"ok": True}
 
 
 @router.post("/bot/guilds/{guild_id}/logs-channel")
@@ -3818,8 +3857,8 @@ def logout():
 # ── Bot: juicy kills (kills com silver_dropped >= threshold) ────────────────
 #
 # O admin configura sala + regiões + threshold no site (GuildConfig). O bot-v2
-# faz poll neste endpoint, pega kills que cruzaram o threshold desde o último
-# poll, posta na sala (embed + imagem), e avança o cursor com /juicy-kill/synced.
+# faz poll neste endpoint, pega deliveries já materializadas, posta na sala
+# (embed + imagem), e confirma cada uma com /juicy-kill/synced.
 # Mesmo pattern do battle-feed. silver_dropped é precificado pelo worker
 # silver_dropped (services/silver_dropped.py) — kills sem preço ainda ficam
 # NULL e não entram no queue (o bot não posta kill sem valor calculado).
@@ -3845,27 +3884,10 @@ def _parse_watermark(value) -> datetime | None:
 async def bot_juicy_kill_queue(
     guild_id: int, authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
-    """Próximo lote de juicy kills (silver_dropped >= min) ainda não postados.
-
-    Checkpoint por timestamp (juicy_kill_last_ts), NÃO por id interno. O id é
-    ordem de INSERÇÃO no nosso banco; uma kill descoberta tardiamente (backfill,
-    sweeper, API atrasada) recebe id MAIOR mas timestamp MENOR — no cursor por
-    id ela seria postada DEPOIS de kills mais recentes, fora da linha do tempo.
-    Por timestamp, posta em ordem cronológica do jogo.
-
-    Precificação on-demand: kills com silver_dropped=NULL dentro do horizonte
-    são precificadas aqui (get_battle_prices_with_presumption) antes de responder
-    — senão uma kill recém-descoberta que ainda não passou pelo worker
-    silver_dropped ficava atrás do cursor pra sempre e nunca era postada.
-
-    Cutoff postable: kills com timestamp < agora - 48h - avg_api_delay(region)
-    não são postadas (permanecem no banco, só não vão pro Discord)."""
+    """Próximo lote da outbox de juicy kills, já elegível e ordenado."""
     _require_bot_secret(authorization)
-    from app.models.players import PlayerKillEvent
-    from app.services.lethality import is_likely_lethal
+    from app.models.players import AlbionPlayer, JuicyKillDelivery, PlayerKillEvent
     from app.services.postable import postable_cutoffs_by_region
-    from app.services.prices import get_battle_prices_with_presumption
-    from app.services.awakened import awakened_value
     g = await db.scalar(select(Guild).where(Guild.id == guild_id))
     if g is None:
         raise HTTPException(404)
@@ -3873,133 +3895,73 @@ async def bot_juicy_kill_queue(
     channel_id = settings.get("juicy_kill_channel_id")
     if not channel_id:
         return {"kills": []}
-    min_silver = max(settings.get("juicy_kill_min_silver", 50_000_000), _JUICY_KILL_HARD_FLOOR)
-    min_fame = settings.get("juicy_kill_min_fame", 0)
     regions = settings.get("juicy_kill_regions") or []
 
-    # Watermark por região — kills da asia/europe (mais recentes) não podem
-    # avançar o watermark passado kills das americas (mais antigas). Antes
-    # era um timestamp único global: guilda com 3 regiões nunca via kills
-    # das americas se a asia já tivesse avançado o watermark.
-    wm_by_region_raw = settings.get("juicy_kill_last_ts_by_region") or {}
-    wm_by_region: dict[str, datetime] = {}
-    for r, v in wm_by_region_raw.items():
-        if r in HOSTS:
-            wm_by_region[r] = _parse_watermark(v)
-
-    # Cutoff por região: kills mais antigas que isso não são postadas.
-    cutoffs = await postable_cutoffs_by_region(db, regions or list(HOSTS.keys()))
-
-    from sqlalchemy import or_ as _sql_or, and_ as _sql_and
-    q = select(PlayerKillEvent).where(
-        PlayerKillEvent.fame > 0,
-        # Filtro no DB: só kills sem preço (precificar on-demand) OU já
-        # precificadas acima do threshold. Sem isso, 1000+ kills pequenas
-        # (silver_dropped < min) entre o watermark e a kill grande preenchem
-        # o LIMIT antes dela chegar — a kill grande nunca é retornada.
-        _sql_or(PlayerKillEvent.silver_dropped.is_(None), PlayerKillEvent.silver_dropped >= min_silver),
-    )
-    if min_fame > 0:
-        q = q.where(PlayerKillEvent.fame >= min_fame)
-    # Filtro por região: watermark individual + cutoff individual
-    # Sempre tem um piso (cutoff) pra evitar Index Scan from epoch quando
-    # o watermark da região ainda não foi populado.
-    regions_to_query = regions or list(HOSTS.keys())
-    conds = []
-    for r in regions_to_query:
-        if r not in HOSTS:
-            continue
-        parts = [PlayerKillEvent.region == r]
-        c = cutoffs.get(r)
-        if c:
-            parts.append(PlayerKillEvent.timestamp >= c)
-        wm = wm_by_region.get(r)
-        if wm and (c is None or wm > c):
-            parts.append(PlayerKillEvent.timestamp > wm)
-        conds.append(_sql_and(*parts) if len(parts) > 1 else parts[0])
-    if conds:
-        q = q.where(_sql_or(*conds))
-
-    candidates = (await db.scalars(q.order_by(PlayerKillEvent.timestamp.asc()).limit(_JUICY_KILL_BATCH * 4))).all()
-    if not candidates:
+    regions_to_query = [region for region in (regions or list(HOSTS)) if region in HOSTS]
+    if not regions_to_query:
+        return {"kills": []}
+    cutoffs = await postable_cutoffs_by_region(db, regions_to_query)
+    regions_to_query = [region for region in regions_to_query if region in cutoffs]
+    if not regions_to_query:
         return {"kills": []}
 
-    # Sem precificação on-demand: kills com silver_dropped=NULL ficam pra trás
-    # (o worker silver_dropped as precifica em background). A precificação
-    # aqui travava o endpoint por minutos quando havia dezenas de kills NULL
-    # antes da kill grande já precificada — o bot nunca recebia a kill grande.
-
-    # Filtra: silver_dropped >= min_silver E é lethal (segunda barreira)
-    events = []
-    dirty = False
-    for ev in candidates:
-        if ev.silver_dropped is None:
-            continue  # ainda sem preço (gear sem cotação, worker não chegou) — espera
-        if not is_likely_lethal(ev.fame, ev.victim_equipment, ev.group_member_count):
-            if ev.silver_dropped > 0:
-                ev.silver_dropped = 0
-                dirty = True
-            continue
-        if ev.silver_dropped < min_silver:
-            continue
-        events.append(ev)
-        if len(events) == _JUICY_KILL_BATCH:
-            break
-    if dirty:
+    deliveries = []
+    for region in regions_to_query:
+        # Uma leitura curta por região usa o índice parcial da outbox. Mesmo um
+        # burst de milhares de eventos nunca muda o custo deste poll.
+        deliveries.extend((await db.scalars(
+            select(JuicyKillDelivery)
+            .where(
+                JuicyKillDelivery.guild_id == guild_id,
+                JuicyKillDelivery.state == "pending",
+                JuicyKillDelivery.region == region,
+                JuicyKillDelivery.occurred_at >= cutoffs[region],
+            )
+            .order_by(JuicyKillDelivery.occurred_at.asc(), JuicyKillDelivery.kill_id.asc())
+            .limit(_JUICY_KILL_BATCH)
+        )).all())
+    deliveries.sort(key=lambda delivery: (delivery.occurred_at, delivery.kill_id))
+    deliveries = deliveries[:_JUICY_KILL_BATCH]
+    if not deliveries:
         await db.commit()
-
-    if not events:
         return {"kills": []}
 
-    out = []
-    for ev in events:
-        out.append(await _juicy_kill_payload_async(db, ev))
-    return {"kills": out}
+    events = (await db.scalars(
+        select(PlayerKillEvent).where(PlayerKillEvent.id.in_([delivery.kill_id for delivery in deliveries]))
+    )).all()
+    events_by_id = {event.id: event for event in events}
+    missing = [delivery.kill_id for delivery in deliveries if delivery.kill_id not in events_by_id]
+    if missing:
+        await db.execute(
+            update(JuicyKillDelivery)
+            .where(JuicyKillDelivery.guild_id == guild_id, JuicyKillDelivery.kill_id.in_(missing))
+            .values(state="suppressed")
+        )
+        deliveries = [delivery for delivery in deliveries if delivery.kill_id in events_by_id]
 
-
-def _has_gear(ev) -> bool:
-    """True se a vítima tinha equipamento ou inventário (pode ter silver_dropped>0)."""
-    eq = ev.victim_equipment or {}
-    if any(slot and slot.get("Type") for slot in eq.values()):
-        return True
-    return any(inv and inv.get("Type") for inv in (ev.victim_inventory or []))
-
-
-async def _price_kills_on_demand(db: AsyncSession, events: list) -> None:
-    """Precifica kills com silver_dropped=NULL ali mesmo (on-demand), em vez de
-    esperar o worker silver_dropped. Mesma lógica de _price_events no worker:
-    coleta item_ids do equipamento+inventário, busca preços, soma. Não commita
-    (caller decide)."""
-    from app.services.prices import get_battle_prices_with_presumption
-    from app.services.awakened import awakened_value
-    pairs: list[tuple[str, int]] = []
-    for ev in events:
-        for item in (ev.victim_equipment or {}).values():
-            if item and item.get("Type"):
-                pairs.append((item["Type"], 1))
-        for inv in (ev.victim_inventory or []):
-            if inv and inv.get("Type"):
-                pairs.append((inv["Type"], inv.get("Count") or 1))
-    if not pairs:
-        return
-    item_ids = list({iid for iid, _ in pairs})
-    # Libera read tx antes do HTTP (get_battle_prices faz chamadas à AODP).
+    player_ids = {
+        player_id
+        for event in events_by_id.values()
+        for player_id in (event.killer_player_id, event.victim_player_id)
+        if player_id is not None
+    }
+    players_by_id = {}
+    if player_ids:
+        players = (await db.scalars(select(AlbionPlayer).where(AlbionPlayer.id.in_(player_ids)))).all()
+        players_by_id = {player.id: player for player in players}
+    from app.services.battle_tracker import publish_delay_status
+    delays = publish_delay_status()
+    out = [
+        _juicy_kill_build(
+            events_by_id[delivery.kill_id],
+            players_by_id.get(events_by_id[delivery.kill_id].killer_player_id),
+            players_by_id.get(events_by_id[delivery.kill_id].victim_player_id),
+            delays.get(events_by_id[delivery.kill_id].region, {}),
+        )
+        for delivery in deliveries
+    ]
     await db.commit()
-    price_by_id, _basis = await get_battle_prices_with_presumption(db, item_ids)
-    for ev in events:
-        total = 0
-        for item in (ev.victim_equipment or {}).values():
-            if item and item.get("Type"):
-                total += price_by_id.get(item["Type"], 0) + awakened_value(
-                    item["Type"], item.get("LegendarySoul"),
-                )
-        for inv in (ev.victim_inventory or []):
-            if inv and inv.get("Type"):
-                total += (
-                    price_by_id.get(inv["Type"], 0)
-                    + awakened_value(inv["Type"], inv.get("LegendarySoul"))
-                ) * (inv.get("Count") or 1)
-        ev.silver_dropped = total
+    return {"kills": out}
 
 
 def _juicy_kill_payload(db: Session, ev) -> dict:
@@ -4010,17 +3972,6 @@ def _juicy_kill_payload(db: Session, ev) -> dict:
     from app.services.battle_tracker import publish_delay_status
     killer = db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.killer_player_id)) if ev.killer_player_id else None
     victim = db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.victim_player_id)) if ev.victim_player_id else None
-    delay = publish_delay_status().get(ev.region, {})
-    return _juicy_kill_build(ev, killer, victim, delay)
-
-
-async def _juicy_kill_payload_async(db: AsyncSession, ev) -> dict:
-    # ponytail: espelho async de _juicy_kill_payload — só bot_juicy_kill_queue
-    # (async) chama; a versão sync fica pro bot_juicy_kill_image (ainda sync-DB).
-    from app.models.players import AlbionPlayer
-    from app.services.battle_tracker import publish_delay_status
-    killer = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.killer_player_id)) if ev.killer_player_id else None
-    victim = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.id == ev.victim_player_id)) if ev.victim_player_id else None
     delay = publish_delay_status().get(ev.region, {})
     return _juicy_kill_build(ev, killer, victim, delay)
 
@@ -4059,8 +4010,7 @@ def _juicy_kill_build(ev, killer, victim, delay) -> dict:
 
 
 class JuicyKillSyncedIn(BaseModel):
-    last_ts: datetime
-    last_ts_by_region: dict[str, datetime] | None = None
+    kill_ids: list[int]
 
 
 @router.post("/bot/guilds/{guild_id}/juicy-kill/synced")
@@ -4068,38 +4018,25 @@ async def bot_juicy_kill_synced(
     guild_id: int, body: JuicyKillSyncedIn,
     authorization: str = Header(...), db: AsyncSession = Depends(deps.async_db_session),
 ):
-    """Avança o watermark após o bot postar as kills com sucesso.
-
-    Watermark por região: kills da asia/europe (mais recentes) não avançam o
-    cursor das americas (mais antigas). O bot envia last_ts_by_region com o
-    timestamp da última kill postada por região. Mantém also juicy_kill_last_ts
-    (legado) como o max de todos, pra compat."""
+    """Confirma deliveries individuais após o Discord aceitar as mensagens."""
     _require_bot_secret(authorization)
-    g = await db.scalar(select(Guild).where(Guild.id == guild_id))
-    if g is None:
+    from app.models.players import JuicyKillDelivery
+    exists_guild = await db.scalar(select(Guild.id).where(Guild.id == guild_id))
+    if exists_guild is None:
         raise HTTPException(404)
-    settings = dict(g.settings or {})
-    if body.last_ts.tzinfo is None:
-        body.last_ts = body.last_ts.replace(tzinfo=timezone.utc)
-    # Watermark global legado (max de todos)
-    current = _parse_watermark(settings.get("juicy_kill_last_ts"))
-    if current is None or body.last_ts > current:
-        settings["juicy_kill_last_ts"] = body.last_ts.isoformat()
-    # Watermark por região
-    if body.last_ts_by_region:
-        wm_raw = dict(settings.get("juicy_kill_last_ts_by_region") or {})
-        for r, ts in body.last_ts_by_region.items():
-            if r not in HOSTS:
-                continue
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            prev = _parse_watermark(wm_raw.get(r))
-            if prev is None or ts > prev:
-                wm_raw[r] = ts.isoformat()
-        settings["juicy_kill_last_ts_by_region"] = wm_raw
-    g.settings = settings
+    if not body.kill_ids:
+        return {"ok": True, "synced": 0}
+    result = await db.execute(
+        update(JuicyKillDelivery)
+        .where(
+            JuicyKillDelivery.guild_id == guild_id,
+            JuicyKillDelivery.kill_id.in_(body.kill_ids),
+            JuicyKillDelivery.state == "pending",
+        )
+        .values(state="sent", sent_at=func.now())
+    )
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "synced": result.rowcount}
 
 
 # ponytail: rota async com Session sync — render_juicy_kill_image ainda usa
@@ -4502,7 +4439,9 @@ def search_guild_members(
                 ign_map[uid] = name
     return [
         {
-            "user_id": gm.user_id,
+            # Discord snowflakes não cabem em Number no browser. O autocomplete
+            # devolve texto para o POST de participante preservar o ID inteiro.
+            "user_id": str(gm.user_id),
             "username": u.username,
             "global_name": u.global_name,
             "avatar": _discord_avatar_url(u.id, u.avatar),

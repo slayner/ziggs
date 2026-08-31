@@ -1015,7 +1015,7 @@ function partitionRoster(detail: EventDetail) {
 interface VirtualParticipantRow {
   virtual: true;
   rowKey: string;
-  user_id: number;
+  user_id: string;
   user_name: string | null;
   percent: number;
   origin: string;
@@ -1035,8 +1035,8 @@ function ParticipantsSection({ detail, act, canManage }: {
   const [regearPanel, setRegearPanel] = useState<{ pid: number; est: RegearEstimate | null; loading: boolean } | null>(null);
   const [newName, setNewName] = useState("");
   const [newPct, setNewPct] = useState("100");
-  const [memberResults, setMemberResults] = useState<{ user_id: number; username: string; global_name: string | null; avatar: string | null; in_game_name: string | null }[]>([]);
-  const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [memberResults, setMemberResults] = useState<{ user_id: string; username: string; global_name: string | null; avatar: string | null; in_game_name: string | null }[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const isActive = !["finalized", "cancelled", "deleted"].includes(detail.state);
   const roster = useMemo(() => partitionRoster(detail), [detail]);
   const roleFnById = useMemo(
@@ -1112,7 +1112,7 @@ function ParticipantsSection({ detail, act, canManage }: {
   function submitAdd() {
     if (!newName.trim()) return;
     act(api.addParticipant(detail.id, {
-      user_id: selectedUserId ?? Date.now(), user_name: newName.trim(), percent: Number(newPct) || 0, is_valid: true,
+      user_id: selectedUserId ?? String(Date.now()), user_name: newName.trim(), percent: Number(newPct) || 0, is_valid: true,
     }));
     setNewName(""); setNewPct("100");
     setSelectedUserId(null); setMemberResults([]);

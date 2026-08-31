@@ -303,7 +303,12 @@ async def _fetch_render(
         async def fetch(candidate: str) -> bytes | None:
             url = f"https://render.albiononline.com/v1/{kind}/{quote(candidate, safe='')}.png"
             resp = await client.get(url, params=params)
-            if resp.status_code != 200 or not resp.content or _is_placeholder(resp.content):
+            # A CDN sinaliza arte inexistente com HTTP 200 + placeholder. Um
+            # erro HTTP é transitório: marcá-lo como ausência esconderia um
+            # item válido até o próximo reteste longo.
+            if resp.status_code != 200:
+                resp.raise_for_status()
+            if not resp.content or _is_placeholder(resp.content):
                 return None
             return resp.content
 
@@ -479,18 +484,23 @@ def discover_cached_render_misses(cache_dir: Path = _CACHE_DIR) -> list[tuple[st
 # CDN). Uma vez que o cache está quente, o worker é praticamente no-op.
 #
 # Cobertura:
-#   - Todos os UniqueNames de item_names.json × qualidades 0-5 × tamanhos 0+128
+#   - Equipamentos do catálogo × qualidades 0-5 × tamanhos 0+64+128
+#   - Todos os UniqueNames de item_names.json × qualidades 0-5 × tamanhos 0+64+128
 #   - Crystal weapons pelo nome EN (a CDN não os serve por UniqueName)
 #   - .missing markers são re-testados a cada ciclo (itens novos do jogo)
 
-_PRERENDER_INTERVAL = 600         # 10min entre ciclos quando há trabalho (1h quando idle)
-_PRERENDER_BATCH = 500            # ícones por ciclo (batch grande = catch-up rápido)
-_PRERENDER_CONCURRENCY = 8        # fetches simultâneos (mesmo limite do semáforo)
-_PRERENDER_DELAY = 0.15           # segundos entre batches concorrentes
+_PRERENDER_START_DELAY = 60         # deixa ingestão e bot estabilizarem após restart
+_PRERENDER_INTERVAL = 120           # varredura de recuperação sem esperar horas entre lotes
+_PRERENDER_BATCH = 200              # corrige misses antigos em poucos ciclos, sem rajada na CDN
+_PRERENDER_CONCURRENCY = 2          # seis dos oito slots seguem livres para requests reais
+_PRERENDER_DELAY = 0.2              # espaça chamadas à CDN externa
 _PRERENDER_MISSING_RETEST = 86400  # re-testa .missing a cada 24h
 
 _ITEM_NAMES_FILE = Path(__file__).resolve().parents[3] / "data" / "item_names.json"
 _ITEMS_TXT_FILE = Path(__file__).resolve().parents[3] / "data" / "ao-bin-dump" / "items.txt"
+_CATALOG_FILE = Path(__file__).resolve().parents[4] / "frontend" / "public" / "data" / "catalog.json"
+_PRERENDER_QUALITIES = range(6)
+_PRERENDER_SIZES = (128, 64, 0)
 
 # Crystal weapons: UniqueName → (EN name base, tier). O render CDN só os serve
 # pelo nome EN ("Elder's Infinity Blade@2"), não pelo UniqueName.
@@ -548,7 +558,7 @@ def _load_items_txt() -> dict[str, str]:
 
 def _crystal_en_name(uid: str, items_txt: dict[str, str]) -> str | None:
     """Converte UniqueName de crystal weapon em nome EN para o render CDN.
-    T4_ARTEFACT_MAIN_SWORD_CRYSTAL → "Adept's Infinity Blade@0"
+    T4_ARTEFACT_MAIN_SWORD_CRYSTAL → "Adept's Infinity Blade"
     (O items.txt tem "Adept's Infinite Crystal" — NÃO é o nome do render.
     O nome do render vem do albion-items.ts: crystalRenderName.)
     """
@@ -558,25 +568,59 @@ def _crystal_en_name(uid: str, items_txt: dict[str, str]) -> str | None:
     tier = int(m.group(1))
     prefix = _CRYSTAL_TIER_PREFIX.get(tier, "Elder's")
     base = m.group(2)
-    ench = m.group(3) or "@0"
+    ench = m.group(3) or ""
     name_en = _CRYSTAL_WEAPON_BASES.get(base)
     if not name_en:
         return None
     return f"{prefix} {name_en}{ench}"
 
 
+def _catalog_equipment_uids() -> list[str]:
+    """Lista variações de equipamento que a UI realmente pode solicitar."""
+    try:
+        data = json.loads(_CATALOG_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    for family in data:
+        if not isinstance(family, dict) or family.get("kind") != "equipment":
+            continue
+        for variation in family.get("variations") or []:
+            if isinstance(variation, dict) and isinstance(variation.get("uniqueName"), str):
+                out.append(variation["uniqueName"])
+    return out
+
+
+def _item_render_key(uid: str) -> str:
+    """Converte cristais para a mesma chave por nome inglês usada pela UI."""
+    return _crystal_en_name(uid, {}) or uid
+
+
 def _build_prerender_queue() -> list[tuple[str, int, int]]:
     """Monta a lista de (key, quality, size) para pré-renderizar.
-    Inclui UniqueNames de item_names.json e crystal weapons por nome EN.
+    Equipamentos do catálogo têm prioridade. Inclui UniqueNames de item_names
+    e crystal weapons por nome EN.
 
     Ordem de prioridade:
-    1. Crystal weapons por nome EN (a CDN não os serve por UniqueName)
-    2. Itens normais por UniqueName
-    Dentro de cada grupo: size=128 primeiro (default do frontend), depois size=0.
+    1. Equipamentos que a UI expõe, inclusive encantamentos raros
+    2. Crystal weapons por nome EN (a CDN não os serve por UniqueName)
+    3. Itens gerais por UniqueName
+    Dentro de cada grupo: size=128, 64 e 0.
     """
     seen: set[tuple[str, int, int]] = set()
+    equipment_queue: list[tuple[str, int, int]] = []
     crystal_queue: list[tuple[str, int, int]] = []
     normal_queue: list[tuple[str, int, int]] = []
+
+    def add(target: list[tuple[str, int, int]], key: str) -> None:
+        for quality in _PRERENDER_QUALITIES:
+            for size in _PRERENDER_SIZES:
+                identity = (key, quality, size)
+                if identity not in seen:
+                    seen.add(identity)
+                    target.append(identity)
 
     names_data = {}
     if _ITEM_NAMES_FILE.exists():
@@ -587,55 +631,77 @@ def _build_prerender_queue() -> list[tuple[str, int, int]]:
 
     items_txt = _load_items_txt()
 
-    # --- Crystal weapons por nome EN (prioridade máxima) ---
+    # --- Equipamentos da UI, antes de qualquer item genérico ---
+    for uid in _catalog_equipment_uids():
+        add(equipment_queue, _item_render_key(uid))
+
+    # --- Crystal weapons por nome EN, inclusive variações fora do catálogo ---
     # Gera diretamente da lista hard-coded: T4-T8 × 25 base IDs × @0-@4.
     for tier in (4, 5, 6, 7, 8):
         prefix = _CRYSTAL_TIER_PREFIX[tier]
         for base, name_en in _CRYSTAL_WEAPON_BASES.items():
             for ench in range(5):
-                en_name = f"{prefix} {name_en}@{ench}"
-                for q in range(6):
-                    for s in (128, 0):
-                        key = (en_name, q, s)
-                        if key not in seen:
-                            seen.add(key)
-                            crystal_queue.append(key)
+                suffix = f"@{ench}" if ench else ""
+                add(crystal_queue, f"{prefix} {name_en}{suffix}")
 
     # Also check items.txt and item_names.json for crystal UIDs (fallback)
     for uid in items_txt:
         en_name = _crystal_en_name(uid, items_txt)
         if en_name:
             for ench in range(5):
-                ench_name = en_name.replace("@0", f"@{ench}")
-                for q in range(6):
-                    for s in (128, 0):
-                        key = (ench_name, q, s)
-                        if key not in seen:
-                            seen.add(key)
-                            crystal_queue.append(key)
+                suffix = f"@{ench}" if ench else ""
+                add(crystal_queue, re.sub(r"@\d+$", "", en_name) + suffix)
 
     for uid in (names_data.keys() if isinstance(names_data, dict) else []):
         en_name = _crystal_en_name(uid, {})
         if en_name:
             for ench in range(5):
-                ench_name = en_name.replace("@0", f"@{ench}")
-                for q in range(6):
-                    for s in (128, 0):
-                        key = (ench_name, q, s)
-                        if key not in seen:
-                            seen.add(key)
-                            crystal_queue.append(key)
+                suffix = f"@{ench}" if ench else ""
+                add(crystal_queue, re.sub(r"@\d+$", "", en_name) + suffix)
 
     # --- Itens normais por UniqueName ---
     for uid in (names_data.keys() if isinstance(names_data, dict) else []):
-        for q in range(6):
-            for s in (128, 0):
-                key = (uid, q, s)
-                if key not in seen:
-                    seen.add(key)
-                    normal_queue.append(key)
+        add(normal_queue, _item_render_key(uid))
 
-    return crystal_queue + normal_queue
+    return equipment_queue + crystal_queue + normal_queue
+
+
+def _prerender_cache_has_real_render(cache_path: Path, key: str) -> bool:
+    """Versão sem cache em memória, segura para a varredura em thread."""
+    if not _cache_usable(cache_path):
+        return False
+    try:
+        content = cache_path.read_bytes()
+    except OSError:
+        return False
+    return not _is_generated_placeholder(content, key)
+
+
+def _find_prerender_missing(
+    queue: list[tuple[str, int, int]], *, retry_missing: bool,
+) -> tuple[list[tuple[str, int, int]], int]:
+    """Varre o disco fora do event loop antes de iniciar o próximo lote."""
+    missing: list[tuple[str, int, int]] = []
+    retried_missing: list[tuple[str, int, int]] = []
+    for key, q, s in queue:
+        cp = _cache_path("item", key, q, s)
+        marker = _missing_path(cp)
+        if not marker.exists() and not _prerender_cache_has_real_render(cp, key):
+            missing.append((key, q, s))
+
+    retried = 0
+    if retry_missing:
+        for key, q, s in queue:
+            cp = _cache_path("item", key, q, s)
+            marker = _missing_path(cp)
+            if marker.exists():
+                marker.unlink(missing_ok=True)
+                if not _prerender_cache_has_real_render(cp, key):
+                    retried_missing.append((key, q, s))
+                retried += 1
+    # Falhas da execução anterior vêm primeiro: podem ser renders válidos que
+    # receberam 5xx transitório da CDN durante a varredura anterior.
+    return retried_missing + missing, retried
 
 
 async def _prerender_one(key: str, quality: int, size: int, log: logging.Logger) -> bool:
@@ -658,7 +724,7 @@ async def run_prerender_forever() -> None:
     rápido. Re-testa .missing markers a cada 24h (itens novos do jogo)."""
     log = logging.getLogger("render.prerender")
     log.setLevel(logging.INFO)
-    await asyncio.sleep(30)
+    await asyncio.sleep(_PRERENDER_START_DELAY)
     last_missing_retest = 0.0
 
     while True:
@@ -667,31 +733,16 @@ async def run_prerender_forever() -> None:
             if not queue:
                 log.info("nenhum item para pré-aquecer")
             else:
-                missing: list[tuple[str, int, int]] = []
-                for key, q, s in queue:
-                    cp = _cache_path("item", key, q, s)
-                    has_marker = _missing_path(cp).exists()
-                    if has_marker:
-                        # Re-testa .missing periodicamente (itens novos do jogo)
-                        continue
-                    if not _cache_has_real_render(cp, key):
-                        missing.append((key, q, s))
-
                 # Re-testa .missing markers a cada 24h
                 now_mono = time.monotonic()
-                if now_mono - last_missing_retest > _PRERENDER_MISSING_RETEST:
+                retry_missing = now_mono - last_missing_retest > _PRERENDER_MISSING_RETEST
+                if retry_missing:
                     last_missing_retest = now_mono
-                    retried = 0
-                    for key, q, s in queue:
-                        cp = _cache_path("item", key, q, s)
-                        if _missing_path(cp).exists():
-                            _missing_path(cp).unlink(missing_ok=True)
-                            _RECORDED_MISSES.discard(("item", key, q, s))
-                            if not _cache_has_real_render(cp, key):
-                                missing.append((key, q, s))
-                            retried += 1
-                    if retried:
-                        log.info("re-testando %d .missing markers", retried)
+                missing, retried = await asyncio.to_thread(
+                    _find_prerender_missing, queue, retry_missing=retry_missing,
+                )
+                if retried:
+                    log.info("re-testando %d .missing markers", retried)
 
                 if missing:
                     batch = missing[:_PRERENDER_BATCH]

@@ -992,11 +992,11 @@ if (!draft) return <div className="container"><p className="muted">{t("loading")
                                 <BigRenders equip={role.equip} weaponIs2H={is2H(role.equip.weapon?.id)} />
                               </div>
                             )}
-                            <button className="cs-xbtn rc-card-move" disabled={si === 0 || party.slots[si - 1].fn !== slot.fn}
+                            <button className="cs-xbtn rc-card-move" disabled={si === 0}
                               onClick={e => { e.stopPropagation(); moveSlot(pi, si, -1); }} title={t("moveUpTitle")}>
                               <i className="ti ti-chevron-up" aria-hidden />
                             </button>
-                            <button className="cs-xbtn rc-card-move" disabled={si === party.slots.length - 1 || party.slots[si + 1].fn !== slot.fn}
+                            <button className="cs-xbtn rc-card-move" disabled={si === party.slots.length - 1}
                               onClick={e => { e.stopPropagation(); moveSlot(pi, si, 1); }} title={t("moveDownTitle")}>
                               <i className="ti ti-chevron-down" aria-hidden />
                             </button>

@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     # quando você clica. Setar no .env: DISABLE_BACKGROUND_FETCHERS=true
     disable_background_fetchers: bool = False
 
+    # Desliga o scan distribuído (VPS/companion) sem interromper os trackers
+    # nativos. Útil para isolar workers externos durante incidentes operacionais.
+    disable_distributed_scan: bool = False
+
+    # Suspende trabalhos históricos e agregações pesadas sem interromper o
+    # polling recente. Útil para preservar o feed e as rotas públicas enquanto
+    # o banco recupera de um incidente de carga.
+    disable_background_maintenance: bool = False
+
     def model_post_init(self, __context) -> None:
         # Trava de segurança: fora de development, subir com os secrets de
         # exemplo tornaria o cookie de sessão FORJÁVEL (os defaults estão

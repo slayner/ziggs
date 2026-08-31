@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class EventCreate(BaseModel):
@@ -62,6 +62,8 @@ class VerificationStepOut(BaseModel):
 
 class ParticipantOut(BaseModel):
     id: int
+    # Snowflakes passam pelo browser como texto para não perder precisão acima
+    # de Number.MAX_SAFE_INTEGER ao promover um participante ausente.
     user_id: int
     user_name: str | None
     percent: int
@@ -79,6 +81,10 @@ class ParticipantOut(BaseModel):
     # sem marcador). Demais: "battle_no_call" | "call_outsider" |
     # "call_no_signup" | "call_signup" | "manual" — ver _participant_origin.
     origin: str | None = None
+
+    @field_serializer("user_id")
+    def serialize_user_id(self, value: int) -> str:
+        return str(value)
 
 
 class DeathOut(BaseModel):
@@ -195,10 +201,18 @@ class SignupOut(BaseModel):
     weapon_fns: list[dict] = Field(default_factory=list)
     created_at: datetime
 
+    @field_serializer("user_id")
+    def serialize_user_id(self, value: int) -> str:
+        return str(value)
+
 
 class BattleAbsenteeOut(BaseModel):
     user_id: int
     user_name: str | None
+
+    @field_serializer("user_id")
+    def serialize_user_id(self, value: int) -> str:
+        return str(value)
 
 
 class ReleaseFunctionsIn(BaseModel):

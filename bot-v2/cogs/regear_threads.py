@@ -18,7 +18,7 @@ from discord.ext import commands, tasks
 
 import http_client
 from cogs._discord_timeout import SKIP_EXC, dtimeout
-from cogs.general import _guild_command_config, guild_lang_for
+from cogs.general import _guild_command_config, clear_unavailable_channel, guild_lang_for
 from i18n import t
 
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
@@ -87,9 +87,11 @@ class RegearThreads(commands.Cog):
         if channel is None:
             try:
                 channel = await dtimeout(guild.fetch_channel(cid))
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException, asyncio.TimeoutError):
-                print(f"[regear_threads] canal {cid} não encontrado/sem acesso "
-                      f"em {guild.id} — configure um canal de texto válido")
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException, asyncio.TimeoutError) as e:
+                print(f"[regear_threads] canal {cid} inacessível em {guild.id}: "
+                      f"{type(e).__name__}: {e}")
+                if isinstance(e, discord.NotFound):
+                    await clear_unavailable_channel(guild.id, "regear_thread_channel_id", cid)
                 return
         if not isinstance(channel, discord.TextChannel):
             print(f"[regear_threads] canal {cid} não é de texto em {guild.id}")

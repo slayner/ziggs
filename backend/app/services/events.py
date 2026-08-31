@@ -1369,7 +1369,6 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
     """
     payout = _calc_payout(ev, db)
     payout_map = {r.user_id: r for r in payout.payouts}
-    paid = 0
     skipped = []
     for p in ev.participants:
         row = payout_map.get(p.user_id)
@@ -1380,23 +1379,31 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
             continue
         if row:
             p.silver_received = row.total
-            if row.total > 0:
-                paid += 1
-                bal = economy_svc.get_or_create_balance(db, ev.guild_id, p.user_id)
-                bal.balance += row.total
-                bal.total_earned += row.total
-                db.add(EconomyTransaction(
-                    guild_id=ev.guild_id, kind="event_payout",
-                    actor_discord_id=actor_id or 0,
-                    from_user_id=None, to_user_id=p.user_id, total_earned_user_id=p.user_id,
-                    amount=row.total, event_id=ev.id,
-                ))
+
+    # `payouts` também pode conter scout/regear fora da lista de participantes;
+    # loggers vivem em uma lista separada. Todos são créditos reais de saldo.
+    paid = 0
+    total_paid = 0
+    for row in [*payout.payouts, *payout.logger_payouts]:
+        if row.user_id is None or row.total <= 0:
+            continue
+        paid += 1
+        total_paid += row.total
+        bal = economy_svc.get_or_create_balance(db, ev.guild_id, row.user_id)
+        bal.balance += row.total
+        bal.total_earned += row.total
+        db.add(EconomyTransaction(
+            guild_id=ev.guild_id, kind="event_payout",
+            actor_discord_id=actor_id or 0,
+            from_user_id=None, to_user_id=row.user_id, total_earned_user_id=row.user_id,
+            amount=row.total, event_id=ev.id,
+        ))
 
     log.info(
         "payout evento %d/%d: tab=%d tax=%d modo=%s — %d pago(s), %d excluido(s), total=%d%s",
         ev.id, ev.guild_id, ev.tab_value, payout.guild_tax,
         payout.lootsplit_mode,
-        paid, len(skipped), payout.total_lootsplit,
+        paid, len(skipped), total_paid,
         f" | excluidos: {'; '.join(skipped)}" if skipped else "",
     )
 

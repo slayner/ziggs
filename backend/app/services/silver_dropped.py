@@ -21,23 +21,27 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
+from app.models.battles import Battle, BattleKillEvent
 from app.models.players import PlayerKillEvent
-from app.services.awakened import awakened_value
+from app.services.death_pricing import price_death_loadouts
 from app.services.lethality import is_likely_lethal
-from app.services.prices import get_battle_prices_with_presumption
 
 log = logging.getLogger(__name__)
 
-BATCH_SIZE = 50      # eventos por ciclo — get_battle_prices agrupa todos os itens do lote em poucas chamadas de API
+BATCH_SIZE = 50      # eventos recentes por ciclo — get_battle_prices agrupa itens em poucas chamadas de API
+BATTLE_BATCH_PER_REGION = 20
+# Backfill baixo e contínuo: mortes novas continuam prioritárias, mas NULL
+# histórico também converge para um valor persistido sem script manual caro.
+HISTORY_BATCH_PER_REGION = 5
+BATTLE_HISTORY_BATCH_SIZE = 10
 BUSY_INTERVAL = 5    # ainda devagar de propósito (soma à taxa agregada dos outros serviços)
 IDLE_INTERVAL = 300  # entre ciclos quando o backlog acabou
-# Só precifica eventos recentes — kills antigas sem preço ficam NULL e são
-# precificadas on-demand ao abrir o perfil. Sem isso o worker cava 600k de
-# backlog histórico antes de chegar na kill que acabou de acontecer.
+# Mortes recentes têm prioridade para não atrasar juicy kills e a timeline. O
+# histórico é drenado em um segundo lote menor a cada ciclo.
 RECENT_WINDOW = timedelta(hours=6)
 # O timestamp do evento é o horário do JOGO, não o de ingestão. Quando a API
 # do Albion atrasa (americas já ficou 30h+), a kill chega aqui já "velha"
@@ -88,55 +92,76 @@ async def _price_events(db: AsyncSession, events: list[PlayerKillEvent]) -> int:
     """Precifica e grava silver_dropped nos eventos do lote. Devolve quantos
     foram atualizados (todos com gear; podem ficar 0 se preço ausente, mas
     nunca reprocessam — já foram escritos)."""
-    pairs: list[tuple[str, int]] = []
-    for ev in events:
-        for item in (ev.victim_equipment or {}).values():
-            if item and item.get("Type"):
-                pairs.append((item["Type"], 1))
-        for inv in (ev.victim_inventory or []):
-            if inv and inv.get("Type"):
-                pairs.append((inv["Type"], inv.get("Count") or 1))
-    if not pairs:
-        # Sem gear — não devia chegar aqui (filtro _has_gear), mas defesa.
-        return 0
-    item_ids = list({iid for iid, _ in pairs})
     t0 = time.monotonic()
-    price_by_id, basis_by_id = await get_battle_prices_with_presumption(db, item_ids)
+    totals, basis_by_id, item_count = await price_death_loadouts(
+        db, [(ev.victim_equipment, ev.victim_inventory) for ev in events],
+    )
     t_fetch = time.monotonic() - t0
 
     # Conta bases pra log de auditoria — quantos itens saíram de cada estágio
     # da cadeia de presunção (exact|quality|equivalent|presumed|missing).
     basis_counts: dict[str, int] = {}
-    for iid in item_ids:
+    for iid in basis_by_id:
         b = basis_by_id.get(iid, "missing")
         basis_counts[b] = basis_counts.get(b, 0) + 1
 
     updated = 0
-    for ev in events:
-        total = 0
-        for item in (ev.victim_equipment or {}).values():
-            if item and item.get("Type"):
-                total += price_by_id.get(item["Type"], 0) + awakened_value(
-                    item["Type"], item.get("LegendarySoul"),
-                )
-        for inv in (ev.victim_inventory or []):
-            if inv and inv.get("Type"):
-                total += (
-                    price_by_id.get(inv["Type"], 0)
-                    + awakened_value(inv["Type"], inv.get("LegendarySoul"))
-                ) * (inv.get("Count") or 1)
+    for ev, total in zip(events, totals):
         ev.silver_dropped = total
         updated += 1
+    # A outbox é escrita na mesma transação da precificação: uma kill nunca
+    # fica com preço calculado sem poder chegar ao bot.
+    from app.services.juicy_kill_delivery import enqueue_priced_events
+    await enqueue_priced_events(db, events)
     t1 = time.monotonic()
     await db.commit()
     t_commit = time.monotonic() - t1
     if t_fetch > 2.0 or t_commit > 1.0:
         log.warning("silver_dropped: LENTO — %d eventos, fetch=%.1fs commit=%.1fs (%d itens, bases=%s)",
-                    len(events), t_fetch, t_commit, len(item_ids), basis_counts)
+                    len(events), t_fetch, t_commit, item_count, basis_counts)
     else:
         log.info("silver_dropped: %d eventos, fetch=%.1fs commit=%.1fs (%d itens, bases=%s)",
-                 len(events), t_fetch, t_commit, len(item_ids), basis_counts)
+                 len(events), t_fetch, t_commit, item_count, basis_counts)
     return updated
+
+
+async def _process_battle_batch(db: AsyncSession) -> int:
+    """Precifica mortes recentes e drena o histórico de batalhas aos poucos."""
+    cutoffs = _recent_cutoffs()
+    rows = []
+    for region, cutoff in cutoffs.items():
+        rows.extend((await db.scalars(
+            select(BattleKillEvent)
+            .join(Battle, Battle.id == BattleKillEvent.battle_id)
+            .where(
+                Battle.region == region,
+                BattleKillEvent.silver_dropped.is_(None),
+                BattleKillEvent.timestamp > cutoff,
+            )
+            .order_by(BattleKillEvent.timestamp.asc(), BattleKillEvent.id.asc())
+            .limit(BATTLE_BATCH_PER_REGION)
+        )).all())
+    recent_ids = {event.id for event in rows}
+    history = (await db.scalars(
+        select(BattleKillEvent)
+        .where(BattleKillEvent.silver_dropped.is_(None))
+        .order_by(BattleKillEvent.timestamp.asc(), BattleKillEvent.id.asc())
+        .limit(BATTLE_HISTORY_BATCH_SIZE)
+    )).all()
+    rows.extend(event for event in history if event.id not in recent_ids)
+    if not rows:
+        return 0
+    t0 = time.monotonic()
+    totals, _basis, _item_count = await price_death_loadouts(
+        db, [(event.victim_equipment, event.victim_inventory) for event in rows],
+    )
+    for event, total in zip(rows, totals):
+        event.silver_dropped = total
+    await db.commit()
+    elapsed = time.monotonic() - t0
+    if elapsed > 2.0:
+        log.warning("silver_dropped: LENTO — %d mortes de batalha em %.1fs", len(rows), elapsed)
+    return len(rows)
 
 
 async def _process_batch(db: AsyncSession) -> int:
@@ -144,16 +169,35 @@ async def _process_batch(db: AsyncSession) -> int:
     # mesmos primeiros eventos bloquearem a fila para sempre. Histórico sem
     # group_member_count também passa pela estimativa conservadora.
     cutoffs = _recent_cutoffs()
-    rows = list((await db.scalars(
-        select(PlayerKillEvent)
-        .where(
-            PlayerKillEvent.silver_dropped.is_(None),
-            or_(*(and_(PlayerKillEvent.region == r, PlayerKillEvent.timestamp > c)
-                  for r, c in cutoffs.items())),
-        )
-        .order_by(PlayerKillEvent.id.desc())
-        .limit(BATCH_SIZE)
-    )).all())
+    # Uma consulta por região preserva o uso do índice parcial (region, timestamp).
+    # O OR entre regiões fazia o Postgres varrer o índice temporal global da tabela.
+    rows = []
+    for region, cutoff in cutoffs.items():
+        rows.extend((await db.scalars(
+            select(PlayerKillEvent)
+            .where(
+                PlayerKillEvent.silver_dropped.is_(None),
+                PlayerKillEvent.region == region,
+                PlayerKillEvent.timestamp > cutoff,
+            )
+            .order_by(PlayerKillEvent.timestamp.asc(), PlayerKillEvent.albion_event_id.asc())
+            .limit(BATCH_SIZE)
+        )).all())
+    rows.sort(key=lambda ev: (ev.timestamp, ev.albion_event_id))
+    rows = rows[:BATCH_SIZE]
+    # Mesmo quando o feed está em rajada, sempre reserva trabalho para o
+    # histórico. A query por região preserva ix_pke_juicy_unpriced_queue.
+    for region, cutoff in cutoffs.items():
+        rows.extend((await db.scalars(
+            select(PlayerKillEvent)
+            .where(
+                PlayerKillEvent.silver_dropped.is_(None),
+                PlayerKillEvent.region == region,
+                PlayerKillEvent.timestamp <= cutoff,
+            )
+            .order_by(PlayerKillEvent.timestamp.asc(), PlayerKillEvent.albion_event_id.asc())
+            .limit(HISTORY_BATCH_PER_REGION)
+        )).all())
     candidates = []
     for ev in rows:
         if _has_gear(ev) and is_likely_lethal(
@@ -174,7 +218,7 @@ async def _process_batch(db: AsyncSession) -> int:
 
 
 async def run_forever() -> None:
-    log.info("silver_dropped: iniciando (precificação de player_kill_events)")
+    log.info("silver_dropped: iniciando (precificação de mortes)")
     # ponytail: folga de 30s no boot — não brigar com os outros serviços
     # acordando (battle_tracker/backfill/sweeper fazem rajada de requests ao
     # subir). O backlog de silver é tolerante (já esperou desde sempre).
@@ -184,13 +228,15 @@ async def run_forever() -> None:
         t_cycle = time.monotonic()
         async with AsyncSessionLocal() as db:
             try:
-                n = await _process_batch(db)
+                kill_count = await _process_batch(db)
+                battle_count = await _process_battle_batch(db)
+                n = kill_count + battle_count
                 t_total = time.monotonic() - t_cycle
                 if n:
                     if t_total > 10.0:
-                        log.warning("silver_dropped: CICLO LENTO — %d eventos em %.1fs", n, t_total)
+                        log.warning("silver_dropped: CICLO LENTO — %d kills + %d mortes de batalha em %.1fs", kill_count, battle_count, t_total)
                     else:
-                        log.info("silver_dropped: %d eventos em %.1fs", n, t_total)
+                        log.info("silver_dropped: %d kills + %d mortes de batalha em %.1fs", kill_count, battle_count, t_total)
             except Exception as e:
                 await db.rollback()
                 log.error("silver_dropped: erro: %s", e)

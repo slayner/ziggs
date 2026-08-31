@@ -43,7 +43,7 @@ from app.domain.states import EventState, allowed_targets
 from app.services import (
     battle_price_reprocessor, battle_reprocessor, battle_sweeper, battle_tracker, claim_checker, companion_scan, companion_kill_scan, dashboard_cache,
     gold_price, guild_verifier, highscores_cache, kill_sweeper, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
-    render_recovery, scan_dispatcher, search_index, silver_dropped, small_battle_discovery, weapon_stats,
+    juicy_kill_delivery, render_recovery, scan_dispatcher, search_index, silver_dropped, small_battle_discovery, weapon_stats,
 )
 
 
@@ -61,45 +61,65 @@ async def lifespan(app: FastAPI):
     else:
         import os as _os
         _feed_off = _os.getenv("DISABLE_FEED_FETCHERS", "").lower() in ("1", "true", "yes")
+        _distributed_scan_off = get_settings().disable_distributed_scan
+        _maintenance_off = get_settings().disable_background_maintenance
         if _feed_off:
-            print("⚠️  DISABLE_FEED_FETCHERS=true — feed polling delegado às VPS workers.")
+            print("⚠️  DISABLE_FEED_FETCHERS=true — páginas delegadas às VPS; verificador ordenado local ativo.")
+        if _distributed_scan_off:
+            print("⚠️  DISABLE_DISTRIBUTED_SCAN=true — scan distribuído desligado.")
+        if _maintenance_off:
+            print("⚠️  DISABLE_BACKGROUND_MAINTENANCE=true — manutenção pesada desligada.")
         tasks = [
-            # Feed polling — delegado às VPS workers quando DISABLE_FEED_FETCHERS=true
+            # Feed polling; com workers, o verificador local só fecha âncoras ordenadas.
             *([] if _feed_off else [
                 asyncio.create_task(player_tracker.run_forever()),
-                asyncio.create_task(player_tracker.run_backfill_forever()),
                 asyncio.create_task(battle_tracker.run_forever()),
-                asyncio.create_task(battle_tracker.run_backfill_forever()),
-                asyncio.create_task(battle_tracker.run_retry_stuck_forever()),
-                asyncio.create_task(battle_sweeper.run_forever()),
-                asyncio.create_task(kill_sweeper.run_forever()),
-                asyncio.create_task(small_battle_discovery.run_forever()),
+                *([] if _maintenance_off else [
+                    asyncio.create_task(player_tracker.run_backfill_forever()),
+                    asyncio.create_task(battle_tracker.run_backfill_forever()),
+                    asyncio.create_task(battle_tracker.run_retry_stuck_forever()),
+                    asyncio.create_task(battle_sweeper.run_forever()),
+                    asyncio.create_task(kill_sweeper.run_forever()),
+                    asyncio.create_task(small_battle_discovery.run_forever()),
+                ]),
             ]),
-            asyncio.create_task(profile_warmer.run_forever()),
+            # O dreno usa apenas o inbox já persistido; permanece ativo quando
+            # a captura de páginas é delegada a workers distribuídos.
+            asyncio.create_task(player_tracker.run_drain_forever()),
+            asyncio.create_task(battle_tracker.run_drain_forever()),
+            *([] if _maintenance_off else [
+                asyncio.create_task(profile_warmer.run_forever()),
+            ]),
             asyncio.create_task(profile_warmer.run_refresh_forever()),
             asyncio.create_task(claim_checker.run_forever()),
             asyncio.create_task(registration_checker.run_forever()),
-            asyncio.create_task(weapon_stats.run_forever()),
-            asyncio.create_task(battle_reprocessor.run_forever()),
-            asyncio.create_task(companion_scan.run_forever()),
-            asyncio.create_task(companion_kill_scan.run_forever()),
-            asyncio.create_task(scan_dispatcher.run_forever()),
-            asyncio.create_task(scan_dispatcher.run_ingest_forever(
-                lambda: _bg_web_is_idle())),
-            asyncio.create_task(scan_dispatcher.run_idle_worker_forever(
-                lambda: _bg_web_is_idle())),
-            asyncio.create_task(player_count_snapshot.run_forever()),
-            asyncio.create_task(battle_price_reprocessor.run_forever()),
-            asyncio.create_task(silver_dropped.run_forever()),
+            *([] if _distributed_scan_off else [
+                asyncio.create_task(companion_scan.run_forever()),
+                asyncio.create_task(companion_kill_scan.run_forever()),
+                asyncio.create_task(scan_dispatcher.run_forever()),
+                *([asyncio.create_task(scan_dispatcher.run_ordered_recovery_forever())] if _feed_off else []),
+                asyncio.create_task(scan_dispatcher.run_ingest_forever(
+                    lambda: _bg_web_is_idle())),
+                asyncio.create_task(scan_dispatcher.run_idle_worker_forever(
+                    lambda: _bg_web_is_idle())),
+            ]),
             asyncio.create_task(regear_retry.run_forever()),
-            asyncio.create_task(dashboard_cache.run_forever()),
-            asyncio.create_task(highscores_cache.run_forever()),
             asyncio.create_task(gold_price.run_forever()),
             asyncio.create_task(market_snapshot.run_forever()),
-            asyncio.create_task(search_index.run_forever()),
             asyncio.create_task(guild_verifier.run_forever()),
-            asyncio.create_task(run_prerender_forever()),
-            asyncio.create_task(render_recovery.run_forever()),
+            *([] if _maintenance_off else [
+                asyncio.create_task(weapon_stats.run_forever()),
+                asyncio.create_task(battle_reprocessor.run_forever()),
+                asyncio.create_task(player_count_snapshot.run_forever()),
+                asyncio.create_task(battle_price_reprocessor.run_forever()),
+                asyncio.create_task(silver_dropped.run_forever()),
+                asyncio.create_task(juicy_kill_delivery.run_recovery_forever()),
+                asyncio.create_task(dashboard_cache.run_forever()),
+                asyncio.create_task(highscores_cache.run_forever()),
+                asyncio.create_task(search_index.run_forever()),
+                asyncio.create_task(run_prerender_forever()),
+                asyncio.create_task(render_recovery.run_forever()),
+            ]),
         ]
     yield
     for t in tasks:

@@ -16,6 +16,7 @@ API_SECRET = os.getenv("BOT_API_SECRET", "")
 # Cache de config de comandos por guild: {guild_id: (config, timestamp)}
 _cmd_cache: dict[int, tuple[dict, float]] = {}
 _CMD_TTL = 60  # segundos
+_CMD_STALE_TTL = 300  # segundos
 
 # Placeholders selecionáveis no painel de permissões do site, ao lado dos
 # cargos reais do servidor — ver update_command_roles em app/api/routes/auth.py.
@@ -36,7 +37,7 @@ async def _guild_command_config(guild_id: int) -> dict:
     if cached and (now - cached[1]) < _CMD_TTL:
         return cached[0]
     empty = {
-        "disabled": frozenset(), "command_roles": {}, "language": "pt",
+        "disabled": frozenset(), "command_roles": {}, "language": "en",
         "events_channel_id": None, "event_review_channel_id": None,
         "event_weapon_gates": {}, "massinfo_message_id": None,
         "nodes_calendar_channel_id": None, "voice_cta_channel_id": None, "trial_percent": None,
@@ -64,7 +65,7 @@ async def _guild_command_config(guild_id: int) -> dict:
                 cfg = {
                     "disabled": frozenset(data.get("disabled", [])),
                     "command_roles": data.get("command_roles", {}),
-                    "language": data.get("language") or "pt",
+                    "language": data.get("language") or "en",
                     "events_channel_id": data.get("events_channel_id"),
                     "event_review_channel_id": data.get("event_review_channel_id"),
                     "event_weapon_gates": data.get("event_weapon_gates", {}),
@@ -96,11 +97,20 @@ async def _guild_command_config(guild_id: int) -> dict:
             await r.read()
     except Exception:
         pass
-    # non-200 ou exception: reusa cache stale, senão empty.
     cached = _cmd_cache.get(guild_id)
-    if cached:
+    if cached and (now - cached[1]) < _CMD_STALE_TTL:
         return cached[0]
+    _cmd_cache.pop(guild_id, None)
     return empty
+
+
+async def clear_unavailable_channel(guild_id: int, setting: str, channel_id: int) -> None:
+    out = await http_client.post_json(
+        f"/bot/guilds/{guild_id}/channel-unavailable",
+        {"setting": setting, "channel_id": str(channel_id)}, tag="channel_unavailable",
+    )
+    if out is not None:
+        _cmd_cache.pop(guild_id, None)
 
 
 async def guild_lang_for(guild_id: int) -> str:

@@ -238,10 +238,9 @@ def _register():
         log.info("Saved credential invalid, re-registering...")
 
     while not _shutdown.is_set():
-        # Registro usa o bootstrap SECRET, não a credencial individual
+        # Registro usa o bootstrap SECRET, não a credencial individual.
+        # SCAN_REGION_PREF é ignorado — workers claimam de todas as regiões.
         body = {"worker_id": WORKER_ID, "name": WORKER_NAME}
-        if REGION_PREF:
-            body["region_pref"] = REGION_PREF
         # Tunnel metadata — optional, faz a VPS aparecer no manifest do companion.
         if VPS_LABEL:
             body["vps_label"] = VPS_LABEL
@@ -279,13 +278,14 @@ def main():
         print("Ziggs VPS Scanner — feed polling")
         print("Usage: python3 vps_scanner.py")
         print("Env: SCAN_BACKEND_URL, SCAN_SECRET, SCAN_WORKER_NAME, SCAN_WORKER_ID,")
-        print("     SCAN_REGION_PREF, SCAN_PROBE_TIMEOUT, SCAN_HEARTBEAT_INTERVAL,")
-        print("     SCAN_LOG_LEVEL")
+        print("     SCAN_PROBE_TIMEOUT, SCAN_HEARTBEAT_INTERVAL, SCAN_LOG_LEVEL")
+        print("")
+        print("Workers claim tasks from all regions (americas, europe, asia).")
+        print("Rate limit is per host, so 1 worker can work on all 3 regions simultaneously.")
         return
 
-    log.info("Starting — worker=%s name=%s region=%s backend=%s tunnel=%s",
-             WORKER_ID, WORKER_NAME, REGION_PREF or "any", BACKEND_URL,
-             VPS_LABEL or "none")
+    log.info("Starting — worker=%s name=%s regions=all backend=%s tunnel=%s",
+             WORKER_ID, WORKER_NAME, BACKEND_URL, VPS_LABEL or "none")
 
     _load_credential()
     _register()
@@ -299,9 +299,10 @@ def main():
     consecutive_429 = 0
 
     while not _shutdown.is_set():
+        # Workers claimam globalmente — o backend distribui tasks de todas as 3
+        # regiões (americas, europe, asia) igualmente. Rate limit é por host, então
+        # 1 worker pode trabalhar nas 3 regiões sem penalidade.
         claim_body = {"worker_id": WORKER_ID}
-        if REGION_PREF:
-            claim_body["region"] = REGION_PREF
         status, task = _request("POST", "/scan/claim", claim_body)
 
         if status == 204:

@@ -2,7 +2,6 @@
 import asyncio
 import io
 import os
-from datetime import datetime, timezone
 from urllib.parse import quote
 
 import discord
@@ -10,12 +9,13 @@ from discord.ext import commands, tasks
 
 import http_client
 from cogs._discord_timeout import SKIP_EXC, dtimeout
-from cogs.general import _guild_command_config
+from cogs.general import _guild_command_config, clear_unavailable_channel
 
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
 PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").rstrip("/") or SITE_URL
 REGION_PREFIX = {"americas": "am", "asia": "as", "europe": "eu"}
 JUICY_MARKER = "ziggs:juicy-kill:"
+JUICY_SYNC_CONCURRENCY = 3
 
 
 def _profile_url(region: str, name: str, event_id: str | None = None) -> str:
@@ -97,49 +97,17 @@ def _message_kill_id(message) -> int | None:
 async def _history_kill_ids(channel, bot_id: int) -> set[int]:
     found = set()
     try:
-        async for message in channel.history(limit=200):
+        history = channel.history(limit=200)
+        while True:
+            message = await dtimeout(anext(history))
             kill_id = _message_kill_id(message) if message.author.id == bot_id else None
             if kill_id is not None:
                 found.add(kill_id)
-    except (discord.Forbidden, discord.HTTPException):
+    except StopAsyncIteration:
+        pass
+    except SKIP_EXC:
         pass
     return found
-
-
-async def _history_last_kill_ts(channel, bot_id: int) -> datetime | None:
-    """Lê o timestamp da kill mais recente já postada no canal (cross-restart
-    dedup). Procura o footer marker (ziggs:juicy-kill:N) nas últimas 200
-    mensagens e devolve o timestamp da mais nova. Usado no 1º poll após o bot
-    subir, quando o watermark local (memória) está vazio."""
-    try:
-        async for message in channel.history(limit=200):
-            if message.author.id != bot_id:
-                continue
-            if not message.embeds or not message.embeds[0].footer.text:
-                continue
-            # Footer: "SITE_URL · ziggs:juicy-kill:N [· API delay ...]"
-            footer = message.embeds[0].footer.text
-            _, sep, marker = footer.rpartition(JUICY_MARKER)
-            if not sep or not marker.isdigit():
-                continue
-            # O timestamp do post ≈ timestamp da kill (postamos em ordem cronológica).
-            # Usar message.created_at (UTC) como proxy do watermark é conservador:
-            # mata tudo postado até aquele instante, evitando re-post no restart.
-            return message.created_at or None
-    except (discord.Forbidden, discord.HTTPException):
-        pass
-    return None
-
-
-def _parse_ts(ts: str | None) -> datetime | None:
-    """ISO string -> datetime aware UTC, ou None."""
-    if not ts:
-        return None
-    try:
-        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        return None
 
 
 _cog_ref: "JuicyKills | None" = None
@@ -148,11 +116,6 @@ _cog_ref: "JuicyKills | None" = None
 class JuicyKills(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Watermark global (legado — max de todas as regiões)
-        self._watermarks: dict[int, datetime] = {}
-        # Watermark por região — impede que kills da asia/europe (mais recentes)
-        # avancem o cursor das americas (mais antigas), que nunca seriam postadas.
-        self._wm_by_region: dict[int, dict[str, datetime]] = {}
         self._posted_ids: dict[int, set[int]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
 
@@ -175,10 +138,19 @@ class JuicyKills(commands.Cog):
         channel_id = cfg.get("juicy_kill_channel_id")
         if not channel_id:
             return
-        channel = guild.get_channel(int(channel_id))
-        if channel is None:
+        try:
+            cid = int(channel_id)
+        except (TypeError, ValueError):
             return
-
+        channel = guild.get_channel(cid)
+        if channel is None:
+            try:
+                channel = await dtimeout(guild.fetch_channel(cid))
+            except SKIP_EXC as e:
+                print(f"[juicy_kills] canal {cid} inacessível em {guild.id}: {type(e).__name__}: {e}")
+                if isinstance(e, discord.NotFound):
+                    await clear_unavailable_channel(guild.id, "juicy_kill_channel_id", cid)
+                return
         data = await http_client.get_json(
             f"/bot/guilds/{guild.id}/juicy-kill/queue", tag="juicy_kills",
         )
@@ -186,71 +158,55 @@ class JuicyKills(commands.Cog):
         if not kills:
             return
 
-        # Watermark local: mata kills já postadas (dedup cross-restart).
-        # Backend já filtra por watermark, mas mantemos um local também pra
-        # tolerar race (poll pegou kills, bot reinicia antes de ackar, próximo
-        # poll rebusca as mesmas — o watermark local evita re-post duplo).
-        # NÃO usamos _history_last_kill_ts (message.created_at) aqui porque o
-        # horário do post no Discord é SEMPRE mais recente que o timestamp da
-        # kill no jogo — isso bloquearia kills legítimas na fila do backend.
-        # Dedup por ID: no 1º poll após restart, lê os IDs das últimas 200
-        # mensagens do canal e ignora kills já postadas. Depois, o watermark
-        # de timestamp (preenchido só após postar com sucesso) cuida do resto.
-        wm = self._watermarks.get(guild.id)
-        wm_region = self._wm_by_region.setdefault(guild.id, {})
+        # A outbox só é confirmada após o Discord aceitar a mensagem. No restart,
+        # os markers recentes evitam repetir um post cujo ACK tenha falhado.
         posted_ids = self._posted_ids.get(guild.id)
         if posted_ids is None:
             bot_user = getattr(self.bot, "user", None)
             bot_id = bot_user.id if bot_user else 0
             posted_ids = await _history_kill_ids(channel, bot_id)
             self._posted_ids[guild.id] = posted_ids
-        last_ts = None
+        acknowledged_ids = []
         for kill in kills:
-            ts = _parse_ts(kill.get("timestamp"))
-            if ts is None:
-                continue
-            region = kill.get("region") or "unknown"
-            if wm is not None and ts <= wm:
-                continue
-            if (rwm := wm_region.get(region)) is not None and ts <= rwm:
-                continue
             if kill["id"] in posted_ids:
-                continue
-            image = await http_client.get_bytes(
-                f"/bot/guilds/{guild.id}/juicy-kill/{kill['id']}/image",
-                timeout=30, tag="juicy_kills",
-            )
-            if image is None or len(image) > guild.filesize_limit:
-                break
-            filename = f"juicy-kill-{kill['id']}.png"
-            try:
-                await dtimeout(channel.send(
-                    embed=_build_embed(kill, filename),
-                    file=discord.File(io.BytesIO(image), filename=filename),
-                ))
-            except SKIP_EXC:
-                break
-            last_ts = ts
-            self._watermarks[guild.id] = ts
-            wm_region[region] = ts
-            self._posted_ids.setdefault(guild.id, set()).add(kill["id"])
+                # A mensagem já foi enviada antes de uma falha no ACK. Reconhece
+                # agora sem duplicá-la no Discord.
+                pass
+            else:
+                image = await http_client.get_bytes(
+                    f"/bot/guilds/{guild.id}/juicy-kill/{kill['id']}/image",
+                    timeout=30, tag="juicy_kills",
+                )
+                if image is None or len(image) > guild.filesize_limit:
+                    break
+                filename = f"juicy-kill-{kill['id']}.png"
+                try:
+                    await dtimeout(channel.send(
+                        embed=_build_embed(kill, filename),
+                        file=discord.File(io.BytesIO(image), filename=filename),
+                    ))
+                except SKIP_EXC:
+                    break
+                posted_ids.add(kill["id"])
+            acknowledged_ids.append(kill["id"])
 
-        if last_ts is not None:
-            payload: dict = {"last_ts": last_ts.isoformat()}
-            if wm_region:
-                payload["last_ts_by_region"] = {
-                    r: ts.isoformat() for r, ts in wm_region.items()
-                }
-            await http_client.post_json(
+        if acknowledged_ids:
+            acknowledged = await http_client.post_json(
                 f"/bot/guilds/{guild.id}/juicy-kill/synced",
-                payload, tag="juicy_kills", attempts=2,
+                {"kill_ids": acknowledged_ids}, tag="juicy_kills", attempts=2,
                 queue_on_failure=True,
             )
 
 
 @tasks.loop(seconds=30)
 async def juicy_kills_loop(cog: JuicyKills) -> None:
-    await asyncio.gather(*(cog.sync_guild(g) for g in cog.bot.guilds), return_exceptions=True)
+    semaphore = asyncio.Semaphore(JUICY_SYNC_CONCURRENCY)
+
+    async def sync_limited(guild: discord.Guild) -> None:
+        async with semaphore:
+            await cog.sync_guild(guild)
+
+    await asyncio.gather(*(sync_limited(g) for g in cog.bot.guilds), return_exceptions=True)
 
 
 @juicy_kills_loop.before_loop

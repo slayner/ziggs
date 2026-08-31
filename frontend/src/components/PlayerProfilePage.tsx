@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../router";
-import { silver, dateUTC, monthYearUTC } from "../lib/format";
+import { silver, silverShort, dateUTC, monthYearUTC } from "../lib/format";
 import { itemRenderUrl, NO_WEAPON_ICON_ID } from "../data/albion-items";
 import { useLang, useT, REGION_LABELS, zoneLabel, factionTag as makeTag } from "../i18n";
 import { Panel } from "./Panel";
@@ -44,6 +44,8 @@ interface ZiggsKill {
   role: string | null;
   battle_public_id: string | null;
   battle_factions: BattleFaction[];
+  bracket_silver_dropped: number | null;
+  is_juicy_bracket: boolean;
 }
 
 type Activity = ZiggsKill & { kind: "kill" | "death" };
@@ -423,9 +425,8 @@ function NameGuildBlock({ name, guild, alliance, onClick }: {
 
 const albionKillboardUrl = (eventId: string) => `https://albiononline.com/en/killboard/kill/${eventId}`;
 
-// Threshold padrão do juicy kill (prata) — mesmo default do backend
-// (Guild.settings.juicy_kill_min_silver). Kills com silver_dropped >= isto
-// ganham destaque visual na lista de atividades.
+// Kills solo preservam o destaque individual; brackets usam a classificação
+// calculada pelo backend a partir da soma de todas as mortes da luta.
 const JUICY_SILVER_THRESHOLD = 50_000_000;
 
 function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, onGlowEnd }: {
@@ -463,8 +464,12 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
   const killerWeaponId = killerWeapon?.Type ?? NO_WEAPON_ICON_ID;
   const victimWeaponId = victimWeapon?.Type ?? NO_WEAPON_ICON_ID;
   const [time, date] = timeOverDate(ev.timestamp);
-  const silverDropped = ev.silver_dropped ?? 0;
-  const isJuicy = silverDropped >= JUICY_SILVER_THRESHOLD;
+  const silverDropped = ev.battle_public_id
+    ? (ev.bracket_silver_dropped ?? 0)
+    : (ev.silver_dropped ?? 0);
+  const isJuicy = ev.battle_public_id
+    ? ev.is_juicy_bracket
+    : silverDropped >= JUICY_SILVER_THRESHOLD;
 
   const prefix = REGION_PREFIX[region];
   // O "outro" (não-dono do perfil) é quem tem link de navegação
@@ -488,9 +493,10 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
 
         <NameGuildBlock name={killerName} guild={killerGuild} alliance={killerAlliance} onClick={killerOnClick} />
 
-        <span className="w-12 shrink-0 flex flex-col items-center leading-tight">
+        <span className="w-20 shrink-0 flex flex-col items-center leading-tight" title={t("silverDroppedLabel")}>
           <span className="text-[11px] font-medium text-zinc-300 tabular-nums">{time}</span>
           <span className="text-[10px] text-zinc-600 tabular-nums">{date}</span>
+          <span className={`text-[10px] font-medium tabular-nums ${isJuicy ? "text-amber-400" : "text-zinc-500"}`}>{silverShort(silverDropped)}</span>
         </span>
 
         <NameGuildBlock
@@ -508,14 +514,10 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
           <div className="flex shrink-0 flex-col items-center gap-1.5 text-center">
             <div className={`text-sm font-semibold tabular-nums ${color}`}>{silver(ev.fame)}</div>
             <div className="text-[10px] text-zinc-600">fame</div>
-            {silverDropped > 0 && (
-              <>
-                <div className={`text-xs tabular-nums ${isJuicy ? "text-amber-400 font-bold" : "text-zinc-500"}`}>
-                  {silver(silverDropped)}
-                </div>
-                <div className="text-[10px] text-zinc-600">prata dropada</div>
-              </>
-            )}
+            <div className={`text-xs tabular-nums ${isJuicy ? "text-amber-400 font-bold" : "text-zinc-500"}`}>
+              {silver(silverDropped)}
+            </div>
+            <div className="text-[10px] text-zinc-600">{t("silverDroppedLabel")}</div>
             {ev.battle_public_id ? (
               <button onClick={() => navigate(`/${ev.battle_public_id}`)} className="hover:opacity-80 transition-opacity">
                 {(ev.battle_factions ?? []).length > 0

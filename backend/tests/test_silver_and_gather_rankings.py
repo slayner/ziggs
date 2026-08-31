@@ -56,6 +56,39 @@ def test_empty_inventory_list_is_no_gear():
     assert _has_gear(_fake_ev(eq=None, inv=[])) is False
 
 
+def test_battle_snapshot_uses_the_same_death_pricing_as_raw_kill():
+    from unittest.mock import AsyncMock, patch
+    from app.services.death_pricing import price_death_loadouts
+
+    raw = (
+        {"MainHand": {"Type": "T8_2H_BOW@4", "LegendarySoul": {"value": 20}}},
+        [{"Type": "T4_BAG", "Count": 2, "LegendarySoul": {"value": 30}}],
+    )
+    battle_snapshot = (
+        {"weapon": "T8_2H_BOW@4", "weapon_legendary_soul": {"value": 20}},
+        [{"item_id": "T4_BAG", "count": 2, "legendary_soul": {"value": 30}}],
+    )
+
+    async def run():
+        with patch(
+            "app.services.death_pricing.get_battle_prices_with_presumption",
+            new=AsyncMock(return_value=({"T8_2H_BOW@4": 100, "T4_BAG": 25}, {})),
+        ), patch("app.services.death_pricing.awakened_value", side_effect=lambda _item, soul: (soul or {}).get("value", 0)):
+            totals, _basis, _count = await price_death_loadouts(None, [raw, battle_snapshot])
+        assert totals == [230, 230]
+
+    asyncio.run(run())
+
+
+def test_battle_equipment_snapshot_ignores_empty_slots():
+    from app.services.battle_tracker import _simplify_equipment
+
+    assert _simplify_equipment({
+        "MainHand": None,
+        "Head": {"Type": "T6_HEAD_CLOTH_SET1", "Quality": 2},
+    }) == {"helmet": "T6_HEAD_CLOTH_SET1", "helmet_quality": 2}
+
+
 def test_gather_kinds_cover_all_resources():
     """The 8 kinds (total + 5 resources + fishing + crafting) must exist —
     the gather dropdown depends on this. If one is missing, that resource's

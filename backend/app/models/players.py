@@ -66,6 +66,9 @@ class AlbionPlayer(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Instante da última consulta direta a /gameinfo/players/{id}. Diferente de
+    # last_seen_at, que também muda ao receber um jogador pelo feed de kills.
+    stats_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Setado por POST /players/{id}/refresh — o profile_warmer prioriza essas
     # linhas na fila e limpa o campo depois de re-sincronizar.
     refresh_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -102,7 +105,17 @@ class PlayerKillEvent(Base):
     existir: o link pro bracket (quando há um) é resolvido em leitura via
     `region + albion_battle_id`, sem FK rígida."""
     __tablename__ = "player_kill_events"
-    __table_args__ = (UniqueConstraint("region", "albion_event_id"),)
+    __table_args__ = (
+        UniqueConstraint("region", "albion_event_id"),
+        Index(
+            "ix_pke_juicy_queue", "region", "silver_dropped", "timestamp",
+            postgresql_where=sa.text("fame > 0 AND silver_dropped IS NOT NULL"),
+        ),
+        Index(
+            "ix_pke_juicy_unpriced_queue", "region", "timestamp",
+            postgresql_where=sa.text("silver_dropped IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = pk()
     region: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
@@ -159,6 +172,34 @@ class PlayerKillEvent(Base):
     # zero (vítima sem gear, ou itens sem cotação); >0 = prata real. Usar 0 como
     # "pendente" causaria loop infinito no worker (ver migration docstring).
     silver_dropped: Mapped[int | None] = mapped_column(BigInt(), nullable=True)
+
+
+class JuicyKillDelivery(Base):
+    """Outbox durável de uma kill já elegível para uma guilda.
+
+    A seleção é feita quando a kill recebe preço, para que o poll do bot nunca
+    precise procurar candidatos no ledger global de eventos.
+    """
+    __tablename__ = "juicy_kill_deliveries"
+    __table_args__ = (
+        Index(
+            "ix_jkd_pending_poll", "guild_id", "region", "occurred_at", "kill_id",
+            postgresql_where=sa.text("state = 'pending'"),
+        ),
+    )
+
+    guild_id: Mapped[int] = mapped_column(
+        ForeignKey("guilds.id", ondelete="CASCADE"), primary_key=True,
+    )
+    kill_id: Mapped[int] = mapped_column(
+        ForeignKey("player_kill_events.id", ondelete="CASCADE"), primary_key=True,
+    )
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    region: Mapped[str] = mapped_column(String(16), nullable=False)
+    fame: Mapped[int] = mapped_column(BigInt(), nullable=False)
+    silver_dropped: Mapped[int] = mapped_column(BigInt(), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PlayerWeaponStat(Base):

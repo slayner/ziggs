@@ -25,19 +25,28 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal, SyncSessionLocal
+from app.config import get_settings
 from app.models.battles import (
     Battle, BattleGuild, BattleKillEvent, BattleParticipant, BattleSide, BattleSyncCursor,
 )
 from app.services import battle_sides, search_index
 from app.services.lethality import ORANGE_GROUP_LIMIT, is_likely_lethal
 from app.services.albion_gate import (
-    NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, PROFILE, albion_scope, battle_priority, slot,
+    NEW_ELIGIBLE, OLD_ELIGIBLE, OTHER, PROFILE, albion_scope, background_allowed, battle_priority, slot,
 )
 from app.services.player_tracker import HOSTS, make_client
+from app.services.native_feed import (
+    KIND_BATTLE, NativeFeedItem, apply_native_items, capture_discovered_items,
+    capture_native_stream,
+)
 
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL = 50  # pedido explícito (ago/2026): check de batalhas novas a cada 50s; deep-process é paralelo e compete no bg pool do albion_gate (6 slots), sobra folga
+DRAIN_INTERVAL = 3  # inbox já capturado: drena sem esperar o próximo poll remoto
+# O inbox só faz o upsert leve; um lote maior reduz rapidamente backlog sem
+# segurar o loop em chamadas remotas de eventos.
+DRAIN_BATCH_SIZE = 100
 DEEP_PROCESS_MIN_PLAYERS = 10   # abaixo disto: nem armazena (upsert_battle_light devolve None).
 # Histórico: era 0 (toda batalha deep-processada, até 1v1/gank) pra alimentar
 # weapon_stats com toda aparição. Subiu pra 10 porque batalhas pequenas são a
@@ -109,6 +118,8 @@ def _simplify_equipment(raw: dict) -> dict:
             out[slot] = item["Type"]
             if item.get("Quality"):
                 out[f"{slot}_quality"] = item["Quality"]
+            if item.get("LegendarySoul"):
+                out[f"{slot}_legendary_soul"] = item["LegendarySoul"]
     return out
 
 
@@ -117,17 +128,20 @@ def _simplify_inventory(raw: list[dict] | None) -> list[dict] | None:
     slot fixo. Usado pra somar no valor aproximado da build de uma kill."""
     if not raw:
         return None
-    out = [
-        {"item_id": item["Type"], "count": int(item.get("Count") or 1)}
-        for item in raw if item and item.get("Type")
-    ]
+    out = []
+    for item in raw:
+        if not item or not item.get("Type"):
+            continue
+        entry = {"item_id": item["Type"], "count": int(item.get("Count") or 1)}
+        if item.get("LegendarySoul"):
+            entry["legendary_soul"] = item["LegendarySoul"]
+        out.append(entry)
     return out or None
 
 
 async def fetch_battles(client: httpx.AsyncClient, host: str, limit: int = 51, offset: int = 0) -> list[dict]:
-    # ponytail: 1 retry — API do Albion dá ReadTimeout transiente com frequência
-    # (mesmo padrão de sync_player_kills e _fetch_deep_data). Sem isso, timeout
-    # numa página do feed descartava-a até o próximo ciclo de 60s.
+    # A API do Albion costuma devolver timeout e 502/503/504 transitórios. Sem
+    # uma segunda tentativa, a âncora do inbox fica aberta até o próximo ciclo.
     for attempt in range(2):
         try:
             async with slot(host):
@@ -137,7 +151,9 @@ async def fetch_battles(client: httpx.AsyncClient, host: str, limit: int = 51, o
                 )
             resp.raise_for_status()
             return resp.json()
-        except (httpx.ReadTimeout, httpx.ConnectTimeout):
+        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.HTTPStatusError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in (429, 502, 503, 504):
+                raise
             if attempt == 1:
                 raise
             await asyncio.sleep(random.uniform(0.7, 1.3))
@@ -146,9 +162,8 @@ async def fetch_battles(client: httpx.AsyncClient, host: str, limit: int = 51, o
 async def fetch_events(client: httpx.AsyncClient, host: str, albion_battle_id: str) -> list[dict]:
     events: list[dict] = []
     for page in range(EVENTS_MAX_PAGES):
-        # ponytail: 1 retry por página — igual fetch_battles. _fetch_deep_data
-        # retry-a a chamada toda, mas isso re-baixaria páginas 0..page-1 de novo
-        # a cada falha; retry isolado evita re-fetch e cobre o timeout transiente.
+        # Retry isolado evita rebaixar páginas anteriores e cobre falhas
+        # transitórias do upstream, inclusive 502/503/504.
         for attempt in range(2):
             try:
                 async with slot(host):
@@ -158,7 +173,9 @@ async def fetch_events(client: httpx.AsyncClient, host: str, albion_battle_id: s
                     )
                 resp.raise_for_status()
                 break
-            except (httpx.ReadTimeout, httpx.ConnectTimeout):
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.HTTPStatusError) as exc:
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in (429, 502, 503, 504):
+                    raise
                 if attempt == 1:
                     raise
                 await asyncio.sleep(random.uniform(0.7, 1.3))
@@ -336,7 +353,7 @@ async def _fetch_events_with_retry(client: httpx.AsyncClient, host: str, battle:
                 raise
             await asyncio.sleep(random.uniform(0.7, 1.3) * (2 ** attempt))
         except httpx.HTTPStatusError as e:
-            if e.response.status_code != 429 or attempt == 2:
+            if e.response.status_code not in (429, 502, 503, 504) or attempt == 2:
                 raise
             retry_after = e.response.headers.get("Retry-After")
             wait = float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit() else 5.0 * (attempt + 1)
@@ -721,6 +738,72 @@ def _prio_old(b: Battle) -> int: return battle_priority(b, is_new=False)
 def _prio_other(_b: Battle) -> int: return OTHER
 
 
+def _battle_source_id(raw: dict) -> str:
+    return str(raw.get("id") or "")
+
+
+def _battle_occurred_at(raw: dict) -> datetime:
+    value = raw.get("startTime")
+    if not value:
+        raise ValueError("batalha sem startTime")
+    return _parse_dt(value)
+
+
+async def _apply_battle_item(
+    db: AsyncSession,
+    item: NativeFeedItem,
+) -> None:
+    """Confirma o inbox após persistir o resumo leve da batalha.
+
+    A paginação de eventos pode durar minutos quando o host do Albion está
+    degradado. Ela roda no retry especializado para que uma batalha antiga não
+    impeça a descoberta e o registro das seguintes.
+    """
+    battle = await upsert_battle_light(db, item.payload, item.region)
+    if battle is None:
+        return
+    if item.discovered_by and battle.found_by is None:
+        battle.found_by = item.discovered_by
+
+
+async def _capture_and_apply_battle_stream(
+    client: httpx.AsyncClient,
+    db: AsyncSession,
+    region: str,
+    host: str,
+    *,
+    page_budget: int,
+    priority: int,
+    force_restart: bool = False,
+) -> int:
+    async with albion_scope(priority):
+        result = await capture_native_stream(
+            db,
+            kind=KIND_BATTLE,
+            region=region,
+            page_size=BACKFILL_PAGE_SIZE,
+            offset_limit=BATTLES_API_OFFSET_LIMIT,
+            page_budget=page_budget,
+            fetch_page=lambda offset, limit: fetch_battles(client, host, limit=limit, offset=offset),
+            source_id=_battle_source_id,
+            occurred_at=_battle_occurred_at,
+            force_restart=force_restart,
+        )
+    # O delay é medido pelo sync_recent (batalha mais recente do feed vs agora).
+    # O backfill também mede (head_payload ≠ None), mas com force_restart=False ele
+    # NÃO começa do topo do feed — é intencional pra não interferir no delay medido.
+    # ponytail: delay só é útil pro sync_recent; backfill não precisa medir.
+    if result.head_payload:
+        try:
+            end = result.head_payload.get("endTime")
+            if end:
+                measured = datetime.now(timezone.utc)
+                _api_delay[region] = (measured, max(0.0, (measured - _parse_dt(end)).total_seconds()))
+        except Exception:
+            pass
+    return 0
+
+
 DEEP_FETCH_CONCURRENCY = 4  # batalhas com deep-fetch em voo ao mesmo tempo (ver _backfill_deep_fetch_all)
 _deep_fetch_gate = asyncio.Semaphore(DEEP_FETCH_CONCURRENCY)
 
@@ -805,6 +888,12 @@ async def _retry_stuck_battles(client: httpx.AsyncClient, db: AsyncSession, regi
     await db.commit()
 
     now = datetime.now(timezone.utc)
+    if not background_allowed(host):
+        # Falhas muito recentes continuam críticas para o feed, mas não deixe
+        # tentativas históricas ocuparem um host que já recuou por 5xx/429.
+        stuck = [battle for battle in stuck if not _is_frozen(battle, now)]
+        if not stuck:
+            return 0
     # retry_stuck: batalha nova (não-frozen) que falhou → NEW_*; antiga → OLD_*.
     def _prio(b: Battle) -> int: return battle_priority(b, is_new=not _is_frozen(b, now))
 
@@ -928,143 +1017,45 @@ async def _deep_process_batch(
 
 
 async def _process_battle_batch(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str, batch: list[dict], *, priority_fn) -> None:
-    """Fluxo comum de uma página de batalhas cruas da API: upsert leve,
-    filtra quem qualifica pra deep, e deep-processa (ver _deep_process_batch).
-    Usado pelo avanço normal do backfill (backfill_step) e pela varredura
-    reversa de startup (_reverse_startup_sweep). `priority_fn` repassa pro
-    tier do bg pool de cada deep-fetch (backfill=_prio_old, sweep=_prio_other).
-
-    Passa o `raw` de cada batalha (já conhecido da listagem) pro
-    _deep_process_batch — evita o re-fetch do detail, que devolve o mesmo
-    shape da página de /battles. Só os events precisam ser buscados por
-    batalha (1 req compartilhado entre 51 → vira só events por batalha)."""
-    qualifying: list[Battle] = []
-    raw_by_battle: dict[int, dict] = {}
-    for raw in batch:
-        try:
-            battle = await upsert_battle_light(db, raw, region)
-        except Exception as e:
-            await db.rollback()
-            log.debug("battle_tracker: skip backfill %s (%s): %s", raw.get("id"), region, e)
-            continue
-        if battle is None or battle.processing_tier == "deep" or battle.players_total < DEEP_PROCESS_MIN_PLAYERS:
-            continue
-        qualifying.append(battle)
-        raw_by_battle[battle.id] = raw
-    try:
-        await db.commit()
-    except Exception as e:
-        # Sem isto, "database is locked" (contenção transitória com outro
-        # serviço de fundo) deixava a Session numa transação já abortada —
-        # TODO próximo commit nesta MESMA sessão falha de novo com "This
-        # Session's transaction has been rolled back...", em cascata pelo
-        # resto da página, pelo resto da varredura reversa de startup
-        # (~196 páginas/região) e pelas regiões seguintes (mesma sessão
-        # reusada em run_backfill_forever). Rollback aqui + pula o deep
-        # processing desta página: as batalhas voltam a ser vistas no
-        # próximo lap do backfill perpétuo normal (mesmo princípio de
-        # resiliência já documentado pra falha de rede/429).
-        await db.rollback()
-        log.warning("battle_tracker: falha ao comitar página (%s): %r — recoberta num ciclo depois", region, e)
-        return
-
-    await _deep_process_batch(client, db, region, host, qualifying, priority_fn=priority_fn, raw_by_battle=raw_by_battle)
+    """Compatibilidade para callers antigos: página crua nunca é aplicada aqui."""
+    await capture_discovered_items(
+        db,
+        kind=KIND_BATTLE,
+        region=region,
+        rows=batch,
+        source_id=_battle_source_id,
+        occurred_at=_battle_occurred_at,
+    )
 
 
 async def backfill_step(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str) -> None:
-    """Avança a paginação da região dentro da janela de ~10000 batalhas mais
-    recentes que a API do Albion expõe (ver BATTLES_API_OFFSET_LIMIT),
-    processa em profundidade (em paralelo, ver _backfill_deep_fetch_all) as
-    que qualificam, e persiste o cursor pra continuar de onde parou no
-    próximo ciclo. Ao completar uma volta (bate no teto da API, a página
-    veio vazia, ou a batalha mais velha já passou de BACKFILL_MAX_AGE),
-    retenta batalhas travadas em "light" (ver _retry_stuck_battles) e
-    recomeça do offset 0 — ver _finish_lap. Nunca para de vez."""
-    cursor = await _get_cursor(db, region)
-    cutoff = datetime.now(timezone.utc) - BACKFILL_MAX_AGE
-
-    async with albion_scope(OLD_ELIGIBLE):
-        for _ in range(BACKFILL_PAGES_PER_CYCLE):
-            if cursor.next_offset + BACKFILL_PAGE_SIZE > BATTLES_API_OFFSET_LIMIT:
-                await _finish_lap(db, cursor)
-                return
-
-            try:
-                batch = await fetch_battles(client, host, limit=BACKFILL_PAGE_SIZE, offset=cursor.next_offset)
-            except Exception as e:
-                log.warning("battle_tracker: falha no backfill (%s, offset=%d): %r", region, cursor.next_offset, e)
-                return
-
-            if not batch:
-                await _finish_lap(db, cursor)
-                return
-
-            reached_cutoff = False
-            fresh: list[dict] = []
-            for raw in batch:
-                if _parse_dt(raw["startTime"]) < cutoff:
-                    reached_cutoff = True
-                    break
-                fresh.append(raw)
-
-            await _process_battle_batch(client, db, region, host, fresh, priority_fn=_prio_old)
-
-            cursor.next_offset += len(batch)
-            if reached_cutoff or len(batch) < BACKFILL_PAGE_SIZE:
-                await _finish_lap(db, cursor)
-                return
-            await db.commit()
+    """Continua uma varredura ancorada; offsets legados não aplicam mais dados."""
+    if not background_allowed(host):
+        return
+    await _capture_and_apply_battle_stream(
+        client, db, region, host,
+        page_budget=BACKFILL_PAGES_PER_CYCLE,
+        priority=OLD_ELIGIBLE,
+    )
 
 
 async def _reverse_startup_sweep(client: httpx.AsyncClient, db: AsyncSession, region: str, host: str) -> None:
-    """Varredura única, só no startup do servidor: cobre a janela de ~10000
-    batalhas mais recentes que a API expõe (ver BATTLES_API_OFFSET_LIMIT) de
-    TRÁS PRA FRENTE (offset mais alto → 0) — o oposto do sentido normal do
-    backfill (ver backfill_step, que sempre avança 0 → topo). Prioriza
-    justamente as batalhas MAIS PERTO de sumir da janela: se o processo
-    reinicia bem quando um lap novo do backfill normal começa do offset 0,
-    as batalhas do fim da janela (as mais velhas ainda alcançáveis) só
-    seriam vistas por último — e o tempo até o backfill sequencial chegar
-    lá pode ser o suficiente pra elas já terem sido empurradas pra fora da
-    janela por batalha nova, sumindo sem nunca ter sido vistas. Depois
-    dessa varredura, o loop perpétuo normal (backfill_cycle) assume.
-
-    O teto real da API é um pouco menor que BATTLES_API_OFFSET_LIMIT (ver
-    comentário na constante) — por isso tolera algumas falhas seguidas no
-    topo da janela (offset ainda inválido) antes de desistir de vez.
-
-    Pausa curta entre páginas (ver PAGE_PAUSE) — ~196 páginas por região
-    sem pausa nenhuma é, sozinho, rajada suficiente pra estourar rate limit
-    logo no startup, antes até do resto dos serviços de fundo entrarem em
-    ritmo. Se abortar por 429 sustentado, quem sobrou nessa passada única
-    ainda é coberto depois pelo backfill perpétuo normal (backfill_cycle)."""
-    offset = BATTLES_API_OFFSET_LIMIT - BACKFILL_PAGE_SIZE
-    consecutive_failures = 0
-    async with albion_scope(OTHER):
-        while offset >= 0:
-            try:
-                batch = await fetch_battles(client, host, limit=BACKFILL_PAGE_SIZE, offset=offset)
-            except Exception as e:
-                consecutive_failures += 1
-                if consecutive_failures >= 5:
-                    log.warning("battle_tracker: varredura reversa de startup abortada (%s, offset=%d): %r",
-                                region, offset, e)
-                    return
-                offset -= BACKFILL_PAGE_SIZE
-                await asyncio.sleep(PAGE_PAUSE)
-                continue
-            consecutive_failures = 0
-            if batch:
-                await _process_battle_batch(client, db, region, host, batch, priority_fn=_prio_other)
-            offset -= BACKFILL_PAGE_SIZE
-            await asyncio.sleep(PAGE_PAUSE)
-    log.info("battle_tracker: varredura reversa de startup concluída (%s)", region)
+    """Compatibilidade de startup: a recuperação agora respeita a âncora."""
+    if background_allowed(host):
+        await _capture_and_apply_battle_stream(
+            client, db, region, host,
+            page_budget=BACKFILL_PAGES_PER_CYCLE,
+            priority=OTHER,
+        )
 
 
 RECENT_PAGES_PER_CYCLE = 8  # mínimo de páginas (8*51=408 batalhas/região/ciclo) — piso
 RECENT_PAGES_MAX = 60      # teto: ~3000 batalhas/região/ciclo (60*51). Acima disso o feed
-                           # já estaria tão atrasado que sondar o topo não resolve — o
-                           # battle_sweeper cobre o resto pelos buracos entre IDs.
+                            # já estaria tão atrasado que sondar o topo não resolve — o
+                            # battle_sweeper cobre o resto pelos buracos entre IDs.
+# Em recuperação operacional, a lista fresca vem antes da completude histórica.
+# O detalhe ainda é buscado, mas só para uma batalha por região em cada ciclo.
+RECENT_DEEP_PER_REGION_DURING_MAINTENANCE = 1
 # Delay de PUBLICAÇÃO da API do Albion por região: quanto tempo a API demora pra
 # expor uma batalha depois que ela termina. ~5min num dia normal; em dia de
 # tráfego alto a API sobrecarrega e atrasa (já observado 8h). Medido de graça no
@@ -1083,6 +1074,8 @@ def _pages_for_delay(region: str) -> int:
     pra cobrir a janela acumulada — senão batalhas saem do topo do feed antes do
     próximo ciclo e caem acima do maior ID conhecido (buraco que o sweeper não
     cobre). Teto em RECENT_PAGES_MAX pra não estourar rate limit em delay extremo."""
+    if get_settings().disable_background_maintenance:
+        return 1
     _, secs = _api_delay.get(region, (None, 0.0))
     if not secs or secs <= POLL_INTERVAL:
         return RECENT_PAGES_PER_CYCLE
@@ -1105,87 +1098,55 @@ def publish_delay_status() -> dict:
 
 
 async def sync_recent() -> int:
-    """Busca e salva as batalhas mais recentes dos 3 servidores e processa em
-    profundidade as que parecem ZvZ. Roda sozinho (sem o backfill histórico
-    junto) pra não ter o feed "recente" atrasado por um backfill lento —
-    ver run_backfill_forever, que cuida do histórico em paralelo.
+    """Captura o feed recente e só aplica após concluir a fronteira anterior.
 
-    Busca várias páginas (não só a primeira) por região: só 51 batalhas
-    (1 página) não cobre picos de atividade — uma batalha que sai do top 51
-    entre dois ciclos de POLL_INTERVAL (1 min) nunca mais é vista, já que o
-    backfill histórico serve só pra carga inicial e reseta ao chegar no teto
-    da API (ver BATTLES_API_OFFSET_LIMIT / _finish_lap).
-
-    Deep-process em paralelo (ver _backfill_deep_fetch_all, concorrência
-    limitada pelo bg pool do albion_gate — 6 slots, compartilhado com
-    todo outro serviço que deep-processa, pra não estourar rate limit da
-    API) — com DEEP_PROCESS_MIN_PLAYERS=0 praticamente toda batalha do feed
-    qualifica, então processar uma de cada vez aqui (await sequencial) fazia
-    o ciclo inteiro (3 regiões × até ~400 batalhas) estourar bem além do
-    POLL_INTERVAL: batalha nova saía da janela de "recentes" antes do ciclo
-    lento sequer chegar nela, e a região nunca mais a via de novo — sintoma
-    era batalha real "nunca encontrada" mesmo ainda visível na API do
-    Albion. Falha em qualquer batalha aqui não é definitiva: cai na fila de
-    reprocess_reason (ver _deep_process_batch) até conseguir."""
-    now = datetime.now(timezone.utc)
+    Usa force_restart=True pra sempre começar do offset 0 (topo do feed).
+    O backfill continua usando o cursor persistido (force_restart=False).
+    """
     count = 0
     async with AsyncSessionLocal() as db:
         async with make_client() as client:
             for region, host in HOSTS.items():
-                # Cada página é tentada isoladamente — antes, timeout numa página
-                # no meio (ex.: página 5 de 8) descartava TODAS as páginas já
-                # buscadas daquela região pro ciclo inteiro (um try/except só em
-                # volta do laço todo), zerando a descoberta da região naquele
-                # ciclo. Agora só para de paginar mais, mantém o que já pegou.
-                battles: list[dict] = []
-                async with albion_scope(NEW_ELIGIBLE):
-                    pages = _pages_for_delay(region)
-                    for page in range(pages):
-                        try:
-                            batch = await fetch_battles(client, host, offset=page * BACKFILL_PAGE_SIZE)
-                        except Exception as e:
-                            log.warning("battle_tracker: falha ao buscar página %d do feed (%s): %r", page, region, e)
-                            break
-                        if not batch:
-                            break
-                        battles.extend(batch)
-                        if len(batch) < BACKFILL_PAGE_SIZE:
-                            break
-
-                # Delay de publicação da API: a mais nova do feed vs agora.
                 try:
-                    ends = [_parse_dt(r["endTime"]) for r in battles if r.get("endTime")]
-                    if ends:
-                        measured = datetime.now(timezone.utc)
-                        _api_delay[region] = (measured, max(0.0, (measured - max(ends)).total_seconds()))
-                except Exception:
-                    pass
-
-                qualifying: list[Battle] = []
-                raw_by_battle: dict[int, dict] = {}
-                for raw in battles:
-                    try:
-                        battle = await upsert_battle_light(db, raw, region)
-                    except Exception as e:
-                        log.debug("battle_tracker: skip %s (%s): %s", raw.get("id"), region, e)
-                        continue
-                    if battle is None:
-                        continue
-                    count += 1
-                    if battle.is_zvz:
-                        log.info("battle: %s (%s) — %d jogadores, is_zvz=%s",
-                                 battle.albion_id, region, battle.players_total or 0, battle.is_zvz)
-                    if battle.players_total < DEEP_PROCESS_MIN_PLAYERS or _is_frozen(battle, now):
-                        continue
-                    qualifying.append(battle)
-                    raw_by_battle[battle.id] = raw
-                await db.commit()
-
-                await _deep_process_batch(
-                    client, db, region, host, qualifying,
-                    priority_fn=_prio_new, raw_by_battle=raw_by_battle,
-                )
+                    count += await _capture_and_apply_battle_stream(
+                        client, db, region, host,
+                        page_budget=_pages_for_delay(region),
+                        priority=NEW_ELIGIBLE,
+                        force_restart=True,
+                    )
+                except Exception as e:
+                    log.warning("battle_tracker: falha no feed recente (%s): %r", region, e)
     return count
+
+
+async def drain_pending_once() -> int:
+    """Drena o inbox já ancorado sem disputar a captura da próxima página."""
+    count = 0
+    async with AsyncSessionLocal() as db:
+        for region in HOSTS:
+            try:
+                count += await apply_native_items(
+                    db,
+                    kind=KIND_BATTLE,
+                    region=region,
+                    batch_size=DRAIN_BATCH_SIZE,
+                    apply_item=_apply_battle_item,
+                )
+            except Exception as e:
+                log.warning("battle_tracker: falha ao drenar inbox (%s): %r", region, e)
+                await db.rollback()
+    return count
+
+
+async def run_drain_forever() -> None:
+    """Consome backlog persistido mesmo enquanto a captura remota continua."""
+    log.info("battle_tracker: dreno ordenado iniciado (intervalo=%ds)", DRAIN_INTERVAL)
+    while True:
+        try:
+            await drain_pending_once()
+        except Exception as e:
+            log.error("battle_tracker: erro no dreno ordenado: %s", e)
+        await asyncio.sleep(DRAIN_INTERVAL)
 
 
 async def backfill_cycle() -> None:

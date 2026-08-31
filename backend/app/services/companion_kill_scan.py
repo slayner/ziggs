@@ -19,7 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import AsyncSessionLocal
 from app.models.players import PlayerKillEvent, KillIdProbe
 from app.services.kill_sweeper import _probe_kill_event
-from app.services.player_tracker import HOSTS, make_client, _record_kill_event, _upsert_event_players
+from app.services.native_feed import KIND_KILL, capture_discovered_items
+from app.services.player_tracker import HOSTS, make_client, _event_occurred_at, _event_source_id
 
 log = logging.getLogger(__name__)
 
@@ -159,11 +160,16 @@ async def report_kill_range(
     for eid, (status, raw) in zip(reported, verified):
         if status == "found" and raw is not None and str(raw.get("EventId")) == str(eid):
             try:
-                await _upsert_event_players(db, raw, region)
-                await _record_kill_event(db, raw, region, commit=False)
-                accepted += 1
+                accepted += await capture_discovered_items(
+                    db,
+                    kind=KIND_KILL,
+                    region=region,
+                    rows=[raw],
+                    source_id=_event_source_id,
+                    occurred_at=_event_occurred_at,
+                )
             except Exception as e:
-                log.debug("kill_scan: erro ao ingerir event %s (%s): %s", eid, region, e)
+                log.debug("kill_scan: erro ao capturar event %s (%s): %s", eid, region, e)
                 await db.rollback()
                 status = "missing"
         elif status == "missing":

@@ -102,7 +102,7 @@ class Regears(commands.Cog):
             return
 
         await message.add_reaction("⏳")
-        lang = guild_lang_for(guild_id)
+        lang = await guild_lang_for(guild_id)
         request_id: int | None = None
         status = "manual"
 

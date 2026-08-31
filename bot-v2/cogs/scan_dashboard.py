@@ -48,10 +48,7 @@ def _stream_line(s: dict, ckt: dict) -> str:
     icon = _sla_icon(st)
     if ckt.get("state") == "open":
         return f"{icon} **OPEN**"
-    if st == "critical":
-        return f"{icon} {_fmt_age(s.get('recent_age_s'))}"
-    rate = s.get("scan_items_per_min") or 0
-    return f"{icon} {rate:.0f}/m"
+    return f"{icon} head {_fmt_age(s.get('recent_age_s'))}"
 
 
 def _build_embed(data: dict) -> discord.Embed:
@@ -61,6 +58,7 @@ def _build_embed(data: dict) -> discord.Embed:
     tasks_d = data.get("tasks") or {}
     alerts = data.get("alerts") or []
     processing = data.get("processing") or {}
+    inbox = data.get("inbox") or {}
 
     any_critical = any(v.get("status") == "critical" for v in sla.values())
     any_warn = any(v.get("status") == "at_risk" for v in sla.values())
@@ -70,12 +68,14 @@ def _build_embed(data: dict) -> discord.Embed:
     color = COLOR_BAD if (any_critical or all_dead) else COLOR_WARN if any_warn else COLOR_OK
 
     pending = tasks_d.get("pending") or 0
-    done = tasks_d.get("done") or 0
+    claimed = tasks_d.get("claimed") or 0
+    reported = tasks_d.get("reported") or 0
     failed = tasks_d.get("failed") or 0
 
     embed = discord.Embed(title=EMBED_TITLE, color=color)
-    embed.description = f"`{active}` workers · `{pending}` pendente · `{done}` done" + (
-        f" · `{failed}` falhou" if failed else ""
+    embed.description = (
+        f"`{active}` workers · fila: `{pending}` pendente · `{claimed}` buscando · `{reported}` ingerindo"
+        + (f" · `{failed}` falhou" if failed else "")
     )
 
     # ── Grid 3 colunas: Americas, Europe, Asia ──
@@ -90,8 +90,20 @@ def _build_embed(data: dict) -> discord.Embed:
 
     # ── Processamento de batalhas (light vs deep) ──
     proc_lines: list[str] = []
+    latest_lines: list[str] = []
+    inbox_lines: list[str] = []
     total_light = 0
     total_deep = 0
+    processing_latest = data.get("processing_latest") or {}
+    def _fmt_ts(ts: str | None) -> str:
+        if not ts:
+            return "—"
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return dt.strftime("%m-%d %H:%M")
+        except Exception:
+            return "—"
+
     for region, flag in (("americas", "🌎"), ("europe", "🌍"), ("asia", "🌏")):
         p = processing.get(region) or {}
         light = p.get("light", 0)
@@ -99,10 +111,33 @@ def _build_embed(data: dict) -> discord.Embed:
         total_light += light
         total_deep += deep
         pct = round(deep / (light + deep) * 100) if (light + deep) > 0 else 100
-        proc_lines.append(f"{flag} `{deep}` deep · `{light}` light · {pct}%")
+        queued = (inbox.get(region) or {}).get("pending", 0)
+        proc_lines.append(f"{flag} `{queued}` inbox · `{light}` light→deep · `{deep}` deep · {pct}%")
+        inbox_lines.append(f"{flag} última recebida {_fmt_ts((inbox.get(region) or {}).get('latest_pending_at'))}")
+        # Latest deep/light battle IDs with timestamps
+        latest = processing_latest.get(region) or {}
+        deep_info = latest.get("deep") or {}
+        light_info = latest.get("light") or {}
+        deep_id = deep_info.get("albion_id") if deep_info else None
+        light_id = light_info.get("albion_id") if light_info else None
+        deep_ts = deep_info.get("start_time") if deep_info else None
+        light_ts = light_info.get("start_time") if light_info else None
+        latest_lines.append(
+            f"{flag} deep `{deep_id or '—'}` ({_fmt_ts(deep_ts)}) · light `{light_id or '—'}` ({_fmt_ts(light_ts)})"
+        )
     embed.add_field(
-        name=f"⚙️ Processamento ({total_deep} prontas · {total_light} pendentes)",
+        name=f"⚙️ Processamento ({total_deep} deep · {total_light} light)",
         value="\n".join(proc_lines),
+        inline=False,
+    )
+    embed.add_field(
+        name="🆔 Última batalha por tier",
+        value="\n".join(latest_lines),
+        inline=False,
+    )
+    embed.add_field(
+        name="📥 Última descoberta no inbox",
+        value="\n".join(inbox_lines),
         inline=False,
     )
 
@@ -220,7 +255,18 @@ class ScanDashboard(commands.Cog):
     async def _update(self) -> None:
         channel = self.bot.get_channel(DASH_CHANNEL_ID)
         if channel is None:
-            return
+            # Tenta buscar via API se não estiver no cache (ex.: restart do bot)
+            try:
+                channel = await self.bot.fetch_channel(DASH_CHANNEL_ID)
+            except discord.NotFound:
+                print(f"[scan_dashboard] canal {DASH_CHANNEL_ID} não encontrado")
+                return
+            except discord.Forbidden:
+                print(f"[scan_dashboard] sem permissão no canal {DASH_CHANNEL_ID}")
+                return
+            except Exception as e:
+                print(f"[scan_dashboard] erro ao buscar canal: {e}")
+                return
 
         data = await http_client.get_json("/scan/stats", tag="scan_dashboard")
         if data is None:

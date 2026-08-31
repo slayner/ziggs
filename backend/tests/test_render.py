@@ -20,8 +20,11 @@ from app.api.routes.render import (
     _MIN_RENDER_BYTES,
     _PLACEHOLDER_BYTES,
     _PLACEHOLDER_SHA1,
+    _build_prerender_queue,
     _cache_usable,
     _cached_render,
+    _crystal_en_name,
+    _find_prerender_missing,
     _is_placeholder,
     _spell_display_names,
 )
@@ -195,6 +198,94 @@ def test_cache_frio_concorrente_baixa_uma_vez():
     assert calls == 1, f"cold cache did {calls} identical downloads"
 
 
+def test_erro_da_cdn_nao_vira_marker_de_item_ausente():
+    class FakeResponse:
+        status_code = 503
+        content = b""
+
+        def raise_for_status(self):
+            import httpx
+            raise httpx.HTTPStatusError(
+                "temporário",
+                request=httpx.Request("GET", "https://test"),
+                response=httpx.Response(503),
+            )
+
+    class FakeClient:
+        def __init__(self, **_kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): pass
+        async def get(self, *_args, **_kwargs): return FakeResponse()
+
+    original = render_module.httpx.AsyncClient
+    render_module.httpx.AsyncClient = FakeClient
+    try:
+        with TemporaryDirectory() as d:
+            cache_path = Path(d) / "render.png"
+            with patch("app.api.routes.render._record_render_miss", AsyncMock()):
+                try:
+                    asyncio.run(_cached_render("item", "T8_TEST", cache_path, {}))
+                    assert False, "CDN indisponível deve retornar 502"
+                except HTTPException as exc:
+                    assert exc.status_code == 502
+            assert not render_module._missing_path(cache_path).exists()
+    finally:
+        render_module.httpx.AsyncClient = original
+
+
+def test_crystal_zero_usa_chave_pedida_pela_ui():
+    assert _crystal_en_name("T8_ARTEFACT_2H_ARCANESTAFF_CRYSTAL", {}) == "Elder's Astral Staff"
+    assert _crystal_en_name("T8_ARTEFACT_2H_ARCANESTAFF_CRYSTAL@4", {}) == "Elder's Astral Staff@4"
+
+
+def test_prerender_prioriza_equipamento_do_catalogo_e_tamanho_64():
+    with TemporaryDirectory() as d:
+        root = Path(d)
+        catalog = root / "catalog.json"
+        names = root / "item_names.json"
+        catalog.write_text(
+            '[{"kind":"equipment","variations":[{"uniqueName":"T7_MAIN_DAGGER_HELL@4"}]}]',
+            encoding="utf-8",
+        )
+        names.write_text("{}", encoding="utf-8")
+        old_catalog = render_module._CATALOG_FILE
+        old_names = render_module._ITEM_NAMES_FILE
+        old_items = render_module._ITEMS_TXT_FILE
+        render_module._CATALOG_FILE = catalog
+        render_module._ITEM_NAMES_FILE = names
+        render_module._ITEMS_TXT_FILE = root / "items.txt"
+        try:
+            queue = _build_prerender_queue()
+        finally:
+            render_module._CATALOG_FILE = old_catalog
+            render_module._ITEM_NAMES_FILE = old_names
+            render_module._ITEMS_TXT_FILE = old_items
+
+    equipment = [entry for entry in queue if entry[0] == "T7_MAIN_DAGGER_HELL@4"]
+    assert len(equipment) == 18
+    assert equipment[:3] == [
+        ("T7_MAIN_DAGGER_HELL@4", 0, 128),
+        ("T7_MAIN_DAGGER_HELL@4", 0, 64),
+        ("T7_MAIN_DAGGER_HELL@4", 0, 0),
+    ]
+
+
+def test_marcadores_sao_retornados_antes_de_cache_frio():
+    with TemporaryDirectory() as d:
+        old_cache = render_module._CACHE_DIR
+        render_module._CACHE_DIR = Path(d)
+        try:
+            retried = ("T8_RETRY", 0, 128)
+            cold = ("T8_COLD", 0, 128)
+            render_module._missing_path(render_module._cache_path("item", *retried)).touch()
+            missing, count = _find_prerender_missing([cold, retried], retry_missing=True)
+        finally:
+            render_module._CACHE_DIR = old_cache
+
+    assert count == 1
+    assert missing == [retried, cold]
+
+
 if __name__ == "__main__":
     test_png_minusculo_e_placeholder()
     test_render_de_verdade_passa()
@@ -208,4 +299,8 @@ if __name__ == "__main__":
     test_card_retries_known_placeholder_before_rendering()
     test_render_snap_size_arbitrario_pro_valido_mais_proximo()
     test_cache_frio_concorrente_baixa_uma_vez()
+    test_erro_da_cdn_nao_vira_marker_de_item_ausente()
+    test_crystal_zero_usa_chave_pedida_pela_ui()
+    test_prerender_prioriza_equipamento_do_catalogo_e_tamanho_64()
+    test_marcadores_sao_retornados_antes_de_cache_frio()
     print("render OK")

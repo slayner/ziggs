@@ -39,24 +39,28 @@ from app.services.battle_tracker import (
     BATTLES_API_OFFSET_LIMIT,
     DEEP_PROCESS_MIN_PLAYERS,
     EVENTS_MAX_PAGES,
-    REPROCESS_REASON_SWEEPER,
+    _battle_occurred_at,
+    _battle_source_id,
     fetch_battles,
     fetch_battle_detail,
     fetch_events,
-    upsert_battle_light,
 )
-from app.services.albion_gate import slot
+from app.services.albion_gate import OTHER, slot
+from app.models.native_feed import NativeFeedItem
+from app.services.native_feed import KIND_BATTLE, KIND_KILL, capture_discovered_items
+
 from app.services.player_tracker import (
     HOSTS,
     KILL_BACKFILL_OFFSET_LIMIT,
-    _record_kill_event,
-    _upsert_event_players,
+    _event_occurred_at,
+    _event_source_id,
     make_client,
 )
 
 log = logging.getLogger(__name__)
 
 SCAN_DISPATCHER_INTERVAL = 15
+ORDERED_RECOVERY_INTERVAL = 15
 RECENT_PAGES = 8
 MAX_RECENT_PAGES = 16
 BACKFILL_PAGE_STRIDE = 40
@@ -358,6 +362,8 @@ async def _record_stream_result(
         .with_for_update()
     )
     if state is not None:
+        if task.priority <= 0:
+            return
         was_open = state.circuit_state
         _apply_circuit_result(state, success, _now())
         if (
@@ -441,8 +447,12 @@ async def _ensure_recent_task(
     return 1
 
 
-def _stream_limits(feed_type: str, stride: int = FEED_PAGE_SIZE) -> tuple[int, int]:
-    start = RECENT_PAGES * FEED_PAGE_SIZE
+def _stream_limits(
+    feed_type: str,
+    stride: int = FEED_PAGE_SIZE,
+    recent_pages: int = RECENT_PAGES,
+) -> tuple[int, int]:
+    start = recent_pages * FEED_PAGE_SIZE
     api_limit = BATTLES_API_OFFSET_LIMIT if feed_type == "battles" else KILL_BACKFILL_OFFSET_LIMIT
     max_offset = api_limit - FEED_PAGE_SIZE
     last = start + ((max_offset - start) // stride) * stride
@@ -471,8 +481,13 @@ async def _reserve_backfill_tasks(
             ScanLap.status == "active",
         ).with_for_update().limit(1)
     )
+    state = await db.scalar(select(ScanStreamState).where(
+        ScanStreamState.region == region,
+        ScanStreamState.feed_type == feed_type,
+    ))
+    recent_pages = state.recent_pages if state is not None else RECENT_PAGES
     if lap is None:
-        start, last = _stream_limits(feed_type, BACKFILL_PAGE_STRIDE)
+        start, last = _stream_limits(feed_type, BACKFILL_PAGE_STRIDE, recent_pages)
         available_pages = ((last - start) // BACKFILL_PAGE_STRIDE) + 1
         lap = ScanLap(
             region=region,
@@ -493,7 +508,7 @@ async def _reserve_backfill_tasks(
                 ScanWorkTask.lap_id.is_(None),
             ).values(lap_id=lap.id)
         )
-    start, last = _stream_limits(feed_type, lap.page_stride)
+    start, last = _stream_limits(feed_type, lap.page_stride, recent_pages)
     available_pages = ((last - start) // lap.page_stride) + 1
     target = min(target, available_pages)
     current = int(await db.scalar(
@@ -727,8 +742,8 @@ async def generate_tasks(db: AsyncSession) -> int:
                     created += await _reserve_backfill_tasks(
                         db, region, feed_type, backfill_target
                     )
-            except IntegrityError:
-                pass
+            except IntegrityError as exc:
+                log.warning("scan_dispatcher: conflito ao agendar %s/%s: %s", region, feed_type, exc.orig)
     # Deep-process delegado: quando há workers ativos, cria tarefas pra
     # batalhas light antigas (o backend cuida das recentes via _retry_stuck).
     # prioridade 0 (baixa) — só roda quando não há feed recente pra claimar.
@@ -773,6 +788,7 @@ async def _claim_next(
                 and_(
                     ScanStreamState.paused.is_(False),
                     or_(
+                        ScanWorkTask.priority == 0,
                         ScanStreamState.circuit_state == "closed",
                         and_(
                             ScanStreamState.circuit_state == "open",
@@ -1051,7 +1067,7 @@ async def report_work(
         task.claim_expires_at = None
         task.completed_at = _now()
         task.error_count += error_count
-        if task.attempt_count == 5:
+        if task.priority > 0 and task.attempt_count == 5:
             _incident(
                 db, "page_failed", worker_id=worker_id, region=task.region,
                 feed_type=task.feed_type, task_id=task.id,
@@ -1146,45 +1162,34 @@ async def _apply_ingest_payload(
                     b.reprocess_reason = b.reprocess_reason or "deep_process_failed"
                 errors += 1
     elif task.feed_type == "battles":
-        raw_ids = {str(raw.get("id")) for raw in payload if raw.get("id") is not None}
-        existing = set((await db.scalars(
-            select(Battle.albion_id).where(
-                Battle.region == task.region,
-                Battle.albion_id.in_(raw_ids),
-            )
-        )).all()) if raw_ids else set()
+        # Worker pages podem chegar fora de ordem. Guardá-las no inbox evita que
+        # uma página posterior publique antes da fronteira da stream local.
         for raw in payload:
             try:
-                async with db.begin_nested():
-                    battle = await upsert_battle_light(db, raw, task.region)
-                    if battle is not None:
-                        battle.reprocess_reason = REPROCESS_REASON_SWEEPER
-                        if str(raw.get("id")) not in existing:
-                            accepted += 1
+                accepted += await capture_discovered_items(
+                    db,
+                    kind=KIND_BATTLE,
+                    region=task.region,
+                    rows=[raw],
+                    source_id=_battle_source_id,
+                    occurred_at=_battle_occurred_at,
+                )
             except Exception as exc:
-                log.warning("scan_dispatcher: ingest battle %s: %s", raw.get("id"), exc)
+                log.warning("scan_dispatcher: captura battle %s: %s", raw.get("id"), exc)
                 errors += 1
     else:
-        event_ids = {
-            str(event.get("EventId")) for event in payload if event.get("EventId") is not None
-        }
-        existing = set((await db.scalars(
-            select(PlayerKillEvent.albion_event_id).where(
-                PlayerKillEvent.region == task.region,
-                PlayerKillEvent.albion_event_id.in_(event_ids),
-            )
-        )).all()) if event_ids else set()
         for event in payload:
-            event_id = str(event.get("EventId") or "")
-            if not event_id or event_id in existing:
-                continue
             try:
-                async with db.begin_nested():
-                    await _upsert_event_players(db, event, task.region)
-                    await _record_kill_event(db, event, task.region, commit=False)
-                accepted += 1
+                accepted += await capture_discovered_items(
+                    db,
+                    kind=KIND_KILL,
+                    region=task.region,
+                    rows=[event],
+                    source_id=_event_source_id,
+                    occurred_at=_event_occurred_at,
+                )
             except Exception as exc:
-                log.debug("scan_dispatcher: ingest kill %s/%s: %s", task.region, event_id, exc)
+                log.debug("scan_dispatcher: captura kill %s/%s: %s", task.region, event.get("EventId"), exc)
                 errors += 1
     return accepted, errors
 
@@ -1348,14 +1353,18 @@ async def get_worker_stats(db: AsyncSession) -> dict:
     status_counts = {
         "pending": 0, "claimed": 0, "reported": 0, "done": 0, "failed": 0
     }
+    live_task_statuses = ("pending", "claimed", "reported")
     for status, count in (await db.execute(
-        select(ScanWorkTask.status, func.count()).group_by(ScanWorkTask.status)
+        select(ScanWorkTask.status, func.count())
+        .where(ScanWorkTask.status.in_(live_task_statuses))
+        .group_by(ScanWorkTask.status)
     )).all():
         status_counts[status] = count or 0
 
     per_region: dict[str, dict[str, int]] = {}
     for region, feed_type, status, count in (await db.execute(
         select(ScanWorkTask.region, ScanWorkTask.feed_type, ScanWorkTask.status, func.count())
+        .where(ScanWorkTask.status.in_(live_task_statuses))
         .group_by(ScanWorkTask.region, ScanWorkTask.feed_type, ScanWorkTask.status)
     )).all():
         key = f"{region}/{feed_type}"
@@ -1446,6 +1455,7 @@ async def get_worker_stats(db: AsyncSession) -> dict:
         )
     for task in (await db.scalars(select(ScanWorkTask).where(
         ScanWorkTask.status == "failed",
+        ScanWorkTask.priority > 0,
         ScanWorkTask.attempt_count >= 5,
     ))).all():
         alerts.append({
@@ -1516,6 +1526,33 @@ async def get_worker_stats(db: AsyncSession) -> dict:
         processing.setdefault(region, {"light": 0, "deep": 0})
         processing[region][tier] = count or 0
 
+    inbox: dict[str, dict[str, object]] = {}
+    for region, status, count, latest in (await db.execute(
+        select(
+            NativeFeedItem.region,
+            NativeFeedItem.status,
+            func.count(),
+            func.max(NativeFeedItem.occurred_at),
+        )
+        .where(NativeFeedItem.kind == KIND_BATTLE)
+        .group_by(NativeFeedItem.region, NativeFeedItem.status)
+    )).all():
+        entry = inbox.setdefault(region, {"pending": 0, "latest_pending_at": None})
+        if status != "applied":
+            entry["pending"] = int(entry["pending"]) + (count or 0)
+            entry["latest_pending_at"] = latest.isoformat() if latest else None
+
+    # Última batalha deep/light processada por região (para debugging de progresso)
+    processing_latest: dict[str, dict[str, object]] = {}
+    for region, tier, albion_id, start_time in (await db.execute(
+        select(Battle.region, Battle.processing_tier, Battle.albion_id, Battle.start_time)
+        .where(Battle.processing_tier.in_(("light", "deep")))
+        .order_by(Battle.region, Battle.processing_tier, Battle.start_time.desc())
+    )).all():
+        processing_latest.setdefault(region, {"light": None, "deep": None})
+        if processing_latest[region][tier] is None:
+            processing_latest[region][tier] = {"albion_id": albion_id, "start_time": start_time.isoformat() if start_time else None}
+
     return {
         "workers": rows,
         "tasks": status_counts,
@@ -1529,6 +1566,8 @@ async def get_worker_stats(db: AsyncSession) -> dict:
         "incidents": incidents,
         "affinity": affinity,
         "processing": processing,
+        "inbox": inbox,
+        "processing_latest": processing_latest,
         "strategy": {
             "active_vps": active,
             "mode": "fallback" if active == 0 else "assist" if backend_is_idle() else "coordinator",
@@ -1557,34 +1596,62 @@ async def run_forever() -> None:
         await asyncio.sleep(SCAN_DISPATCHER_INTERVAL)
 
 
+async def run_ordered_recovery_forever() -> None:
+    """Mantém âncoras quando workers são a fonte principal das páginas cruas.
+
+    Workers continuam buscando o grosso do feed; este verificador serial só
+    percorre a fronteira persistida, para que o inbox distribuído tenha uma
+    conclusão segura antes de aplicar qualquer item.
+    """
+    from app.services.battle_tracker import _capture_and_apply_battle_stream
+    from app.services.player_tracker import _capture_and_apply_kill_stream
+
+    log.info("scan_dispatcher: verificador ordenado de streams iniciado")
+    while True:
+        async with AsyncSessionLocal() as db:
+            try:
+                async with make_client() as client:
+                    for region, host in HOSTS.items():
+                        await _capture_and_apply_battle_stream(
+                            client, db, region, host, page_budget=1, priority=OTHER,
+                        )
+                        await _capture_and_apply_kill_stream(
+                            client, db, region, host, page_budget=1, priority=OTHER,
+                        )
+            except Exception as exc:
+                log.error("scan_dispatcher: verificador ordenado: %s", exc)
+                await db.rollback()
+        await asyncio.sleep(ORDERED_RECOVERY_INTERVAL)
+
+
 async def run_ingest_forever(web_is_idle: Callable[[], Awaitable[bool]]) -> None:
     """Bounded durable consumer. On Postgres writes don't block reads, so we
     always drain when there's backlog — the web_is_idle gate (kept for the
     callback signature) is no longer the bottleneck it was on SQLite."""
     log.info("scan_dispatcher: ingest consumer started")
     while True:
-        async with AsyncSessionLocal() as db:
-            await db.execute(
-                update(ScanIngestPayload)
-                .where(
-                    ScanIngestPayload.status == "processing",
-                    ScanIngestPayload.started_at < _now() - timedelta(minutes=5),
+        try:
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    update(ScanIngestPayload)
+                    .where(
+                        ScanIngestPayload.status == "processing",
+                        ScanIngestPayload.started_at < _now() - timedelta(minutes=5),
+                    )
+                    .values(status="pending", next_attempt_at=_now())
                 )
-                .values(status="pending", next_attempt_at=_now())
-            )
-            backlog = int(await db.scalar(
-                select(func.count()).select_from(ScanIngestPayload).where(
-                    ScanIngestPayload.status.in_(("pending", "processing"))
-                )
-            ) or 0)
-            await db.commit()
-        if backlog == 0:
-            await asyncio.sleep(1)
-            continue
-        # ponytail: 1 por vez — concurrency > 1 causava deadlock no Postgres
-        # (ingest + search_index + battle_tracker escrevendo em battles ao
-        # mesmo tempo). 1 é mais lento pra drenar backlog mas não deadlocka.
-        processed = await ingest_one()
+                backlog = int(await db.scalar(
+                    select(func.count()).select_from(ScanIngestPayload).where(
+                        ScanIngestPayload.status.in_(("pending", "processing"))
+                    )
+                ) or 0)
+                await db.commit()
+            processed = await ingest_one() if backlog else False
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("scan_dispatcher: consumidor de ingest falhou: %s", exc)
+            processed = False
         await asyncio.sleep(0 if processed else 1)
 
 

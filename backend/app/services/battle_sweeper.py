@@ -21,9 +21,8 @@ Este serviço, por ciclo:
      janela de BELOW_MIN_WINDOW abaixo do menor ID conhecido — é ela que segue
      estendendo o histórico para trás, um ciclo de cada vez.
   2. Sonda cada candidato SÓ no host da própria região.
-  3. Light-captura os válidos (upsert_battle_light) e marca
-     reprocess_reason='sweeper' — o battle_reprocessor faz o deep-process
-     (eventos/lados/builds) na fila de fundo, sem lógica nova aqui.
+   3. Captura os válidos no inbox nativo; a stream ordenada aplica o light e
+      o deep-process sem deixar este achado passar itens mais antigos.
   4. Memoriza cada ID sondado em BattleIdProbe (found/missing) pra nunca
      re-sondar o mesmo buraco.
 
@@ -43,8 +42,9 @@ from sqlalchemy.orm import Session
 
 from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import Battle, BattleIdProbe
-from app.services.albion_gate import OTHER, albion_scope, slot
-from app.services.battle_tracker import REPROCESS_REASON_SWEEPER, upsert_battle_light
+from app.services.albion_gate import OTHER, albion_scope, background_allowed, slot
+from app.services.battle_tracker import _battle_occurred_at, _battle_source_id
+from app.services.native_feed import KIND_BATTLE, capture_discovered_items
 from app.services.player_tracker import HOSTS, make_client
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ MAX_CANDIDATES_PER_CYCLE = 1200
 CYCLE_INTERVAL = 180          # segundos entre ciclos
 MAX_429_RETRIES = 3
 DB_LOCK_RETRIES = 3
+PROBE_CONCURRENCY = 6
 
 # Companion-aware: quando há companions ativos sondando, o sweeper reduz seus
 # candidatos — eles cobrem os mesmos buracos de graça (IP deles, não nosso rate
@@ -183,10 +184,7 @@ async def _probe_and_capture(
     client: httpx.AsyncClient, db: AsyncSession, db_lock: asyncio.Lock,
     region: str, albion_id: int,
 ) -> bool:
-    """Sonda o candidato no host da SUA região (o número só faz sentido na
-    sequência dela). Found → light-capture + reprocess_reason='sweeper' pro
-    battle_reprocessor deep-processar. Grava BattleIdProbe (found/missing;
-    error não grava — re-tenta depois). Retorna True sse capturou batalha nova."""
+    """Sonda e captura no inbox; a aplicação continua na stream ordenada."""
     aid = str(albion_id)
     status, raw = await _probe_detail(client, HOSTS[region], aid)
     if status == "error":
@@ -195,28 +193,30 @@ async def _probe_and_capture(
     async with db_lock:
         for attempt in range(DB_LOCK_RETRIES):
             try:
-                battle: Battle | None = None
+                captured = False
                 if status == "found" and raw is not None:
-                    battle = await upsert_battle_light(db, raw, region)
-                    if battle is not None:
-                        battle.reprocess_reason = REPROCESS_REASON_SWEEPER
-                    else:
-                        status = "missing"
+                    captured = bool(await capture_discovered_items(
+                        db,
+                        kind=KIND_BATTLE,
+                        region=region,
+                        rows=[raw],
+                        source_id=_battle_source_id,
+                        occurred_at=_battle_occurred_at,
+                    ))
 
                 existing = await db.get(BattleIdProbe, aid)
                 if existing is None:
                     db.add(BattleIdProbe(
                         albion_id=aid, status=status,
-                        region=region, battle_id=battle.id if battle else None,
+                        region=region,
                         probed_at=datetime.now(timezone.utc),
                     ))
                 else:
                     existing.status = status
                     existing.region = region
-                    existing.battle_id = battle.id if battle else None
                     existing.probed_at = datetime.now(timezone.utc)
                 await db.commit()
-                return battle is not None
+                return captured
             except OperationalError as e:
                 await db.rollback()
                 if "database is locked" not in str(e).lower() or attempt == DB_LOCK_RETRIES - 1:
@@ -252,6 +252,7 @@ async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
     # conexão no meio — o resto do ciclo inteiro falharia com OperationalError.
     await db.commit()
     candidates = await asyncio.to_thread(_generate_candidates_sync, active)
+    candidates = [(region, aid) for region, aid in candidates if background_allowed(HOSTS[region])]
     if not candidates:
         log.info("battle_sweeper: sem candidatos novos (tudo sondado ou base vazia)")
         return {"candidates": 0, "found": 0, "probed": 0}
@@ -259,6 +260,8 @@ async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
     db_lock = asyncio.Lock()
 
     async def _one(region: str, aid: int) -> bool:
+        if not background_allowed(HOSTS[region]):
+            return False
         try:
             return await _probe_and_capture(client, db, db_lock, region, aid)
         except Exception as e:
@@ -271,7 +274,10 @@ async def sweep_cycle(client: httpx.AsyncClient, db: AsyncSession) -> dict:
             # perdendo o ciclo inteiro por causa de UMA sondagem.
             return False
 
-    results = await asyncio.gather(*(_one(r, c) for r, c in candidates))
+    results: list[bool] = []
+    for start in range(0, len(candidates), PROBE_CONCURRENCY):
+        batch = candidates[start:start + PROBE_CONCURRENCY]
+        results.extend(await asyncio.gather(*(_one(r, c) for r, c in batch)))
     found = sum(1 for r in results if r)
     log.info("battle_sweeper: ciclo — %d candidatos, %d achados", len(candidates), found)
     return {"candidates": len(candidates), "found": found, "probed": len(candidates)}

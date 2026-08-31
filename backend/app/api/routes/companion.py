@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.api import deps
 from app.auth.session import make_companion_token
 from app.db import get_async_session, get_session
@@ -257,23 +258,22 @@ def companion_latest():
 
 # ─── VPS manifest dinâmico (tunnel) ──────────────────────────────────────────
 # Antes era um JSON estático em frontend/public/vps-manifest.json editado à mão.
-# Agora vem do banco: scan_workers com vps_endpoint preenchido e heartbeat recente
-# aparecem automaticamente no companion e no site. Adicionar/remover VPS = ligar/
-# desligar o scanner da VPS — o heartbeat expira em WORKER_HEARTBEAT_TIMEOUT.
+# Agora vem do banco: scan_workers com vps_endpoint preenchido aparecem
+# automaticamente no companion e no site. O estado do scanner é independente do
+# tunnel: quarentenar o scan não pode desconectar jogadores do WireGuard.
 _vps_manifest_cache: list = []  # [monotonic, payload]
 
 
 async def _build_vps_manifest(db: AsyncSession) -> list[dict]:
     """Lê scan_workers com tunnel metadata e monta o manifest.
     Lista quem tem tunnel configurado, não quem está pingando agora —
-    o companion pinga cada VPS pra decidir se está online."""
+    o companion pinga cada VPS pra decidir se está online. Quarentena e
+    credencial revogada só controlam o scanner distribuído, não o WireGuard."""
     from app.models.scan_worker import ScanWorker
     rows = (await db.scalars(
         select(ScanWorker).where(
             ScanWorker.vps_endpoint.is_not(None),
             ScanWorker.vps_endpoint != "",
-            ScanWorker.status != "quarantined",
-            ScanWorker.credential_revoked.is_(False),
         ).order_by(ScanWorker.id)
     )).all()
     return [
@@ -578,6 +578,8 @@ async def scan_claim(
 
     X-Ziggs-Install identifica a INSTALAÇÃO (1 por PC): a mesma instalação
     pedindo de novo recebe o range que já tem, em vez de acumular ranges."""
+    if get_settings().disable_distributed_scan:
+        raise HTTPException(204)
     install = _install_id(x_ziggs_install)
     if install is None:
         raise HTTPException(400, "X-Ziggs-Install inválido")
@@ -620,6 +622,9 @@ async def scan_report(
     x_ziggs_install: str | None = Header(None),
     db: AsyncSession = Depends(get_async_session),
 ) -> ScanReportOut:
+    if get_settings().disable_distributed_scan:
+        # Mantém o companion estável sem revalidar IDs contra a API Albion.
+        return ScanReportOut(accepted=0, rejected=0)
     install = _install_id(x_ziggs_install)
     if install is None:
         raise HTTPException(400, "X-Ziggs-Install inválido")
@@ -660,6 +665,8 @@ async def kill_scan_claim(
     x_ziggs_install: str | None = Header(None),
 ) -> KillScanClaimOut | None:
     """Pega um range de EventIds pra sondar. 204 = sem trabalho."""
+    if get_settings().disable_distributed_scan:
+        raise HTTPException(204)
     install = _install_id(x_ziggs_install)
     if install is None:
         raise HTTPException(400, "X-Ziggs-Install inválido")
@@ -697,6 +704,9 @@ async def kill_scan_report(
     x_ziggs_install: str | None = Header(None),
     db: AsyncSession = Depends(get_async_session),
 ) -> KillScanReportOut:
+    if get_settings().disable_distributed_scan:
+        # Mantém o companion estável sem revalidar IDs contra a API Albion.
+        return KillScanReportOut(accepted=0, rejected=0)
     install = _install_id(x_ziggs_install)
     if install is None:
         raise HTTPException(400, "X-Ziggs-Install inválido")

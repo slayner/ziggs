@@ -58,7 +58,9 @@ async def _history_posted_ids(channel, bot_id: int) -> set[str]:
     ackadas (bot caiu antes de chamar /synced) seriam re-postadas."""
     posted: set[str] = set()
     try:
-        async for message in channel.history(limit=200):
+        history = channel.history(limit=200)
+        while True:
+            message = await dtimeout(anext(history))
             if message.author.id != bot_id or not message.content:
                 continue
             # Link: https://ziggs.example/{public_id} — pega o último segmento.
@@ -68,7 +70,9 @@ async def _history_posted_ids(channel, bot_id: int) -> set[str]:
                     pid = token.rstrip("/").rsplit("/", 1)[-1]
                     if pid and pid != token:
                         posted.add(pid)
-    except (discord.Forbidden, discord.HTTPException):
+    except StopAsyncIteration:
+        pass
+    except SKIP_EXC:
         pass
     return posted
 
@@ -130,10 +134,9 @@ class BattleFeed(commands.Cog):
             if wm is not None and ts <= wm:
                 continue
             if posted_ids is not None and b.get("public_id") in posted_ids:
-                # Já postada (histórico do canal) — só avança o watermark se for
-                # mais novo, pra o backend não re-enviar no próximo poll.
-                if ts > (wm or datetime.min.replace(tzinfo=timezone.utc)):
-                    self._watermarks[guild.id] = ts
+                # Já postada mas ainda sem ACK (o processo caiu ou o backend
+                # estava indisponível). Inclui no checkpoint para reconhecê-la.
+                last_ts = ts
                 continue
             link = f"{PUBLIC_URL}/{b['public_id']}"
             try:
@@ -141,10 +144,13 @@ class BattleFeed(commands.Cog):
             except SKIP_EXC:
                 break  # para no primeiro erro — ack só até o último enviado
             last_ts = ts
-            self._watermarks[guild.id] = ts
 
         if last_ts is not None:
-            await _post(f"/bot/guilds/{guild.id}/battle-feed-synced", {"last_ts": last_ts.isoformat()})
+            acknowledged = await _post(
+                f"/bot/guilds/{guild.id}/battle-feed-synced", {"last_ts": last_ts.isoformat()},
+            )
+            if acknowledged is not None:
+                self._watermarks[guild.id] = last_ts
 
 
 @tasks.loop(seconds=30)
