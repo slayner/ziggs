@@ -595,9 +595,9 @@ def _write_deep_data(battle_id: int, raw: dict | None, events: list[dict]) -> bo
         if not is_lethal:
             from app.models.battles import BattleIdProbe
             aid = battle.albion_id
-            if db.get(BattleIdProbe, aid) is None:
+            if db.get(BattleIdProbe, {"region": battle.region, "albion_id": aid}) is None:
                 db.add(BattleIdProbe(
-                    albion_id=aid, status="missing", region=battle.region,
+                    region=battle.region, albion_id=aid, status="missing",
                     probed_at=datetime.now(timezone.utc),
                 ))
             db.delete(battle)
@@ -693,12 +693,7 @@ async def find_or_create_battle(client: httpx.AsyncClient, db: AsyncSession, alb
     await db.commit()
 
     if battle is None:
-        # Já foi deep-processada e descartada (não-lethal)? Não recria.
         from app.models.battles import BattleIdProbe
-        probe = await db.scalar(select(BattleIdProbe).where(BattleIdProbe.albion_id == albion_id))
-        await db.commit()
-        if probe is not None:
-            return None
 
         for region, candidate_host in HOSTS.items():
             try:
@@ -706,6 +701,9 @@ async def find_or_create_battle(client: httpx.AsyncClient, db: AsyncSession, alb
             except Exception:
                 continue
             if raw is None:
+                continue
+            probe = await db.get(BattleIdProbe, {"region": region, "albion_id": albion_id})
+            if probe is not None:
                 continue
             battle = await upsert_battle_light(db, raw, region)
             await db.commit()

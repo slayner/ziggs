@@ -98,10 +98,6 @@ def _region_candidates(ids_desc: list[int], probed: set[int], limit: int) -> lis
 
 def generate_candidates(db: Session, active_companions: int = 0) -> list[tuple[str, int]]:
     """[(region, albion_id_int), ...] — buracos por região, novos primeiro.
-    Exclusão de sondados é GLOBAL por albion_id (PK única da BattleIdProbe):
-    um número sondado numa região não re-entra pra outra. Perde no máximo o
-    gêmeo de número coincidente em outra região — raro e barato; se um dia
-    importar, o upgrade é PK composta (region, albion_id) na probe table.
 
     `active_companions`: se >0, reduz o teto de candidatos — companions ativos
     sondam os mesmos buracos de graça (IP deles), então o sweeper gasta menos
@@ -113,16 +109,15 @@ def generate_candidates(db: Session, active_companions: int = 0) -> list[tuple[s
         log.info("battle_sweeper: %d companion(s) ativo(s) — teto reduzido pra %d candidatos",
                  active_companions, limit)
 
-    probed: set[int] = set()
-    for x in db.scalars(select(BattleIdProbe.albion_id)):
-        try:
-            probed.add(int(x))
-        except (TypeError, ValueError):
-            continue
-
     per_region_limit = max(1, limit // len(HOSTS))
     out: list[tuple[str, int]] = []
     for region in HOSTS:
+        probed: set[int] = set()
+        for x in db.scalars(select(BattleIdProbe.albion_id).where(BattleIdProbe.region == region)):
+            try:
+                probed.add(int(x))
+            except (TypeError, ValueError):
+                continue
         raw = db.scalars(select(Battle.albion_id).where(Battle.region == region)).all()
         ids: set[int] = set()
         for a in raw:
@@ -204,16 +199,14 @@ async def _probe_and_capture(
                         occurred_at=_battle_occurred_at,
                     ))
 
-                existing = await db.get(BattleIdProbe, aid)
+                existing = await db.get(BattleIdProbe, {"region": region, "albion_id": aid})
                 if existing is None:
                     db.add(BattleIdProbe(
-                        albion_id=aid, status=status,
-                        region=region,
+                        region=region, albion_id=aid, status=status,
                         probed_at=datetime.now(timezone.utc),
                     ))
                 else:
                     existing.status = status
-                    existing.region = region
                     existing.probed_at = datetime.now(timezone.utc)
                 await db.commit()
                 return captured

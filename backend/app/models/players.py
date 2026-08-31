@@ -318,16 +318,12 @@ class DeletedProfile(Base):
 
 
 class KillIdProbe(Base):
-    """Memória de sondagem do kill_sweeper — uma linha por albion_event_id que
-    sondamos no endpoint de detalhe (fora da janela de offset 999 da listagem
-    de events). Sem isto, cada ciclo re-sondaria todos os buracos (404s) de
-    novo. status='found' = evento existe e foi ingerido; status='missing' =
-    404, evento inexistente."""
+    """Memória de sondagem por região e albion_event_id fora do feed."""
     __tablename__ = "kill_id_probes"
 
+    region: Mapped[str] = mapped_column(String(16), primary_key=True)
     albion_event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # "found" | "missing"
-    region: Mapped[str | None] = mapped_column(String(16), nullable=True)
     probed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

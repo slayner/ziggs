@@ -88,16 +88,17 @@ async def generate_kill_candidates(db: AsyncSession, active_companions: int = 0)
         log.info("kill_sweeper: %d companion(s) ativo(s) — teto reduzido pra %d candidatos",
                  active_companions, limit)
 
-    probed: set[int] = set()
-    for x in (await db.scalars(select(KillIdProbe.albion_event_id))):
-        try:
-            probed.add(int(x))
-        except (TypeError, ValueError):
-            continue
-
     per_region_limit = max(1, limit // len(HOSTS))
     out: list[tuple[str, int]] = []
     for region in HOSTS:
+        probed: set[int] = set()
+        for x in (await db.scalars(
+            select(KillIdProbe.albion_event_id).where(KillIdProbe.region == region)
+        )):
+            try:
+                probed.add(int(x))
+            except (TypeError, ValueError):
+                continue
         raw = (await db.scalars(
             select(PlayerKillEvent.albion_event_id)
             .where(PlayerKillEvent.region == region)
@@ -176,16 +177,14 @@ async def _probe_and_ingest(
                 occurred_at=_event_occurred_at,
             ))
 
-        existing = await db.get(KillIdProbe, eid)
+        existing = await db.get(KillIdProbe, {"region": region, "albion_event_id": eid})
         if existing is None:
             db.add(KillIdProbe(
-                albion_event_id=eid, status=status,
-                region=region,
+                region=region, albion_event_id=eid, status=status,
                 probed_at=datetime.now(timezone.utc),
             ))
         else:
             existing.status = status
-            existing.region = region
             existing.probed_at = datetime.now(timezone.utc)
         await db.commit()
     return captured

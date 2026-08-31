@@ -126,9 +126,20 @@ def test_status_e_payload_vem_da_api_oficial():
         ))
 
     assert db.scalar(select(Battle.id).where(Battle.albion_id == "101")) is not None
-    assert db.get(BattleIdProbe, "100").status == "missing"
-    assert db.get(BattleIdProbe, "101").status == "found"
-    assert db.get(BattleIdProbe, "102") is None
+    assert db.get(BattleIdProbe, {"region": "americas", "albion_id": "100"}).status == "missing"
+    assert db.get(BattleIdProbe, {"region": "americas", "albion_id": "101"}).status == "found"
+    assert db.get(BattleIdProbe, {"region": "americas", "albion_id": "102"}) is None
+
+
+def test_mesmo_id_em_regioes_diferentes_tem_checkpoints_independentes():
+    db = _session()
+    db.add_all([
+        BattleIdProbe(region="europe", albion_id="100", status="missing"),
+        BattleIdProbe(region="americas", albion_id="100", status="found"),
+    ])
+    db.commit()
+    assert db.get(BattleIdProbe, {"region": "europe", "albion_id": "100"}).status == "missing"
+    assert db.get(BattleIdProbe, {"region": "americas", "albion_id": "100"}).status == "found"
 
 
 if __name__ == "__main__":

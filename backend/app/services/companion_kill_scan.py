@@ -87,7 +87,11 @@ async def _generate_kill_range(db: AsyncSession, region: str) -> tuple[int, int]
         return None
 
     ids_desc = sorted(ids, reverse=True)
-    probed = {int(x) for x in (await db.scalars(select(KillIdProbe.albion_event_id))) if str(x).isdigit()}
+    probed = {
+        int(x) for x in (await db.scalars(
+            select(KillIdProbe.albion_event_id).where(KillIdProbe.region == region)
+        )) if str(x).isdigit()
+    }
     candidates = _kill_region_candidates(ids_desc, probed | ids, KILL_RANGE_SIZE)
     if not candidates:
         return None
@@ -178,15 +182,14 @@ async def report_kill_range(
             status = "error"
 
         if status != "error":
-            probe = await db.get(KillIdProbe, str(eid))
+            probe = await db.get(KillIdProbe, {"region": region, "albion_event_id": str(eid)})
             if probe is None:
                 db.add(KillIdProbe(
-                    albion_event_id=str(eid), status=status,
-                    region=region, probed_at=_now(),
+                    region=region, albion_event_id=str(eid), status=status,
+                    probed_at=_now(),
                 ))
             else:
                 probe.status = status
-                probe.region = region
                 probe.probed_at = _now()
 
     await db.commit()

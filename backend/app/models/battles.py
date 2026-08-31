@@ -236,17 +236,12 @@ class BattleGroupMember(Base):
 
 
 class BattleIdProbe(Base):
-    """Memória de sondagem do battle_sweeper — uma linha por albion_id que
-    sondamos no endpoint de detalhe (fora da janela de offset 10000 da
-    listagem). Sem isto, cada ciclo re-sondaria todos os buracos (404s) de novo
-    e viraria tempestade de 429. status='found' = achado em ≥1 região (light-
-    capturado, marcado reprocess_reason='sweeper' pro battle_reprocessor fazer
-    o deep); status='missing' = 404 nos 3 hosts, batalha inexistente."""
+    """Memória de sondagem por região e albion_id fora da janela do feed."""
     __tablename__ = "battle_id_probes"
 
+    region: Mapped[str] = mapped_column(String(16), primary_key=True)
     albion_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # "found" | "missing"
-    region: Mapped[str | None] = mapped_column(String(16), nullable=True)  # primeira região que achou
     probed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

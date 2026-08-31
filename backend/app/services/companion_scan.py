@@ -86,7 +86,11 @@ async def _generate_tasks_for_region(db: AsyncSession, region: str) -> int:
         return 0
 
     ids_desc = sorted(ids, reverse=True)
-    probed = {int(x) for x in (await db.scalars(select(BattleIdProbe.albion_id))).all() if str(x).isdigit()}
+    probed = {
+        int(x) for x in (await db.scalars(
+            select(BattleIdProbe.albion_id).where(BattleIdProbe.region == region)
+        )).all() if str(x).isdigit()
+    }
     candidates = _region_candidates(ids_desc, probed | ids, CANDIDATES_PER_REGION)
 
     created = 0
@@ -280,15 +284,14 @@ async def report_task(
             verified_errors += 1
 
         if status != "error":
-            probe = await db.get(BattleIdProbe, str(aid))
+            probe = await db.get(BattleIdProbe, {"region": region, "albion_id": str(aid)})
             if probe is None:
                 db.add(BattleIdProbe(
-                    albion_id=str(aid), status=status, region=region,
+                    region=region, albion_id=str(aid), status=status,
                     probed_at=_now(),
                 ))
             else:
                 probe.status = status
-                probe.region = region
                 probe.probed_at = _now()
 
     task.status = "done"
