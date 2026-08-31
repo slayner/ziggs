@@ -318,7 +318,6 @@ async def _capture_and_apply_kill_stream(
     *,
     page_budget: int,
     priority: int,
-    force_restart: bool = False,
 ) -> int:
     async with albion_scope(priority):
         result = await capture_native_stream(
@@ -331,16 +330,10 @@ async def _capture_and_apply_kill_stream(
             fetch_page=lambda offset, limit: _fetch_kill_page(client, host, offset, limit),
             source_id=_event_source_id,
             occurred_at=_event_occurred_at,
-            force_restart=force_restart,
         )
-    if not result.completed:
-        return 0
-    return await apply_native_items(
-        db,
-        kind=KIND_KILL,
-        region=region,
-        apply_item=_apply_kill_item,
-    )
+    if result.head_payload:
+        pass
+    return 0
 
 
 PLAYER_SYNC_LIMIT = 50  # kills/mortes buscados por sincronização ativa, sem paginar mais que isso
@@ -439,10 +432,10 @@ async def poll_once() -> int:
                 try:
                     count += await _capture_and_apply_kill_stream(
                         c, db, region, host, page_budget=max_pages, priority=NEW_ELIGIBLE,
-                        force_restart=True,
                     )
                 except Exception as e:
                     log.warning("player_tracker: falha no feed de kills (%s): %s", region, e)
+                    await db.rollback()
 
     return count
 
