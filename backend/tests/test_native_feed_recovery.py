@@ -996,3 +996,50 @@ def test_lock_de_captura_ocupado_nao_inani_a_regiao_seguinte():
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_capturing_no_limite_promove_outside_window_em_vez_de_bloquear():
+    """Regressão: kill em next_offset=1000 ficava bloqueado para sempre quando
+    a âncora já havia saído da janela. Fim da janela é resolução válida."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="europe",
+                completed_head_source_id="old", captured_head_source_id="old",
+                scan_anchor_source_id="old", scan_head_source_id="new",
+                scan_active=True, scan_phase="capturing", next_offset=1000,
+                search_high_offset=969,
+            ))
+            db.add_all([
+                NativeFeedItem(
+                    kind=KIND_KILL, region="europe", source_id="old",
+                    occurred_at=now, payload=_raw("old", now), status="applied",
+                ),
+                NativeFeedItem(
+                    kind=KIND_KILL, region="europe", source_id="new",
+                    occurred_at=now + timedelta(minutes=1), payload=_raw("new", now + timedelta(minutes=1)),
+                ),
+            ])
+            await db.commit()
+
+            async def fetch(_offset, _limit):
+                raise AssertionError("não deve buscar além do limite")
+
+            result = await capture_native_stream(
+                db, kind=KIND_KILL, region="europe", page_size=51,
+                offset_limit=1000, page_budget=3, fetch_page=fetch,
+                source_id=_source, occurred_at=_occurred,
+            )
+            stream = await db.get(NativeFeedStream, {"kind": KIND_KILL, "region": "europe"})
+            assert result.completed and not result.blocked
+            assert stream is not None
+            assert stream.scan_resolution == "outside_window"
+            assert stream.captured_head_source_id == "new"
+            assert not stream.scan_active and not stream.scan_blocked
+
+        await engine.dispose()
+
+    asyncio.run(run())

@@ -688,18 +688,29 @@ async def _capture_to_target(
         offset = stream.next_offset
         request_size = min(page_size, offset_limit - offset)
         if request_size <= 0:
-            stream.scan_blocked = True
-            stream.blocked_at = _now()
-            stream.blocked_reason = (
-                f"âncora {anchor_id!r} não apareceu antes do limite {offset_limit}"
-            )
+            # Chegamos ao fim da janela visível: a âncora saiu dela. Isso é uma
+            # conclusão válida, não bloqueio — promove a cabeça já capturada e
+            # permite o dreno. Antes, kills ficava eternamente ativo em offset
+            # 1000 e battles em 10000 esperando uma âncora impossível.
+            stream.scan_active = False
+            stream.scan_anchor_source_id = None
+            stream.scan_anchor_occurred_at = None
+            stream.next_offset = 0
+            stream.scan_resolution = "outside_window"
+            stream.scan_phase = None
+            stream.scan_last_progress_at = _now()
+            stream.search_low_offset = 0
+            stream.search_high_offset = 0
+            if stream.scan_head_source_id:
+                stream.captured_head_source_id = stream.scan_head_source_id
+            stream.scan_head_source_id = None
             await db.commit()
-            log.warning(
-                "event=native_feed_scan_blocked scan_id=%s kind=%s region=%s "
-                "reason=%s",
-                stream.scan_id, kind, region, stream.blocked_reason,
+            log.info(
+                "event=native_feed_boundary_promoted scan_id=%s kind=%s region=%s "
+                "resolution=outside_window anchor_id=%s pages=%d",
+                stream.scan_id, kind, region, anchor_id, pages,
             )
-            return ScanResult(False, True, pages, head_payload)
+            return ScanResult(True, False, pages, head_payload)
 
         probe, page = await _fetch_and_store(
             db, fetch_page, offset, request_size,
