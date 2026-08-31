@@ -13,6 +13,7 @@ routers — o catch-all só apanha o que nenhuma rota da API reconheceu.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, quote
 
@@ -94,23 +95,51 @@ async def _og_for_path(
 
     m = _GUILD_RE.match(path)
     if m:
-        from app.api.routes.profiles import guild_preview_metadata
+        from app.api.routes.profiles import guild_preview_metadata, _resolve_region_for_guild
         from app.config import get_settings
+        from app.models.guild_profiles import GuildProfile
+        from app.db import AsyncSessionLocal
+        from app.services.profile_warmer import request_refresh
+        from sqlalchemy import select
         metadata = await guild_preview_metadata(m.group(1))
         if metadata is not None:
             _, image_version = metadata
             s = get_settings()
             return ("", "", f"{s.frontend_url}/public/guilds/embed/{quote(m.group(1), safe='')}.png?v={image_version}")
+        async with AsyncSessionLocal() as db:
+            region = await _resolve_region_for_guild(db, m.group(1))
+            if region is not None:
+                gp = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == m.group(1)))
+                if gp is None:
+                    db.add(GuildProfile(albion_id=m.group(1), name=m.group(1), region=region, refresh_requested_at=datetime.now(timezone.utc)))
+                elif gp.refresh_requested_at is None:
+                    gp.refresh_requested_at = datetime.now(timezone.utc)
+                await db.commit()
+                request_refresh()
 
     m = _ALLIANCE_RE.match(path)
     if m:
         from app.config import get_settings
-        from app.api.routes.profiles import alliance_preview_metadata
+        from app.api.routes.profiles import alliance_preview_metadata, _resolve_region_for_alliance
+        from app.models.guild_profiles import AllianceProfile
+        from app.db import AsyncSessionLocal
+        from app.services.profile_warmer import request_refresh
+        from sqlalchemy import select
         s = get_settings()
         metadata = await alliance_preview_metadata(m.group(1))
         if metadata is not None:
             _, image_version = metadata
             return ("", "", f"{s.frontend_url}/public/alliances/embed/{quote(m.group(1), safe='')}.png?v={image_version}")
+        async with AsyncSessionLocal() as db:
+            region = await _resolve_region_for_alliance(db, m.group(1))
+            if region is not None:
+                ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == m.group(1)))
+                if ap is None:
+                    db.add(AllianceProfile(albion_id=m.group(1), name=m.group(1), region=region, refresh_requested_at=datetime.now(timezone.utc)))
+                elif ap.refresh_requested_at is None:
+                    ap.refresh_requested_at = datetime.now(timezone.utc)
+                await db.commit()
+                request_refresh()
 
     if path.startswith(("guild/", "alliance/")):
         return ("Perfil de guilda — Ziggs", "", None)
