@@ -89,6 +89,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(battle_tracker.run_drain_forever()),
             *([] if _maintenance_off else [
                 asyncio.create_task(profile_warmer.run_forever()),
+                asyncio.create_task(profile_warmer.run_prerender_forever()),
             ]),
             asyncio.create_task(profile_warmer.run_refresh_forever()),
             asyncio.create_task(claim_checker.run_forever()),

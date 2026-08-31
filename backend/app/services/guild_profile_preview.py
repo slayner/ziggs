@@ -31,6 +31,10 @@ def _cache_path(albion_id: str) -> Path:
     return _CACHE_DIR / f"{albion_id}_r{PREVIEW_RENDER_VERSION}.png"
 
 
+def _alliance_cache_path(albion_id: str) -> Path:
+    return _ALLIANCE_CACHE_DIR / f"{albion_id}_r{PREVIEW_RENDER_VERSION}.png"
+
+
 def invalidate_cache(albion_id: str) -> None:
     for p in [_CACHE_DIR / f"{albion_id}.png", *_CACHE_DIR.glob(f"{albion_id}_r*.png")]:
         try:

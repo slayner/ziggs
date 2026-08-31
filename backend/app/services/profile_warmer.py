@@ -117,6 +117,7 @@ async def _warm_player(client, db: AsyncSession, host: str, region: str, albion_
         invalidate_cache(albion_id, region)
         _refresh_progress[albion_id] = "kills"
         await sync_player_kills(client, db, host, region, albion_id)
+        await _render_player_preview_async(albion_id, region)
         log.info("warm: player %s (%s) — %s aquecido", raw.get("Name") or albion_id, region, "refresh" if force else "backfill")
         return True
     except Exception as e:
@@ -264,6 +265,7 @@ async def _warm_guild(client, db: AsyncSession, host: str, region: str, albion_i
             return False
         from app.services.guild_profile_preview import invalidate_cache
         invalidate_cache(albion_id)
+        await _render_guild_preview_async(albion_id)
         log.info("warm: guild %s (%s) — %s aquecida (%d membros)",
                  raw.get("Name") or albion_id, region, "refresh",
                  len(members) if members else 0)
@@ -298,6 +300,7 @@ async def _warm_alliance(client, db: AsyncSession, host: str, region: str, albio
             return False
         from app.services.guild_profile_preview import invalidate_alliance_cache
         invalidate_alliance_cache(albion_id)
+        await _render_alliance_preview_async(albion_id)
         log.info("warm: alliance %s (%s) — %s aquecida",
                  raw.get("AllianceName") or albion_id, region, "refresh")
         return True
@@ -700,3 +703,161 @@ async def run_forever() -> None:
             log.error("profile_warmer: erro: %s", e)
             n = 0
         await asyncio.sleep(BUSY_INTERVAL if n > 0 else IDLE_INTERVAL)
+
+
+# ── Render de embeds após warm ────────────────────────────────────────────
+
+async def _render_player_preview_async(albion_id: str, region: str) -> None:
+    """Gera o PNG do perfil do jogador em background após o warm."""
+    from app.services.profile_preview import render_player_preview, _cache_path
+
+    if _cache_path(albion_id, region).exists():
+        return
+
+    def _run():
+        sdb = SyncSessionLocal()
+        try:
+            return render_player_preview(sdb, albion_id, region)
+        except Exception as e:
+            log.debug("warm: render player %s (%s) falhou: %s", albion_id, region, e)
+        finally:
+            sdb.close()
+
+    await asyncio.to_thread(_run)
+
+
+async def _render_guild_preview_async(albion_id: str) -> None:
+    """Gera o PNG do perfil de guilda em background após o warm."""
+    from app.services.guild_profile_preview import render_guild_preview, _cache_path
+
+    if _cache_path(albion_id).exists():
+        return
+
+    def _run():
+        sdb = SyncSessionLocal()
+        try:
+            return render_guild_preview(sdb, albion_id)
+        except Exception as e:
+            log.debug("warm: render guild %s falhou: %s", albion_id, e)
+        finally:
+            sdb.close()
+
+    await asyncio.to_thread(_run)
+
+
+async def _render_alliance_preview_async(albion_id: str) -> None:
+    """Gera o PNG do perfil de aliança em background após o warm."""
+    from app.services.guild_profile_preview import render_alliance_preview, _alliance_cache_path
+
+    if _alliance_cache_path(albion_id).exists():
+        return
+
+    def _run():
+        sdb = SyncSessionLocal()
+        try:
+            return render_alliance_preview(sdb, albion_id)
+        except Exception as e:
+            log.debug("warm: render alliance %s falhou: %s", albion_id, e)
+        finally:
+            sdb.close()
+
+    await asyncio.to_thread(_run)
+
+
+PRERENDER_BATCH = 50
+PRERENDER_INTERVAL = 120
+
+
+async def run_prerender_forever() -> None:
+    """Garante que perfis já aquecidos tenham seu PNG de embed gerado.
+
+    Percorre players e guilds com last_seen_at recente mas sem PNG no cache.
+    Roda em background, sem competir com o warm (não faz HTTP à Albion — só
+    lê o DB e gera a imagem com PIL)."""
+    log.info("profile_warmer: prerender de embeds iniciando")
+    from pathlib import Path as _Path
+    from app.services.profile_preview import _cache_path as _player_cache, render_player_preview
+    from app.services.guild_profile_preview import _cache_path as _guild_cache, render_guild_preview, _alliance_cache_path, render_alliance_preview
+    while True:
+        try:
+            rendered = 0
+            async with AsyncSessionLocal() as db:
+                players = (await db.scalars(
+                    select(AlbionPlayer)
+                    .where(AlbionPlayer.last_seen_at.isnot(None))
+                    .order_by(AlbionPlayer.last_seen_at.desc())
+                    .limit(PRERENDER_BATCH)
+                )).all()
+                player_data = [(p.albion_id, p.region) for p in players]
+                guilds = (await db.scalars(
+                    select(GuildProfile)
+                    .where(GuildProfile.last_seen_at.isnot(None))
+                    .order_by(GuildProfile.last_seen_at.desc())
+                    .limit(PRERENDER_BATCH)
+                )).all()
+                guild_data = [g.albion_id for g in guilds]
+                alliances = (await db.scalars(
+                    select(AllianceProfile)
+                    .where(AllianceProfile.last_seen_at.isnot(None))
+                    .order_by(AllianceProfile.last_seen_at.desc())
+                    .limit(PRERENDER_BATCH)
+                )).all()
+                alliance_data = [a.albion_id for a in alliances]
+            await db.commit()
+
+            missing_players = [
+                (aid, reg) for aid, reg in player_data
+                if not _player_cache(aid, reg).exists()
+            ]
+            missing_guilds = [
+                aid for aid in guild_data
+                if not _guild_cache(aid).exists()
+            ]
+            missing_alliances = [
+                aid for aid in alliance_data
+                if not _alliance_cache_path(aid).exists()
+            ]
+
+            def _run_player(aid, reg):
+                sdb = SyncSessionLocal()
+                try:
+                    return render_player_preview(sdb, aid, reg)
+                except Exception as e:
+                    log.debug("prerender: player %s (%s) falhou: %s", aid, reg, e)
+                finally:
+                    sdb.close()
+
+            def _run_guild(aid):
+                sdb = SyncSessionLocal()
+                try:
+                    return render_guild_preview(sdb, aid)
+                except Exception as e:
+                    log.debug("prerender: guild %s falhou: %s", aid, e)
+                finally:
+                    sdb.close()
+
+            def _run_alliance(aid):
+                sdb = SyncSessionLocal()
+                try:
+                    return render_alliance_preview(sdb, aid)
+                except Exception as e:
+                    log.debug("prerender: alliance %s falhou: %s", aid, e)
+                finally:
+                    sdb.close()
+
+            for aid, reg in missing_players:
+                await asyncio.to_thread(_run_player, aid, reg)
+                rendered += 1
+            for aid in missing_guilds:
+                await asyncio.to_thread(_run_guild, aid)
+                rendered += 1
+            for aid in missing_alliances:
+                await asyncio.to_thread(_run_alliance, aid)
+                rendered += 1
+
+            if rendered:
+                log.info("profile_warmer: prerender gerou %d embeds (%d players, %d guilds, %d alliances)",
+                         rendered, len(missing_players), len(missing_guilds), len(missing_alliances))
+        except Exception as e:
+            log.error("profile_warmer: erro no prerender: %s", e)
+        await asyncio.sleep(PRERENDER_INTERVAL)
