@@ -433,6 +433,9 @@ async def _locate_anchor(
     # ── Busca exponencial: dobrar offset até passar o tempo da âncora ──
     if stream.search_high_offset == 0:
         exp_offset = stream.next_offset
+        if exp_offset == 0 and stream.search_low_offset > 0:
+            exp_offset = min(offset_limit, 2 * stream.search_low_offset + page_size)
+            stream.next_offset = exp_offset
         while pages < page_budget:
             request_size = min(page_size, offset_limit - exp_offset)
             if request_size <= 0:
