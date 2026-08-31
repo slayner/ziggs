@@ -1094,6 +1094,8 @@ def publish_delay_status() -> dict:
 async def sync_recent() -> int:
     """Captura o feed recente. A busca exponencial/binária localiza a âncora
     em ~8-16 probes em vez de ~197 lineares."""
+    from app.services.native_feed import CaptureBusy
+
     count = 0
     async with AsyncSessionLocal() as db:
         async with make_client() as client:
@@ -1104,6 +1106,14 @@ async def sync_recent() -> int:
                         page_budget=_pages_for_delay(region),
                         priority=NEW_ELIGIBLE,
                     )
+                except CaptureBusy:
+                    # Varredura de fundo segurando o lock: pula a região SEM
+                    # abortar o ciclo — europe/asia continuam sendo tentadas.
+                    log.info(
+                        "battle_tracker: captura ocupada (%s) — região pulada neste ciclo",
+                        region,
+                    )
+                    await db.rollback()
                 except Exception as e:
                     log.warning("battle_tracker: falha no feed recente (%s): %r", region, e)
                     await db.rollback()

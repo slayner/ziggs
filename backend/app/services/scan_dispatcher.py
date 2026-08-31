@@ -1607,6 +1607,7 @@ async def run_ordered_recovery_forever() -> None:
     """
     from app.services.battle_tracker import _capture_and_apply_battle_stream
     from app.services.player_tracker import _capture_and_apply_kill_stream
+    from app.services.native_feed import CaptureBusy
 
     log.info("scan_dispatcher: verificador ordenado de streams iniciado")
     while True:
@@ -1614,9 +1615,12 @@ async def run_ordered_recovery_forever() -> None:
             try:
                 async with make_client() as client:
                     for region, host in HOSTS.items():
-                        await _capture_and_apply_battle_stream(
-                            client, db, region, host, page_budget=1, priority=OTHER,
-                        )
+                        try:
+                            await _capture_and_apply_battle_stream(
+                                client, db, region, host, page_budget=1, priority=OTHER,
+                            )
+                        except CaptureBusy:
+                            pass  # lock seguro por outro worker — próxima região
                         await _capture_and_apply_kill_stream(
                             client, db, region, host, page_budget=1, priority=OTHER,
                         )

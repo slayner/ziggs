@@ -29,9 +29,43 @@ RECOVERY_MAX_AGE = timedelta(minutes=15)
 PROCESSING_STALE_AFTER = timedelta(minutes=5)
 DEAD_LETTER_MAX_ATTEMPTS = 20
 OVERLAP_PAGES = 1
+CAPTURE_LOCK_WAIT_SECONDS = 60.0
+STALL_LOG_INTERVAL_SECONDS = 300.0
 
-_capture_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+class CaptureBusy(Exception):
+    """Outra varredura segura o lock de captura por tempo demais."""
+
+
+class _TimedCaptureLock:
+    """asyncio.Lock com espera limitada: o holder lento (varredura de fundo
+    pendurada no rate limiter) não pode inanir a descoberta de feed de alta
+    prioridade — incidente 31/08/2026: sync_recent esperava o lock para
+    sempre enquanto o reverse-sweep (OTHER) o segurava por minutos atrás da
+    manada de sondas do sweeper, e as regiões seguintes nunca eram tentadas.
+    Após o timeout, levanta CaptureBusy: o caller pula pra próxima região e
+    o ciclo não pendura."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+
+    async def __aenter__(self) -> None:
+        try:
+            async with asyncio.timeout(CAPTURE_LOCK_WAIT_SECONDS):
+                await self._lock.acquire()
+        except TimeoutError as exc:
+            raise CaptureBusy(
+                f"lock de captura ocupado há {CAPTURE_LOCK_WAIT_SECONDS:.0f}s "
+                "(outra varredura em andamento)"
+            ) from exc
+
+    async def __aexit__(self, *_exc: object) -> None:
+        self._lock.release()
+
+
+_capture_locks: dict[tuple[str, str], _TimedCaptureLock] = {}
 _apply_locks: dict[tuple[str, str], asyncio.Lock] = {}
+_stall_log_last: dict[tuple[str, str], datetime] = {}
 
 
 @dataclass(frozen=True)
@@ -60,8 +94,8 @@ OccurredAt = Callable[[dict], datetime]
 ApplyItem = Callable[[AsyncSession, NativeFeedItem], Awaitable[None]]
 
 
-def _capture_lock(kind: str, region: str) -> asyncio.Lock:
-    return _capture_locks.setdefault((kind, region), asyncio.Lock())
+def _capture_lock(kind: str, region: str) -> _TimedCaptureLock:
+    return _capture_locks.setdefault((kind, region), _TimedCaptureLock())
 
 
 def _apply_lock(kind: str, region: str) -> asyncio.Lock:
@@ -759,13 +793,17 @@ async def apply_native_items(
                 and stream.scan_started_at
                 and _aware(stream.scan_started_at) + RECOVERY_MAX_AGE <= _now()
             ):
-                log.warning(
-                    "event=native_feed_scan_stalled scan_id=%s kind=%s region=%s "
-                    "phase=%s seconds_without_progress=%d current_offset=%d anchor_id=%s",
-                    stream.scan_id, kind, region, stream.scan_phase or "capturing",
-                    int((_now() - _aware(stream.scan_last_progress_at or stream.scan_started_at)).total_seconds()),
-                    stream.next_offset, stream.scan_anchor_source_id,
-                )
+                now = _now()
+                last = _stall_log_last.get((kind, region))
+                if last is None or (now - last).total_seconds() >= STALL_LOG_INTERVAL_SECONDS:
+                    _stall_log_last[(kind, region)] = now
+                    log.warning(
+                        "event=native_feed_scan_stalled scan_id=%s kind=%s region=%s "
+                        "phase=%s seconds_without_progress=%d current_offset=%d anchor_id=%s",
+                        stream.scan_id, kind, region, stream.scan_phase or "capturing",
+                        int((now - _aware(stream.scan_last_progress_at or stream.scan_started_at)).total_seconds()),
+                        stream.next_offset, stream.scan_anchor_source_id,
+                    )
             boundary = None
             if stream.scan_active or stream.scan_blocked:
                 if stream.captured_head_source_id:

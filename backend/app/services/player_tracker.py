@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -292,12 +293,24 @@ def _event_occurred_at(raw: dict) -> datetime:
 
 
 async def _fetch_kill_page(client: httpx.AsyncClient, host: str, offset: int, limit: int) -> list[dict]:
-    async with slot(host):
-        response = await client.get(
-            f"https://{host}/api/gameinfo/events",
-            params={"limit": limit, "offset": offset},
-        )
-    response.raise_for_status()
+    # Mesma política de retry do fetch_battles: sem isto, UM 502 transitório
+    # no meio da varredura aborta o ciclo da região inteira (a âncora fica
+    # aberta até o ciclo seguinte). 1 retry com jitter cobre o transitório.
+    for attempt in range(2):
+        try:
+            async with slot(host):
+                response = await client.get(
+                    f"https://{host}/api/gameinfo/events",
+                    params={"limit": limit, "offset": offset},
+                )
+            response.raise_for_status()
+            break
+        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.HTTPStatusError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in (429, 502, 503, 504):
+                raise
+            if attempt == 1:
+                raise
+            await asyncio.sleep(random.uniform(0.7, 1.3))
     data = response.json()
     if not isinstance(data, list):
         raise ValueError(f"feed de kills inválido em offset {offset}")
@@ -424,6 +437,8 @@ async def sync_player_kills(client: httpx.AsyncClient, db: AsyncSession, host: s
 
 async def poll_once() -> int:
     """Captura e aplica o feed global das três regiões com âncora durável."""
+    from app.services.native_feed import CaptureBusy
+
     count = 0
     async with AsyncSessionLocal() as db:
         async with make_client() as c:
@@ -433,6 +448,12 @@ async def poll_once() -> int:
                     count += await _capture_and_apply_kill_stream(
                         c, db, region, host, page_budget=max_pages, priority=NEW_ELIGIBLE,
                     )
+                except CaptureBusy:
+                    log.info(
+                        "player_tracker: captura ocupada (%s) — região pulada neste ciclo",
+                        region,
+                    )
+                    await db.rollback()
                 except Exception as e:
                     log.warning("player_tracker: falha no feed de kills (%s): %s", region, e)
                     await db.rollback()

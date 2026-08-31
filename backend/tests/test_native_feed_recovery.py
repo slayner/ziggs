@@ -933,3 +933,66 @@ def test_busca_exponencial_retoma_do_ultimo_offset_entre_ciclos():
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_lock_de_captura_ocupado_nao_inani_a_regiao_seguinte():
+    """Regressão do incidente 31/08 (inanição de lock): uma varredura de fundo
+    pendurada segurando o lock de captura de uma região não pode bloquear a
+    descoberta por tempo indefinido — após CAPTURE_LOCK_WAIT_SECONDS, o
+    caller de alta prioridade recebe CaptureBusy e segue pra próxima região."""
+    async def run():
+        from app.services import native_feed as nf
+        from app.services.native_feed import CaptureBusy
+
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        pages = {
+            0: [_raw("new", now + timedelta(minutes=1)), _raw("anchor", now)],
+            2: [_raw("older", now - timedelta(minutes=1)), _raw("older2", now - timedelta(minutes=2))],
+        }
+
+        async def fetch(offset, _limit):
+            return pages.get(offset, [])
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="americas",
+                completed_head_source_id="anchor", captured_head_source_id="anchor",
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="americas", source_id="anchor",
+                occurred_at=now, payload=_raw("anchor", now), status="applied",
+            ))
+            await db.commit()
+
+            # Varredura "de fundo" pendurada segura o lock (holder lento)
+            lock = nf._capture_lock(KIND_KILL, "americas")
+            await lock._lock.acquire()
+
+            original_wait = nf.CAPTURE_LOCK_WAIT_SECONDS
+            nf.CAPTURE_LOCK_WAIT_SECONDS = 0.05
+            try:
+                try:
+                    await asyncio.wait_for(capture_native_stream(
+                        db, kind=KIND_KILL, region="americas", page_size=2, offset_limit=20,
+                        page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+                    ), timeout=2.0)
+                    raise AssertionError("deveria ter levantado CaptureBusy")
+                except asyncio.TimeoutError:
+                    raise AssertionError("CaptureBusy deveria ser rápido, não pendurar")
+                except CaptureBusy:
+                    pass  # esperado: caller pula a região e segue o ciclo
+            finally:
+                nf.CAPTURE_LOCK_WAIT_SECONDS = original_wait
+                lock._lock.release()
+
+            # Após o holder soltar, a captura prossegue normal
+            result = await capture_native_stream(
+                db, kind=KIND_KILL, region="americas", page_size=2, offset_limit=20,
+                page_budget=6, fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+            )
+            assert result.completed and not result.blocked
+
+        await engine.dispose()
+
+    asyncio.run(run())
