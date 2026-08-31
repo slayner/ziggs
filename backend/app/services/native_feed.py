@@ -278,7 +278,8 @@ async def capture_native_stream(
             stream.scan_started_at = _now()
             stream.scan_phase = "locating"
             stream.search_low_offset = 0
-            stream.search_high_offset = 0
+            stream.search_high_offset = -1
+            stream.next_offset = 0
             await db.commit()
 
         if not stream.scan_active:
@@ -302,7 +303,7 @@ async def capture_native_stream(
             stream.scan_phase = "locating"
             stream.scan_last_progress_at = _now()
             stream.search_low_offset = 0
-            stream.search_high_offset = 0
+            stream.search_high_offset = -1
             stream.next_offset = 0
             stream.scan_started_at = _now()
             await db.commit()
@@ -389,7 +390,7 @@ async def _locate_anchor(
     head_payload: dict | None = None
 
     # ── Sondagem da última página (outside_window proativo) ──────
-    if stream.search_low_offset == 0 and stream.search_high_offset == 0:
+    if stream.search_high_offset == -1:
         last_probe = await _probe_last_page(
             db, fetch_page, page_size=page_size, offset_limit=offset_limit,
             kind=kind, region=region, source_id=source_id, occurred_at=occurred_at,
@@ -422,11 +423,16 @@ async def _locate_anchor(
             if anchor_id in last_probe.ids:
                 # A âncora está na última página — captura linear simples
                 return pages, head_payload, last_probe.offset
+        stream.search_high_offset = 0
+        stream.next_offset = 0
+        stream.scan_last_progress_at = _now()
+        await db.commit()
+        if pages >= page_budget:
+            return None
 
     # ── Busca exponencial: dobrar offset até passar o tempo da âncora ──
     if stream.search_high_offset == 0:
-        exp_offset = 0
-        step = page_size
+        exp_offset = stream.next_offset
         while pages < page_budget:
             request_size = min(page_size, offset_limit - exp_offset)
             if request_size <= 0:
@@ -443,6 +449,7 @@ async def _locate_anchor(
                 stream.scan_head_source_id = probe.ids[0]
 
             stream.search_low_offset = exp_offset
+            stream.next_offset = min(offset_limit, 2 * exp_offset + page_size)
             stream.scan_last_progress_at = _now()
             await db.commit()
             log.info(
@@ -491,8 +498,7 @@ async def _locate_anchor(
                 await db.commit()
                 return pages, head_payload, 0  # blocked, não None
 
-            exp_offset += step
-            step *= 2
+            exp_offset = stream.next_offset
 
         if pages >= page_budget:
             return None

@@ -862,3 +862,74 @@ if __name__ == "__main__":
                 print(f"FAIL: {e}")
                 sys.exit(1)
     print("All tests passed.")
+
+
+def test_busca_exponencial_retoma_do_ultimo_offset_entre_ciclos():
+    """Regressão do incidente 31/08: com budget pequeno por ciclo (rate
+    limiter apertado), a busca exponencial recomeçava do offset 0 a cada
+    ciclo e nunca alcançava âncoras distantes. Os offsets sondados devem
+    avançar monotonicamente entre ciclos."""
+    async def run():
+        engine = await _engine()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        page_size = 2
+        offset_limit = 40
+
+        # Timestamps decrescentes; âncora fica dentro da janela (a última
+        # página contém itens mais VELHOS que a âncora — não é outside_window)
+        pages = {}
+        t = now + timedelta(minutes=30)
+        for off in range(0, offset_limit, page_size):
+            page = []
+            for j in range(page_size):
+                page.append(_raw(f"id-{off + j}", t))
+                t = t - timedelta(seconds=60)
+            pages[off] = page
+
+        anchor_time = now + timedelta(minutes=15)
+
+        probes_seen: list[int] = []
+
+        async def fetch(offset, _limit):
+            probes_seen.append(offset)
+            return pages.get(offset, [])
+
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            db.add(NativeFeedStream(
+                kind=KIND_KILL, region="americas",
+                completed_head_source_id="far-anchor",
+                captured_head_source_id="far-anchor",
+            ))
+            db.add(NativeFeedItem(
+                kind=KIND_KILL, region="americas", source_id="far-anchor",
+                occurred_at=anchor_time, payload=_raw("far-anchor", anchor_time),
+                status="applied",
+            ))
+            await db.commit()
+
+            # Vários ciclos com budget de 1 página (simula rate limiter lento)
+            for _ in range(60):
+                result = await capture_native_stream(
+                    db, kind=KIND_KILL, region="americas", page_size=page_size,
+                    offset_limit=offset_limit, page_budget=2,
+                    fetch_page=fetch, source_id=_source, occurred_at=_occurred,
+                )
+                if result.completed:
+                    break
+
+            assert result.completed and not result.blocked
+            # Os offsets da busca exponencial devem ser estritamente
+            # crescentes (nenhum retorno a 0 no meio da busca)
+            offsets = [o for o in probes_seen if o != offset_limit - page_size]
+            assert offsets, "nenhum probe exponencial registrado"
+            # O primeiro retorno a zero marca a transição locating → capturing.
+            # Antes dele, os probes exponenciais precisam avançar sem reiniciar.
+            second_zero = next((i for i, off in enumerate(offsets[1:], 1) if off == 0), len(offsets))
+            locating_offsets = offsets[:second_zero]
+            assert locating_offsets[0] == 0
+            for prev, curr in zip(locating_offsets, locating_offsets[1:]):
+                assert curr > prev, f"busca voltou para offset menor: {curr} após {prev}"
+
+        await engine.dispose()
+
+    asyncio.run(run())
