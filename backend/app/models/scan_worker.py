@@ -146,6 +146,28 @@ class ScanIngestPayload(Base):
     error: Mapped[str | None] = mapped_column(Text())
 
 
+class ScanReportChunk(Base):
+    """Parte idempotente de um report grande aguardando todas as demais."""
+    __tablename__ = "scan_report_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "task_id", "lease_token", "payload_sha256", "chunk_index",
+            name="uq_scan_report_chunk",
+        ),
+    )
+
+    id: Mapped[int] = pk()
+    task_id: Mapped[int] = mapped_column(BigInt(), nullable=False, index=True)
+    lease_token: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload_chunk: Mapped[str] = mapped_column(Text(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
 class ScanIncident(Base):
     __tablename__ = "scan_incidents"
 

@@ -7,7 +7,9 @@ atomic, so every VPS can work on every region without overlapping another.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import json
 import logging
 import secrets
 import time
@@ -30,6 +32,7 @@ from app.models.scan_worker import (
     ScanIngestPayload,
     ScanIncident,
     ScanLap,
+    ScanReportChunk,
     ScanStreamState,
     ScanWorker,
     ScanWorkerRegionMetric,
@@ -76,6 +79,10 @@ INGEST_FORCE_DRAIN = 300
 INGEST_MAX_ATTEMPTS = 5
 CIRCUIT_ERROR_THRESHOLD = 3
 CIRCUIT_OPEN_INTERVAL = timedelta(seconds=60)
+# Limites do protocolo de report fatiado. O scanner usa os mesmos valores.
+REPORT_PAYLOAD_MAX_BYTES = 20 * 1024 * 1024
+REPORT_CHUNK_MAX_BYTES = 2 * 1024 * 1024
+MAX_REPORT_CHUNKS = REPORT_PAYLOAD_MAX_BYTES // REPORT_CHUNK_MAX_BYTES
 FOREGROUND_LATENCY_LIMIT_MS = 500.0
 FOREGROUND_LATENCY_TTL = 30.0
 DB_CHECKED_OUT_LIMIT = 20
@@ -578,6 +585,11 @@ async def _cleanup_history(db: AsyncSession) -> None:
         ScanIngestPayload.status.in_(("done", "failed")),
         ScanIngestPayload.completed_at < now - DONE_RETENTION,
     ))
+    # Partes de uploads interrompidos não têm utilidade após a janela de
+    # recuperação do worker; evita retenção ilimitada de payloads parciais.
+    await db.execute(delete(ScanReportChunk).where(
+        ScanReportChunk.created_at < now - timedelta(hours=1)
+    ))
 
 
 async def _retry_failed_tasks(db: AsyncSession) -> int:
@@ -1000,6 +1012,100 @@ async def _release_task(db: AsyncSession, task_id: int) -> None:
     if task is not None:
         await _reopen_half_open(db, [(task.region, task.feed_type)])
     await db.commit()
+
+
+async def report_chunk(
+    db: AsyncSession,
+    worker_id: str,
+    task_id: int,
+    lease_token: str,
+    found_count: int,
+    error_count: int,
+    *,
+    payload_chunk: str,
+    payload_sha256: str,
+    chunk_index: int,
+    chunk_count: int,
+    latency_ms: int | None = None,
+) -> tuple[int, int]:
+    """Persiste partes de um payload grande e só enfileira quando completo."""
+    task = await db.scalar(
+        select(ScanWorkTask).where(ScanWorkTask.id == task_id).with_for_update().limit(1)
+    )
+    if task is None:
+        raise LookupError("tarefa não encontrada")
+    if task.status == "reported" and task.claimed_by == worker_id and task.lease_token:
+        if secrets.compare_digest(task.lease_token, lease_token):
+            queued = await db.scalar(select(ScanIngestPayload).where(ScanIngestPayload.task_id == task.id))
+            return (len(queued.payload), 0) if queued is not None else (0, 0)
+    if (
+        task.status != "claimed"
+        or task.claimed_by != worker_id
+        or not task.lease_token
+        or not secrets.compare_digest(task.lease_token, lease_token)
+        or not task.claim_expires_at
+        or task.claim_expires_at <= _now()
+    ):
+        raise PermissionError("stale lease")
+    if (
+        len(payload_sha256) != 64
+        or chunk_count < 1
+        or chunk_count > MAX_REPORT_CHUNKS
+        or chunk_index < 0
+        or chunk_index >= chunk_count
+    ):
+        raise ValueError("metadados de chunk inválidos ou acima do limite")
+    try:
+        raw_chunk = base64.b64decode(payload_chunk, validate=True)
+    except ValueError as exc:
+        raise ValueError("chunk não é base64 válido") from exc
+    if not raw_chunk or len(raw_chunk) > REPORT_CHUNK_MAX_BYTES:
+        raise ValueError("chunk vazio ou acima do limite")
+    existing = await db.scalar(select(ScanReportChunk).where(
+        ScanReportChunk.task_id == task_id,
+        ScanReportChunk.lease_token == lease_token,
+        ScanReportChunk.payload_sha256 == payload_sha256,
+        ScanReportChunk.chunk_index == chunk_index,
+    ).with_for_update().limit(1))
+    if existing is None:
+        db.add(ScanReportChunk(
+            task_id=task_id, lease_token=lease_token, payload_sha256=payload_sha256,
+            chunk_index=chunk_index, chunk_count=chunk_count, payload_chunk=payload_chunk,
+        ))
+        await db.flush()
+    elif existing.chunk_count != chunk_count or existing.payload_chunk != payload_chunk:
+        raise ValueError("chunk conflitante")
+    chunks = (await db.scalars(select(ScanReportChunk).where(
+        ScanReportChunk.task_id == task_id,
+        ScanReportChunk.lease_token == lease_token,
+        ScanReportChunk.payload_sha256 == payload_sha256,
+    ).order_by(ScanReportChunk.chunk_index))).all()
+    if len(chunks) < chunk_count:
+        await db.commit()
+        return 0, 0
+    if len(chunks) != chunk_count or any(row.chunk_count != chunk_count for row in chunks):
+        raise ValueError("conjunto de chunks inconsistente")
+    if [row.chunk_index for row in chunks] != list(range(chunk_count)):
+        raise ValueError("faltam chunks do report")
+    encoded = b"".join(base64.b64decode(row.payload_chunk, validate=True) for row in chunks)
+    if hashlib.sha256(encoded).hexdigest() != payload_sha256:
+        raise ValueError("checksum do report inválido")
+    try:
+        data = json.loads(encoded)
+    except json.JSONDecodeError as exc:
+        raise ValueError("payload reconstruído inválido") from exc
+    if not isinstance(data, list):
+        raise ValueError("payload reconstruído deve ser uma lista")
+    accepted, rejected = await report_work(
+        db, worker_id, task_id, lease_token, found_count, error_count,
+        data=data, latency_ms=latency_ms,
+    )
+    await db.execute(delete(ScanReportChunk).where(
+        ScanReportChunk.task_id == task_id,
+        ScanReportChunk.lease_token == lease_token,
+    ))
+    await db.commit()
+    return accepted, rejected
 
 
 async def report_work(

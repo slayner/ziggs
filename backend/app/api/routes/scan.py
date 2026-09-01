@@ -138,6 +138,10 @@ class ReportIn(BaseModel):
     found_count: int = Field(default=0)
     error_count: int = Field(default=0)
     data: list[dict[str, Any]] | None = Field(default=None, max_length=FEED_PAGE_SIZE)
+    payload_chunk: str | None = Field(default=None, max_length=4_500_000)
+    payload_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    chunk_index: int | None = Field(default=None, ge=0)
+    chunk_count: int | None = Field(default=None, ge=1, le=128)
     latency_ms: int | None = Field(default=None, ge=0, le=120_000)
 
 
@@ -191,18 +195,34 @@ async def scan_report(
     body = await _read_report(request)
     if body.worker_id != x_scan_worker:
         raise HTTPException(401, "worker identity mismatch")
+    chunk_fields = (body.payload_sha256, body.chunk_index, body.chunk_count)
     try:
-        accepted, rejected = await scan_dispatcher.report_work(
-            db, body.worker_id, body.task_id, body.lease_token,
-            body.found_count, body.error_count,
-            data=body.data,
-            latency_ms=body.latency_ms,
-        )
+        if body.payload_chunk is not None:
+            if body.data is not None or any(value is None for value in chunk_fields):
+                raise ValueError("chunk de report inválido")
+            accepted, rejected = await scan_dispatcher.report_chunk(
+                db, body.worker_id, body.task_id, body.lease_token,
+                body.found_count, body.error_count,
+                payload_chunk=body.payload_chunk,
+                payload_sha256=body.payload_sha256 or "",
+                chunk_index=body.chunk_index if body.chunk_index is not None else -1,
+                chunk_count=body.chunk_count if body.chunk_count is not None else 0,
+                latency_ms=body.latency_ms,
+            )
+        elif any(value is not None for value in chunk_fields):
+            raise ValueError("metadados de chunk incompletos")
+        else:
+            accepted, rejected = await scan_dispatcher.report_work(
+                db, body.worker_id, body.task_id, body.lease_token,
+                body.found_count, body.error_count,
+                data=body.data,
+                latency_ms=body.latency_ms,
+            )
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(409, str(exc)) from exc
-    except ValueError as exc:
+    except (ValueError, UnicodeDecodeError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return ReportOut(accepted=accepted, rejected=rejected)
 
