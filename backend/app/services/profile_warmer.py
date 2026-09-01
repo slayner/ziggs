@@ -59,6 +59,8 @@ BATCH_SIZE = 3       # batalhas por ciclo
 BUSY_INTERVAL = 3    # segundos entre ciclos enquanto há fila pra processar
 IDLE_INTERVAL = 60    # segundos entre ciclos quando a fila esvaziou
 STALE_AFTER = timedelta(days=7)  # só re-busca perfil com mais tempo que isso sem atualizar
+BOT_PREVIEW_STALE_AFTER = timedelta(days=14)
+_bot_warm_tasks: dict[str, asyncio.Task] = {}
 
 
 def _aware(dt: datetime) -> datetime:
@@ -111,11 +113,10 @@ async def _warm_player(client, db: AsyncSession, host: str, region: str, albion_
         if not valid_snapshot:
             log.info("warm: player %s (%s) — snapshot da Albion sem Timestamp; preservando stats existentes", albion_id, region)
             return False
-        # O card pode ser compartilhado enquanto kills/deaths ainda sincronizam.
-        # Invalida já com os stats novos, sem fazer o próximo embed esperar isso.
-        from app.services.profile_preview import invalidate_cache
-        invalidate_cache(albion_id, region)
+        # Mantém o PNG anterior até o render novo ser publicado por rename
+        # atômico; assim o bot pode entregar o cache velho imediatamente.
         _refresh_progress[albion_id] = "kills"
+
         await sync_player_kills(client, db, host, region, albion_id)
         await _render_player_preview_async(albion_id, region)
         log.info("warm: player %s (%s) — %s aquecido", raw.get("Name") or albion_id, region, "refresh" if force else "backfill")
@@ -493,6 +494,44 @@ def request_refresh() -> None:
     refresh_event.set()
 
 
+async def warm_bot_profile(name: str, region: str) -> dict:
+    """Entrega o estado persistido para /profile e só agenda trabalho lento.
+
+    O bot nunca espera bootstrap, sync de atividades ou render: ele envia o PNG
+    existente e acompanha o refresh pela mesma API. A task é deduplicada por
+    região/nome e o banco continua sendo a fonte de verdade entre reinícios.
+    """
+    host = HOSTS.get(region)
+    if host is None:
+        return {"status": "bad_region"}
+    key = f"{region}:{name.lower()}"
+    async with AsyncSessionLocal() as db:
+        player = await db.scalar(select(AlbionPlayer).where(
+            AlbionPlayer.region == region, func.lower(AlbionPlayer.name) == name.lower()
+        ))
+        if player is not None and player.lifetime_statistics is not None:
+            updated_at = player.stats_updated_at
+            stale = updated_at is None or datetime.now(timezone.utc) - _aware(updated_at) > BOT_PREVIEW_STALE_AFTER
+            if stale and player.refresh_requested_at is None:
+                player.refresh_requested_at = datetime.now(timezone.utc)
+                await db.commit()
+                request_refresh()
+            else:
+                await db.commit()
+            return {
+                "status": "stale" if stale else "fresh",
+                "albion_id": player.albion_id,
+                "name": player.name,
+            }
+
+    task = _bot_warm_tasks.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(warm_by_name(name, region))
+        _bot_warm_tasks[key] = task
+        task.add_done_callback(lambda _task: _bot_warm_tasks.pop(key, None))
+    return {"status": "loading"}
+
+
 async def warm_by_name(name: str, region: str) -> dict:
     """Aquece o perfil de `name`/`region` a pedido de um companion (o próprio
     personagem do usuário).
@@ -710,9 +749,6 @@ async def run_forever() -> None:
 async def _render_player_preview_async(albion_id: str, region: str) -> None:
     """Gera o PNG do perfil do jogador em background após o warm."""
     from app.services.profile_preview import render_player_preview, _cache_path
-
-    if _cache_path(albion_id, region).exists():
-        return
 
     def _run():
         sdb = SyncSessionLocal()

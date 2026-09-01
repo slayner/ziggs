@@ -464,12 +464,9 @@ function ActivityRow({ ev, profileName, profileGuild, region, forceOpen, isNew, 
   const killerWeaponId = killerWeapon?.Type ?? NO_WEAPON_ICON_ID;
   const victimWeaponId = victimWeapon?.Type ?? NO_WEAPON_ICON_ID;
   const [time, date] = timeOverDate(ev.timestamp);
-  const silverDropped = ev.battle_public_id
-    ? (ev.bracket_silver_dropped ?? 0)
-    : (ev.silver_dropped ?? 0);
-  const isJuicy = ev.battle_public_id
-    ? ev.is_juicy_bracket
-    : silverDropped >= JUICY_SILVER_THRESHOLD;
+  const silverDropped = ev.silver_dropped ?? 0;
+  const isJuicy = silverDropped >= JUICY_SILVER_THRESHOLD;
+
 
   const prefix = REGION_PREFIX[region];
   // O "outro" (não-dono do perfil) é quem tem link de navegação

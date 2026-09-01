@@ -989,8 +989,9 @@ async def _cold_load_player(region: str, name: str, host: str, priority: int = E
     finally:
         # Só limpa se ainda é desta run — não apaga a de outra em andamento.
         entry = _load_progress.get(progress_key)
-        if entry is not None and entry[0] is token:
+        if entry is not None and entry[0] is token and not entry[1].startswith("error:"):
             _load_progress.pop(progress_key, None)
+
         _cold_load_tasks.pop(progress_key, None)
         ready = _cold_load_ready.pop(progress_key, None)
         if ready is not None:
@@ -1104,6 +1105,14 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
         await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
 
+    if cached is not None and cached.lifetime_statistics is not None and _player_has_bad_snapshot(cached):
+        # Temos o perfil, mas o snapshot salvo veio de uma resposta inválida da
+        # Albion (Timestamp null). Não reclassificamos como cold nem sobrescrevemos
+        # o snapshot anterior: servimos o que temos e deixamos o warmer corrigir.
+        await _queue_refresh_if_stale(db, cached)
+        await db.commit()
+        return await _build_profile_payload(db, cached, _synthetic_raw(cached))
+
     if cached is not None and cached.lifetime_statistics is None:
         # Cache incompleto (visto via feed/search mas nunca warmed). Tenta
         # buscar o perfil completo SÍNCRONO com timeout curto — se a Albion
@@ -1132,15 +1141,11 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
                         refreshed = await db.scalar(
                             select(AlbionPlayer).where(AlbionPlayer.albion_id == raw["Id"], AlbionPlayer.region == region)
                         )
-                        if refreshed is not None:
-                            # Marca pra o warmer sincronizar kills em background
-                            # (tem seu próprio controle de pool/concorrência).
-                            try:
-                                refreshed.refresh_requested_at = datetime.now(timezone.utc)
-                                await db.commit()
-                            except Exception:
-                                pass
-                            return await _build_profile_payload(db, refreshed, raw)
+                        if refreshed is not None and valid and refreshed.lifetime_statistics is not None and not _player_has_bad_snapshot(refreshed):
+                            refreshed.refresh_requested_at = datetime.now(timezone.utc)
+                            await db.commit()
+                            return await _build_profile_payload(db, refreshed, _synthetic_raw(refreshed))
+
             except (asyncio.TimeoutError, httpx.RequestError, Exception):
                 pass  # cai pro cold load async abaixo
         # Síncrono falhou (ou já tem task rodando) — enfileira warm no
@@ -1207,6 +1212,13 @@ async def get_player(albion_id: str, region: str | None = None, db: AsyncSession
         await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
 
+    if cached is not None and cached.lifetime_statistics is not None and _player_has_bad_snapshot(cached):
+        # Perfil salvo mas com snapshot bugado da Albion — servimos o que temos
+        # e deixamos o warmer corrigir; não reclassificamos como cold.
+        await _queue_refresh_if_stale(db, cached)
+        await db.commit()
+        return await _build_profile_payload(db, cached, _synthetic_raw(cached))
+
     if cached is not None and cached.lifetime_statistics is None and cached.region:
         # Cache incompleto (visto via feed/search mas nunca warmed). Tenta
         # buscar o perfil completo SÍNCRONO com timeout curto — mesma
@@ -1227,13 +1239,10 @@ async def get_player(albion_id: str, region: str | None = None, db: AsyncSession
                         refreshed = await db.scalar(
                             select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id)
                         )
-                        if refreshed is not None:
-                            try:
-                                refreshed.refresh_requested_at = datetime.now(timezone.utc)
-                                await db.commit()
-                            except Exception:
-                                pass
-                            return await _build_profile_payload(db, refreshed, raw)
+                        if refreshed is not None and valid and refreshed.lifetime_statistics is not None and not _player_has_bad_snapshot(refreshed):
+                            refreshed.refresh_requested_at = datetime.now(timezone.utc)
+                            await db.commit()
+                            return await _build_profile_payload(db, refreshed, _synthetic_raw(refreshed))
             except (asyncio.TimeoutError, httpx.RequestError, Exception):
                 pass  # cai pro fluxo live abaixo
 
