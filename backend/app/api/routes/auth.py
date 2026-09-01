@@ -348,7 +348,7 @@ def my_site_guilds(
 @router.get("/auth/guild-info/{guild_id}")
 def guild_info(
     guild_id: int,
-    user: User = Depends(deps.require_user),
+    _member: GuildMember = Depends(deps.require_guild_member),
     db: Session = Depends(deps.db_session),
 ):
     g = db.scalar(select(Guild).where(Guild.id == guild_id))
@@ -2525,6 +2525,130 @@ async def bot_economy_stats(
         .where(EconomyBalance.guild_id == guild_id)
     )).one()
     return {"user_count": row[0], "balances_sum": int(row[1])}
+
+
+@router.get("/bot/economy/transactions/{guild_id}/{discord_user_id}")
+def bot_economy_transactions(
+    guild_id: int,
+    discord_user_id: int,
+    limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    authorization: str = Header(...),
+    db: Session = Depends(deps.db_session),
+):
+    """Ledger de transações de um membro (todas as linhas onde ele aparece como
+    from, to ou total_earned). Mesma lógica de direção da rota member/wallet,
+    mas com BOT_API_SECRET em vez de sessão de site. Inclui event_channel_id e
+    event_message_id pra o bot poder mencionar a thread de revisão do evento."""
+    _require_bot_secret(authorization)
+    uid = discord_user_id
+    bal = db.scalar(select(EconomyBalance).where(
+        EconomyBalance.guild_id == guild_id,
+        EconomyBalance.discord_user_id == uid,
+    ))
+    balance = int(bal.balance) if bal else 0
+    total_earned = int(bal.total_earned) if bal else 0
+
+    count_q = (
+        select(EconomyTransaction)
+        .where(
+            EconomyTransaction.guild_id == guild_id,
+            (EconomyTransaction.from_user_id == uid)
+            | (EconomyTransaction.to_user_id == uid)
+            | (EconomyTransaction.total_earned_user_id == uid),
+        )
+    )
+    total = db.scalar(
+        select(func.count()).select_from(count_q.subquery())
+    ) or 0
+
+    rows = db.scalars(
+        select(EconomyTransaction)
+        .where(
+            EconomyTransaction.guild_id == guild_id,
+            (EconomyTransaction.from_user_id == uid)
+            | (EconomyTransaction.to_user_id == uid)
+            | (EconomyTransaction.total_earned_user_id == uid),
+        )
+        .order_by(EconomyTransaction.id.desc())
+        .limit(limit).offset(offset)
+    ).all()
+
+    counter_ids = {
+        r.from_user_id for r in rows if r.from_user_id and r.from_user_id != uid
+    } | {
+        r.to_user_id for r in rows if r.to_user_id and r.to_user_id != uid
+    }
+    names: dict[int, str] = {}
+    if counter_ids:
+        for u in db.scalars(select(User).where(User.id.in_(counter_ids))):
+            names[u.id] = u.global_name or u.username
+
+    albion_names: dict[int, str] = {}
+    if counter_ids:
+        reg_rows = db.execute(
+            select(BotRegistration.discord_user_id, BotRegistration.albion_player_name)
+            .where(
+                BotRegistration.guild_id == guild_id,
+                BotRegistration.discord_user_id.in_(counter_ids),
+                BotRegistration.active.is_(True),
+            )
+        ).all()
+        for discord_id, albion_name in reg_rows:
+            if discord_id not in albion_names:
+                albion_names[discord_id] = albion_name
+
+    actor_ids = {
+        r.actor_discord_id for r in rows
+        if r.actor_discord_id
+        and r.actor_discord_id != uid
+        and r.actor_discord_id != r.from_user_id
+        and r.actor_discord_id != r.to_user_id
+        and r.kind in ("add", "remove", "forfeit")
+    }
+    actor_names: dict[int, str] = {}
+    if actor_ids:
+        for u in db.scalars(select(User).where(User.id.in_(actor_ids))):
+            actor_names[u.id] = u.global_name or u.username
+
+    event_ids = {r.event_id for r in rows if r.event_id is not None}
+    event_info: dict[int, dict] = {}
+    if event_ids:
+        for ev in db.scalars(select(Event).where(Event.id.in_(event_ids))):
+            event_info[ev.id] = {
+                "title": ev.title or f"Evento #{ev.id}",
+                "event_channel_id": str(ev.event_channel_id) if ev.event_channel_id else None,
+                "event_message_id": str(ev.event_message_id) if ev.event_message_id else None,
+            }
+
+    txs = []
+    for r in rows:
+        if r.to_user_id == uid:
+            direction = "in"
+            cp_id = r.from_user_id
+        elif r.from_user_id == uid:
+            direction = "out"
+            cp_id = r.to_user_id
+        else:
+            direction = "neutral"
+            cp_id = None
+        actor_name = None
+        if r.kind in ("add", "remove", "forfeit") and r.actor_discord_id and r.actor_discord_id != uid:
+            actor_name = actor_names.get(r.actor_discord_id)
+        ei = event_info.get(r.event_id) if r.event_id else None
+        txs.append({
+            "id": r.id, "kind": r.kind, "direction": direction, "amount": r.amount,
+            "counterparty_name": names.get(cp_id) if cp_id else None,
+            "counterparty_albion_name": albion_names.get(cp_id) if cp_id else None,
+            "actor_name": actor_name,
+            "event_id": r.event_id,
+            "event_title": ei["title"] if ei else None,
+            "event_channel_id": ei["event_channel_id"] if ei else None,
+            "event_message_id": ei["event_message_id"] if ei else None,
+            "undone": r.undone, "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return {"balance": balance, "total_earned": total_earned,
+            "transactions": txs, "total": int(total)}
 
 
 # ── Bot: banco da guilda (admin adjust) ──────────────────────────────────────

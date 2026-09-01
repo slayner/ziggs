@@ -8,6 +8,7 @@ resto), o bot só chama /bot/economy/* com o secret compartilhado — igual ao
 /avatar, /banner e /register (ver cogs/general.py, cogs/registration.py)."""
 import os
 import re
+from datetime import datetime, timezone
 from typing import Optional
 
 import discord
@@ -423,6 +424,39 @@ class Economy(commands.Cog):
         view.update_buttons()
         await _reply(interaction, embed=view.build_embed(data["rows"], offset=0), view=view)
 
+    @app_commands.command(name="transactions", description=loc("Shows your transaction history with pagination", "cmd_desc_transactions"))
+    @app_commands.guild_only()
+    @app_commands.describe(alvo=loc("User to check (default: yourself)", "opt_desc_transactions_alvo"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"))
+    async def transactions(self, interaction: Interaction, alvo: discord.Member | None = None) -> None:
+        await interaction.response.defer()
+        if not await _check_access(interaction, "transactions"):
+            return
+        lang = await guild_lang(interaction)
+        target = alvo or interaction.user
+        data = await _get(
+            f"/bot/economy/transactions/{interaction.guild_id}/{target.id}"
+            f"?limit={TX_PAGE_SIZE}&offset=0"
+        )
+        if data is None:
+            await _reply(interaction, t(lang, "tx_fetch_fail"))
+            return
+        if data["total"] == 0:
+            embed = discord.Embed(
+                color=discord.Color.blurple(),
+                title=t(lang, "tx_title", user=target.display_name),
+                description=t(lang, "tx_empty"),
+            )
+            await _reply(interaction, embed=embed)
+            return
+        view = TransactionsView(
+            guild_id=interaction.guild_id, target_id=target.id,
+            target_name=target.display_name,
+            author_id=interaction.user.id, total=data["total"], lang=lang,
+        )
+        view.update_buttons()
+        await _reply(interaction, embed=view.build_embed(data, offset=0), view=view)
+
 
 class LeaderboardView(discord.ui.View):
     """Botões ⏮️ ◀️ ▶️ ⏭️ — só quem usou o comando pode paginar."""
@@ -465,6 +499,155 @@ class LeaderboardView(discord.ui.View):
         rows = data["rows"] if data else []
         self.update_buttons()
         await interaction.edit_original_response(embed=self.build_embed(rows, offset), view=self)
+
+    @discord.ui.button(emoji="⏮️", style=discord.ButtonStyle.secondary)
+    async def first_btn(self, interaction: Interaction, _button: discord.ui.Button):
+        await self._goto(interaction, 0)
+
+    @discord.ui.button(emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: Interaction, _button: discord.ui.Button):
+        await self._goto(interaction, self.page - 1)
+
+    @discord.ui.button(emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: Interaction, _button: discord.ui.Button):
+        await self._goto(interaction, self.page + 1)
+
+    @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary)
+    async def last_btn(self, interaction: Interaction, _button: discord.ui.Button):
+        await self._goto(interaction, self.max_page)
+
+
+TX_PAGE_SIZE = 5
+
+_KIND_LABELS = {
+    "pay": "pay",
+    "add": "add",
+    "remove": "remove",
+    "forfeit": "forfeit",
+    "event_payout": "event_payout",
+    "event_deficit": "event_deficit",
+    "bank_adjust": "bank_adjust",
+}
+
+
+def _format_tx_date(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except (ValueError, TypeError):
+        return "—"
+
+
+class TransactionsView(discord.ui.View):
+    """Paginacao do /transactions — lista todas as mudancas de saldo."""
+
+    def __init__(self, *, guild_id: int, target_id: int, target_name: str,
+                 author_id: int, total: int, lang: str = "pt"):
+        super().__init__(timeout=300)
+        self.guild_id = guild_id
+        self.target_id = target_id
+        self.target_name = target_name
+        self.author_id = author_id
+        self.total = total
+        self.lang = lang
+        self.page = 0
+        self.max_page = max(0, (total - 1) // TX_PAGE_SIZE)
+
+    async def interaction_check(self, interaction: Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                t(self.lang, "tx_only_author"), ephemeral=True)
+            return False
+        return True
+
+    def update_buttons(self):
+        self.first_btn.disabled = self.prev_btn.disabled = (self.page == 0)
+        self.next_btn.disabled = self.last_btn.disabled = (self.page >= self.max_page)
+
+    def build_embed(self, data: dict, offset: int) -> discord.Embed:
+        txs = data.get("transactions", [])
+        balance = data.get("balance", 0)
+        total_earned = data.get("total_earned", 0)
+        embed = discord.Embed(
+            color=discord.Color.blurple(),
+            title=t(self.lang, "tx_title", user=self.target_name),
+        )
+        if not txs:
+            embed.description = t(self.lang, "tx_empty_page")
+            return embed
+
+        for tx in txs:
+            kind = tx["kind"]
+            direction = tx["direction"]
+            amount = tx["amount"]
+            kind_label = t(self.lang, f"tx_kind_{_KIND_LABELS.get(kind, kind)}")
+            sign = "+" if direction == "in" else ("-" if direction == "out" else "")
+
+            field_title = f"#{tx['id']} — {kind_label}"
+            parts: list[str] = []
+            parts.append(f"**{sign}{format_silver(amount)}**")
+
+            cp = tx.get("counterparty_albion_name") or tx.get("counterparty_name")
+            if cp:
+                cp_label = t(self.lang, "tx_counterparty")
+                parts.append(f"{cp_label}: {cp}")
+
+            actor = tx.get("actor_name")
+            if actor:
+                actor_label = t(self.lang, "tx_actor")
+                parts.append(f"{actor_label}: {actor}")
+
+            if tx.get("event_id"):
+                ev_title = tx.get("event_title") or f"#{tx['event_id']}"
+                ev_ch = tx.get("event_channel_id")
+                ev_msg = tx.get("event_message_id")
+                if ev_ch and ev_msg:
+                    jump = f"https://discord.com/channels/{self.guild_id}/{ev_ch}/{ev_msg}"
+                    parts.append(f"{t(self.lang, 'tx_event')}: [{ev_title}]({jump})")
+                else:
+                    parts.append(f"{t(self.lang, 'tx_event')}: {ev_title}")
+
+            if tx.get("undone"):
+                parts.append(f"*{t(self.lang, 'tx_undone')}*")
+
+            parts.append(f"`{_format_tx_date(tx.get('created_at'))}`")
+
+            embed.add_field(
+                name=field_title,
+                value="\n".join(parts),
+                inline=False,
+            )
+
+        embed.add_field(
+            name=t(self.lang, "tx_balance_field"),
+            value=f"`{format_silver(balance)}`",
+            inline=True,
+        )
+        embed.add_field(
+            name=t(self.lang, "tx_total_earned_field"),
+            value=f"`{format_silver(total_earned)}`",
+            inline=True,
+        )
+        embed.set_footer(text=t(self.lang, "tx_page_footer",
+                                 page=self.page + 1, max_page=self.max_page + 1,
+                                 total=self.total))
+        return embed
+
+    async def _goto(self, interaction: Interaction, page: int):
+        await interaction.response.defer()
+        self.page = max(0, min(page, self.max_page))
+        offset = self.page * TX_PAGE_SIZE
+        data = await _get(
+            f"/bot/economy/transactions/{self.guild_id}/{self.target_id}"
+            f"?limit={TX_PAGE_SIZE}&offset={offset}"
+        )
+        if data is None:
+            data = {"transactions": [], "balance": 0, "total_earned": 0}
+        self.update_buttons()
+        await interaction.edit_original_response(
+            embed=self.build_embed(data, offset), view=self)
 
     @discord.ui.button(emoji="⏮️", style=discord.ButtonStyle.secondary)
     async def first_btn(self, interaction: Interaction, _button: discord.ui.Button):

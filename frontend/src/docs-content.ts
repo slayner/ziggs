@@ -196,6 +196,19 @@ export const COMMANDS: CommandDoc[] = [
     ],
   },
   {
+    id: "transactions",
+    command: "/transactions",
+    category: "economy",
+    permission: text("Everyone.", "Todos.", "Todos."),
+    prerequisites: text("None.", "Nenhum.", "Ninguno."),
+    description: text("Shows the full transaction history with pagination; event payouts link to the review thread.", "Mostra o histórico completo de transações com paginação; pagamentos de evento linkam para a thread de revisão.", "Muestra el historial completo de transacciones con paginación; los pagos de evento enlazan al hilo de revisión."),
+    syntax: ["/transactions", "/transactions [<user>]"],
+    examples: [
+      { input: "/transactions", result: text("Shows your transactions five at a time with navigation buttons.", "Mostra suas transações cinco por vez com botões de navegação.", "Muestra tus transacciones de cinco en cinco con botones de navegación.") },
+      { input: "/transactions @Rivera", result: text("Shows Rivera's transaction history.", "Mostra o histórico de transações de Rivera.", "Muestra el historial de transacciones de Rivera.") },
+    ],
+  },
+  {
     id: "leaderboard",
     command: "/leaderboard",
     category: "economy",

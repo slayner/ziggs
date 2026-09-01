@@ -364,6 +364,75 @@ T: dict[str, dict[str, str]] = {
         "es": "Página {page}/{max_page}",
     },
 
+    # cogs/economy.py — /transactions
+    "tx_fetch_fail": {
+        "pt": "Não consegui consultar o histórico de transações agora.",
+        "en": "Couldn't fetch the transaction history right now.",
+        "es": "No pude consultar el historial de transacciones ahora.",
+    },
+    "tx_empty": {
+        "pt": "Nenhuma transação registrada.",
+        "en": "No transactions recorded.",
+        "es": "Sin transacciones registradas.",
+    },
+    "tx_empty_page": {
+        "pt": "*Nada para mostrar nesta página.*",
+        "en": "*Nothing to show on this page.*",
+        "es": "*Nada para mostrar en esta página.*",
+    },
+    "tx_only_author": {
+        "pt": "Apenas quem usou o comando pode controlar a paginação.",
+        "en": "Only whoever used the command can control the pagination.",
+        "es": "Solo quien usó el comando puede controlar la paginación.",
+    },
+    "tx_title": {
+        "pt": "Transações — {user}",
+        "en": "Transactions — {user}",
+        "es": "Transacciones — {user}",
+    },
+    "tx_page_footer": {
+        "pt": "Página {page}/{max_page} · {total} transações",
+        "en": "Page {page}/{max_page} · {total} transactions",
+        "es": "Página {page}/{max_page} · {total} transacciones",
+    },
+    "tx_counterparty": {
+        "pt": "Contraparte",
+        "en": "Counterparty",
+        "es": "Contraparte",
+    },
+    "tx_actor": {
+        "pt": "Por",
+        "en": "By",
+        "es": "Por",
+    },
+    "tx_event": {
+        "pt": "Evento",
+        "en": "Event",
+        "es": "Evento",
+    },
+    "tx_undone": {
+        "pt": "revertida",
+        "en": "reverted",
+        "es": "revertida",
+    },
+    "tx_balance_field": {
+        "pt": "Saldo atual",
+        "en": "Current balance",
+        "es": "Saldo actual",
+    },
+    "tx_total_earned_field": {
+        "pt": "Total recebido",
+        "en": "Total earned",
+        "es": "Total recibido",
+    },
+    "tx_kind_pay": {"pt": "Transferência", "en": "Transfer", "es": "Transferencia"},
+    "tx_kind_add": {"pt": "Adição", "en": "Addition", "es": "Adición"},
+    "tx_kind_remove": {"pt": "Remoção", "en": "Removal", "es": "Remoción"},
+    "tx_kind_forfeit": {"pt": "Confisco", "en": "Forfeit", "es": "Confisco"},
+    "tx_kind_event_payout": {"pt": "Pagamento de evento", "en": "Event payout", "es": "Pago de evento"},
+    "tx_kind_event_deficit": {"pt": "Déficit de evento", "en": "Event deficit", "es": "Déficit de evento"},
+    "tx_kind_bank_adjust": {"pt": "Ajuste de banco", "en": "Bank adjust", "es": "Ajuste de banco"},
+
     # cogs/events.py — mass-info + inscrição em eventos
     "massinfo_title": {
         "pt": "⚔️ MASS INFO",
@@ -960,6 +1029,17 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "pt": "ID da transação a reverter (veja o rodapé do embed original)",
         "en": "Transaction ID to revert (see the original embed's footer)",
         "es": "ID de la transacción a revertir (ver el pie del embed original)",
+    },
+
+    "cmd_desc_transactions": {
+        "pt": "Mostra o histórico de transações com paginação",
+        "en": "Shows your transaction history with pagination",
+        "es": "Muestra el historial de transacciones con paginación",
+    },
+    "opt_desc_transactions_alvo": {
+        "pt": "Usuário para verificar (padrão: você mesmo)",
+        "en": "User to check (default: yourself)",
+        "es": "Usuario a verificar (por defecto: tú mismo)",
     },
 
     "cmd_group_event": {
