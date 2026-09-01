@@ -460,7 +460,7 @@ class Economy(commands.Cog):
             return
         view = TransactionsView(
             guild_id=interaction.guild_id, target_id=target.id,
-            target_name=target.display_name,
+            target_name=target.display_name, avatar_url=target.display_avatar.url,
             author_id=interaction.user.id, total=data["total"], lang=lang,
         )
         view.update_buttons()
@@ -505,9 +505,15 @@ class LeaderboardView(discord.ui.View):
         self.page = max(0, min(page, self.max_page))
         offset = self.page * LEADERBOARD_PAGE_SIZE
         data = await _get(f"/bot/economy/leaderboard/{self.guild_id}?limit={LEADERBOARD_PAGE_SIZE}&offset={offset}")
-        rows = data["rows"] if data else []
+        if data is None:
+            await interaction.followup.send(t(self.lang, "leaderboard_fail"), ephemeral=True)
+            return
+        self.total = data["total"]
+        self.max_page = max(0, (self.total - 1) // LEADERBOARD_PAGE_SIZE)
+        self.page = min(self.page, self.max_page)
+        offset = self.page * LEADERBOARD_PAGE_SIZE
         self.update_buttons()
-        await interaction.edit_original_response(embed=self.build_embed(rows, offset), view=self)
+        await interaction.edit_original_response(embed=self.build_embed(data["rows"], offset), view=self)
 
     @discord.ui.button(emoji="⏮️", style=discord.ButtonStyle.secondary)
     async def first_btn(self, interaction: Interaction, _button: discord.ui.Button):
@@ -543,11 +549,12 @@ class TransactionsView(discord.ui.View):
     """Paginacao do /transactions — lista todas as mudancas de saldo."""
 
     def __init__(self, *, guild_id: int, target_id: int, target_name: str,
-                 author_id: int, total: int, lang: str = "pt"):
+                 avatar_url: str | None = None, author_id: int, total: int, lang: str = "pt"):
         super().__init__(timeout=300)
         self.guild_id = guild_id
         self.target_id = target_id
         self.target_name = target_name
+        self.avatar_url = avatar_url
         self.author_id = author_id
         self.total = total
         self.lang = lang
@@ -629,6 +636,8 @@ class TransactionsView(discord.ui.View):
                        balance=format_silver(data.get("balance", 0)),
                        total_earned=format_silver(data.get("total_earned", 0))))
         embed.description = "\n\n".join(lines)
+        if self.avatar_url:
+            embed.set_thumbnail(url=self.avatar_url)
         embed.set_footer(text=t(self.lang, "tx_page_footer",
                                  page=self.page + 1, max_page=self.max_page + 1,
                                  total=self.total))
@@ -643,7 +652,12 @@ class TransactionsView(discord.ui.View):
             f"?limit={TX_PAGE_SIZE}&offset={offset}"
         )
         if data is None:
-            data = {"transactions": [], "balance": 0, "total_earned": 0}
+            await interaction.followup.send(t(self.lang, "tx_fetch_fail"), ephemeral=True)
+            return
+        self.total = data["total"]
+        self.max_page = max(0, (self.total - 1) // TX_PAGE_SIZE)
+        self.page = min(self.page, self.max_page)
+        offset = self.page * TX_PAGE_SIZE
         self.update_buttons()
         await interaction.edit_original_response(
             embed=self.build_embed(data, offset), view=self)

@@ -397,7 +397,7 @@ T: dict[str, dict[str, str]] = {
     },
     "tx_heading": {
         "pt": "Transações de {user}",
-        "en": "Transactions for {user}",
+        "en": "Transactions — {user}",
         "es": "Transacciones de {user}",
     },
     "tx_page_footer": {
