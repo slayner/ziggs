@@ -1,3 +1,5 @@
+#![cfg_attr(not(target_os = "windows"), allow(dead_code, unused_imports))]
+
 // Packet sniffer: captures Albion UDP packets via WinDivert (WFP layer).
 //
 // WinDivert hooks at the Windows Filtering Platform network layer, ABOVE
@@ -13,23 +15,29 @@
 // Requires admin.
 
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "windows", test))]
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(any(target_os = "windows", test))]
+use std::collections::HashSet;
+#[cfg(any(target_os = "windows", test))]
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+#[cfg(target_os = "windows")]
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
 use crate::aodp::{self, AodpBatch, AodpServer};
+#[cfg(target_os = "windows")]
 use crate::photon_parser::{
     extract_attach_container, extract_detach_container, extract_gold, extract_health,
     extract_history_request, extract_history_response, extract_inventory_move, extract_loot,
     extract_market, extract_new_character, extract_new_loot_item, extract_new_loot_owner,
-    extract_party, extract_player_state, self_loot_event, DamageAcc, HistoryReq, LootEvent,
-    PhotonParser, PhotonValue,
+    extract_party, extract_player_state, self_loot_event, PhotonParser,
 };
+use crate::photon_parser::{DamageAcc, HistoryReq, LootEvent, PhotonValue};
 
 /// Cities with real marketplaces — we only report prices when the player is
 /// in one of these. Includes the 3 Rests (Arthur's/Merlyn's/Morgana's) which
@@ -287,16 +295,21 @@ impl Sniffer {
         self.generation.load(Ordering::Acquire) == generation
     }
 
-    /// Main loop: starts WinDivert capture and processes packets.
-    ///
-    /// WinDivert capture blocks on a dedicated thread (WinDivertRecv blocks),
-    /// sending packets via std::mpsc. The async task processes received
-    /// packets without blocking the executor.
+    /// Main loop: starts the platform capture backend and processes packets.
+    #[cfg(target_os = "windows")]
     pub async fn run(&self) {
         let generation = self.prepare_start();
         self.run_generation(generation).await;
     }
 
+    #[cfg(not(target_os = "windows"))]
+    pub async fn run(&self) {
+        let mut stats = self.stats.lock().await;
+        stats.running = false;
+        stats.error = Some("Captura de pacotes indisponível nesta plataforma.".into());
+    }
+
+    #[cfg(target_os = "windows")]
     pub async fn run_generation(&self, generation: u64) {
         {
             let mut s = self.stats.lock().await;
@@ -1018,6 +1031,13 @@ impl Sniffer {
                 .await;
             }
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub async fn run_generation(&self, _generation: u64) {
+        let mut stats = self.stats.lock().await;
+        stats.running = false;
+        stats.error = Some("Captura de pacotes indisponível nesta plataforma.".into());
     }
 
     async fn push_loot(&self, loot: LootEvent) {

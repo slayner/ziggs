@@ -38,7 +38,6 @@ ping = "0.5"
 chrono = "0.4"
 # WireGuard tunnel (Phase 1.5 — ExitLag-style routing)
 boringtun = { version = "0.7", default-features = false }
-wintun = "0.5"
 socket2 = "0.5"
 base64 = "0.22"
 hex = "0.4"
@@ -46,6 +45,7 @@ sha2 = "0.10"
 rand_core = "0.6"
 
 [target.'cfg(windows)'.dependencies]
+wintun = "0.5"
 windows-sys = { version = "0.48", features = [
     "Win32_Security",
     "Win32_Foundation",

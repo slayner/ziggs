@@ -17,6 +17,7 @@ pub mod sniffer;
 pub mod transfer;
 pub mod tunnel;
 pub mod tunnel_presets;
+#[cfg(target_os = "windows")]
 pub mod windivert;
 pub mod winutil;
 pub mod zone_detect;
@@ -34,7 +35,9 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_autostart::MacosLauncher;
+#[cfg(not(target_os = "windows"))]
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Mutex;
 
@@ -68,6 +71,29 @@ async fn heavy_work_ok(
     !(paused && matches!(*zone.lock().await, transfer::ZoneType::PvP))
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PlatformCapabilities {
+    pub platform: &'static str,
+    pub packet_capture: bool,
+    pub tunnel: bool,
+    pub dns_apply: bool,
+    pub market_capture: bool,
+    pub self_update: bool,
+}
+
+impl PlatformCapabilities {
+    fn current() -> Self {
+        Self {
+            platform: std::env::consts::OS,
+            packet_capture: cfg!(target_os = "windows"),
+            tunnel: cfg!(target_os = "windows"),
+            dns_apply: cfg!(target_os = "windows"),
+            market_capture: cfg!(target_os = "windows"),
+            self_update: cfg!(target_os = "windows"),
+        }
+    }
+}
+
 pub struct AppState {
     pub config: Arc<Mutex<CompanionConfig>>,
     pub scanner: Scanner,
@@ -88,11 +114,16 @@ async fn get_config(state: tauri::State<'_, AppState>) -> Result<CompanionConfig
 }
 
 #[tauri::command]
+fn get_platform_capabilities() -> PlatformCapabilities {
+    PlatformCapabilities::current()
+}
+
+#[tauri::command]
 async fn set_config(
     key: String,
     value: serde_json::Value,
     state: tauri::State<'_, AppState>,
-    app: tauri::AppHandle,
+    #[cfg_attr(target_os = "windows", allow(unused_variables))] app: tauri::AppHandle,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().await;
     let changed_autostart = key == "autostart";
@@ -671,90 +702,7 @@ async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("failed to open browser: {e}"))
 }
 
-// ─── Discord login (optional) ────────────────────────────────────
-
-#[tauri::command]
-async fn companion_login(
-    _state: tauri::State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    let api = api::ApiClient::new(config::API_BASE_URL);
-    let nonce: String = (0..16)
-        .map(|_| {
-            let c = rand::Rng::gen_range(&mut rand::thread_rng(), 0..=255u8);
-            format!("{:02x}", c)
-        })
-        .collect();
-    let url = api.auth_start_url(&nonce);
-    app.opener()
-        .open_url(&url, None::<&str>)
-        .map_err(|e| format!("failed to open browser: {e}"))?;
-    Ok(nonce)
-}
-
-#[tauri::command]
-async fn companion_poll_auth(
-    nonce: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<api::AuthPollResult, String> {
-    let api = api::ApiClient::new(config::API_BASE_URL);
-    match api.auth_poll(&nonce).await {
-        Ok(result) => {
-            let mut cfg = state.config.lock().await;
-            cfg.discord_token = Some(result.token.clone());
-            cfg.discord_user_id = Some(result.user_id.clone());
-            cfg.discord_username = Some(result.username.clone());
-            if let Err(e) = config::save(&cfg) {
-                return Err(format!("failed to save config: {e}"));
-            }
-            Ok(result)
-        }
-        Err(e) => Err(format!("{:#}", e)),
-    }
-}
-
-#[tauri::command]
-async fn companion_logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut cfg = state.config.lock().await;
-    cfg.discord_token = None;
-    cfg.discord_user_id = None;
-    cfg.discord_username = None;
-    config::save(&cfg).map_err(|e| format!("failed to save config: {e}"))?;
-    Ok(())
-}
-
-#[tauri::command]
-async fn get_active_events(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<api::ActiveEvent>, String> {
-    let cfg = state.config.lock().await.clone();
-    let api = api::ApiClient::new(config::API_BASE_URL).with_token(cfg.discord_token.clone());
-    api.active_events().await.map_err(|e| format!("{:#}", e))
-}
-
-/// Submits captured loot (CSV) to an event.
-#[tauri::command]
-async fn submit_captured_loot(
-    event_id: i64,
-    state: tauri::State<'_, AppState>,
-) -> Result<api::LootlogIngestOut, String> {
-    let cfg = state.config.lock().await.clone();
-    let buf = state.sniffer.loot.lock().await;
-    let csv = lootlog::build_csv_from_loot(&buf);
-    drop(buf);
-    let api = api::ApiClient::new(config::API_BASE_URL).with_token(cfg.discord_token.clone());
-    api.submit_lootlog(event_id, &csv)
-        .await
-        .map_err(|e| format!("{:#}", e))
-}
-
-/// Auto-submit worker: sends lootlog when a subscribed event enters REVIEW.
-///
-/// REVIEW is the right moment (guild closes CTA and starts checking logs).
-/// Before = incomplete log; after = too late. Re-sending the same event is
-/// harmless (backend upserts by guild+event+submitter), so the "already sent"
-/// check is in-memory only.
-/// Also keeps profiles warm on the site while the game is running (`online`). 5min loop.
+/// Mantém perfis aquecidos no site enquanto o jogo está aberto. Ciclo de 5 min.
 /// Only NAMING — the backend fetches data from Albion (never trusts the client):
 /// - Every cycle: SEEN players (`entities`) → `/warm/seen` (refresh-only; covers
 ///   sub-threshold fights the tracker misses).
@@ -865,7 +813,7 @@ async fn loot_silver_worker(
 /// prompt (RunLevel HighestAvailable). Starts as a normal window: ads need to
 /// show on boot to cover tunnel VPS cost. Closing the window still goes to
 /// tray if minimize_to_tray is on.
-/// macOS/Linux: uses tauri_plugin_autostart (LaunchAgent / .desktop).
+#[cfg(target_os = "windows")]
 fn set_autostart(enable: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -1457,7 +1405,7 @@ async fn stop_tunnel_and_wait(tunnel: &Tunnel) {
 /// `update-status: "available"` so the UI shows an update button — the user
 /// clicks it to download and install. This avoids forcing a restart while the
 /// user is mid-CTA. `apply_update` does the download+install+relaunch.
-#[cfg(desktop)]
+#[cfg(target_os = "windows")]
 async fn auto_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
     use tauri_plugin_updater::UpdaterExt;
     let update = match app.updater()?.check().await {
@@ -1475,7 +1423,7 @@ async fn auto_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
 }
 
 /// Download, install, and relaunch. Called when the user clicks the update button.
-#[cfg(desktop)]
+#[cfg(target_os = "windows")]
 async fn apply_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
     use tauri_plugin_updater::UpdaterExt;
     let update = match app.updater()?.check().await {
@@ -1500,38 +1448,38 @@ async fn apply_update(app: &tauri::AppHandle) -> Result<(), anyhow::Error> {
     // WinDivert/wintun. Re-launch elevated via ShellExecuteW("runas") and exit,
     // same as the boot-time elevation path. The new process hits the
     // is_windows_admin() check, passes, and continues normally.
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Ok(exe_path) = exe.into_os_string().into_string() {
-                use windows_sys::Win32::Foundation::HWND;
-                use windows_sys::Win32::UI::Shell::ShellExecuteW;
-                use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-                let verb: Vec<u16> = "runas\0".encode_utf16().collect();
-                let file: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
-                unsafe {
-                    ShellExecuteW(
-                        0 as HWND,
-                        verb.as_ptr(),
-                        file.as_ptr(),
-                        std::ptr::null(),
-                        std::ptr::null(),
-                        SW_SHOWNORMAL,
-                    );
-                }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Ok(exe_path) = exe.into_os_string().into_string() {
+            use windows_sys::Win32::Foundation::HWND;
+            use windows_sys::Win32::UI::Shell::ShellExecuteW;
+            use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+            let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+            let file: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+            unsafe {
+                ShellExecuteW(
+                    0 as HWND,
+                    verb.as_ptr(),
+                    file.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOWNORMAL,
+                );
             }
         }
-        std::process::exit(0);
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        app.restart();
-    }
+    std::process::exit(0);
 }
 
 #[tauri::command]
+#[cfg(target_os = "windows")]
 async fn check_and_apply_update(app: tauri::AppHandle) -> Result<(), String> {
     apply_update(&app).await.map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn check_and_apply_update() -> Result<(), String> {
+    Err("auto-update is not available on this platform".into())
 }
 
 #[tauri::command]
@@ -1672,7 +1620,7 @@ pub fn run() {
             });
             // Auto-update: silent check on startup — downloads and installs without
             // confirmation. Passive install (small progress bar), then relaunch.
-            #[cfg(desktop)]
+            #[cfg(target_os = "windows")]
             {
                 let _ = app
                     .handle()
@@ -2037,6 +1985,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
+            get_platform_capabilities,
             set_config,
             get_scan_stats,
             start_scanner,
@@ -2067,11 +2016,6 @@ pub fn run() {
             get_sniff_stats,
             get_sniffer_debug,
             open_url,
-            companion_login,
-            companion_poll_auth,
-            companion_logout,
-            get_active_events,
-            submit_captured_loot,
             report_frontend_crash,
         ])
         .run(tauri::generate_context!())

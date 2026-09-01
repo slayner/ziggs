@@ -9,6 +9,15 @@ import { useT, useLang, LANG_LABELS, LANG_FULL, type Lang, type LangPref, type T
 // Mirrors CompanionConfig from Rust. Character name, region, and backend URL
 // are not here — they are auto-detected/hardcoded in the binary. Battles and
 // prices are always on (core companion features) — no toggle.
+type PlatformCapabilities = {
+  platform: string;
+  packet_capture: boolean;
+  tunnel: boolean;
+  dns_apply: boolean;
+  market_capture: boolean;
+  self_update: boolean;
+};
+
 type CompanionConfig = {
   api_base_url: string;
   collect_damage_meter: boolean;
@@ -21,9 +30,6 @@ type CompanionConfig = {
   tunnel_client_privkey: string;
   pvp_pause_transfer: boolean;
   feed_aodp: boolean;
-  discord_token: string | null;
-  discord_user_id: string | null;
-  discord_username: string | null;
   install_id: string;
   spell_index_offset: number;
   region: string;
@@ -93,13 +99,6 @@ type DebugLine = {
   ts: string;
   level: string;
   msg: string;
-};
-
-type AuthPollResult = {
-  token: string;
-  user_id: string;
-  username: string;
-  global_name: string | null;
 };
 
 // Albion status for the sidebar card.
@@ -276,10 +275,38 @@ const WEAPON_LABELS: Record<Lang, Record<string, string>> = {
 };
 
 
+function LinuxScannerMvp({ config, pending, appVersion }: {
+  config: CompanionConfig;
+  pending: number;
+  appVersion: string;
+}) {
+  return (
+    <div className="ck-root">
+      <header className="ck-bar">
+        <div className="ck-logo-wrap">
+          <img className="logo" src="/logo.png" alt="Ziggs" />
+          {appVersion && <span className="ck-version">v{appVersion}</span>}
+        </div>
+        <span className="ck-brand">ZIGGS</span>
+      </header>
+      <main className="ck-full">
+        <div className="ck-panel ck-loot"><CardGlow />
+          <div className="card-head"><h2>Ziggs Companion para Linux</h2></div>
+          <p className="card-desc">Scanner distribuído de batalhas ativo. O Companion consulta a API pública do Albion e envia resultados ao Ziggs.</p>
+          <div className="empty-area">Relatórios pendentes: {pending}</div>
+          <p className="card-desc">Captura de pacotes, Damage Meter, Lootlog, captura de mercado, túnel WireGuard e alteração de DNS ainda não estão disponíveis no Linux.</p>
+        </div>
+      </main>
+      {config.autostart && <span className="ck-version">Início automático habilitado</span>}
+    </div>
+  );
+}
+
 export default function App() {
   const t = useT();
   const { pref, setPref } = useLang();
   const [config, setConfig] = useState<CompanionConfig | null>(null);
+  const [capabilities, setCapabilities] = useState<PlatformCapabilities | null>(null);
   const [sniffStats, setSniffStats] = useState<SniffStats | null>(null);
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus | null>(null);
   const [updateStatus, setUpdateStatus] = useState<"available" | "downloading" | "installed" | null>(null);
@@ -314,6 +341,7 @@ export default function App() {
 
   useEffect(() => {
     refreshConfig();
+    invoke<PlatformCapabilities>("get_platform_capabilities").then(setCapabilities).catch(() => {});
     getVersion().then(setAppVersion).catch(() => {});
     let unlisten: UnlistenFn | null = null;
     listen("scanner-restart", () => {
@@ -333,23 +361,26 @@ export default function App() {
     await refreshConfig();
   };
 
-  // Poll sniffer stats + tunnel status. Scanner/collection stats run silently
-  // in the background.
+  // Poll only features available on this platform.
   usePoll(async () => {
-    try {
-      const st = await invoke<SniffStats>("get_sniff_stats");
-      setSniffStats(st);
-      const now = Date.now();
-      if (prevPkt.current && now > prevPkt.current.t) {
-        setPktRate(Math.max(0, (st.packets_captured - prevPkt.current.n) / ((now - prevPkt.current.t) / 1000)));
-      }
-      prevPkt.current = { n: st.packets_captured, t: now };
-    } catch { /* sniffer unavailable */ }
-    try {
-      const ts = await invoke<TunnelStatus>("tunnel_status");
-      setTunnelStatus(ts);
-      setHist(h => [...h.slice(-119), { d: ts.direct_latency_ms, tn: ts.tunnel_latency_ms }]);
-    } catch { /* tunnel unavailable */ }
+    if (capabilities?.packet_capture) {
+      try {
+        const st = await invoke<SniffStats>("get_sniff_stats");
+        setSniffStats(st);
+        const now = Date.now();
+        if (prevPkt.current && now > prevPkt.current.t) {
+          setPktRate(Math.max(0, (st.packets_captured - prevPkt.current.n) / ((now - prevPkt.current.t) / 1000)));
+        }
+        prevPkt.current = { n: st.packets_captured, t: now };
+      } catch { /* sniffer unavailable */ }
+    }
+    if (capabilities?.tunnel) {
+      try {
+        const ts = await invoke<TunnelStatus>("tunnel_status");
+        setTunnelStatus(ts);
+        setHist(h => [...h.slice(-119), { d: ts.direct_latency_ms, tn: ts.tunnel_latency_ms }]);
+      } catch { /* tunnel unavailable */ }
+    }
   }, 5000);
 
   usePoll(async () => {
@@ -357,6 +388,7 @@ export default function App() {
   }, 15000);
 
   usePoll(async () => {
+    if (!capabilities?.tunnel) return;
     try {
       const m = await invoke<RoutingMatrix>("tunnel_regions");
       setSideMatrix(m);
@@ -377,7 +409,7 @@ export default function App() {
     v => Object.values(v.cell_pings).some(p => p != null),
   );
 
-  if (!config || !routesDetected) {
+  if (!config || !capabilities || (capabilities.tunnel && !routesDetected)) {
     return (
       <div
         className="splash"
@@ -388,10 +420,16 @@ export default function App() {
         <img className="splash-logo" src="/logo.png" alt="Ziggs" />
         <div className="splash-text">{t("splashText")}</div>
         <div className="splash-sub">
-          {!routesDetected && sideMatrix ? t("splashOffline") : t("splashRoutes")}
+          {capabilities && !capabilities.tunnel
+            ? "Preparando o scanner distribuído…"
+            : !routesDetected && sideMatrix ? t("splashOffline") : t("splashRoutes")}
         </div>
       </div>
     );
+  }
+
+  if (!capabilities.tunnel) {
+    return <LinuxScannerMvp config={config} pending={pending} appVersion={appVersion} />;
   }
 
   const playerName = sniffStats?.player_name || "";
@@ -519,13 +557,12 @@ export default function App() {
                 <Icon name="gear" />
                 <span>{t("navConfig")}</span>
               </button>
-              {updateStatus === "available" && (
+              {updateStatus === "available" && capabilities?.self_update && (
                 <button className="ck-side-update" onClick={() => invoke("check_and_apply_update")} title={t("updateAvailable")}>
                   <Icon name="download" />
                 </button>
               )}
             </div>
-            <DiscordButton config={config} onChange={refreshConfig} />
           </div>
         </aside>
 
@@ -886,8 +923,6 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
-  const loggedIn = !!config.discord_token;
-
   // Poll: captured loot + sniffer debug (every 2s).
   usePoll(async () => {
     try {
@@ -922,9 +957,6 @@ function LootlogTab({ config, update, sniffStats }: { config: CompanionConfig; u
     await invoke("clear_captured_loot");
     setLoot([]);
   };
-
-  // Auto-submit runs in the Rust worker when an event enters review. Do NOT
-  // submit from React: each new loot would overwrite the previous partial log.
 
   const onTerminalScroll = () => {
     if (!terminalRef.current) return;
@@ -1278,74 +1310,6 @@ function ConfigTab({
           via config.json, not exposed to users. The field still exists in
           config/set_config. */}
     </>
-  );
-}
-
-// ─── Discord button (top of the sidebar, next to the logo) ────────────────
-
-/// Official Discord mark (simple-icons path, 24×24 viewBox). Do not hand-draw
-/// brand logos; replace with the full official asset if edits are needed.
-function DiscordIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
-      <path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/>
-    </svg>
-  );
-}
-
-function DiscordButton({ config, onChange }: {
-  config: CompanionConfig;
-  onChange: () => Promise<void>;
-}) {
-  const t = useT();
-  const [state, setState] = useState<"idle" | "waiting">("idle");
-  const loggedIn = !!config.discord_token;
-
-  const login = async () => {
-    if (state === "waiting") return;
-    setState("waiting");
-    try {
-      const nonce = await invoke<string>("companion_login");
-      for (let i = 0; i < 60; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-          await invoke<AuthPollResult>("companion_poll_auth", { nonce });
-          await onChange();
-          break;
-        } catch { /* 408 = still waiting */ }
-      }
-    } catch { /* failed to open browser */ }
-    setState("idle");
-  };
-
-  const logout = async () => {
-    if (!confirm(t("discordDisconnectConfirm"))) return;
-    await invoke("companion_logout");
-    await onChange();
-  };
-
-  if (loggedIn) {
-    return (
-      <button
-        className="discord-btn connected"
-        onClick={logout}
-        title={t("discordDisconnectHint")}
-      >
-        <DiscordIcon />
-        <span className="discord-btn-name">{config.discord_username || config.discord_user_id}</span>
-      </button>
-    );
-  }
-  return (
-    <button
-      className={`discord-btn ${state === "waiting" ? "waiting" : ""}`}
-      onClick={login}
-      disabled={state === "waiting"}
-      title={t("connectDiscord")}
-    >
-      <DiscordIcon />
-      <span className="discord-btn-name">{state === "waiting" ? "…" : t("connectDiscord")}</span>
-    </button>
   );
 }
 

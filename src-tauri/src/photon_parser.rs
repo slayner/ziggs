@@ -1906,7 +1906,7 @@ mod tests {
         let cap = extract_market(&op);
         // Our DB only stores sell ("offer").
         assert_eq!(cap.offers.len(), 1);
-        assert_eq!(cap.offers[0].item_id, "T4_BAG@1");
+        assert_eq!(cap.offers[0].item_id, "T4_BAG");
         assert_eq!(cap.offers[0].unit_price_silver, 125);
         assert_eq!(cap.offers[0].quality, 2);
         // AODP gets sell and buy, verbatim (original price ×10000).
