@@ -7,6 +7,7 @@ backend (EventParticipant é a "attendance" do bot antigo, agora no Postgres).
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import time
 import urllib.parse
@@ -41,6 +42,8 @@ _API_RETRIES = 3
 # ao vivo. Teto de 5 min como pedido pelo dono.
 _PROFILE_RETRY_INTERVAL = 15
 _PROFILE_RETRY_CAP = 5 * 60
+_PROFILE_READY_POLL_INTERVAL = 2
+_PROFILE_READY_TIMEOUT = 12 * 60
 
 
 def _num(v) -> str:
@@ -71,9 +74,9 @@ async def _get_guild_region(guild_id: int) -> str:
     return region if region in _HOSTS else "americas"
 
 
-async def _warm_profile(guild_id: int, name: str, region: str) -> None:
-    """Best-effort: esquenta o perfil no backend pra não desperdiçar a busca."""
-    await http_client.post_json(
+async def _warm_profile(guild_id: int, name: str, region: str) -> dict | None:
+    """Esquenta o perfil no backend e devolve o estado do warm."""
+    return await http_client.post_json(
         f"/bot/guilds/{guild_id}/warm",
         {"name": name, "region": region},
         timeout=10, tag="warm", queue_on_failure=False,
@@ -253,98 +256,40 @@ class Members(commands.Cog):
                     content=t(lang, "profile_not_found", name=name)
                 )
                 return
-            if len(candidates) == 1:
-                region = candidates[0][0]
-            else:
-                await self._show_region_buttons(interaction, name, candidates, lang, guild_id)
-                return
+            region = max(candidates, key=lambda c: c[1].get("KillFame") or 0)[0]
 
-        await self._fetch_and_show(interaction, name, region, lang, guild_id)
+        await self._wait_and_show_preview(interaction, name, region, lang, guild_id)
 
-    async def _show_region_buttons(
-        self, interaction: Interaction, name: str,
-        candidates: list[tuple[str, dict, bool]], lang: str, guild_id: int,
-    ) -> None:
-        """Mostra botões de região e processa a escolha (ou auto-após 10s)."""
-        cands = [(r, s) for r, s, _ in candidates]
-
-        async def on_select(btn_interaction: Interaction | None, chosen_region: str) -> None:
-            if btn_interaction is not None:
-                await btn_interaction.response.edit_message(
-                    content=t(lang, "processing"), view=None
-                )
-            else:
-                # Timeout — edita a mensagem original sem nova interação.
-                try:
-                    await interaction.edit_original_response(
-                        content=t(lang, "profile_region_auto", region=_REGION_LABELS.get(chosen_region, chosen_region)),
-                        view=None,
-                    )
-                except (discord.NotFound, discord.HTTPException):
-                    pass
-            await self._fetch_and_show(interaction, name, chosen_region, lang, guild_id)
-
-        await interaction.edit_original_response(
-            content=t(lang, "profile_region_prompt", name=name),
-            view=_RegionSelectView(cands, lang, on_select),
-        )
-
-    async def _fetch_and_show(
+    async def _wait_and_show_preview(
         self, interaction: Interaction, name: str, region: str, lang: str, guild_id: int,
     ) -> None:
-        """Busca o perfil na API do Albion com retry, mostra o embed."""
-        host = _HOSTS[region]
-        start = time.monotonic()
-        attempt = 0
-        detail, api_ok = await _fetch_profile(name, host)
-        while not api_ok and (time.monotonic() - start) < _PROFILE_RETRY_CAP:
-            attempt += 1
+        """Espera silenciosamente o cold-load e responde somente com o preview pronto."""
+        warm = await _warm_profile(guild_id, name, region)
+        if warm and warm.get("status") in {"not_found", "search_failed"}:
             await interaction.edit_original_response(
-                content=t(lang, "profile_retrying", attempt=attempt)
-            )
-            await asyncio.sleep(_PROFILE_RETRY_INTERVAL)
-            detail, api_ok = await _fetch_profile(name, host)
-
-        if not api_ok:
-            await interaction.edit_original_response(
-                content=t(lang, "profile_api_error")
-            )
+                content=t(lang, "profile_not_found", name=name), embed=None)
             return
-        if detail is None:
-            await interaction.edit_original_response(
-                content=t(lang, "profile_not_found", name=name)
-            )
-            return
-
-        # Warm do perfil no backend (best-effort, não bloqueia a resposta)
-        asyncio.create_task(_warm_profile(guild_id, name, region))
-
-        embed = self._build_profile_embed(detail, name)
-        await interaction.edit_original_response(content=None, embed=embed)
-
-    def _build_profile_embed(self, detail: dict, name: str) -> discord.Embed:
-        gname = (detail.get("GuildName") or "").strip()
-        atag = (detail.get("AllianceTag") or detail.get("AllianceName") or "").strip()
-        guild_disp = f"[{atag}] {gname}" if (atag and gname) else (gname or "*sem guilda*")
-
-        embed = discord.Embed(color=discord.Color.blurple(), description=f"\n{guild_disp}")
-        embed.set_author(name=name)
-
-        kf = detail.get("KillFame") or 0
-        df = detail.get("DeathFame") or 0
-        kda = (kf / df) if df else float(kf or 0)
-        pve = ((detail.get("LifetimeStatistics") or {}).get("PvE") or {}).get("Total") or 0
-
-        embed.add_field(
-            name="",
-            value=(
-                f"⚔️ Fama PvP: {_num(kf)}\n"
-                f"🌿 Fama PvE: {_num(pve)}\n"
-                f"📊 Ratio: __{kda:.2f}__"
-            ),
-            inline=False,
-        )
-        return embed
+        encoded_name = urllib.parse.quote(name, safe="")
+        profile_path = f"/players/by-name/{region}/{encoded_name}"
+        preview_path = f"/players/embed/{region}/{encoded_name}.png"
+        deadline = time.monotonic() + _PROFILE_READY_TIMEOUT
+        while time.monotonic() < deadline:
+            profile = await http_client.get_json(profile_path, timeout=15, tag="profile")
+            if profile is None:
+                await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
+                continue
+            if profile.get("_cold_load"):
+                await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
+                continue
+            png = await http_client.get_bytes(preview_path, timeout=30, tag="profile")
+            if png:
+                image = discord.File(io.BytesIO(png), filename="profile.png")
+                embed = discord.Embed(color=discord.Color.blurple())
+                embed.set_image(url="attachment://profile.png")
+                await interaction.edit_original_response(content=None, embed=embed, attachments=[image])
+                return
+            await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
+        await interaction.edit_original_response(content=t(lang, "profile_api_error"), embed=None)
 
     # ------------------------------------------------------------------
     # /attendance — stats do backend
