@@ -1,11 +1,11 @@
 {
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmR2TURtMmsyS29kRDV5ZGpFYlQ5bHpBd0Fqb2tWODAzM09MMkxRUE1BNVNibXlmdW9FMGwybjYzcDBRSUtNZVVVTGRNejViV3VmMW1LUHA1MXMxRmc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3Njg5OTgwCWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4xMF94NjQtc2V0dXAuZXhlCno2UkVzQnoyTkZac2RONENUbVFicVRSUjNkK3ZCY0cxYUs1QnZWLzg3b0FqYmpvZS9wYkZrQkNuMSt4VUFQSXRMK1JLR1FhaDY4TnBsYzRDdzlNaENBPT0K",
-                                             "url":  "https://github.com/slayner/ziggs/releases/download/v0.2.10/Ziggs.Companion_0.2.10_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZmVpRnBGTjVMb2JjVFBhSFFTRUQ3R2lIV2FZT1o1N05KM08zNGlhaVpsRnp0WGEwL3VodEVaR1BQTkNXUkNYTW9PSWNZSDVMME5iR29rSVFORWo3ZEFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjUzOTI1CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4xMV94NjQtc2V0dXAuZXhlCkxvejdPc1YxdHNaQjhralkrUUpucUNCK1RqMndyVHN3Y0xWd3FkUENlVnFMaVByekFxSkxJNC9SckMwU2ZPRnJTMi9KNUZEMENmZmZ4M3pnOXRMQUFRPT0K",
+                                             "url":  "https://github.com/slayner/ziggs/releases/download/v0.2.11/Ziggs.Companion_0.2.11_x64-setup.exe"
                                          }
                   },
-    "pub_date":  "2026-08-25T17:34:25Z",
-    "version":  "0.2.10",
-    "notes":  "UI cleanup: remove About card from settings, show version in title bar, simplify damage meter tab, point downloads to GitHub releases"
+    "pub_date":  "2026-09-01T06:12:11Z",
+    "version":  "0.2.11",
+    "notes":  "Dragon update: zone detection for new Dragon Areas, updated item catalog and spell data"
 }
