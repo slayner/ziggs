@@ -129,9 +129,15 @@ class Economy(commands.Cog):
         if data is None:
             await _reply(interaction, t(lang, "balance_fetch_fail"))
             return
+        lines = [
+            f"## {target.mention}",
+            t(lang, "balance_display", balance=format_silver(data["balance"])),
+        ]
+        if not data.get("energy_whitelisted") and data.get("energy_balance") is not None:
+            lines.append(t(lang, "balance_energy", energy=data["energy_balance"]))
         embed = discord.Embed(
             color=discord.Color.blurple(),
-            description=f"# {target.mention}\n{t(lang, 'balance_display', balance=format_silver(data['balance']))}",
+            description="\n".join(lines),
         )
         embed.set_thumbnail(url=target.display_avatar.url)
         await _reply(interaction, embed=embed)

@@ -28,6 +28,7 @@ from app.models.audit import AuditLog
 from app.models.battles import BattleGuild
 from app.models.catalog import Weapon
 from app.models.economy import EconomyBalance, EconomyTransaction
+from app.models.energy import EnergyBalance, EnergyEntry, EnergyWhitelist
 from app.models.events import Event, EventParticipant, EventSignup
 from app.models.nodes import NodeEvent
 from app.models.registration import BotRegistration
@@ -2274,8 +2275,26 @@ def bot_economy_balance(
 ):
     _require_bot_secret(authorization)
     bal = _get_or_create_balance(db, guild_id, discord_user_id)
+    has_energy_history = db.scalar(select(EnergyEntry.id).where(
+        EnergyEntry.guild_id == guild_id,
+        EnergyEntry.discord_user_id == discord_user_id,
+    ).limit(1)) is not None
+    energy_balance = None
+    energy_whitelisted = False
+    if has_energy_history:
+        energy_whitelisted = db.scalar(select(EnergyWhitelist.id).where(
+            EnergyWhitelist.guild_id == guild_id,
+            EnergyWhitelist.discord_user_id == discord_user_id,
+        ).limit(1)) is not None
+        if not energy_whitelisted:
+            energy = db.scalar(select(EnergyBalance).where(
+                EnergyBalance.guild_id == guild_id,
+                EnergyBalance.discord_user_id == discord_user_id,
+            ))
+            energy_balance = int(energy.balance) if energy else 0
     db.commit()
-    return {"balance": bal.balance, "total_earned": bal.total_earned}
+    return {"balance": bal.balance, "total_earned": bal.total_earned,
+            "energy_balance": energy_balance, "energy_whitelisted": energy_whitelisted}
 
 
 class EconomyPayIn(BaseModel):

@@ -169,6 +169,11 @@ T: dict[str, dict[str, str]] = {
         "en": "💰 Balance: **{balance}**",
         "es": "💰 Saldo: **{balance}**",
     },
+    "balance_energy": {
+        "pt": "🧪 Energia: **{energy}**",
+        "en": "🧪 Energy: **{energy}**",
+        "es": "🧪 Energía: **{energy}**",
+    },
     "balance_fetch_fail": {
         "pt": "⚠️ Não consegui consultar o saldo agora.",
         "en": "⚠️ Couldn't check the balance right now.",
