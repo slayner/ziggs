@@ -199,25 +199,6 @@ async def get_bytes(path: str, *, timeout: float = 20, tag: str = "") -> bytes |
     return None
 
 
-async def post_bytes(path: str, body: dict, *, timeout: float = 20, tag: str = "") -> bytes | None:
-    if not _ready():
-        return None
-    try:
-        async with session().post(
-            f"{_site_url()}{path}", json=body, headers=_headers(),
-            timeout=aiohttp.ClientTimeout(total=timeout),
-        ) as r:
-            if r.status == 200:
-                return await r.read()
-            if tag:
-                await _log_non200(tag, "POST", path, r)
-            else:
-                await r.read()
-    except Exception as e:
-        await _on_exception(e)
-    return None
-
-
 async def _write_json(
     method: str, path: str, body: dict | None, *, timeout: float,
     tag: str, attempts: int, queue_on_failure: bool,

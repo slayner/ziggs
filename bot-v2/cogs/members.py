@@ -329,7 +329,11 @@ class Members(commands.Cog):
         pct_all = (user_all / total_all * 100) if total_all > 0 else 0
         pct_7d = (user_7d / total_7d * 100) if total_7d > 0 else 0
 
-        embed = discord.Embed(color=discord.Color.blurple(), title=f"Attendance — {member.display_name}")
+        embed = discord.Embed(
+            color=discord.Color.blurple(),
+            description=f"## {member.mention}",
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
 
         if total_all == 0:
             embed.add_field(name=t(lang, "att_lifetime"), value=t(lang, "att_no_events"), inline=False)
@@ -358,17 +362,6 @@ class Members(commands.Cog):
             embed.add_field(name=t(lang, "att_last"), value=t(lang, "att_never"), inline=True)
 
         embed.set_footer(text=t(lang, "att_footer"))
-        banner = await http_client.post_bytes(
-            f"/bot/guilds/{guild_id}/attendance/{member.id}/image",
-            {"display_name": member.display_name, "stats": data, "lang": lang},
-            timeout=20, tag="attendance",
-        )
-        if banner:
-            filename = f"attendance-{member.id}.png"
-            image = discord.File(io.BytesIO(banner), filename=filename)
-            embed.set_image(url=f"attachment://{filename}")
-            await interaction.followup.send(embed=embed, file=image, ephemeral=True)
-            return
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ------------------------------------------------------------------
