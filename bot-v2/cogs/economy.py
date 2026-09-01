@@ -444,8 +444,7 @@ class Economy(commands.Cog):
         if data["total"] == 0:
             embed = discord.Embed(
                 color=discord.Color.blurple(),
-                title=t(lang, "tx_title", user=target.display_name),
-                description=t(lang, "tx_empty"),
+                description=f"## {t(lang, 'tx_heading', user=target.mention)}\n\n{t(lang, 'tx_empty')}",
             )
             await _reply(interaction, embed=embed)
             return
@@ -519,23 +518,13 @@ class LeaderboardView(discord.ui.View):
 
 TX_PAGE_SIZE = 5
 
-_KIND_LABELS = {
-    "pay": "pay",
-    "add": "add",
-    "remove": "remove",
-    "forfeit": "forfeit",
-    "event_payout": "event_payout",
-    "event_deficit": "event_deficit",
-    "bank_adjust": "bank_adjust",
-}
-
 
 def _format_tx_date(iso: str | None) -> str:
     if not iso:
         return "—"
     try:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        return dt.strftime("%d/%m/%Y %H:%M")
+        return dt.astimezone(timezone.utc).strftime("%d/%m %H:%M UTC")
     except (ValueError, TypeError):
         return "—"
 
@@ -566,70 +555,52 @@ class TransactionsView(discord.ui.View):
         self.first_btn.disabled = self.prev_btn.disabled = (self.page == 0)
         self.next_btn.disabled = self.last_btn.disabled = (self.page >= self.max_page)
 
+    def _event_ref(self, tx: dict) -> str:
+        title = tx.get("event_title") or f"#{tx['event_id']}"
+        channel_id = tx.get("event_channel_id")
+        message_id = tx.get("event_message_id")
+        if not channel_id or not message_id:
+            return title
+        jump = f"https://discord.com/channels/{self.guild_id}/{channel_id}/{message_id}"
+        return f"[{title}]({jump})"
+
+    def _line(self, tx: dict) -> str:
+        target = f"<@{self.target_id}>"
+        actor_id = tx.get("actor_discord_id")
+        actor = f"<@{actor_id}>" if actor_id else t(self.lang, "tx_system")
+        counterparty_id = tx.get("counterparty_id")
+        counterparty = f"<@{counterparty_id}>" if counterparty_id else None
+        amount = format_silver(tx["amount"])
+        kind = tx["kind"]
+        if kind == "pay":
+            action = t(self.lang, "tx_action_pay_in" if tx["direction"] == "in" else "tx_action_pay_out",
+                       actor=actor, target=target, counterparty=counterparty or target, amount=amount)
+        elif kind in ("event_payout", "event_deficit"):
+            action = t(self.lang, f"tx_action_{kind}", actor=actor, target=target,
+                       event=self._event_ref(tx))
+        elif kind in ("add", "remove"):
+            action = t(self.lang, f"tx_action_{kind}", actor=actor, target=target, amount=amount)
+        elif kind == "forfeit":
+            action = t(self.lang, "tx_action_forfeit", target=target, amount=amount)
+        else:
+            action = t(self.lang, "tx_kind_unknown", kind=kind)
+        sign = "+" if tx["direction"] == "in" else "-" if tx["direction"] == "out" else ""
+        undone = f" · *{t(self.lang, 'tx_undone')}*" if tx.get("undone") else ""
+        return f"{_format_tx_date(tx.get('created_at'))} #{tx['id']} {action} **{sign}{amount}**{undone}"
+
     def build_embed(self, data: dict, offset: int) -> discord.Embed:
         txs = data.get("transactions", [])
-        balance = data.get("balance", 0)
-        total_earned = data.get("total_earned", 0)
-        embed = discord.Embed(
-            color=discord.Color.blurple(),
-            title=t(self.lang, "tx_title", user=self.target_name),
-        )
+        embed = discord.Embed(color=discord.Color.blurple())
         if not txs:
             embed.description = t(self.lang, "tx_empty_page")
             return embed
-
-        for tx in txs:
-            kind = tx["kind"]
-            direction = tx["direction"]
-            amount = tx["amount"]
-            kind_label = t(self.lang, f"tx_kind_{_KIND_LABELS.get(kind, kind)}")
-            sign = "+" if direction == "in" else ("-" if direction == "out" else "")
-
-            field_title = f"#{tx['id']} — {kind_label}"
-            parts: list[str] = []
-            parts.append(f"**{sign}{format_silver(amount)}**")
-
-            cp = tx.get("counterparty_albion_name") or tx.get("counterparty_name")
-            if cp:
-                cp_label = t(self.lang, "tx_counterparty")
-                parts.append(f"{cp_label}: {cp}")
-
-            actor = tx.get("actor_name")
-            if actor:
-                actor_label = t(self.lang, "tx_actor")
-                parts.append(f"{actor_label}: {actor}")
-
-            if tx.get("event_id"):
-                ev_title = tx.get("event_title") or f"#{tx['event_id']}"
-                ev_ch = tx.get("event_channel_id")
-                ev_msg = tx.get("event_message_id")
-                if ev_ch and ev_msg:
-                    jump = f"https://discord.com/channels/{self.guild_id}/{ev_ch}/{ev_msg}"
-                    parts.append(f"{t(self.lang, 'tx_event')}: [{ev_title}]({jump})")
-                else:
-                    parts.append(f"{t(self.lang, 'tx_event')}: {ev_title}")
-
-            if tx.get("undone"):
-                parts.append(f"*{t(self.lang, 'tx_undone')}*")
-
-            parts.append(f"`{_format_tx_date(tx.get('created_at'))}`")
-
-            embed.add_field(
-                name=field_title,
-                value="\n".join(parts),
-                inline=False,
-            )
-
-        embed.add_field(
-            name=t(self.lang, "tx_balance_field"),
-            value=f"`{format_silver(balance)}`",
-            inline=True,
-        )
-        embed.add_field(
-            name=t(self.lang, "tx_total_earned_field"),
-            value=f"`{format_silver(total_earned)}`",
-            inline=True,
-        )
+        lines = [f"## {t(self.lang, 'tx_heading', user=f'<@{self.target_id}>')}"]
+        lines.extend(self._line(tx) for tx in txs)
+        lines.append("")
+        lines.append(t(self.lang, "tx_summary",
+                       balance=format_silver(data.get("balance", 0)),
+                       total_earned=format_silver(data.get("total_earned", 0))))
+        embed.description = "\n".join(lines)
         embed.set_footer(text=t(self.lang, "tx_page_footer",
                                  page=self.page + 1, max_page=self.max_page + 1,
                                  total=self.total))

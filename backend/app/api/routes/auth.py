@@ -2638,8 +2638,10 @@ def bot_economy_transactions(
         ei = event_info.get(r.event_id) if r.event_id else None
         txs.append({
             "id": r.id, "kind": r.kind, "direction": direction, "amount": r.amount,
+            "counterparty_id": cp_id,
             "counterparty_name": names.get(cp_id) if cp_id else None,
             "counterparty_albion_name": albion_names.get(cp_id) if cp_id else None,
+            "actor_discord_id": r.actor_discord_id if r.actor_discord_id else None,
             "actor_name": actor_name,
             "event_id": r.event_id,
             "event_title": ei["title"] if ei else None,

@@ -390,48 +390,63 @@ T: dict[str, dict[str, str]] = {
         "en": "Transactions — {user}",
         "es": "Transacciones — {user}",
     },
+    "tx_heading": {
+        "pt": "Transações de {user}",
+        "en": "Transactions for {user}",
+        "es": "Transacciones de {user}",
+    },
     "tx_page_footer": {
         "pt": "Página {page}/{max_page} · {total} transações",
         "en": "Page {page}/{max_page} · {total} transactions",
         "es": "Página {page}/{max_page} · {total} transacciones",
     },
-    "tx_counterparty": {
-        "pt": "Contraparte",
-        "en": "Counterparty",
-        "es": "Contraparte",
+    "tx_summary": {
+        "pt": "Saldo atual: **{balance}** | Total recebido: **{total_earned}**",
+        "en": "Current balance: **{balance}** | Total earned: **{total_earned}**",
+        "es": "Saldo actual: **{balance}** | Total recibido: **{total_earned}**",
     },
-    "tx_actor": {
-        "pt": "Por",
-        "en": "By",
-        "es": "Por",
+    "tx_system": {"pt": "Sistema", "en": "System", "es": "Sistema"},
+    "tx_undone": {"pt": "revertida", "en": "reverted", "es": "revertida"},
+    "tx_action_pay_in": {
+        "pt": "{actor} enviou {amount} para {target}",
+        "en": "{actor} sent {amount} to {target}",
+        "es": "{actor} envió {amount} a {target}",
     },
-    "tx_event": {
-        "pt": "Evento",
-        "en": "Event",
-        "es": "Evento",
+    "tx_action_pay_out": {
+        "pt": "{target} enviou {amount} para {counterparty}",
+        "en": "{target} sent {amount} to {counterparty}",
+        "es": "{target} envió {amount} a {counterparty}",
     },
-    "tx_undone": {
-        "pt": "revertida",
-        "en": "reverted",
-        "es": "revertida",
+    "tx_action_add": {
+        "pt": "{actor} adicionou {amount} ao saldo de {target}",
+        "en": "{actor} added {amount} to {target}'s balance",
+        "es": "{actor} añadió {amount} al saldo de {target}",
     },
-    "tx_balance_field": {
-        "pt": "Saldo atual",
-        "en": "Current balance",
-        "es": "Saldo actual",
+    "tx_action_remove": {
+        "pt": "{actor} removeu {amount} do saldo de {target}",
+        "en": "{actor} removed {amount} from {target}'s balance",
+        "es": "{actor} retiró {amount} del saldo de {target}",
     },
-    "tx_total_earned_field": {
-        "pt": "Total recebido",
-        "en": "Total earned",
-        "es": "Total recibido",
+    "tx_action_forfeit": {
+        "pt": "Saldo de {target} foi confiscado",
+        "en": "{target}'s balance was forfeited",
+        "es": "El saldo de {target} fue confiscado",
     },
-    "tx_kind_pay": {"pt": "Transferência", "en": "Transfer", "es": "Transferencia"},
-    "tx_kind_add": {"pt": "Adição", "en": "Addition", "es": "Adición"},
-    "tx_kind_remove": {"pt": "Remoção", "en": "Removal", "es": "Remoción"},
-    "tx_kind_forfeit": {"pt": "Confisco", "en": "Forfeit", "es": "Confisco"},
-    "tx_kind_event_payout": {"pt": "Pagamento de evento", "en": "Event payout", "es": "Pago de evento"},
-    "tx_kind_event_deficit": {"pt": "Déficit de evento", "en": "Event deficit", "es": "Déficit de evento"},
-    "tx_kind_bank_adjust": {"pt": "Ajuste de banco", "en": "Bank adjust", "es": "Ajuste de banco"},
+    "tx_action_event_payout": {
+        "pt": "{actor} registrou pagamento de evento {event} para {target}",
+        "en": "{actor} recorded the event payout {event} for {target}",
+        "es": "{actor} registró el pago de evento {event} para {target}",
+    },
+    "tx_action_event_deficit": {
+        "pt": "{actor} registrou déficit de evento {event} para {target}",
+        "en": "{actor} recorded the event deficit {event} for {target}",
+        "es": "{actor} registró el déficit de evento {event} para {target}",
+    },
+    "tx_kind_unknown": {
+        "pt": "Ação: {kind}",
+        "en": "Action: {kind}",
+        "es": "Acción: {kind}",
+    },
 
     # cogs/events.py — mass-info + inscrição em eventos
     "massinfo_title": {
