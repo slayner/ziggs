@@ -67,7 +67,7 @@ async def _og_for_path(
         image_url = f"{s.frontend_url}/players/embed/{region}/{quote(name, safe='')}.png"
         if image_version:
             image_url += f"?v={image_version}"
-        return ("", "", image_url)
+        return (f"{name} — Perfil Albion", f"Perfil de {name} no Ziggs.", image_url)
 
     m = _EVENT_RE.match(path)
     if m:

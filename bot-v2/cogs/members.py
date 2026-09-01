@@ -280,7 +280,9 @@ class Members(commands.Cog):
 
         preview_status = await http_client.get_json(status_path, timeout=10, tag="profile")
         if preview_status and preview_status.get("ready"):
-            await interaction.edit_original_response(content=t(lang, "profile_link_ready", name=name, url=profile_url))
+            version = urllib.parse.quote(str(preview_status.get("updated_at") or ""), safe="")
+            public_url = f"{profile_url}?v={version}" if version else profile_url
+            await interaction.edit_original_response(content=public_url)
             if warm and warm.get("status") == "stale":
                 asyncio.create_task(self._wait_for_profile_refresh(
                     interaction, name, region, lang, profile_url, status_path,
@@ -296,7 +298,7 @@ class Members(commands.Cog):
                 continue
             await interaction.edit_original_response(content=t(lang, "profile_progress_rendering", name=name))
             if await http_client.get_bytes(preview_path, timeout=120, tag="profile"):
-                await interaction.edit_original_response(content=t(lang, "profile_link_ready", name=name, url=profile_url))
+                await interaction.edit_original_response(content=profile_url)
                 return
             await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
         await interaction.edit_original_response(content=t(lang, "profile_api_error"), embed=None)
@@ -311,7 +313,7 @@ class Members(commands.Cog):
             if status and status.get("ready") and not status.get("refreshing"):
                 version = urllib.parse.quote(str(status.get("updated_at") or ""), safe="")
                 updated_url = f"{profile_url}?v={version}" if version else profile_url
-                await interaction.edit_original_response(content=t(lang, "profile_link_refreshed", name=name, url=updated_url))
+                await interaction.edit_original_response(content=updated_url)
                 return
             await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
 
