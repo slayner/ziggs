@@ -54,6 +54,34 @@ SHAPESHIFTER_FAMILIES: dict[str, dict] = {
     "2H_SHAPESHIFTER_CRYSTAL": {"name": "Stillgaze Staff", "rare": "T3_ALCHEMY_RARE_PANTHER"},
 }
 
+# Equipamentos Dragon Leather (artefato). Mesmo padrão dos outros artefatos:
+# T4-T8 × encant 0-4, craftCategory por slot.
+DRAGON_LEATHER_FAMILIES: dict[str, dict] = {
+    "HEAD_LEATHER_DRAGON":  {"nameEn": "Dragonslayer Hood",  "craftCategory": "leatherhead"},
+    "ARMOR_LEATHER_DRAGON": {"nameEn": "Dragonslayer Jacket", "craftCategory": "leatherarmor"},
+    "SHOES_LEATHER_DRAGON": {"nameEn": "Dragonslayer Shoes",  "craftCategory": "leathershoes"},
+}
+
+# Consumíveis Dragon: poção, omelete e comida especial.
+# outputPerCraft não está no XML — é hardcoded por tipo (poção combate=5, omelete=10, especial=1).
+DRAGON_CONSUMABLE_FAMILIES: dict[str, dict] = {
+    "POTION_LIFEWARD": {
+        "nameEn": "Lifeward Potion", "slot": "potion",
+        "craftCategory": "potion", "bonusCity": "Brecilien",
+        "subcategory": "potions", "outputPerCraft": 5,
+    },
+    "MEAL_OMELETTE_DRAGONAREA": {
+        "nameEn": "Dragon Area Omelette", "slot": "food",
+        "craftCategory": "food", "bonusCity": "Caerleon",
+        "subcategory": "food", "outputPerCraft": 10,
+    },
+    "MEAL_SPECIAL_FOOD_DRAKE_EGG": {
+        "nameEn": "Firewing Drake Egg Dish", "slot": "food",
+        "craftCategory": "food", "bonusCity": "Caerleon",
+        "subcategory": "food", "outputPerCraft": 1,
+    },
+}
+
 TIER_PREFIX: dict[int, str] = {
     4: "Adept's", 5: "Expert's", 6: "Master's", 7: "Grandmaster's", 8: "Elder's",
 }
@@ -78,11 +106,23 @@ def base_id(uid: str) -> str:
 
 def load_localized_names() -> dict[str, dict[str, str]]:
     data = json.loads(ITEMS_JSON.read_text(encoding="utf-8"))
+    items_node = data.get("items", data)
+    flat: list = []
+    if isinstance(items_node, list):
+        flat = items_node
+    elif isinstance(items_node, dict):
+        for v in items_node.values():
+            if isinstance(v, list):
+                flat.extend(v)
     out: dict[str, dict[str, str]] = {}
-    for item in data:
-        uid = item.get("UniqueName", "")
+    for item in flat:
+        if not isinstance(item, dict):
+            continue
+        uid = item.get("@uniquename") or item.get("UniqueName", "")
+        if not uid:
+            continue
         locs = item.get("LocalizedNames") or {}
-        if uid and locs:
+        if locs:
             out[uid] = {
                 "en": locs.get("EN-US", ""),
                 "pt": locs.get("PT-BR", ""),
@@ -214,7 +254,7 @@ def parse_resources(craft_req: ET.Element) -> list[dict]:
 
 def find_elements(root: ET.Element, base: str) -> list[ET.Element]:
     matches: list[ET.Element] = []
-    for tag in ("weapon", "offhand", "transformationweapon", "equipmentitem"):
+    for tag in ("weapon", "offhand", "transformationweapon", "equipmentitem", "consumableitem"):
         for el in root.iter(tag):
             uid = el.get("uniquename", "")
             if base_id(uid) == base:
@@ -329,6 +369,54 @@ def build_shapeshifter_family(
     )
 
 
+def build_consumable_family(
+    root: ET.Element,
+    base: str,
+    meta: dict,
+    names: dict[str, dict[str, str]],
+    item_values: dict[str, int],
+) -> dict | None:
+    elements = find_elements(root, base)
+    if not elements:
+        print(f"[WARN] {base}: nenhum elemento encontrado no dump")
+        return None
+
+    variations: list[dict] = []
+    for el in elements:
+        uid = el.get("uniquename", "")
+        tier, _ = tier_enchant(uid)
+        if tier < 1 or tier > 8:
+            continue
+        for cr in el.iter("craftingrequirements"):
+            focus = int(cr.get("craftingfocus", "0"))
+            resources = parse_resources(cr)
+            item_value = compute_item_value(resources, item_values)
+            var = make_variation(uid, 0, focus, item_value, resources)
+            var["outputPerCraft"] = meta["outputPerCraft"]
+            variations.append(var)
+
+    if not variations:
+        return None
+
+    variations.sort(key=lambda v: (v["tier"], v["enchant"]))
+
+    sample_uid = variations[0]["uniqueName"]
+    localized = names.get(sample_uid, {})
+    name = localized.get("en") or meta["nameEn"]
+
+    return {
+        "familyKey": base,
+        "name": name,
+        "slot": meta["slot"],
+        "category": "consumables",
+        "subcategory": meta["subcategory"],
+        "craftCategory": meta["craftCategory"],
+        "bonusCity": meta["bonusCity"],
+        "kind": "consumable",
+        "variations": variations,
+    }
+
+
 def main() -> None:
     if not ITEMS_XML.exists():
         raise FileNotFoundError(f"Dump não encontrado: {ITEMS_XML}")
@@ -358,6 +446,25 @@ def main() -> None:
         if fam:
             added.append(fam)
             print(f"[ADD] shapeshifter {base} ({len(fam['variations'])} variações)")
+
+    for base, meta in DRAGON_LEATHER_FAMILIES.items():
+        if base in existing_keys:
+            print(f"[SKIP] dragon leather {base} já existe")
+            continue
+        fam = build_crystal_family(root, base, meta, names, item_values)
+        if fam:
+            fam["category"] = "armor"
+            added.append(fam)
+            print(f"[ADD] dragon leather {base} ({len(fam['variations'])} variações)")
+
+    for base, meta in DRAGON_CONSUMABLE_FAMILIES.items():
+        if base in existing_keys:
+            print(f"[SKIP] consumível {base} já existe")
+            continue
+        fam = build_consumable_family(root, base, meta, names, item_values)
+        if fam:
+            added.append(fam)
+            print(f"[ADD] consumível {base} ({len(fam['variations'])} variações)")
 
     # Ordena as novas famílias por chave para estabilidade e anexa ao fim.
     added.sort(key=lambda f: f["familyKey"])

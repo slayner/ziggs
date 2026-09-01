@@ -834,16 +834,29 @@ async def apply_native_items(
                 and _aware(stream.scan_started_at) + RECOVERY_MAX_AGE <= _now()
             ):
                 now = _now()
-                last = _stall_log_last.get((kind, region))
-                if last is None or (now - last).total_seconds() >= STALL_LOG_INTERVAL_SECONDS:
-                    _stall_log_last[(kind, region)] = now
-                    log.warning(
-                        "event=native_feed_scan_stalled scan_id=%s kind=%s region=%s "
-                        "phase=%s seconds_without_progress=%d current_offset=%d anchor_id=%s",
-                        stream.scan_id, kind, region, stream.scan_phase or "capturing",
-                        int((now - _aware(stream.scan_last_progress_at or stream.scan_started_at)).total_seconds()),
-                        stream.next_offset, stream.scan_anchor_source_id,
-                    )
+                anchor_id = stream.scan_anchor_source_id
+                stream.scan_active = False
+                stream.scan_anchor_source_id = None
+                stream.scan_anchor_occurred_at = None
+                stream.next_offset = 0
+                stream.scan_resolution = "expired"
+                stream.scan_phase = None
+                stream.search_low_offset = 0
+                stream.search_high_offset = 0
+                if stream.scan_head_source_id:
+                    stream.captured_head_source_id = stream.scan_head_source_id
+                stream.scan_head_source_id = None
+                stream.blocked_reason = (
+                    f"âncora {anchor_id!r} abandonada após {RECOVERY_MAX_AGE}"
+                )
+                log.warning(
+                    "event=native_feed_scan_expired scan_id=%s kind=%s region=%s "
+                    "phase=%s anchor_id=%s captured_head=%s",
+                    stream.scan_id, kind, region,
+                    stream.scan_phase or "capturing",
+                    anchor_id, stream.captured_head_source_id,
+                )
+                await db.commit()
             boundary = None
             if stream.scan_active or stream.scan_blocked:
                 if stream.captured_head_source_id:

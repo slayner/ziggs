@@ -28,6 +28,14 @@ pub fn classify_zone(cluster_type: &str) -> ZoneType {
         return ZoneType::PvP;
     }
 
+    // DRAGON_AREA: ORANGE = blue (non-lethal), BLACK = PvP (full-loot)
+    if t.starts_with("DRAGON_AREA") || t.starts_with("DRAGON-ISLANDS") {
+        if t.contains("BLACK") {
+            return ZoneType::PvP;
+        }
+        return ZoneType::Blue;
+    }
+
     // PvP (lethal) — full-loot or otherwise dangerous
     let pvp_prefixes = [
         "OPENPVP_BLACK",
@@ -42,7 +50,6 @@ pub fn classify_zone(cluster_type: &str) -> ZoneType {
         "TUNNEL_DEEP",
         "TUNNEL_HIDEOUT_DEEP",
         "HIDEOUT",
-        "DRAGONAREA",
     ];
     for prefix in &pvp_prefixes {
         if t.starts_with(prefix) {
@@ -120,6 +127,14 @@ mod tests {
             classify_zone("CORRUPTED_DUNGEON_INTERMEDIATE"),
             ZoneType::Blue
         ));
+        assert!(matches!(
+            classify_zone("DRAGON_AREA_1_TO_1_ORANGE"),
+            ZoneType::Blue
+        ));
+        assert!(matches!(
+            classify_zone("DRAGON-ISLANDS-001"),
+            ZoneType::Blue
+        ));
     }
 
     #[test]
@@ -145,6 +160,14 @@ mod tests {
         assert!(matches!(classify_zone("ARENA_CRYSTAL"), ZoneType::PvP));
         assert!(matches!(
             classify_zone("ARENA_CRYSTAL_20VS20"),
+            ZoneType::PvP
+        ));
+        assert!(matches!(
+            classify_zone("DRAGON_AREA_1_TO_1_BLACK"),
+            ZoneType::PvP
+        ));
+        assert!(matches!(
+            classify_zone("DRAGON_AREA_15_TO_20_BLACK"),
             ZoneType::PvP
         ));
     }

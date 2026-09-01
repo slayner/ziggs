@@ -123,6 +123,7 @@ export const ALBION_ITEMS: AlbionItem[] = [
   ...art("HEAD_LEATHER_AVALON",   "Capuz de Avalon (Couro)",       "helmet"),
   ...art("HEAD_LEATHER_CAERLEON", "Capuz de Caerleon (Couro)",     "helmet"),
   ...art("HEAD_LEATHER_FEY",     "Capuz Mistwalker",              "helmet"),
+  ...artAll("HEAD_LEATHER_DRAGON",  "Capuz do Caçador de Dragões",    "helmet", "Dragonslayer Hood"),
 
   // ═══════════════════════════════════════════════════════════
   // ARMADURAS
@@ -166,6 +167,7 @@ export const ALBION_ITEMS: AlbionItem[] = [
   ...art("ARMOR_LEATHER_AVALON",   "Jaqueta de Avalon",                  "armor"),
   ...art("ARMOR_LEATHER_CAERLEON", "Jaqueta de Caerleon",                "armor"),
   ...art("ARMOR_LEATHER_FEY",     "Jaqueta Mistwalker",                 "armor"),
+  ...artAll("ARMOR_LEATHER_DRAGON",  "Jaqueta do Caçador de Dragões",      "armor", "Dragonslayer Jacket"),
 
   // ═══════════════════════════════════════════════════════════
   // BOTAS
@@ -209,6 +211,7 @@ export const ALBION_ITEMS: AlbionItem[] = [
   ...art("SHOES_LEATHER_AVALON",   "Sapatos de Avalon (Couro)",      "boots"),
   ...art("SHOES_LEATHER_CAERLEON", "Sapatos de Caerleon (Couro)",    "boots"),
   ...art("SHOES_LEATHER_FEY",     "Sapatos Mistwalker",             "boots"),
+  ...artAll("SHOES_LEATHER_DRAGON",  "Sapatos do Caçador de Dragões",  "boots", "Dragonslayer Shoes"),
 
   // ═══════════════════════════════════════════════════════════
   // OFFHANDS
@@ -288,6 +291,8 @@ export const ALBION_ITEMS: AlbionItem[] = [
   ...gen([5,6,7,8], [0,1,2,3], "MEAL_SANDWICH_AVALON", "Sanduíche Avaloniano","food"),
   ...gen([5,6,7,8], [0,1,2,3], "MEAL_ROAST",           "Assado",             "food"),
   ...gen([5,6,7,8], [0,1,2,3], "MEAL_ROAST_FISH",      "Peixe Assado",       "food"),
+  ...gen([3,5,7], [0], "MEAL_OMELETTE_DRAGONAREA", "Omelete Dragona",  "food"),
+  ...gen([8], [0], "MEAL_SPECIAL_FOOD_DRAKE_EGG", "Ovo de Drake Flamejante", "food"),
 
   // ═══════════════════════════════════════════════════════════
   // POÇÕES
@@ -305,6 +310,7 @@ export const ALBION_ITEMS: AlbionItem[] = [
   ...gen(T, [0], "POTION_GATHER",   "Coleta",                 "potion", "Gathering Potion"),
   ...gen(T, [0], "POTION_SLOWFIELD","Pegajosa",               "potion", "Sticky Potion"),
   ...gen(T, [0], "POTION_COOLDOWN", "Veneno",                 "potion", "Poison Potion"),
+  ...gen(T, [0], "POTION_LIFEWARD",  "Guarda-vida",             "potion", "Lifeward Potion"),
 
   // ═══════════════════════════════════════════════════════════
   // ARMAS

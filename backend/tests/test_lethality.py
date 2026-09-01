@@ -13,8 +13,11 @@ def test_expected_fame_accepts_raw_and_simplified_equipment():
     assert expected_kill_fame({"weapon": "T4_MAIN_SWORD", "armor": "T4_ARMOR_PLATE_SET1@1"}) == expected
 
 
-def test_large_group_proves_not_orange():
-    assert is_likely_lethal(1, None, 4) is True
+def test_large_group_still_requires_fame():
+    expected = expected_kill_fame(RAW_GEAR)
+    assert is_likely_lethal(expected, RAW_GEAR, 4) is True
+    assert is_likely_lethal(expected - 1, RAW_GEAR, 4) is False
+    assert is_likely_lethal(96, RAW_GEAR, 12) is False
 
 
 def test_small_or_unknown_group_requires_expected_fame():
@@ -31,7 +34,7 @@ def test_zero_fame_and_unknown_gear_are_rejected():
 
 if __name__ == "__main__":
     test_expected_fame_accepts_raw_and_simplified_equipment()
-    test_large_group_proves_not_orange()
+    test_large_group_still_requires_fame()
     test_small_or_unknown_group_requires_expected_fame()
     test_zero_fame_and_unknown_gear_are_rejected()
     print("ok")

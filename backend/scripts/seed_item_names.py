@@ -26,13 +26,51 @@ Uso:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, ".")
 
 DUMP = Path("data/ao-bin-dump/items.json")
+LOC = Path("data/ao-bin-dump/localization.json")
 OUT = Path("data/item_names.json")
+
+
+def _flatten_items(raw: dict) -> list[dict]:
+    items_node = raw.get("items", raw)
+    items: list = []
+    if isinstance(items_node, list):
+        return items_node
+    if isinstance(items_node, dict):
+        for v in items_node.values():
+            if isinstance(v, list):
+                items.extend(v)
+    return items
+
+
+def _load_localization() -> dict[str, str]:
+    if not LOC.exists():
+        return {}
+    raw = json.loads(LOC.read_bytes())
+    tus = raw.get("tmx", {}).get("body", {}).get("tu", [])
+    out: dict[str, str] = {}
+    if isinstance(tus, dict):
+        tus = [tus]
+    for tu in tus:
+        tuid = tu.get("@tuid", "")
+        if not tuid:
+            continue
+        tuvs = tu.get("tuv", [])
+        if isinstance(tuvs, dict):
+            tuvs = [tuvs]
+        for tuv in tuvs:
+            if tuv.get("@xml:lang") == "EN-US":
+                seg = tuv.get("seg", "")
+                if seg:
+                    out[tuid] = seg  # mantém o @ no tuid
+                break
+    return out
 
 
 def main() -> None:
@@ -41,18 +79,27 @@ def main() -> None:
         sys.exit(1)
 
     raw = json.loads(DUMP.read_bytes())
-    items = raw if isinstance(raw, list) else raw.get("items", [])
+    items = _flatten_items(raw)
+    loc = _load_localization()
 
-    # Indexa por UniqueName
+    # Indexa por @uniquename
     by_unique: dict[str, str | None] = {}
     for it in items:
         if not it or not isinstance(it, dict):
             continue
-        u = it.get("UniqueName")
+        u = it.get("@uniquename") or it.get("UniqueName")
         if not u:
             continue
+        # Tenta LocalizedNames (formato antigo) depois localization.json
         names = it.get("LocalizedNames") or {}
-        en = names.get("EN-US")
+        en = names.get("EN-US") if names else None
+        if not en:
+            en = loc.get(u) or loc.get(f"@ITEMS_{u}")
+        if not en:
+            # Tenta sem @n (base item)
+            base = u.rsplit("@", 1)[0] if "@" in u else u
+            if base != u:
+                en = loc.get(base) or loc.get(f"@ITEMS_{base}")
         by_unique[u] = en
 
     out: dict[str, str] = {}
@@ -61,7 +108,7 @@ def main() -> None:
         if not en:
             continue
 
-        is_resource = "_LEVEL" in unique  # T4_FIBER_LEVEL1@1, T4_CLOTH_LEVEL2@2
+        is_resource = "_LEVEL" in unique
         has_at = "@" in unique
         ench = 0
         if has_at:
@@ -71,26 +118,13 @@ def main() -> None:
                 pass
 
         if is_resource:
-            # Recurso encantado: nome próprio do localization, sem @
-            # T4_FIBER_LEVEL1@1 → "Uncommon Hemp"
             out[unique] = en
-            # Também gera sem o @n (catálogo usa assim)
             if has_at:
                 base = unique.rsplit("@", 1)[0]
                 out[base] = en
         elif has_at and ench > 0:
-            # Equipamento encantado: nome do base + @n
-            # T4_BAG@1 → "Adept's Bag@1"
             out[unique] = f"{en}@{ench}"
         else:
-            # Flat: equipamento ganha @0, recurso/other fica sem
-            # T4_BAG → "Adept's Bag@0", T4_FIBER → "Hemp"
-            # Distinguir equipamento de recurso: equipamentos têm slot type
-            # no dump. Mas o dump antigo nem sempre tem. Heurística simples:
-            # se o UniqueName começa com T\d_ e não é recurso/consumível/mount,
-            # é equipamento. Na prática, o @0 só importa pra render, e o
-            # render aceita tanto "Adept's Bag" quanto "Adept's Bag@0".
-            # Pra segurança, equipamentos ganham @0, resto fica sem.
             if _is_equipment(unique, items):
                 out[unique] = f"{en}@0"
             else:
@@ -100,34 +134,29 @@ def main() -> None:
     print(f"Gerado {OUT}: {len(out)} entradas")
 
 
+_NON_EQUIP = (
+    "_FIBER", "_CLOTH", "_WOOD", "_PLANKS", "_ORE", "_METALBAR",
+    "_HIDE", "_LEATHER", "_ROCK", "_STONEBLOCK",
+    "_POTION", "_MEAL", "_FOOD", "_SEED", "_FISH",
+    "_MOUNT", "_BUTTER", "_MILK", "_YARROW", "_PUMPKIN",
+    "_CABBAGE", "_AGARIC", "_MULLEIN", "_MEAT", "_SOUL",
+    "_ARTEFACT", "_TREASURE", "_FARM",
+)
+
+
 def _is_equipment(unique: str, items: list) -> bool:
-    r"""Heurística: equipamentos são T\d_ com slot type conhecido."""
-    # Busca rápida pelo item
     for it in items:
         if not it or not isinstance(it, dict):
             continue
-        if it.get("UniqueName") == unique:
-            # Se tem slot type no dump, é equipamento
+        uid = it.get("@uniquename") or it.get("UniqueName")
+        if uid == unique:
             slot = it.get("@slottype") or it.get("SlotType")
             if slot:
                 return True
-            # Heurística pelo prefixo: armas, armaduras, capas, bolsas, etc.
-            # Recursos: FIBER, CLOTH, WOOD, PLANKS, ORE, METALBAR, HIDE, LEATHER, ROCK, STONEBLOCK
-            # Consumíveis: POTION, MEAL, FOOD
-            # Mounts: MOUNT
-            # Equipamentos: o resto que começa com T\d_
             u = unique
             if not u.startswith("T"):
                 return False
-            non_equip = (
-                "_FIBER", "_CLOTH", "_WOOD", "_PLANKS", "_ORE", "_METALBAR",
-                "_HIDE", "_LEATHER", "_ROCK", "_STONEBLOCK",
-                "_POTION", "_MEAL", "_FOOD", "_SEED", "_FISH",
-                "_MOUNT", "_BUTTER", "_MILK", "_YARROW", "_PUMPKIN",
-                "_CABBAGE", "_AGARIC", "_MULLEIN", "_MEAT", "_SOUL",
-                "_ARTEFACT", "_TREASURE", "_FARM",
-            )
-            return not any(x in u for x in non_equip)
+            return not any(x in u for x in _NON_EQUIP)
     return False
 
 

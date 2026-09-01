@@ -300,7 +300,7 @@ async def _render_juicy_kill_image(db: Session, kill_id: int) -> Path | None:
     ev = db.get(PlayerKillEvent, kill_id)
     if ev is None:
         return None
-    if not is_likely_lethal(ev.fame, ev.victim_equipment, ev.group_member_count):
+    if not is_likely_lethal(ev.fame, ev.victim_equipment, ev.group_member_count, ev.kill_area):
         return None
     try:
 

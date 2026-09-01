@@ -34,12 +34,15 @@ def is_likely_lethal(
     fame: int,
     victim_equipment: dict | None,
     group_member_count: int | None,
+    kill_area: str | None = None,
 ) -> bool:
-    """Grupo >3 prova que não é zona laranja. Grupo <=3 ou histórico sem o
-    campo precisa entregar ao menos 100% da fama-base estimada."""
+    """Heurística conservadora: falso negativo é preferível a falso positivo.
+
+    Grupo >3 sugere que não é zona laranja (limite de grupo 3), mas não prova
+    que é lethal — arenas, hellgates e CDGs aceitam grupos maiores e geram
+    fama muito baixa. Por isso a fama é SEMPRE checada contra o baseline do
+    equipamento, independentemente do tamanho do grupo."""
     if fame <= 0:
         return False
-    if group_member_count is not None and group_member_count > ORANGE_GROUP_LIMIT:
-        return True
     expected = expected_kill_fame(victim_equipment)
     return expected > 0 and fame >= expected

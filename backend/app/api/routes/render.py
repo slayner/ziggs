@@ -538,6 +538,13 @@ _CRYSTAL_WEAPON_BASES: dict[str, str] = {
     "OFF_TORCH": "Blueflame Torch",
 }
 
+# Dragon Leather: a CDN serve pelo nome EN, não pelo UniqueName (igual crystal).
+_DRAGON_LEATHER_BASES: dict[str, str] = {
+    "HEAD_LEATHER_DRAGON": "Dragonslayer Hood",
+    "ARMOR_LEATHER_DRAGON": "Dragonslayer Jacket",
+    "SHOES_LEATHER_DRAGON": "Dragonslayer Shoes",
+}
+
 
 def _load_items_txt() -> dict[str, str]:
     """Lê items.txt (UniqueName: EN name) — fonte que cobre crystal weapons."""
@@ -593,9 +600,25 @@ def _catalog_equipment_uids() -> list[str]:
     return out
 
 
+def _dragon_en_name(uid: str) -> str | None:
+    """Converte UniqueName de Dragon Leather em nome EN para o render CDN.
+    T4_HEAD_LEATHER_DRAGON@2 → "Adept's Dragonslayer Hood@2"
+    """
+    m = re.match(r"T(\d+)_(.+?)(@\d+)?$", uid)
+    if not m:
+        return None
+    base = m.group(2)
+    if base not in _DRAGON_LEATHER_BASES:
+        return None
+    tier = int(m.group(1))
+    prefix = _CRYSTAL_TIER_PREFIX.get(tier, "Elder's")
+    ench = m.group(3) or ""
+    return f"{prefix} {_DRAGON_LEATHER_BASES[base]}{ench}"
+
+
 def _item_render_key(uid: str) -> str:
-    """Converte cristais para a mesma chave por nome inglês usada pela UI."""
-    return _crystal_en_name(uid, {}) or uid
+    """Converte crystal weapons e Dragon Leather para o nome EN usado pela CDN."""
+    return _crystal_en_name(uid, {}) or _dragon_en_name(uid) or uid
 
 
 def _build_prerender_queue() -> list[tuple[str, int, int]]:
@@ -658,6 +681,14 @@ def _build_prerender_queue() -> list[tuple[str, int, int]]:
             for ench in range(5):
                 suffix = f"@{ench}" if ench else ""
                 add(crystal_queue, re.sub(r"@\d+$", "", en_name) + suffix)
+
+    # --- Dragon Leather por nome EN (mesma doutrina dos crystal weapons) ---
+    for tier in (4, 5, 6, 7, 8):
+        prefix = _CRYSTAL_TIER_PREFIX[tier]
+        for base, name_en in _DRAGON_LEATHER_BASES.items():
+            for ench in range(5):
+                suffix = f"@{ench}" if ench else ""
+                add(crystal_queue, f"{prefix} {name_en}{suffix}")
 
     # --- Itens normais por UniqueName ---
     for uid in (names_data.keys() if isinstance(names_data, dict) else []):

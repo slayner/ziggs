@@ -201,7 +201,7 @@ async def _process_batch(db: AsyncSession) -> int:
     candidates = []
     for ev in rows:
         if _has_gear(ev) and is_likely_lethal(
-            ev.fame, ev.victim_equipment, ev.group_member_count,
+            ev.fame, ev.victim_equipment, ev.group_member_count, ev.kill_area,
         ):
             candidates.append(ev)
         else:

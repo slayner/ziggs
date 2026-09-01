@@ -68,7 +68,7 @@ def _is_eligible(settings: dict, event: PlayerKillEvent, cutoff: datetime) -> bo
     return (
         event.fame >= minimum_fame
         and (event.silver_dropped or 0) >= minimum_silver
-        and is_likely_lethal(event.fame, event.victim_equipment, event.group_member_count)
+        and is_likely_lethal(event.fame, event.victim_equipment, event.group_member_count, event.kill_area)
     )
 
 
