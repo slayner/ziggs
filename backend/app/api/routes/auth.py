@@ -4209,6 +4209,28 @@ async def bot_juicy_kill_image(
 
 # ── Bot: attendance / lowattendance / warm ─────────────────────────────────────
 
+class AttendanceImageIn(BaseModel):
+    display_name: str
+    stats: dict
+    lang: str = "pt"
+
+
+@router.post("/bot/guilds/{guild_id}/attendance/{discord_user_id}/image")
+def bot_attendance_image(
+    guild_id: int,
+    discord_user_id: int,
+    body: AttendanceImageIn,
+    authorization: str = Header(...),
+):
+    _require_bot_secret(authorization)
+    from app.services.attendance_preview import render_attendance_preview
+    path = render_attendance_preview(
+        guild_id, discord_user_id, body.display_name, body.stats, body.lang,
+    )
+    from fastapi.responses import FileResponse
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
+
+
 @router.get("/bot/guilds/{guild_id}/attendance/{discord_user_id}")
 def bot_attendance(
     guild_id: int,

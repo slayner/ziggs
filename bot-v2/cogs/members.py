@@ -358,6 +358,17 @@ class Members(commands.Cog):
             embed.add_field(name=t(lang, "att_last"), value=t(lang, "att_never"), inline=True)
 
         embed.set_footer(text=t(lang, "att_footer"))
+        banner = await http_client.post_bytes(
+            f"/bot/guilds/{guild_id}/attendance/{member.id}/image",
+            {"display_name": member.display_name, "stats": data, "lang": lang},
+            timeout=20, tag="attendance",
+        )
+        if banner:
+            filename = f"attendance-{member.id}.png"
+            image = discord.File(io.BytesIO(banner), filename=filename)
+            embed.set_image(url=f"attachment://{filename}")
+            await interaction.followup.send(embed=embed, file=image, ephemeral=True)
+            return
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ------------------------------------------------------------------
