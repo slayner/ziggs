@@ -11,23 +11,32 @@ from pydantic import BaseModel, Field
 
 class RegearChannelOut(BaseModel):
     channel_id: str
-    coverage_pct: int = 100
 
 
 class RegearSettingsOut(BaseModel):
     enabled: bool = False
-    channels: list[RegearChannelOut] = Field(default_factory=list)
+    event_thread_parent_channel_id: str | None = None
+    payment_channel_id: str | None = None
+    extra_channels: list[RegearChannelOut] = Field(default_factory=list)
+    payment_pct: int = Field(default=100, ge=0, le=100)
     enabled_categories: list[str] = Field(default_factory=list)
     disabled_items: list[str] = Field(default_factory=list)
+    requester_role_ids: list[str] = Field(default_factory=list)
+    attendance_multiplier_enabled: bool = False
     require_approval: bool = True
     approver_role_ids: list[int] = Field(default_factory=list)
 
 
 class RegearSettingsIn(BaseModel):
     enabled: bool | None = None
-    channels: list[RegearChannelOut] | None = None
+    event_thread_parent_channel_id: str | None = None
+    payment_channel_id: str | None = None
+    extra_channels: list[RegearChannelOut] | None = None
+    payment_pct: int | None = Field(default=None, ge=0, le=100)
     enabled_categories: list[str] | None = None
     disabled_items: list[str] | None = None
+    requester_role_ids: list[str] | None = None
+    attendance_multiplier_enabled: bool | None = None
     require_approval: bool | None = None
     approver_role_ids: list[int] | None = None
 
@@ -52,6 +61,14 @@ class RegearRequestOut(BaseModel):
     event_title: str | None = None
     requester_user_id: int | None
     requester_name: str | None
+    source_message_id: str | None = None
+    source_attachment_id: str | None = None
+    source_attachment_index: int | None = None
+    payment_message_id: str | None = None
+    payment_message_channel_id: str | None = None
+    economy_transaction_id: int | None = None
+    requester_role_ids_snapshot: list[str] = Field(default_factory=list)
+    event_participation_snapshot: dict[str, Any] = Field(default_factory=dict)
     screenshot_url: str
     ocr_name: str | None
     albion_event_id: str | None
@@ -81,6 +98,19 @@ class RegearRequestUpdate(BaseModel):
     notes: str | None = None
     # Edição de itens detectados (manual): sobrescreve a lista reconhecida.
     detected_items: list[dict[str, Any]] | None = Field(default=None, max_length=100)
+    event_participation_pct: int | None = Field(default=None, ge=0, le=100)
+    event_role_name: str | None = Field(default=None, max_length=255)
+
+
+class RegearPaymentMessageIn(BaseModel):
+    payment_message_id: str | None = None
+    payment_message_channel_id: str | None = None
+
+
+class RegearBotRequestUpdate(RegearRequestUpdate):
+    actor_user_id: int
+    actor_role_ids: list[int] = Field(default_factory=list)
+    actor_is_admin: bool = False
 
 
 class RegearListOut(BaseModel):

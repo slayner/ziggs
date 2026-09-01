@@ -129,13 +129,17 @@ export interface RegearEstimate {
 // ── Regear por screenshot (fila standalone) ─────────────────────────────────
 export interface RegearChannelCfg {
   channel_id: string;
-  coverage_pct: number;
 }
 export interface RegearSettings {
   enabled: boolean;
-  channels: RegearChannelCfg[];
+  event_thread_parent_channel_id: string | null;
+  payment_channel_id: string | null;
+  extra_channels: RegearChannelCfg[];
+  payment_pct: number;
   enabled_categories: string[];
   disabled_items: string[];
+  requester_role_ids: string[];
+  attendance_multiplier_enabled: boolean;
   require_approval: boolean;
   approver_role_ids: number[];
 }
@@ -156,6 +160,18 @@ export interface RegearRequest {
   event_title: string | null;
   requester_user_id: number | null;
   requester_name: string | null;
+  source_message_id: string | null;
+  source_attachment_id: string | null;
+  source_attachment_index: number | null;
+  payment_message_id: string | null;
+  payment_message_channel_id: string | null;
+  economy_transaction_id: number | null;
+  requester_role_ids_snapshot: string[];
+  event_participation_snapshot: {
+    percent?: number;
+    base_percent?: number;
+    is_valid?: boolean;
+  };
   screenshot_url: string;
   ocr_name: string | null;
   albion_event_id: string | null;

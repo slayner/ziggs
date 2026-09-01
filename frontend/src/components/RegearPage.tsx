@@ -186,8 +186,8 @@ export default function RegearPage({ guildId, initialRequestId, eventId, active 
             <i className="ti ti-building-bank" aria-hidden /> {t("guildBankBalance")}: <strong>{fmt(bankBalance)}</strong>
           </span>
         )}
-        {settings && settings.channels.length === 1 && settings.channels[0].coverage_pct < 100 && (
-          <span className="regear-cov-hint">{t("regearCoverage")}: {settings.channels[0].coverage_pct}%</span>
+        {settings && settings.payment_pct < 100 && (
+          <span className="regear-cov-hint">{t("regearCoverage")}: {settings.payment_pct}%</span>
         )}
       </div>
       <p className="regear-channel-hint"><i className="ti ti-info-circle" /> {t("regearChannelHint")}</p>
@@ -231,7 +231,11 @@ export default function RegearPage({ guildId, initialRequestId, eventId, active 
                             {RECOG_ICON[r.recognition_status] ?? "⚠️"} {t(`regear${cap(r.recognition_status)}` as never)}
                           </span>
                         </div>
+                        <div className="regear-meta-line"><b>{t("regearRequestId")}:</b> #{r.id}</div>
+                        {r.economy_transaction_id != null && <div className="regear-meta-line"><b>{t("regearTransactionId")}:</b> #{r.economy_transaction_id}</div>}
                         <div className="regear-meta-line"><b>{t("regearRequester")}:</b> {r.requester_name ?? "—"}</div>
+                        {r.requester_role_ids_snapshot.length > 0 && <div className="regear-meta-line"><b>{t("regearRole")}:</b> {r.requester_role_ids_snapshot.map(roleId => `@${roleId}`).join(", ")}</div>}
+                        {r.event_participation_snapshot.percent != null && <div className="regear-meta-line"><b>{t("regearEventParticipation")}:</b> {r.event_participation_snapshot.percent}%</div>}
                         <div className="regear-meta-line"><b>{t("regearDeathAt")}:</b> {fmtDate(r.death_timestamp)}</div>
                         {r.event_id && (
                           <div className="regear-meta-line">

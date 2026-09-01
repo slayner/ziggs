@@ -189,7 +189,6 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   const [eventsChannelId, setEventsChannelId] = useState<string>("");
   const [eventsEnabled, setEventsEnabled] = useState(false);
   const [reviewChannelId, setReviewChannelId] = useState<string>("");
-  const [regearThreadChannelId, setRegearThreadChannelId] = useState<string>("");
   const [lootlogThreadChannelId, setLootlogThreadChannelId] = useState<string>("");
   const [voiceCtaChannelId, setVoiceCtaChannelId] = useState<string>("");
   const [trialPercent, setTrialPercent] = useState<string>("20");
@@ -334,7 +333,6 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
       setEventsChannelId(evCh);
       setEventsEnabled(!!evCh);
       setReviewChannelId((g.settings.event_review_channel_id as string | undefined) ?? "");
-      setRegearThreadChannelId((g.settings.regear_thread_channel_id as string | undefined) ?? "");
       setLootlogThreadChannelId((g.settings.lootlog_thread_channel_id as string | undefined) ?? "");
       setVoiceCtaChannelId((g.settings.voice_cta_channel_id as string | undefined) ?? "");
       setTrialPercent(String(g.settings.trial_percent ?? 20));
@@ -592,14 +590,6 @@ export default function GuildConfig({ guildId, onSwitch, active = true }: Props)
   async function saveReviewChannel(value: string) {
     setReviewChannelId(value);
     await api.updateGuildSettings(guildId, { event_review_channel_id: value || null });
-  }
-
-  // Canal dedicado de threads de regear: ao entrar em IN_PROGRESS o bot cria
-  // uma thread aqui; prints postadas nela viram regears atrelados ao evento.
-  // Vazio = sem thread automÃ¡tica (regears soltos caem na fila geral sem tag).
-  async function saveRegearThreadChannel(value: string) {
-    setRegearThreadChannelId(value);
-    await api.updateGuildSettings(guildId, { regear_thread_channel_id: value || null });
   }
 
   // Canal dedicado de threads de lootlog por evento: o bot cria uma thread aqui
@@ -879,32 +869,23 @@ async function saveJuicyKillMinSilver() {
     const has = regear.approver_role_ids.includes(id);
     pushRegear({ approver_role_ids: has ? regear.approver_role_ids.filter(x => x !== id) : [...regear.approver_role_ids, id] });
   }
-
+  function toggleRegearRequester(roleId: string) {
+    if (!regear) return;
+    pushRegear({ requester_role_ids: toggleRoleKey(regear.requester_role_ids, roleId) });
+  }
   function addRegearChannel(channelId: string) {
     if (!regear) return;
-    pushRegear({ channels: [...regear.channels, { channel_id: channelId, coverage_pct: 100 }] });
+    pushRegear({ extra_channels: [...regear.extra_channels, { channel_id: channelId }] });
   }
   function removeRegearChannel(channelId: string) {
     if (!regear) return;
-    pushRegear({ channels: regear.channels.filter(c => c.channel_id !== channelId) });
-  }
-  // % de cobertura: edita local sÃ³ no input (evita corrida de keystroke); commit
-  // no blur manda o estado final dos canais pro servidor.
-  function setRegearChannelPct(channelId: string, pct: number) {
-    setRegear(r => r ? { ...r, channels: r.channels.map(c => c.channel_id === channelId ? { ...c, coverage_pct: pct } : c) } : r);
-  }
-  function commitRegearChannelPct() {
-    if (regear) pushRegear({ channels: regear.channels });
+    pushRegear({ extra_channels: regear.extra_channels.filter(c => c.channel_id !== channelId) });
   }
 
-  // Toggle mestre de Regear: liga/desliga o flag persistido `enabled`. Canais
-  // locais ficam de memÃ³ria (nÃ£o apagam ao desligar) â€” religar reusa sem
-  // reescolher. Sem canal de thread ainda â†’ abre a seÃ§Ã£o pra escolher um.
   function toggleRegearFeature(v: boolean) {
     setRegearEnabled(v);
     if (!regear) { openFeat("regear"); return; }
     pushRegear({ enabled: v });
-    if (v && !regearThreadChannelId) openFeat("regear")
   }
 
   async function saveLootLog() {
@@ -1636,8 +1617,8 @@ async function saveJuicyKillMinSilver() {
               on={regearEnabled}
               onToggle={v => { void toggleRegearFeature(v); }}
               disabled={!hasGuild}
-              statusHint={regearEnabled && regear?.channels.length
-                ? `${regear.channels.length} ${regear.channels.length === 1 ? t("regcfgChannelSingular") : t("regcfgChannelPlural")}`
+              statusHint={regearEnabled && regear?.extra_channels.length
+                ? `${regear.extra_channels.length} ${regear.extra_channels.length === 1 ? t("regcfgChannelSingular") : t("regcfgChannelPlural")}`
                 : t("featNeedsSetup")}
               fullWidth
               open={featOpen.has("regear")} onOpen={() => toggleFeat("regear")}
@@ -1647,60 +1628,42 @@ async function saveJuicyKillMinSilver() {
                 <p className="text-xs text-zinc-500">{t("loading")}</p>
               ) : (
                 <div className="space-y-4">
-                  {/* Canal dedicado de threads de regear por evento (landmark) â€”
-                      primÃ¡rio: Ã© ele que libera os canais extras abaixo. Setting
-                      top-level da guilda, nÃ£o da blob regear.channels, entÃ£o fica
-                      sempre interativo (nÃ£o depende do master toggle). */}
                   <div>
-                    <label className="block text-xs text-zinc-500 mb-2">{t("regearThreadChannelLabel")}</label>
-                    {channelSelect(regearThreadChannelId, saveRegearThreadChannel, "mb-1")}
-                    <p className="text-[11px] text-zinc-600">{t("regearThreadChannelDesc")}</p>
+                    <label className="block text-xs text-zinc-500 mb-2">{t("regcfgEventThreadChannel")}</label>
+                    {channelSelect(regear.event_thread_parent_channel_id ?? "", value => pushRegear({ event_thread_parent_channel_id: value || null }), "mb-1")}
+                    <p className="text-[11px] text-zinc-600">{t("regcfgEventThreadChannelDesc")}</p>
                   </div>
 
-                  {/* Canais extras monitorados â€” cada um com sua prÃ³pria % de
-                      cobertura. SÃ³ libera depois do canal de threads acima
-                      definido (Ã© ele que atrela os regears aos eventos; sem ele
-                      nÃ£o faz sentido configurar canais extras soltos). Desligado
-                      no master toggle = dimmed tambÃ©m (evita re-ligar via Salvar
-                      sem querer, ver saveRegear/toggleRegearFeature). */}
-                  <div className={regearEnabled && regearThreadChannelId ? "" : "opacity-40 pointer-events-none"}>
+                  <div>
+                    <label className="block text-xs text-zinc-500 mb-2">{t("regcfgPaymentChannel")}</label>
+                    {channelSelect(regear.payment_channel_id ?? "", value => pushRegear({ payment_channel_id: value || null }), "mb-1")}
+                    <p className="text-[11px] text-zinc-600">{t("regcfgPaymentChannelDesc")}</p>
+                  </div>
+
+                  <div>
                     <label className="block text-xs text-zinc-500 mb-2">{t("regcfgChannel")}</label>
-                    {!regearThreadChannelId && (
-                      <p className="text-[11px] text-amber-500 mb-2">{t("regcfgExtraNeedsThread")}</p>
-                    )}
                     <div className="space-y-2 mb-2">
-                      {regear.channels.map(c => (
+                      {regear.extra_channels.map(c => (
                         <div key={c.channel_id} className="flex items-center gap-2">
-                          <span className="flex-1 text-xs text-zinc-300 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 truncate">
-                            {chName(c.channel_id)}
-                          </span>
-                          <input
-                            type="number" min={0} max={100}
-                            value={c.coverage_pct}
-                            onChange={e => setRegearChannelPct(c.channel_id, Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
-                            onBlur={commitRegearChannelPct}
-                            className="w-16 bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200"
-                          />
-                          <span className="text-xs text-zinc-500">%</span>
-                          <button type="button" onClick={() => removeRegearChannel(c.channel_id)} className="text-zinc-500 hover:text-red-400">
-                            <i className="ti ti-x" aria-hidden="true" />
-                          </button>
+                          <span className="flex-1 text-xs text-zinc-300 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 truncate">{chName(c.channel_id)}</span>
+                          <button type="button" onClick={() => removeRegearChannel(c.channel_id)} className="text-zinc-500 hover:text-red-400"><i className="ti ti-x" aria-hidden="true" /></button>
                         </div>
                       ))}
                     </div>
-                    <select
-                      value="" onChange={e => { if (e.target.value) addRegearChannel(e.target.value); }}
-                      disabled={!channels && !channelsErr}
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-400"
-                    >
+                    <select value="" onChange={e => { if (e.target.value) addRegearChannel(e.target.value); }} disabled={!channels && !channelsErr} className="w-full bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-400">
                       <option value="">{t("regcfgAddChannel")}</option>
-                      {(channels ?? [])
-                        .filter(ch => !regear.channels.some(c => c.channel_id === ch.id))
-                        .sort((a, b) => a.name.localeCompare(b.name))
-                        .map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      {(channels ?? []).filter(ch => !regear.extra_channels.some(c => c.channel_id === ch.id)).sort((a, b) => a.name.localeCompare(b.name)).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
-                    <p className="text-[11px] text-zinc-600 mt-1">{t("regcfgCoverageHint")}</p>
+                    <p className="text-[11px] text-zinc-600 mt-1">{t("regcfgExtraChannelsHint")}</p>
                   </div>
+
+                  <label className="block text-xs text-zinc-500">{t("regcfgPaymentPct")}
+                    <div className="flex items-center gap-2 mt-2">
+                      <input type="number" min={0} max={100} value={regear.payment_pct} onChange={e => setRegear(r => r ? { ...r, payment_pct: Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)) } : r)} onBlur={() => regear && pushRegear({ payment_pct: regear.payment_pct })} className="w-20 bg-zinc-800 border border-zinc-700 rounded-md text-xs px-2 py-1.5 text-zinc-200" />
+                      <span className="text-xs text-zinc-500">%</span>
+                    </div>
+                    <p className="text-[11px] text-zinc-600 mt-1">{t("regcfgCoverageHint")}</p>
+                  </label>
 
                   <div>
                     <label className="block text-xs text-zinc-500 mb-2">{t("regcfgCategories")}</label>
@@ -1723,6 +1686,24 @@ async function saveJuicyKillMinSilver() {
                       })}
                     </div>
                   </div>
+
+                  <div>
+                    <label className="block text-xs text-zinc-500 mb-1">{t("regcfgRequesters")}</label>
+                    <p className="text-[11px] text-zinc-600 mb-2">{t("regcfgRequestersHint")}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button type="button" onClick={() => toggleRegearRequester(EVERYONE)} className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${regear.requester_role_ids.includes(EVERYONE) ? "border-sky-500 bg-sky-500/15 text-sky-300" : "border-zinc-700 text-white/70 hover:border-zinc-600"}`}>@everyone</button>
+                      {(roles ?? []).map(r => {
+                        const active = regear.requester_role_ids.includes(r.id);
+                        return <button key={r.id} type="button" onClick={() => toggleRegearRequester(r.id)} className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${active ? "border-sky-500 bg-sky-500/15 text-sky-300" : "border-zinc-700 text-white/70 hover:border-zinc-600"}`}>{r.name}</button>;
+                      })}
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                    <input type="checkbox" checked={regear.attendance_multiplier_enabled} onChange={e => pushRegear({ attendance_multiplier_enabled: e.target.checked })} />
+                    {t("regcfgAttendanceMultiplier")}
+                  </label>
+                  <p className="text-[11px] text-zinc-600 -mt-2">{t("regcfgAttendanceMultiplierHint")}</p>
 
                   <div>
                     <label className="block text-xs text-zinc-500 mb-1">{t("regcfgDisabledItems")}</label>

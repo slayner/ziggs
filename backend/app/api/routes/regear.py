@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.api.schemas.regear import (
-    RegearListOut, RegearRequestOut, RegearRequestUpdate, RegearSettingsIn,
+    RegearBotRequestUpdate, RegearListOut, RegearPaymentMessageIn, RegearRequestOut, RegearRequestUpdate, RegearSettingsIn,
     RegearSettingsOut,
 )
 from app.models.audit import AuditLog
@@ -83,7 +83,11 @@ async def ingest_screenshot(
     requester_name: str | None = Form(None),
     requester_user_id: int | None = Form(None),
     channel_id: str | None = Form(None),
+    parent_channel_id: str | None = Form(None),
     event_id: int | None = Form(None),
+    attachment_id: str | None = Form(None),
+    attachment_index: int | None = Form(None),
+    requester_role_ids: list[int] | None = Form(None),
     db: Session = Depends(deps.db_session),
     _bot=Depends(deps.require_bot_api),
 ):
@@ -106,10 +110,60 @@ async def ingest_screenshot(
         return await regear.ingest(
             db, guild, image, file.filename or "screenshot.png",
             file.content_type, requester_user_id, requester_name, msg_id, channel_id,
-            event_id,
+            event_id, parent_channel_id, attachment_id, attachment_index, requester_role_ids,
         )
     except regear.RegearServiceError as e:
         raise HTTPException(400, str(e))
+
+
+@router.get("/bot/guilds/{guild_id}/regear/requests", response_model=RegearListOut)
+def bot_list_requests(
+    guild_id: int, status: str | None = None, db: Session = Depends(deps.db_session),
+    _bot=Depends(deps.require_bot_api),
+):
+    return RegearListOut(requests=regear.list_requests(db, guild_id, status))
+
+
+@router.patch("/bot/guilds/{guild_id}/regear/{request_id}", response_model=RegearRequestOut)
+def bot_update_request(
+    guild_id: int, request_id: int, payload: RegearBotRequestUpdate,
+    db: Session = Depends(deps.db_session), _bot=Depends(deps.require_bot_api),
+):
+    try:
+        data = payload.model_dump(exclude={"actor_user_id", "actor_role_ids", "actor_is_admin"}, exclude_unset=True)
+        return regear.update_request(
+            db, guild_id, request_id, data, payload.actor_user_id,
+            actor_role_ids=set(payload.actor_role_ids), actor_is_admin=payload.actor_is_admin,
+        )
+    except regear.RegearServiceError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/bot/guilds/{guild_id}/regear/{request_id}")
+def bot_remove_request(
+    guild_id: int, request_id: int, actor_user_id: int | None = None,
+    db: Session = Depends(deps.db_session), _bot=Depends(deps.require_bot_api),
+):
+    try:
+        regear.remove_request(db, guild_id, request_id, actor_user_id)
+    except regear.RegearServiceError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@router.put("/bot/guilds/{guild_id}/regear/{request_id}/payment-message", response_model=RegearRequestOut)
+def bot_set_payment_message(
+    guild_id: int, request_id: int, payload: RegearPaymentMessageIn,
+    db: Session = Depends(deps.db_session), _bot=Depends(deps.require_bot_api),
+):
+    row = regear.get_request_row(db, guild_id, request_id)
+    if row is None:
+        raise HTTPException(404, "pedido não encontrado")
+    row.payment_message_id = payload.payment_message_id
+    row.payment_message_channel_id = payload.payment_message_channel_id
+    db.commit()
+    db.refresh(row)
+    return regear._to_out(row)
 
 
 # ── fila (site) ─────────────────────────────────────────────────────────────────

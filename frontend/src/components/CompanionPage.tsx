@@ -5,13 +5,14 @@ import { Panel } from "./Panel";
 const GITHUB_URL = "https://github.com/slayner/ziggs";
 const PINGS_URL = "/companion/vps-pings";
 const RELEASE_URL = "/companion/latest.json";
-const WINDOWS_FALLBACK_URL = "https://github.com/slayner/ziggs/releases/latest";
-
 const ALBION_REGIONS = ["americas", "europe", "asia"] as const;
 
 type VpsPing = { americas: number; asia: number; europe: number };
 type VpsRow = { label: string; country: string; pings: VpsPing | null; loading: boolean; error: boolean };
-type Release = { platforms?: Record<string, { url?: string }> };
+type Release = {
+  platforms?: Record<string, { url?: string }>;
+  downloads?: Record<string, { url?: string }>;
+};
 
 const PLATFORM = {
   "windows-x86_64": { icon: "ti-brand-windows", label: "Windows" },
@@ -20,9 +21,22 @@ const PLATFORM = {
   "darwin-aarch64": { icon: "ti-brand-apple", label: "macOS (Apple Silicon)" },
 } as const;
 
-function platformOrder(): string[] {
-  const platform = navigator.userAgent.includes("Mac") ? "darwin" : navigator.userAgent.includes("Linux") ? "linux" : "windows";
-  return Object.keys(PLATFORM).sort((a, b) => Number(!a.startsWith(platform)) - Number(!b.startsWith(platform)));
+type BrowserPlatform = "windows" | "linux" | "darwin" | null;
+
+function detectedPlatform(): BrowserPlatform {
+  if (typeof navigator === "undefined") return null;
+  const platform = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform
+    ?? navigator.platform
+    ?? navigator.userAgent;
+  if (/Windows/i.test(platform)) return "windows";
+  if (/Macintosh|Mac OS X|MacIntel/i.test(platform)) return "darwin";
+  if (/Linux/i.test(platform)) return "linux";
+  return null;
+}
+
+function availableDownload(platform: BrowserPlatform, downloads: Record<string, string>): [string, string] | null {
+  if (!platform) return null;
+  return Object.entries(downloads).find(([key]) => key.startsWith(platform)) ?? null;
 }
 
 const FEATURES: { icon: string; title: TKey; desc: TKey }[] = [
@@ -129,9 +143,12 @@ function PingMatrix({ rows }: { rows: VpsRow[] }) {
 export default function CompanionPage() {
   const t = useT();
   const [vpsRows, setVpsRows] = useState<VpsRow[]>([]);
-  const [downloads, setDownloads] = useState<Record<string, string>>({
-    "windows-x86_64": WINDOWS_FALLBACK_URL,
-  });
+  const [downloads, setDownloads] = useState<Record<string, string>>({});
+  const [browserPlatform, setBrowserPlatform] = useState<BrowserPlatform>(null);
+
+  useEffect(() => {
+    setBrowserPlatform(detectedPlatform());
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -161,9 +178,10 @@ export default function CompanionPage() {
     fetch(RELEASE_URL, { cache: "no-store" })
       .then(res => res.ok ? res.json() as Promise<Release> : null)
       .then(release => {
-        if (!alive || !release?.platforms) return;
+        const manifest = release?.downloads ?? release?.platforms;
+        if (!alive || !manifest) return;
         const urls: Record<string, string> = {};
-        for (const [platform, item] of Object.entries(release.platforms)) {
+        for (const [platform, item] of Object.entries(manifest)) {
           if (platform in PLATFORM && typeof item.url === "string") urls[platform] = item.url;
         }
         setDownloads(urls);
@@ -171,6 +189,8 @@ export default function CompanionPage() {
       .catch(() => {});
     return () => { alive = false; };
   }, []);
+
+  const download = availableDownload(browserPlatform, downloads);
 
   return (
     <div className="cp-page">
@@ -187,13 +207,17 @@ export default function CompanionPage() {
         <h1 className="cp-hero-title">Ziggs Companion</h1>
         <p className="cp-hero-tagline">{t("companionTagline")}</p>
         <div className="cp-hero-cta">
-          {platformOrder().map(platform => {
+          {download ? (() => {
+            const [platform, url] = download;
             const item = PLATFORM[platform as keyof typeof PLATFORM];
-            const url = downloads[platform];
-            return url && <a key={platform} className="btn btn-lg" href={url}>
+            return <a className="btn btn-lg" href={url}>
               <i className={`ti ${item.icon}`} /> {t("companionDownload")} {item.label}
             </a>;
-          })}
+          })() : (
+            <span className="cp-badge cp-badge-mut">
+              <i className="ti ti-info-circle" /> {t("companionNoCompatibleDownload")}
+            </span>
+          )}
           <a className="cp-github-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
             <i className="ti ti-brand-github" /> {t("companionViewSource")}
           </a>

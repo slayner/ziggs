@@ -104,7 +104,7 @@ _HISTORY_TTL = timedelta(hours=4)
 _BATCH_SIZE = 50
 
 CITIES = ["Lymhurst", "Fort Sterling", "Thetford", "Bridgewatch", "Martlock"]
-HISTORY_DAYS = 7
+HISTORY_DAYS = 30
 _AVG_SENTINEL = "_5city_avg_"
 
 VALID_SLOTS = ("offhand", "helmet", "armor", "boots", "cape", "food")

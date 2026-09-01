@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, BigInt, Snowflake, TimestampMixin, json_type, pk
@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 
 class RegearRequest(Base, TimestampMixin):
     __tablename__ = "regear_requests"
+    __table_args__ = (
+        UniqueConstraint("guild_id", "source_message_id", "source_attachment_id", name="uq_regear_source_attachment"),
+        UniqueConstraint("guild_id", "source_message_id", "source_attachment_index", name="uq_regear_source_attachment_index"),
+    )
 
     id: Mapped[int] = pk()
     guild_id: Mapped[int] = mapped_column(
@@ -47,6 +51,16 @@ class RegearRequest(Base, TimestampMixin):
     # Prova: caminho relativo da imagem salva + id da msg no Discord (idempotência).
     screenshot_path: Mapped[str] = mapped_column(Text, nullable=False)
     screenshot_msg_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_message_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_attachment_id: Mapped[str | None] = mapped_column(String(64))
+    source_attachment_index: Mapped[int | None] = mapped_column(Integer)
+    payment_message_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    payment_message_channel_id: Mapped[str | None] = mapped_column(String(64))
+    requester_role_ids_snapshot: Mapped[list] = mapped_column(json_type(), default=list, nullable=False)
+    event_participation_snapshot: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
+    economy_transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("economy_transactions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     # Canal Discord de onde a screenshot veio — a guilda pode ter vários canais
     # de regear, cada um com sua própria % (ver regear_config.RegearSettings.

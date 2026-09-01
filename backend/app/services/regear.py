@@ -16,8 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditLog
-from app.models.events import Event
+from app.models.catalog import GameRole
+from app.models.economy import EconomyTransaction
+from app.models.events import Event, EventParticipant
 from app.models.regear import RegearRequest
+from app.services.economy import get_or_create_balance
 from app.models.registration import BotRegistration
 from app.models.tenancy import Guild, GuildMember
 from app.auth.permissions import has_permission
@@ -174,6 +177,10 @@ async def _apply_recognition(
     req.suggested_total = suggestion["suggested_total"]
     req.coverage_pct = suggestion["coverage_pct"]
     req.price_basis = suggestion["price_basis"]
+    if settings.attendance_multiplier_enabled and req.event_participation_snapshot:
+        attendance_pct = max(0, min(100, int(req.event_participation_snapshot.get("percent", 0))))
+        req.suggested_total = round(req.suggested_total * attendance_pct / 100)
+        req.price_basis = f"{req.price_basis} × {attendance_pct}% presença"
     req.ocr_name = rec.get("ocr_name")
     req.albion_event_id = rec.get("albion_event_id")
     req.death_timestamp = rec.get("death_timestamp")
@@ -189,31 +196,65 @@ async def ingest(
     db: Session, guild: Guild, image_bytes: bytes, filename: str,
     content_type: str | None, requester_user_id: int | None,
     requester_name: str | None, msg_id: str | None, channel_id: str | None = None,
-    event_id: int | None = None,
+    event_id: int | None = None, parent_channel_id: str | None = None, attachment_id: str | None = None,
+    attachment_index: int | None = None, requester_role_ids: list[int] | None = None,
 ) -> dict:
     """Cria (ou retorna existente) RegearRequest a partir de uma screenshot.
 
     `event_id`: se passado, vincula ao evento (landmark). Se None, deriva do
     `channel_id` (thread de regear do evento → Event.regear_thread_id)."""
-    # Idempotência: mesmo attachment reenviado → retorna o pedido existente.
-    if msg_id:
+    settings = regear_config.get_regear_settings(guild)
+    role_ids = {int(role_id) for role_id in (requester_role_ids or [])}
+    if not settings.enabled:
+        raise RegearServiceError("regear está desativado nesta guilda")
+    if not settings.accepts_requester_roles(role_ids):
+        raise RegearServiceError("solicitante não possui um cargo autorizado para regear")
+    source_message_id = msg_id
+    if source_message_id and attachment_id is None and attachment_index is None:
+        raise RegearServiceError("id ou índice do anexo é obrigatório")
+    if source_message_id and attachment_id:
         existing = db.scalar(select(RegearRequest).where(
             RegearRequest.guild_id == guild.id,
-            RegearRequest.screenshot_msg_id == msg_id,
+            RegearRequest.source_message_id == source_message_id,
+            RegearRequest.source_attachment_id == attachment_id,
+        ))
+        if existing is not None:
+            return _to_out(existing)
+    elif source_message_id and attachment_index is not None:
+        existing = db.scalar(select(RegearRequest).where(
+            RegearRequest.guild_id == guild.id,
+            RegearRequest.source_message_id == source_message_id,
+            RegearRequest.source_attachment_index == attachment_index,
         ))
         if existing is not None:
             return _to_out(existing)
 
-    # Sem event_id explícito, tenta casar pelo canal (thread do evento).
-    if event_id is None:
-        event_id = _event_id_for_channel(db, guild.id, channel_id)
-    elif db.scalar(select(Event.id).where(
+    linked_event_id = _event_id_for_channel(db, guild.id, channel_id)
+    is_event_thread = (
+        linked_event_id is not None
+        and str(parent_channel_id) == settings.event_thread_parent_channel_id
+    )
+    if not is_event_thread and str(channel_id) not in {c.channel_id for c in settings.extra_channels}:
+        raise RegearServiceError("canal de origem não está autorizado para regear")
+    if event_id is None and is_event_thread:
+        event_id = linked_event_id
+    if event_id is not None and not is_event_thread:
+        raise RegearServiceError("somente mensagens de threads de evento podem ser vinculadas a eventos")
+    if event_id is not None and db.scalar(select(Event.id).where(
         Event.id == event_id, Event.guild_id == guild.id,
     )) is None:
         raise RegearServiceError("evento não pertence a esta guilda")
 
     region = (guild.settings or {}).get("albion_guild_region")
-    settings = regear_config.get_regear_settings(guild)
+    participant = db.scalar(select(EventParticipant).where(
+        EventParticipant.event_id == event_id,
+        EventParticipant.guild_id == guild.id,
+        EventParticipant.user_id == requester_user_id,
+    )) if event_id and requester_user_id else None
+    participation = {}
+    if participant is not None:
+        role_name = db.scalar(select(GameRole.name).where(GameRole.id == participant.game_role_id)) if participant.game_role_id else None
+        participation = {"percent": participant.percent, "base_percent": participant.base_percent, "is_valid": participant.is_valid, "role_name": role_name}
 
     # Salva a imagem ANTES de commitar a read tx — se o processo crashar
     # aqui, só perdemos o arquivo (sem pedido órfão).
@@ -230,7 +271,12 @@ async def ingest(
         requester_name=requester_name,
         screenshot_path=rel_path,
         screenshot_msg_id=msg_id,
+        source_message_id=source_message_id,
+        source_attachment_id=attachment_id,
+        source_attachment_index=attachment_index,
         channel_id=channel_id,
+        requester_role_ids_snapshot=sorted(role_ids),
+        event_participation_snapshot=participation,
         recognition_status="manual",
         status="pending",
     )
@@ -331,6 +377,18 @@ def update_request(
             raise RegearServiceError("valor final não pode ser negativo")
     if payload.get("notes") is not None:
         r.notes = payload["notes"]
+    if "event_participation_pct" in payload:
+        if r.event_id is None:
+            raise RegearServiceError("participação só pode ser alterada em regear de evento")
+        participation = dict(r.event_participation_snapshot or {})
+        participation["percent"] = int(payload["event_participation_pct"])
+        r.event_participation_snapshot = participation
+    if payload.get("event_role_name") is not None:
+        if r.event_id is None:
+            raise RegearServiceError("função só pode ser alterada em regear de evento")
+        participation = dict(r.event_participation_snapshot or {})
+        participation["role_name"] = payload["event_role_name"].strip()
+        r.event_participation_snapshot = participation
     if payload.get("detected_items") is not None:
         # Re-soma base/suggested a partir dos itens editados (logística pode
         # corrigir a lista reconhecida manualmente).
@@ -344,7 +402,12 @@ def update_request(
                     raise RegearServiceError(f"{key} não pode ser negativo")
         r.detected_items = items
         r.base_total = sum(int(i.get("total_price", 0)) for i in items if i.get("eligible"))
+    if payload.get("detected_items") is not None or "event_participation_pct" in payload:
         r.suggested_total = round(r.base_total * r.coverage_pct / 100)
+        guild_for_multiplier = db.get(Guild, guild_id)
+        settings_for_multiplier = regear_config.get_regear_settings(guild_for_multiplier) if guild_for_multiplier else None
+        if settings_for_multiplier and settings_for_multiplier.attendance_multiplier_enabled and r.event_participation_snapshot:
+            r.suggested_total = round(r.suggested_total * int(r.event_participation_snapshot.get("percent", 0)) / 100)
 
     if new_status is not None and not regear_status_transition_allowed(r.status, new_status):
         raise RegearServiceError(f"transição de regear inválida: {r.status} -> {new_status}")
@@ -374,24 +437,28 @@ def update_request(
                 raise RegearServiceError(
                     "valor do pagamento é zero; negue ou remova o pedido em vez de aprovar"
                 )
-            guild = db.get(Guild, guild_id)
-            # Regears vinculados a evento em modos tab (leftover/guild_backed) saem
-            # da tab do evento, não do banco — o débito acontece no _calc_payout.
-            # Import local pra evitar circular (events importa regear só em runtime).
-            from app.services.events import get_lootsplit_mode
-            debit_bank = not (
-                r.event_id is not None
-                and guild is not None
-                and get_lootsplit_mode(guild) in ("leftover", "guild_backed")
+            guild = db.scalar(select(Guild).where(Guild.id == guild_id).with_for_update())
+            if guild is None or r.requester_user_id is None:
+                raise RegearServiceError("pedido sem solicitante não pode ser pago diretamente")
+            balance = get_or_create_balance(db, guild_id, r.requester_user_id)
+            bank_before = guild.bank_balance
+            balance.balance += amount
+            balance.total_earned += amount
+            guild.bank_balance -= amount
+            tx = EconomyTransaction(
+                guild_id=guild_id, kind="regear", actor_discord_id=actor_id or r.requester_user_id,
+                to_user_id=r.requester_user_id, total_earned_user_id=r.requester_user_id,
+                amount=amount, event_id=r.event_id,
+                payout_context={"regear_request_id": r.id},
             )
-            if debit_bank and guild is not None:
-                guild.bank_balance -= amount
+            db.add(tx)
+            db.flush()
+            r.economy_transaction_id = tx.id
             db.add(AuditLog(
                 guild_id=guild_id, actor_id=actor_id, actor_type="site", source="site",
                 action="regear.pay", entity="regear_request", entity_id=str(r.id),
-                before={"bank": (guild.bank_balance + amount) if (debit_bank and guild) else None},
-                after={"bank": guild.bank_balance if (debit_bank and guild) else None,
-                       "amount": amount, "from_tab": not debit_bank},
+                before={"bank": bank_before},
+                after={"bank": guild.bank_balance, "amount": amount, "transaction_id": tx.id},
             ))
         elif new_status == "denied":
             r.handled_by_user_id = actor_id
@@ -425,6 +492,14 @@ def _to_out(r: RegearRequest) -> dict:
         "event_title": r.event.title if r.event_id and r.event else None,
         "requester_user_id": r.requester_user_id,
         "requester_name": r.requester_name,
+        "source_message_id": r.source_message_id,
+        "source_attachment_id": r.source_attachment_id,
+        "source_attachment_index": r.source_attachment_index,
+        "payment_message_id": r.payment_message_id,
+        "payment_message_channel_id": r.payment_message_channel_id,
+        "economy_transaction_id": r.economy_transaction_id,
+        "requester_role_ids_snapshot": [str(role_id) for role_id in (r.requester_role_ids_snapshot or [])],
+        "event_participation_snapshot": dict(r.event_participation_snapshot or {}),
         "screenshot_url": f"/guilds/{r.guild_id}/regear/{r.id}/screenshot",
         "ocr_name": r.ocr_name,
         "albion_event_id": r.albion_event_id,

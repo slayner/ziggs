@@ -7,7 +7,6 @@ backend (EventParticipant é a "attendance" do bot antigo, agora no Postgres).
 from __future__ import annotations
 
 import asyncio
-import io
 import os
 import time
 import urllib.parse
@@ -24,6 +23,7 @@ from i18n import t
 from localization import loc
 
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
+PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", "").rstrip("/") or SITE_URL
 
 _HOSTS = {
     "americas": "gameinfo.albiononline.com",
@@ -168,13 +168,10 @@ async def _search_region(name: str, region: str) -> tuple[str, dict | None, bool
     return region, cand[0], True
 
 
-async def _search_all_regions(name: str) -> list[tuple[str, dict, bool]]:
-    """Busca o nick nas 3 regiões em paralelo. Devolve lista de
-    (region, summary, api_ok) — só as regiões onde api_ok=True E summary
-    não-None (player existe). Regiões com erro de API são excluídas."""
+async def _search_all_regions(name: str) -> list[tuple[str, dict | None, bool]]:
+    """Busca o nick nas três regiões e preserva falhas temporárias da API."""
     regions = list(_HOSTS.keys())
-    results = await asyncio.gather(*(_search_region(name, r) for r in regions))
-    return [(r, s, ok) for r, s, ok in results if ok and s is not None]
+    return await asyncio.gather(*(_search_region(name, region) for region in regions))
 
 
 _REGION_LABELS = {
@@ -250,46 +247,73 @@ class Members(commands.Cog):
         # regiões. Busca nas 3 em paralelo e oferece botões se achar em >1.
         region_known = bool(raw and not raw.startswith("<@") and not raw.isdigit())
         if region_known:
-            candidates = await _search_all_regions(name)
+            searches = await _search_all_regions(name)
+            candidates = [(candidate_region, summary) for candidate_region, summary, api_ok in searches if api_ok and summary is not None]
             if not candidates:
                 await interaction.edit_original_response(
-                    content=t(lang, "profile_not_found", name=name)
+                    content=t(lang, "retry_later") if any(not api_ok for _, _, api_ok in searches) else t(lang, "profile_not_found", name=name)
                 )
                 return
-            region = max(candidates, key=lambda c: c[1].get("KillFame") or 0)[0]
+            region = max(candidates, key=lambda candidate: candidate[1].get("KillFame") or 0)[0]
 
         await self._wait_and_show_preview(interaction, name, region, lang, guild_id)
 
     async def _wait_and_show_preview(
         self, interaction: Interaction, name: str, region: str, lang: str, guild_id: int,
     ) -> None:
-        """Espera silenciosamente o cold-load e responde somente com o preview pronto."""
-        warm = await _warm_profile(guild_id, name, region)
-        if warm and warm.get("status") in {"not_found", "search_failed"}:
-            await interaction.edit_original_response(
-                content=t(lang, "profile_not_found", name=name), embed=None)
-            return
+        """Mostra o andamento e publica o link apenas com preview disponível."""
         encoded_name = urllib.parse.quote(name, safe="")
         profile_path = f"/players/by-name/{region}/{encoded_name}"
         preview_path = f"/players/embed/{region}/{encoded_name}.png"
+        status_path = f"/players/embed/status/{region}/{encoded_name}"
+        region_prefix = {"americas": "am", "europe": "eu", "asia": "as"}[region]
+        profile_url = f"{PUBLIC_URL}/{region_prefix}/{encoded_name}"
+
+        await interaction.edit_original_response(content=t(lang, "profile_progress_warm", name=name, region=region))
+        warm = await _warm_profile(guild_id, name, region)
+        if warm and warm.get("status") == "not_found":
+            await interaction.edit_original_response(content=t(lang, "profile_not_found", name=name), embed=None)
+            return
+        if warm and warm.get("status") in {"search_failed", "fetch_failed", "error"}:
+            await interaction.edit_original_response(content=t(lang, "retry_later"), embed=None)
+            return
+
+        preview_status = await http_client.get_json(status_path, timeout=10, tag="profile")
+        if preview_status and preview_status.get("ready"):
+            await interaction.edit_original_response(content=t(lang, "profile_link_ready", name=name, url=profile_url))
+            if warm and warm.get("status") == "stale":
+                asyncio.create_task(self._wait_for_profile_refresh(
+                    interaction, name, region, lang, profile_url, status_path,
+                ))
+            return
+
+        await interaction.edit_original_response(content=t(lang, "profile_progress_loading", name=name))
         deadline = time.monotonic() + _PROFILE_READY_TIMEOUT
         while time.monotonic() < deadline:
             profile = await http_client.get_json(profile_path, timeout=15, tag="profile")
-            if profile is None:
+            if profile is None or profile.get("_cold_load"):
                 await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
                 continue
-            if profile.get("_cold_load"):
-                await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
-                continue
-            png = await http_client.get_bytes(preview_path, timeout=30, tag="profile")
-            if png:
-                image = discord.File(io.BytesIO(png), filename="profile.png")
-                embed = discord.Embed(color=discord.Color.blurple())
-                embed.set_image(url="attachment://profile.png")
-                await interaction.edit_original_response(content=None, embed=embed, attachments=[image])
+            await interaction.edit_original_response(content=t(lang, "profile_progress_rendering", name=name))
+            if await http_client.get_bytes(preview_path, timeout=120, tag="profile"):
+                await interaction.edit_original_response(content=t(lang, "profile_link_ready", name=name, url=profile_url))
                 return
             await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
         await interaction.edit_original_response(content=t(lang, "profile_api_error"), embed=None)
+
+    async def _wait_for_profile_refresh(
+        self, interaction: Interaction, name: str, region: str, lang: str, profile_url: str, status_path: str,
+    ) -> None:
+        """Atualiza o link publicado depois que o warm substitui o preview antigo."""
+        deadline = time.monotonic() + _PROFILE_READY_TIMEOUT
+        while time.monotonic() < deadline:
+            status = await http_client.get_json(status_path, timeout=10, tag="profile")
+            if status and status.get("ready") and not status.get("refreshing"):
+                version = urllib.parse.quote(str(status.get("updated_at") or ""), safe="")
+                updated_url = f"{profile_url}?v={version}" if version else profile_url
+                await interaction.edit_original_response(content=t(lang, "profile_link_refreshed", name=name, url=updated_url))
+                return
+            await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
 
     # ------------------------------------------------------------------
     # /attendance — stats do backend

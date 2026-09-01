@@ -1509,8 +1509,53 @@ async def _render_profile_preview(albion_id: str, region: str):
     return await asyncio.to_thread(_run)
 
 
+@router.get("/embed/status/{region}/{name}")
+async def player_preview_status(region: str, name: str):
+    """Estado mínimo para consumidores que aguardam um warm sem polling pesado."""
+    if region not in HOSTS:
+        raise HTTPException(400, "Região inválida")
+    async with AsyncSessionLocal() as db:
+        player = await db.scalar(select(AlbionPlayer).where(
+            AlbionPlayer.region == region,
+            func.lower(AlbionPlayer.name) == name.lower(),
+        ))
+    if player is None:
+        raise HTTPException(404, "Perfil não encontrado")
+    from app.services.profile_preview import _cache_path
+    updated_at = player.stats_updated_at or player.last_seen_at
+    return {
+        "ready": _cache_path(player.albion_id, region).is_file(),
+        "refreshing": player.refresh_requested_at is not None,
+        "updated_at": _aware(updated_at).isoformat() if updated_at is not None else None,
+    }
+
+
+@router.get("/embed/cached/{region}/{name}.png")
+async def cached_player_preview_png(region: str, name: str):
+    """Entrega somente um PNG já publicado; nunca renderiza nem chama a Albion."""
+    from urllib.parse import unquote
+    from fastapi.responses import FileResponse
+    from app.services.profile_preview import _cache_path
+
+    if region not in HOSTS:
+        raise HTTPException(400, "Região inválida")
+    name_decoded = unquote(name)
+    async with AsyncSessionLocal() as db:
+        player = await db.scalar(select(AlbionPlayer).where(
+            AlbionPlayer.region == region,
+            func.lower(AlbionPlayer.name) == name_decoded.lower(),
+        ))
+    if player is None:
+        raise HTTPException(404, "Preview não encontrado")
+    path = _cache_path(player.albion_id, region)
+    if not path.is_file():
+        raise HTTPException(404, "Preview não encontrado")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
 @router.get("/embed/{region}/{name}.png")
 async def player_preview_png(region: str, name: str):
+
     """PNG de perfil do jogador pra embeds do Discord. Cacheado em disco (1h TTL).
     Aguarda a carga fria compartilhada, sem repetir chamadas da Albion para os
     crawlers concorrentes do Discord."""
