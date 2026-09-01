@@ -326,7 +326,9 @@ async def render_item(
         raise HTTPException(400, "invalid render parameters")
     size = _snap_size(size)
     return await _cached_render(
-        "item", key, _cache_path("item", key, quality, size), _request_params("item", quality, size)
+        "item", key, _cache_path("item", key, quality, size),
+        _request_params("item", quality, size),
+        fallback=_item_render_fallback(key),
     )
 
 
@@ -424,7 +426,9 @@ async def recover_render_miss(kind: str, key: str, quality: int, size: int) -> b
         return True  # Discard malformed legacy rows instead of retrying forever.
     mkey = str(cache_path)
     key_lock = _KEY_LOCKS[hash(mkey) % len(_KEY_LOCKS)]
-    fallback = _spell_display_names().get(key) if kind == "spell" else None
+    fallback = _spell_display_names().get(key) if kind == "spell" else (
+        _item_render_fallback(key) if kind == "item" else None
+    )
     async with key_lock:
         missing = _cached_missing_render(cache_path, mkey)
         if not missing and _cache_has_real_render(cache_path, key):
@@ -616,6 +620,48 @@ def _dragon_en_name(uid: str) -> str | None:
     return f"{prefix} {_DRAGON_LEATHER_BASES[base]}{ench}"
 
 
+@lru_cache(maxsize=1)
+def _item_en_names() -> dict[str, str]:
+    """UniqueName → EN name (de item_names.json). Itens novos da Albion às
+    vezes só têm render pelo nome EN, não pelo UniqueName — este mapeamento
+    é o fallback genérico para esses casos (igual a spell_names.json para
+    spells)."""
+    try:
+        data = json.loads(_ITEM_NAMES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data
+
+
+def _item_en_fallback(uid: str) -> str | None:
+    """Converte UniqueName em nome EN para o render CDN, via item_names.json.
+    T8_MEAL_SPECIAL_FOOD_DRAKE_EGG → "Drake Egg Biscuits"
+    T4_BAG@1 → "Adept's Bag@1"
+    Retorna None se o UID não estiver mapeado."""
+    names = _item_en_names()
+    if not names:
+        return None
+    base, _, ench = uid.rpartition("@")
+    if not base:
+        base, ench = uid, ""
+    en = names.get(base)
+    if not en:
+        return None
+    en = re.sub(r"@0$", "", en)
+    if ench and ench != "0":
+        en = f"{en}@{ench}"
+    return en or None
+
+
+def _item_render_fallback(uid: str) -> str | None:
+    """Fallback de nome EN para o render CDN de itens que não são crystal
+    weapons nem Dragon Leather (estes têm path dedicado e nomes diferentes
+    no item_names.json — o nome do artefato, não do render)."""
+    if _crystal_en_name(uid, {}) or _dragon_en_name(uid):
+        return None
+    return _item_en_fallback(uid)
+
+
 def _item_render_key(uid: str) -> str:
     """Converte crystal weapons e Dragon Leather para o nome EN usado pela CDN."""
     return _crystal_en_name(uid, {}) or _dragon_en_name(uid) or uid
@@ -741,7 +787,8 @@ async def _prerender_one(key: str, quality: int, size: int, log: logging.Logger)
     if _cache_has_real_render(cache_path, key):
         return False
     try:
-        await _cached_render("item", key, cache_path, _request_params("item", quality, size))
+        await _cached_render("item", key, cache_path, _request_params("item", quality, size),
+                            fallback=_item_render_fallback(key))
         return _cache_has_real_render(cache_path, key)
     except Exception:
         return False

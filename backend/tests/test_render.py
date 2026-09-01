@@ -238,6 +238,19 @@ def test_crystal_zero_usa_chave_pedida_pela_ui():
     assert _crystal_en_name("T8_ARTEFACT_2H_ARCANESTAFF_CRYSTAL@4", {}) == "Elder's Astral Staff@4"
 
 
+def test_fallback_genero_resolve_item_novo_por_nome_en():
+    """Itens novos sem render por UniqueName caem no fallback de item_names.json."""
+    from app.api.routes.render import _item_en_fallback, _item_render_fallback
+    # Drake Egg Biscuits — item novo do update Dragon
+    assert _item_en_fallback("T8_MEAL_SPECIAL_FOOD_DRAKE_EGG") == "Drake Egg Biscuits"
+    # @0 é stripado; @N é preservado
+    assert _item_en_fallback("T4_BAG") == "Adept's Bag"
+    assert _item_en_fallback("T4_BAG@1") == "Adept's Bag@1"
+    # Crystal weapons e Dragon Leather não usam fallback genérico (path dedicado)
+    assert _item_render_fallback("T8_ARTEFACT_2H_ARCANESTAFF_CRYSTAL") is None
+    assert _item_render_fallback("T8_HEAD_LEATHER_DRAGON") is None
+
+
 def test_prerender_prioriza_equipamento_do_catalogo_e_tamanho_64():
     with TemporaryDirectory() as d:
         root = Path(d)
@@ -301,6 +314,7 @@ if __name__ == "__main__":
     test_cache_frio_concorrente_baixa_uma_vez()
     test_erro_da_cdn_nao_vira_marker_de_item_ausente()
     test_crystal_zero_usa_chave_pedida_pela_ui()
+    test_fallback_genero_resolve_item_novo_por_nome_en()
     test_prerender_prioriza_equipamento_do_catalogo_e_tamanho_64()
     test_marcadores_sao_retornados_antes_de_cache_frio()
     print("render OK")
