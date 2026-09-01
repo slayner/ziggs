@@ -19,6 +19,7 @@ import http_client
 from cogs.general import (
     _access_status, extract_mention_targets, guild_lang, resolve_user_or_guild,
 )
+from cogs.nodes import _node_display_name, _node_emoji
 from i18n import t
 from localization import loc
 
@@ -572,21 +573,40 @@ class TransactionsView(discord.ui.View):
         counterparty = f"<@{counterparty_id}>" if counterparty_id else None
         amount = format_silver(tx["amount"])
         kind = tx["kind"]
-        if kind == "pay":
-            action = t(self.lang, "tx_action_pay_in" if tx["direction"] == "in" else "tx_action_pay_out",
-                       actor=actor, target=target, counterparty=counterparty or target, amount=amount)
-        elif kind in ("event_payout", "event_deficit"):
-            action = t(self.lang, f"tx_action_{kind}", actor=actor, target=target,
-                       event=self._event_ref(tx))
+        context = tx.get("payout_context") or {}
+        if kind == "event_payout":
+            payout_type = context.get("type", "payout")
+            action = t(self.lang, f"tx_action_{payout_type}", event=self._event_ref(tx), target=target)
+        elif kind == "event_deficit":
+            action = t(self.lang, "tx_action_event_deficit", event=self._event_ref(tx), target=target)
         elif kind in ("add", "remove"):
             action = t(self.lang, f"tx_action_{kind}", actor=actor, target=target, amount=amount)
+        elif kind == "pay":
+            action = t(self.lang, "tx_action_pay_in" if tx["direction"] == "in" else "tx_action_pay_out",
+                       actor=actor, target=target, counterparty=counterparty or target, amount=amount)
         elif kind == "forfeit":
-            action = t(self.lang, "tx_action_forfeit", target=target, amount=amount)
+            action = t(self.lang, "tx_action_forfeit_actor" if actor_id else "tx_action_forfeit",
+                       actor=actor, target=target, amount=amount)
         else:
             action = t(self.lang, "tx_kind_unknown", kind=kind)
         sign = "+" if tx["direction"] == "in" else "-" if tx["direction"] == "out" else ""
+        detail = ""
+        if kind == "event_payout":
+            if context.get("type") == "split":
+                detail = t(self.lang, "tx_detail_split")
+            elif context.get("type") == "logger":
+                detail = t(self.lang, "tx_detail_logger", percent=context.get("percent", 0))
+            elif context.get("type") == "scout":
+                node_type = context.get("node_type", "")
+                node_name = _node_display_name(node_type, self.lang)
+                detail = f"**{_node_emoji(node_type)} {node_name}** · 🗺️ {context.get('map_name') or '—'}"
+        elif kind == "event_deficit":
+            detail = t(self.lang, "tx_detail_deficit")
         undone = f" · *{t(self.lang, 'tx_undone')}*" if tx.get("undone") else ""
-        return f"{_format_tx_date(tx.get('created_at'))} #{tx['id']} {action} **{sign}{amount}**{undone}"
+        meta = f"{_format_tx_date(tx.get('created_at'))} · #{tx['id']}"
+        if detail:
+            meta += f" · {detail}"
+        return f"{action} **{sign}{amount}**\n{meta}{undone}"
 
     def build_embed(self, data: dict, offset: int) -> discord.Embed:
         txs = data.get("transactions", [])
@@ -596,11 +616,10 @@ class TransactionsView(discord.ui.View):
             return embed
         lines = [f"## {t(self.lang, 'tx_heading', user=f'<@{self.target_id}>')}"]
         lines.extend(self._line(tx) for tx in txs)
-        lines.append("")
         lines.append(t(self.lang, "tx_summary",
                        balance=format_silver(data.get("balance", 0)),
                        total_earned=format_silver(data.get("total_earned", 0))))
-        embed.description = "\n".join(lines)
+        embed.description = "\n\n".join(lines)
         embed.set_footer(text=t(self.lang, "tx_page_footer",
                                  page=self.page + 1, max_page=self.max_page + 1,
                                  total=self.total))

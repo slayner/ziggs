@@ -10,7 +10,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, BigInt, Snowflake, pk
+from app.models.base import Base, BigInt, Snowflake, json_type, pk
 
 
 class EconomyBalance(Base):
@@ -65,4 +65,5 @@ class EconomyTransaction(Base):
     event_id: Mapped[int | None] = mapped_column(
         ForeignKey("events.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    payout_context: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -337,7 +337,7 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     scout_source = get_scout_bonus_source(guild)
     scout_pct = get_scout_percent(guild)
     scout_mult = scout_pct / 100.0
-    scout_rows_data: list[tuple[int | None, str | None, int]] = []
+    scout_rows_data: list[dict] = []
     scout_pool = 0
     if db is not None:
         from app.services import nodes as nodes_svc
@@ -349,7 +349,14 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
                 amount = int(log.sold_value * w)
             if amount <= 0 or log.scout_id is None:
                 continue
-            scout_rows_data.append((log.scout_id, log.scout_name, amount))
+            scout_rows_data.append({
+                "user_id": log.scout_id,
+                "user_name": log.scout_name,
+                "amount": amount,
+                "node_type": log.node_type,
+                "map_name": log.map_name,
+                "node_log_id": log.id,
+            })
             scout_pool += amount
 
     # guild_deficit_*: só preenchido em guild_backed quando o regear come mais
@@ -393,6 +400,7 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
             "lootsplit": lootsplit,
             "regear": 0,
             "scout": 0,
+            "scout_nodes": [],
             "total": lootsplit,
         }
 
@@ -407,7 +415,8 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
             rows[uid] = {
                 "user_id": uid,
                 "display_name": name or (str(uid) if uid is not None else "Regear"),
-                "percent": 0, "lootsplit": 0, "regear": amt, "scout": 0, "total": amt,
+                "percent": 0, "lootsplit": 0, "regear": amt, "scout": 0,
+                "scout_nodes": [], "total": amt,
             }
 
     # Scout: atribui os amounts precomputados acima nas linhas. Em modo
@@ -415,25 +424,36 @@ def _calc_payout(ev: Event, db: Session) -> PayoutPreview:
     # foi deduzido da participant_pool acima. Scout que também é participante
     # soma na própria linha.
     scout_payouts: list[PayoutRow] = []
-    for scout_id, scout_name, amount in scout_rows_data:
-        key = scout_id
-        if key in rows:
-            rows[key]["scout"] += amount
-            rows[key]["total"] += amount
+    for scout_row in scout_rows_data:
+        scout_id = scout_row["user_id"]
+        scout_name = scout_row["user_name"]
+        amount = scout_row["amount"]
+        node = {
+            "node_log_id": scout_row["node_log_id"],
+            "node_type": scout_row["node_type"],
+            "map_name": scout_row["map_name"],
+            "amount": amount,
+        }
+        if scout_id in rows:
+            rows[scout_id]["scout"] += amount
+            rows[scout_id]["scout_nodes"].append(node)
+            rows[scout_id]["total"] += amount
         else:
-            rows[key] = {
+            rows[scout_id] = {
                 "user_id": scout_id,
                 "display_name": scout_name or str(scout_id),
                 "percent": 0,
                 "lootsplit": 0,
                 "regear": 0,
                 "scout": amount,
+                "scout_nodes": [node],
                 "total": amount,
             }
         scout_payouts.append(PayoutRow(
             user_id=scout_id,
             display_name=scout_name or str(scout_id),
-            percent=0, lootsplit=0, regear=0, scout=amount, total=amount,
+            percent=0, lootsplit=0, regear=0, scout=amount,
+            scout_nodes=[node], total=amount,
         ))
 
     payouts = [PayoutRow(**r) for r in rows.values()]
@@ -1381,10 +1401,44 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
             p.silver_received = row.total
 
     # `payouts` também pode conter scout/regear fora da lista de participantes;
-    # loggers vivem em uma lista separada. Todos são créditos reais de saldo.
+    # loggers vivem em uma lista separada. O saldo recebe o total de cada pessoa
+    # uma única vez, mas o ledger guarda uma linha por componente para explicar
+    # de onde cada crédito do evento veio.
     paid = 0
     total_paid = 0
-    for row in [*payout.payouts, *payout.logger_payouts]:
+    for row in payout.payouts:
+        if row.user_id is None or row.total <= 0:
+            continue
+        paid += 1
+        total_paid += row.total
+        bal = economy_svc.get_or_create_balance(db, ev.guild_id, row.user_id)
+        bal.balance += row.total
+        bal.total_earned += row.total
+        if row.lootsplit > 0:
+            db.add(EconomyTransaction(
+                guild_id=ev.guild_id, kind="event_payout", actor_discord_id=actor_id or 0,
+                from_user_id=None, to_user_id=row.user_id, total_earned_user_id=row.user_id,
+                amount=row.lootsplit, event_id=ev.id,
+                payout_context={"type": "split", "percent": row.percent},
+            ))
+        if row.regear > 0:
+            db.add(EconomyTransaction(
+                guild_id=ev.guild_id, kind="event_payout", actor_discord_id=actor_id or 0,
+                from_user_id=None, to_user_id=row.user_id, total_earned_user_id=row.user_id,
+                amount=row.regear, event_id=ev.id,
+                payout_context={"type": "regear"},
+            ))
+        for node in row.scout_nodes:
+            db.add(EconomyTransaction(
+                guild_id=ev.guild_id, kind="event_payout", actor_discord_id=actor_id or 0,
+                from_user_id=None, to_user_id=row.user_id, total_earned_user_id=row.user_id,
+                amount=int(node["amount"]), event_id=ev.id,
+                payout_context={
+                    "type": "scout", "node_type": node["node_type"],
+                    "map_name": node["map_name"], "node_log_id": node["node_log_id"],
+                },
+            ))
+    for row in payout.logger_payouts:
         if row.user_id is None or row.total <= 0:
             continue
         paid += 1
@@ -1393,10 +1447,10 @@ def _finalize_payouts(db: Session, ev: Event, actor_id: int | None = None) -> No
         bal.balance += row.total
         bal.total_earned += row.total
         db.add(EconomyTransaction(
-            guild_id=ev.guild_id, kind="event_payout",
-            actor_discord_id=actor_id or 0,
+            guild_id=ev.guild_id, kind="event_payout", actor_discord_id=actor_id or 0,
             from_user_id=None, to_user_id=row.user_id, total_earned_user_id=row.user_id,
             amount=row.total, event_id=ev.id,
+            payout_context={"type": "logger", "percent": row.percent},
         ))
 
     log.info(

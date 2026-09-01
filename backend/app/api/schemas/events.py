@@ -103,6 +103,7 @@ class PayoutRow(BaseModel):
     lootsplit: int
     regear: int
     scout: int = 0
+    scout_nodes: list[dict] = Field(default_factory=list)
     total: int
 
 

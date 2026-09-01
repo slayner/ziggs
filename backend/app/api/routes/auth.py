@@ -2647,6 +2647,7 @@ def bot_economy_transactions(
             "event_title": ei["title"] if ei else None,
             "event_channel_id": ei["event_channel_id"] if ei else None,
             "event_message_id": ei["event_message_id"] if ei else None,
+            "payout_context": dict(r.payout_context or {}),
             "undone": r.undone, "created_at": r.created_at.isoformat() if r.created_at else None,
         })
     return {"balance": balance, "total_earned": total_earned,
