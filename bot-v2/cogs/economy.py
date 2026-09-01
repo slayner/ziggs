@@ -129,8 +129,11 @@ class Economy(commands.Cog):
         if data is None:
             await _reply(interaction, t(lang, "balance_fetch_fail"))
             return
-        embed = discord.Embed(color=discord.Color.blurple(), title=target.display_name,
-                               description=t(lang, "balance_display", balance=format_silver(data["balance"])))
+        embed = discord.Embed(
+            color=discord.Color.blurple(),
+            description=f"# {target.mention}\n{t(lang, 'balance_display', balance=format_silver(data['balance']))}",
+        )
+        embed.set_thumbnail(url=target.display_avatar.url)
         await _reply(interaction, embed=embed)
 
     @app_commands.command(name="pay", description=loc("Transfers silver from your balance to another user", "cmd_desc_pay"))
