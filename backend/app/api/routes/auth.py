@@ -2302,6 +2302,7 @@ class EconomyPayIn(BaseModel):
     to_user_id: int
     amount: int
     request_id: str | None = None
+    reason: str | None = None
 
 
 @router.post("/bot/economy/pay/{guild_id}")
@@ -2339,6 +2340,7 @@ def bot_economy_pay(
         guild_id=guild_id, kind="pay", actor_discord_id=body.from_user_id,
         from_user_id=body.from_user_id, to_user_id=body.to_user_id,
         total_earned_user_id=body.to_user_id, amount=body.amount,
+        reason=(body.reason or "").strip()[:500] or None,
     )
     db.add(tx)
     db.flush()
@@ -2359,6 +2361,7 @@ class EconomyAddIn(BaseModel):
     amount: int
     actor_discord_id: int
     request_id: str | None = None
+    reason: str | None = None
 
 
 @router.post("/bot/economy/add/{guild_id}")
@@ -2391,6 +2394,7 @@ def bot_economy_add(
         guild_id=guild_id, kind="add", actor_discord_id=body.actor_discord_id,
         from_user_id=None, to_user_id=body.discord_user_id,
         total_earned_user_id=body.discord_user_id, amount=body.amount,
+        reason=(body.reason or "").strip()[:500] or None,
     )
     db.add(tx)
     db.flush()
@@ -2415,6 +2419,7 @@ class EconomyRemoveIn(BaseModel):
     allow_negative: bool = False
     actor_discord_id: int
     request_id: str | None = None
+    reason: str | None = None
 
 
 @router.post("/bot/economy/remove/{guild_id}")
@@ -2449,6 +2454,7 @@ def bot_economy_remove(
             guild_id=guild_id, kind="remove", actor_discord_id=body.actor_discord_id,
             from_user_id=body.discord_user_id, to_user_id=None,
             total_earned_user_id=None, amount=actual,
+            reason=(body.reason or "").strip()[:500] or None,
         )
         db.add(tx)
         db.flush()
@@ -2667,6 +2673,7 @@ def bot_economy_transactions(
             "event_channel_id": ei["event_channel_id"] if ei else None,
             "event_message_id": ei["event_message_id"] if ei else None,
             "payout_context": dict(r.payout_context or {}),
+            "reason": r.reason,
             "undone": r.undone, "created_at": r.created_at.isoformat() if r.created_at else None,
         })
     return {"balance": balance, "total_earned": total_earned,
@@ -4418,16 +4425,14 @@ async def bot_warm(
     body: BotWarmIn,
     authorization: str = Header(...),
 ):
-    """Bot pede pra aquecer o perfil de um personagem no backend — reusa o
-    profile_warmer.warm_by_name (mesma lógica do companion). Sem teto de
-    install (o teto real é a cota da Albion no albion_gate)."""
+    """Bot consulta o cache persistido e agenda o warm sem segurar a request."""
     _require_bot_secret(authorization)
     from app.services import profile_warmer
     name = (body.name or "").strip()
     region = (body.region or "").strip().lower()
     if not name or region not in HOSTS:
         raise HTTPException(400, "name/region inválidos")
-    return await profile_warmer.warm_by_name(name, region)
+    return await profile_warmer.warm_bot_profile(name, region)
 
 
 def _require_member(db: Session, user: User, guild_id: int) -> GuildMember:

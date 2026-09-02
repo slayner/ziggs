@@ -1,10 +1,8 @@
-"""Lootlog anônimo: submissões de log do lootlogger por CTA, enviadas pelo site.
+"""Submissões de log do lootlogger por CTA.
 
-Fluxo: logger faz upload do .csv no site (`/guilds/{g}/lootlog/ingest`, sessão
-do membro) → armazena as coletas aqui. A área de revisão é SÓ-ADMIN no site
-(admin-only). Sem threads privadas (diferente do bot-v1). Sem co-relação/cópias
-(dropado): cada submissão conta isolada; o peso do logger = valor total dos
-itens que ele logou.
+Fluxo: o jogador envia o .csv pelo bot-v2 e o backend armazena as coletas aqui.
+A área de revisão é SÓ-ADMIN no site. Cada submissão conta isolada; o peso do
+logger = valor total dos itens que ele logou.
 
 A fatia `logger_percent` da tab do CTA é separada pra loggers e dividida pelo
 peso — ver `services/lootlog.compute_logger_weights` + o hook em

@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+
 // WireGuard tunnel via wintun — split-tunneling for Albion IPs only.
 //
 // Client-side routes are untrusted (user controls the binary). Abuse
@@ -6,32 +9,48 @@
 //
 // Requires admin (virtual adapter + route manipulation).
 
-use anyhow::{anyhow, Result};
-use boringtun::noise::{Tunn, TunnResult};
-use boringtun::x25519::{PublicKey, StaticSecret};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
+use anyhow::anyhow;
+#[cfg(target_os = "windows")]
+use boringtun::noise::{Tunn, TunnResult};
+#[cfg(target_os = "windows")]
+use boringtun::x25519::{PublicKey, StaticSecret};
+#[cfg(target_os = "windows")]
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket};
+#[cfg(target_os = "windows")]
 use wintun::Adapter;
 
+#[cfg(target_os = "windows")]
 use crate::albion_ips;
 
+#[cfg(target_os = "windows")]
 const TUNNEL_ADAPTER_NAME: &str = "Ziggs";
+#[cfg(target_os = "windows")]
 const TUNNEL_ADAPTER_TYPE: &str = "WireGuard";
+#[cfg(target_os = "windows")]
 const TUNNEL_IPV4_ADDR: Ipv4Addr = Ipv4Addr::new(10, 99, 0, 2);
+#[cfg(target_os = "windows")]
 const TUNNEL_IPV4_GW: Ipv4Addr = Ipv4Addr::new(10, 99, 0, 1);
+#[cfg(target_os = "windows")]
 const TUNNEL_NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
-const TUNNEL_MTU: usize = 1280; // WireGuard overhead friendly
-const KEEPALIVE: Option<u16> = Some(25); // seconds
-const PATH_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
-const PATH_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+#[cfg(target_os = "windows")]
+const TUNNEL_MTU: usize = 1280;
+#[cfg(target_os = "windows")]
+const KEEPALIVE: Option<u16> = Some(25);
+#[cfg(target_os = "windows")]
+const PATH_HEALTH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(target_os = "windows")]
+const PATH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 
-/// Max buffer: IP packet + WireGuard overhead
+#[cfg(target_os = "windows")]
 const WG_BUFFER_SIZE: usize = 65535 + 32;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,8 +130,6 @@ pub struct Tunnel {
     shutdown: Arc<AtomicBool>,
     installed_routes: Arc<Mutex<Vec<InstalledRoute>>>,
     operation: Arc<Mutex<()>>,
-    #[cfg(target_os = "windows")]
-    preloaded_paths: Arc<Mutex<Vec<PathCandidate>>>,
     /// The Albion region this tunnel is serving (e.g. "asia"). Used by
     /// stop()/kick to only affect the selected region, not all three.
     region: Arc<Mutex<String>>,
@@ -131,8 +148,6 @@ impl Tunnel {
             shutdown: Arc::new(AtomicBool::new(false)),
             installed_routes: Arc::new(Mutex::new(Vec::new())),
             operation: Arc::new(Mutex::new(())),
-            #[cfg(target_os = "windows")]
-            preloaded_paths: Arc::new(Mutex::new(Vec::new())),
             region: Arc::new(Mutex::new(String::new())),
         }
     }

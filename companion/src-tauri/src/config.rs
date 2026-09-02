@@ -58,13 +58,6 @@ pub struct CompanionConfig {
     /// Enabled by default.
     #[serde(default = "default_true")]
     pub feed_aodp: bool,
-    /// Discord bearer token — set after optional OAuth login.
-    /// None = not logged in. Used for /companion/lootlog/* and /companion/auth/*.
-    pub discord_token: Option<String>,
-    /// Discord user id as string to preserve 64-bit snowflake precision.
-    pub discord_user_id: Option<String>,
-    /// Discord username shown in the UI.
-    pub discord_username: Option<String>,
     /// Stable identity of THIS installation (one PC = one id). Generated on first
     /// use and persisted. Sent in the X-Ziggs-Install header so the backend
     /// treats app restarts and concurrent rebuild processes as the same companion.
@@ -105,9 +98,6 @@ impl Default for CompanionConfig {
             tunnel_client_privkey: String::new(),
             pvp_pause_transfer: true,
             feed_aodp: true,
-            discord_token: None,
-            discord_user_id: None,
-            discord_username: None,
             install_id: String::new(), // generated on demand by install_id()
             spell_index_offset: 0,
             region: default_region(),
@@ -203,10 +193,7 @@ mod tests {
             "collect_damage_meter": true,
             "collect_auto_lootlog": false,
             "autostart": true,
-            "minimize_to_tray": true,
-            "discord_token": null,
-            "discord_user_id": null,
-            "discord_username": null
+            "minimize_to_tray": true
         }"#;
         let cfg: CompanionConfig = serde_json::from_str(json).expect("valid config");
         assert_eq!(cfg.api_base_url, API_BASE_URL);

@@ -1,8 +1,7 @@
-"""Rotas do lootlog anônimo: envio (membro logado) + área só-admin (site).
+"""Rotas de configuração e revisão administrativa de lootlogs.
 
-Auth: área de revisão é SÓ-ADMIN (guild.admin). Envio (`POST /ingest`) é
-qualquer membro logado da guilda (era `/enviarlog` no bot, removido — a
-função virou site-only).
+Os jogadores enviam arquivos pelo bot-v2; o site mantém configurações,
+listagem, prévia e remoção administrativa das submissões.
 """
 from __future__ import annotations
 
@@ -14,13 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.api.schemas.lootlog import (
-    BotLootLogIngestOut, LoggerStandingOut, LootLogIngestOut, LootLogListOut,
+    BotLootLogIngestOut, LoggerStandingOut, LootLogListOut,
     LootLogPreviewOut, LootLogSettingsIn, LootLogSettingsOut,
     LootLogSubmissionOut,
 )
 from app.models.audit import AuditLog
 from app.models.events import Event
-from app.models.tenancy import Guild, GuildMember, User
+from app.models.tenancy import Guild
 from app.services import lootlog
 
 router = APIRouter(tags=["lootlog"])
@@ -52,42 +51,6 @@ def put_settings(
     ))
     db.commit()
     return LootLogSettingsOut(**after.to_dict())
-
-
-# ── envio (membro logado → .csv do lootlogger) ───────────────────────────────
-
-@router.post("/guilds/{guild_id}/lootlog/ingest", response_model=LootLogIngestOut)
-async def ingest_log(
-    guild_id: int,
-    event_id: int = Form(...),
-    file: UploadFile = File(...),
-    db: Session = Depends(deps.db_session),
-    user: User = Depends(deps.require_user),
-    _member: GuildMember = Depends(deps.require_guild_member),
-):
-    """Membro logado envia o próprio .csv/.txt do lootlogger de um CTA."""
-    fname = file.filename or "log.csv"
-    if not fname.lower().endswith((".csv", ".txt")):
-        raise HTTPException(400, "arquivo precisa ser .csv ou .txt")
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "arquivo vazio")
-    if len(data) > lootlog.MAX_FILE_BYTES:
-        raise HTTPException(413, "arquivo grande demais (limite 15 MB)")
-    try:
-        # to_thread: `lootlog.ingest` faz parse síncrono de CSV até 15 MB +
-        # db.commit(); rodar direto no event loop trava TODAS as outras rotas
-        # (e o próprio request) pela duração do parse. Session SQLAlchemy é
-        # single-thread uso-por-vez — enquanto o await suspende a coro no loop,
-        # a thread do to_thread usa a session exclusivamente.
-        return await asyncio.to_thread(
-            lootlog.ingest,
-            db, guild_id, event_id, user.id, user.global_name or user.username,
-            fname, data,
-        )
-    except lootlog.LootLogServiceError as e:
-        raise HTTPException(400, str(e))
-
 
 # ── envio (bot-v2 → thread de lootlog do evento) ────────────────────────────
 # Auth por Bearer BOT_API_SECRET (sem cookie). O bot posta o .csv que um player

@@ -9,9 +9,6 @@ use serde::{Deserialize, Serialize};
 pub struct ApiClient {
     base_url: String,
     client: Client,
-    /// Bearer token for Discord auth — None = not logged in.
-    /// Sent as Authorization: Bearer <token> on /companion/auth/* and /companion/lootlog/*.
-    discord_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -155,19 +152,7 @@ impl ApiClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client,
-            discord_token: None,
         }
-    }
-
-    pub fn with_token(mut self, token: Option<String>) -> Self {
-        self.discord_token = token;
-        self
-    }
-
-    fn auth_header(&self) -> Option<(&str, String)> {
-        self.discord_token
-            .as_ref()
-            .map(|t| ("Authorization", format!("Bearer {}", t)))
     }
 
     pub async fn report_crash(&self, payload: &crate::crash_report::CrashReport) -> Result<()> {
@@ -336,90 +321,6 @@ impl ApiClient {
         Ok(total)
     }
 
-    // ── Discord OAuth pairing ──────────────────────────────────────────────
-
-    pub fn auth_start_url(&self, nonce: &str) -> String {
-        format!("{}/companion/auth/start?nonce={}", self.base_url, nonce)
-    }
-
-    pub async fn auth_poll(&self, nonce: &str) -> Result<AuthPollResult> {
-        let url = format!("{}/companion/auth/poll?nonce={}", self.base_url, nonce);
-        let resp = self.client.get(&url).send().await?;
-        if resp.status() == reqwest::StatusCode::REQUEST_TIMEOUT {
-            return Err(anyhow!("waiting for login"));
-        }
-        if !resp.status().is_success() {
-            return Err(anyhow!("auth poll failed: HTTP {}", resp.status()));
-        }
-        Ok(resp.json().await?)
-    }
-
-    // ── Lootlog auto-submit ────────────────────────────────────────────────
-
-    /// Logged-in user's active events across all guilds (in progress or review).
-    /// No guild_id is sent; the backend derives it from event signups.
-    pub async fn active_events(&self) -> Result<Vec<ActiveEvent>> {
-        let (key, val) = self.auth_header().ok_or_else(|| anyhow!("not logged in"))?;
-        let url = format!("{}/companion/lootlog/active-events", self.base_url);
-        let resp = self.client.get(&url).header(key, &val).send().await?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("active-events failed: HTTP {}", resp.status()));
-        }
-        Ok(resp.json().await?)
-    }
-
-    /// Guild is not sent in the body; the backend derives it from the user's
-    /// event signup and rejects if there is none.
-    pub async fn submit_lootlog(&self, event_id: i64, csv_text: &str) -> Result<LootlogIngestOut> {
-        let (key, val) = self.auth_header().ok_or_else(|| anyhow!("not logged in"))?;
-        let url = format!("{}/companion/lootlog/ingest", self.base_url);
-        let body = serde_json::json!({
-            "event_id": event_id,
-            "csv_text": csv_text,
-            "file_name": "companion-lootlog.csv",
-        });
-        let resp = self
-            .client
-            .post(&url)
-            .header(key, &val)
-            .json(&body)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-                return Err(anyhow!("lootlog ingest failed: HTTP {} {}", status, text));
-        }
-        Ok(resp.json().await?)
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct AuthPollResult {
-    pub token: String,
-    pub user_id: String,
-    pub username: String,
-    #[serde(default)]
-    pub global_name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ActiveEvent {
-    pub event_id: i64,
-    pub guild_id: i64,
-    pub guild_name: Option<String>,
-    pub title: Option<String>,
-    pub scheduled_at: Option<String>,
-    /// "in_progress" or "review" (review triggers auto-submit).
-    pub state: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct LootlogIngestOut {
-    pub id: i64,
-    pub row_count: i64,
-    pub silver_total: i64,
-    pub is_update: bool,
 }
 
 /// Response from POST /companion/warm.

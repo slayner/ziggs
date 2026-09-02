@@ -10,11 +10,6 @@ Rotas:
   GET  /companion/dns/targets      → hostnames dos 3 servidores Albion (pra DNS test)
   POST /companion/prices/submit    → ingere preços capturados via packet capture (Fase 2)
   GET  /companion/latest.json      → manifest do auto-updater (Tauri updater plugin)
-  GET  /companion/auth/start       → inicia login Discord (redirect pro OAuth)
-  GET  /companion/auth/done        → pós-OAuth: emite token companion, mostra HTML de sucesso
-  GET  /companion/auth/poll        → companion faz polling pelo token (nonce)
-  GET  /companion/lootlog/active-events → eventos em andamento onde o user está inscrito
-  POST /companion/lootlog/ingest   → envia CSV do lootlog pra um evento
   POST /companion/crash-report     → forwards a bounded diagnostic to Discord
 """
 from __future__ import annotations
@@ -32,7 +27,7 @@ from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -40,14 +35,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.api import deps
-from app.auth.session import make_companion_token
 from app.db import get_async_session, get_session
-from app.models.events import Event, EventSignup
 from app.models.loot import ItemPriceCache
-from app.models.lootlog import LootLogSubmission
-from app.models.tenancy import Guild, User
-from app.services import companion_scan, companion_kill_scan, lootlog as lootlog_svc, market_history, prices, profile_warmer
-from app.domain.states import EventState
+from app.models.tenancy import Guild
+from app.services import companion_scan, companion_kill_scan, market_history, prices, profile_warmer
 from app.models.prices import ItemPriceLatest
 from app.services.player_tracker import HOSTS
 
@@ -333,184 +324,6 @@ async def companion_vps_pings(db: AsyncSession = Depends(get_async_session)):
     _vps_pings_cache[:] = [now, out]
     return out
 
-
-# ─── Discord OAuth pairing (companion login, opcional) ─────────────────────
-# ponytail: cache em memória nonce → {uid, token, username}. O companion gera
-# um nonce, abre o navegador pra /companion/auth/start?nonce=X, o backend faz
-# o OAuth normal (cookie de sessão), e /companion/auth/done cunha o token e
-# guarda aqui. O companion faz poll em /companion/auth/poll?nonce=X.
-# Em memória: se o backend reinicia no meio de um pairing, o user re-loga. OK.
-_PAIRING_CACHE: dict[str, dict] = {}
-_PAIRING_TTL = 300  # 5 min
-
-
-@router.get("/companion/auth/start")
-def companion_auth_start(nonce: str = Query(...)):
-    """Inicia login Discord vindo do companion. Redireciona pro OAuth normal
-    com next=/companion/auth/done?nonce=... — depois do callback, o backend
-    cai em /companion/auth/done que cunha o token."""
-    next_url = f"/companion/auth/done?nonce={nonce}"
-    state = __import__("secrets").token_urlsafe(24)
-    import app.auth.discord as _discord
-    from app.config import get_settings
-    resp = RedirectResponse(_discord.build_authorize_url(state))
-    resp.set_cookie("ziggs_oauth_state", state, max_age=600, httponly=True, samesite="lax")
-    resp.set_cookie("ziggs_oauth_next", next_url, max_age=600, httponly=True, samesite="lax")
-    return resp
-
-
-@router.get("/companion/auth/done")
-def companion_auth_done(
-    nonce: str = Query(...),
-    user: User = Depends(deps.require_user),
-):
-    """Pós-OAuth: o user já está logado (cookie de sessão definido pelo callback).
-    Cunha o token companion, guarda no cache de pairing, mostra HTML de sucesso."""
-    token = make_companion_token(user.id)
-    _PAIRING_CACHE[nonce] = {
-        "uid": user.id,
-        "username": user.username,
-        "global_name": user.global_name,
-        "token": token,
-        "ts": time.monotonic(),
-    }
-    return HTMLResponse("""<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>body{background:#0e0f13;color:#e7e9ee;font-family:system-ui,sans-serif;
-display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-.box{text-align:center}.ok{font-size:48px;margin-bottom:12px}
-.hint{color:#6b7280;font-size:14px;margin-top:8px}</style></head><body>
-<div class="box"><div class="ok">✓</div><h2>Login concluído</h2>
-<div class="hint">Volte para o Ziggs Companion — você já pode fechar esta aba.</div>
-</div></body></html>""")
-
-
-@router.get("/companion/auth/poll")
-def companion_auth_poll(nonce: str = Query(...)):
-    """Companion faz poll aqui até o pairing ficar pronto (ou expirar)."""
-    _expire_old_pairings()
-    entry = _PAIRING_CACHE.pop(nonce, None)
-    if entry is None:
-        raise HTTPException(408, "aguardando login")  # companion re-tenta
-    return {
-        "token": entry["token"],
-        "user_id": str(entry["uid"]),
-        "username": entry["username"],
-        "global_name": entry["global_name"],
-    }
-
-
-def _expire_old_pairings():
-    now = time.monotonic()
-    expired = [k for k, v in _PAIRING_CACHE.items() if now - v["ts"] > _PAIRING_TTL]
-    for k in expired:
-        del _PAIRING_CACHE[k]
-
-
-# ─── Lootlog auto-submit (companion auth) ──────────────────────────────────
-
-class CompanionEventOut(BaseModel):
-    event_id: int
-    guild_id: int
-    guild_name: str | None
-    title: str | None
-    scheduled_at: str | None
-    # in_progress = rolando; review = fechou e está sendo revisado (é aqui que
-    # o auto-submit dispara).
-    state: str
-
-
-# Estados em que faz sentido o companion mandar loot.
-_LOOTLOG_STATES = ("in_progress", "review")
-
-
-@router.get("/companion/lootlog/active-events")
-async def companion_active_events(
-    user: User = Depends(deps.require_companion_user_async),
-    db: AsyncSession = Depends(get_async_session),
-) -> list[CompanionEventOut]:
-    """Eventos do usuário em andamento ou em revisão, de TODAS as guildas.
-
-    Sem guild_id: a inscrição (EventSignup) já diz de quais eventos o usuário
-    participa e em qual guilda cada um está — pedir o snowflake da guilda ao
-    usuário era trabalho manual pra descobrir algo que o backend já sabe.
-    """
-    rows = (await db.execute(
-        select(Event, Guild.name)
-        .join(EventSignup, EventSignup.event_id == Event.id)
-        .outerjoin(Guild, Guild.id == Event.guild_id)
-        .where(
-            Event.state.in_(_LOOTLOG_STATES),
-            EventSignup.user_id == user.id,
-        )
-        .order_by(Event.id.desc())
-    )).all()
-    return [
-        CompanionEventOut(
-            event_id=ev.id,
-            guild_id=ev.guild_id,
-            guild_name=guild_name,
-            title=ev.title,
-            scheduled_at=ev.scheduled_at.isoformat() if ev.scheduled_at else None,
-            state=ev.state.value if hasattr(ev.state, "value") else str(ev.state),
-        )
-        for ev, guild_name in rows
-    ]
-
-
-class CompanionLootlogIngestIn(BaseModel):
-    event_id: int
-    csv_text: str
-    file_name: str = "companion-lootlog.csv"
-
-
-class CompanionLootlogIngestOut(BaseModel):
-    id: int
-    row_count: int
-    silver_total: int
-    is_update: bool
-
-
-@router.post("/companion/lootlog/ingest")
-def companion_lootlog_ingest(
-    body: CompanionLootlogIngestIn,
-    user: User = Depends(deps.require_companion_user),
-    db: Session = Depends(get_session),
-) -> CompanionLootlogIngestOut:
-    """Submete o CSV do lootlog (texto normalizado) pra um evento.
-    Mesmo upsert do /guilds/{g}/lootlog/ingest — 1 submissão por
-    (guild_id, event_id, submitter_user_id).
-
-    A guilda vem do EVENTO, não do cliente: antes o companion mandava guild_id
-    junto e nada checava se o usuário tinha alguma relação com aquele evento —
-    qualquer conta logada podia despejar lootlog em evento de qualquer guilda.
-    Agora exige inscrição (EventSignup) no evento, que é o mesmo critério que
-    faz o evento aparecer em /active-events.
-    """
-    signup = db.scalar(
-        select(EventSignup).where(
-            EventSignup.event_id == body.event_id,
-            EventSignup.user_id == user.id,
-        )
-    )
-    if signup is None:
-        raise HTTPException(403, "você não está inscrito neste evento")
-    event = db.get(Event, body.event_id)
-    if event is None:
-        raise HTTPException(404, "evento não encontrado")
-    if event.guild_id != signup.guild_id:
-        raise HTTPException(403, "inscrição não pertence à guilda do evento")
-    if event.state != EventState.REVIEW:
-        raise HTTPException(409, "lootlog só pode ser enviado durante revisão")
-
-    result = lootlog_svc.ingest(
-        db, signup.guild_id, body.event_id, user.id,
-        user.global_name or user.username,
-        body.file_name, body.csv_text.encode("utf-8"),
-    )
-    return CompanionLootlogIngestOut(
-        id=result.id, row_count=result.row_count,
-        silver_total=result.silver_total, is_update=result.is_update,
-    )
 
 
 class SilverEstimateItemIn(BaseModel):

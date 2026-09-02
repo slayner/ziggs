@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.auth import discord
 from app.auth.crypto import decrypt_token
 from app.auth.permissions import has_permission
-from app.auth.session import verify_session, verify_companion_token
+from app.auth.session import verify_session
 from app.config import get_settings
 from app.db import get_async_session, get_session
 from app.models.tenancy import Guild, GuildMember, User
@@ -128,44 +128,6 @@ def require_bot_api(authorization: str = Header(...)) -> bool:
     if not secrets.compare_digest(authorization, f"Bearer {get_settings().bot_api_secret}"):
         raise HTTPException(status_code=401, detail="bot api secret inválido")
     return True
-
-
-def require_companion_user(
-    authorization: str = Header(...),
-    db: Session = Depends(db_session),
-) -> User:
-    """Auth companion↔site: Bearer <companion_token> (JWT-like, assinado).
-    O companion faz login Discord no navegador, recebe este token, e usa em
-    todas as rotas /companion/auth/* e /companion/lootlog/*. Devolve o User
-    que o token representa — rotas usam user.id pra filtrar signups/eventos."""
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(401, detail="token companion ausente")
-    token = authorization[7:]
-    uid = verify_companion_token(token)
-    if uid is None:
-        raise HTTPException(401, detail="token companion inválido ou expirado")
-    user = db.scalar(select(User).where(User.id == uid))
-    if user is None:
-        raise HTTPException(401, detail="usuário não encontrado")
-    return user
-
-
-async def require_companion_user_async(
-    authorization: str = Header(...),
-    db: AsyncSession = Depends(async_db_session),
-) -> User:
-    """Variante async de require_companion_user pra rotas /companion async.
-    Mesma lógica, mas com AsyncSession (await db.scalar)."""
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(401, detail="token companion ausente")
-    token = authorization[7:]
-    uid = verify_companion_token(token)
-    if uid is None:
-        raise HTTPException(401, detail="token companion inválido ou expirado")
-    user = await db.scalar(select(User).where(User.id == uid))
-    if user is None:
-        raise HTTPException(401, detail="usuário não encontrado")
-    return user
 
 
 # ponytail: debug temporário do 403 da escalação — só grava em DEVELOPMENT
