@@ -18,9 +18,8 @@ from app.api.routes.battles import (
 from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import Battle, BattleKillEvent, BattleParticipant
 from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, PlayerSnapshot, PlayerWeaponStat, SearchEntry
-from app.services import battle_groups, prices, user_profile
-from app.services.albion_gate import EMBED, PROFILE, WARM, albion_scope, queue_depth, slot
-from app.services.awakened import awakened_value
+from app.services import battle_groups, user_profile
+from app.services.albion_gate import EMBED, LINK_PROFILE, PROFILE, WARM, albion_scope, queue_depth, slot
 from app.services.player_tracker import HOSTS, make_client, sync_player_kills, upsert_player
 from app.services.profile_warmer import request_refresh
 from app.services.search_norm import normalize as norm_name, prefix_range
@@ -455,36 +454,15 @@ async def _serialize_kill(
     }
 
 
-async def _silver_dropped(db: AsyncSession, death_rows: list[PlayerKillEvent]) -> int:
-    """Prata aproximada perdida nas mortes registradas — preço dos itens
-    equipados + carregados no momento da morte, reaproveitando o cache
-    permanente de preço de loot (mesmo usado na página de batalha)."""
-    pairs: list[tuple[str, int]] = []
-    for ev in death_rows:
-        for item in (ev.victim_equipment or {}).values():
-            if item and item.get("Type"):
-                pairs.append((item["Type"], 1))
-        for inv in (ev.victim_inventory or []):
-            if inv and inv.get("Type"):
-                pairs.append((inv["Type"], inv.get("Count") or 1))
-    if not pairs:
-        return 0
-    item_ids = list({iid for iid, _ in pairs})
-    price_by_id = await prices.get_battle_prices(db, item_ids)
-    total = 0
-    for ev in death_rows:
-        for item in (ev.victim_equipment or {}).values():
-            if item and item.get("Type"):
-                total += price_by_id.get(item["Type"], 0) + awakened_value(
-                    item["Type"], item.get("LegendarySoul"),
-                )
-        for item in (ev.victim_inventory or []):
-            if item and item.get("Type"):
-                total += (
-                    price_by_id.get(item["Type"], 0)
-                    + awakened_value(item["Type"], item.get("LegendarySoul"))
-                ) * (item.get("Count") or 1)
-    return total
+async def _silver_dropped(_db: AsyncSession, death_rows: list[PlayerKillEvent]) -> int:
+    """Prata perdida já materializada pelo worker de precificação.
+
+    O worker aplica a cadeia de presunção e o valor awakened antes de persistir
+    cada morte. O perfil só soma esse snapshot para não divergir das atividades,
+    batalhas e mensagens do bot.
+    """
+    return sum(ev.silver_dropped or 0 for ev in death_rows)
+
 
 
 # Rank do jogador num kind de coleta (gather_*/fishing/crafting) — quantos têm
@@ -949,7 +927,9 @@ async def _cold_load_player(region: str, name: str, host: str, priority: int = E
                         )
                         if player is not None and player.refresh_requested_at is None:
                             player.refresh_requested_at = datetime.now(timezone.utc)
+                            player.refresh_priority = LINK_PROFILE
                             await db.commit()
+                            request_refresh()
                 from app.services.profile_preview import invalidate_cache
                 invalidate_cache(raw["Id"], region)
                 ready = _cold_load_ready.get(progress_key)
@@ -1032,7 +1012,6 @@ async def _preview_version(region: str, name: str) -> str | None:
         )
         if player is None or player.lifetime_statistics is None or _player_has_bad_snapshot(player):
             return None
-        await _queue_embed_refresh_if_stale(db, player)
         version_at = player.stats_updated_at or player.last_seen_at
         if version_at is None:
             return None
@@ -1048,7 +1027,7 @@ async def prefetch_player_preview(region: str, name: str, *, wait_seconds: float
     if image_version is not None:
         return image_version
 
-    _start_cold_load(region, name, host)
+    _start_cold_load(region, name, host, priority=LINK_PROFILE)
     if wait_seconds <= 0:
         return None
     ready = _cold_load_ready.get(f"{region}:{name.lower()}")
@@ -1100,7 +1079,6 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
         # LifetimeStatistics), kill_fame/death_fame/pve/gathering estão zeros e
         # o perfil mostra nada — precisa do cold load pra buscar o perfil
         # completo. Cai pro fluxo de cold load abaixo.
-        await _queue_refresh_if_stale(db, cached)
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
         await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
@@ -1109,7 +1087,6 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
         # Temos o perfil, mas o snapshot salvo veio de uma resposta inválida da
         # Albion (Timestamp null). Não reclassificamos como cold nem sobrescrevemos
         # o snapshot anterior: servimos o que temos e deixamos o warmer corrigir.
-        await _queue_refresh_if_stale(db, cached)
         await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
 
@@ -1207,7 +1184,6 @@ async def get_player(albion_id: str, region: str | None = None, db: AsyncSession
         # Mesma lógica de get_player_by_name: só serve o cache se já temos o
         # perfil completo (LifetimeStatistics). Sem ele, kill_fame/death_fame/
         # pve/gathering estão zeros e o perfil mostra nada — cai pro cold load.
-        await _queue_refresh_if_stale(db, cached)
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
         await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
@@ -1215,7 +1191,6 @@ async def get_player(albion_id: str, region: str | None = None, db: AsyncSession
     if cached is not None and cached.lifetime_statistics is not None and _player_has_bad_snapshot(cached):
         # Perfil salvo mas com snapshot bugado da Albion — servimos o que temos
         # e deixamos o warmer corrigir; não reclassificamos como cold.
-        await _queue_refresh_if_stale(db, cached)
         await db.commit()
         return await _build_profile_payload(db, cached, _synthetic_raw(cached))
 
@@ -1532,8 +1507,12 @@ async def player_preview_status(region: str, name: str):
         raise HTTPException(404, "Perfil não encontrado")
     from app.services.profile_preview import _cache_path
     updated_at = player.stats_updated_at or player.last_seen_at
+    profile_ready = player.lifetime_statistics is not None and not _player_has_bad_snapshot(player)
+    cached_png = _cache_path(player.albion_id, region).is_file()
     return {
-        "ready": _cache_path(player.albion_id, region).is_file(),
+        "ready": profile_ready and cached_png,
+        "profile_ready": profile_ready,
+        "cached_png": cached_png,
         "refreshing": player.refresh_requested_at is not None,
         "updated_at": _aware(updated_at).isoformat() if updated_at is not None else None,
     }
@@ -1591,6 +1570,21 @@ async def player_preview_png(region: str, name: str):
     player = await asyncio.to_thread(_lookup)
 
     if player is None or player.lifetime_statistics is None or _player_has_bad_snapshot(player):
+        def _battle_known_id():
+            from app.services.profile_preview import battle_participant_preview_id
+            sdb = SyncSessionLocal()
+            try:
+                return battle_participant_preview_id(sdb, name_decoded, region)
+            finally:
+                sdb.close()
+
+        battle_known_id = await asyncio.to_thread(_battle_known_id)
+        _start_cold_load(region, name_decoded, host, priority=LINK_PROFILE)
+        if battle_known_id is not None:
+            path = await _render_profile_preview(battle_known_id, region)
+            if path is not None:
+                return FileResponse(path, media_type="image/png",
+                                    headers={"Cache-Control": "public, max-age=3600"})
         _start_cold_load(region, name_decoded, host)
         ready = _cold_load_ready.get(f"{region}:{name_decoded.lower()}")
         player = await _wait_for_preview_player(_lookup, ready)

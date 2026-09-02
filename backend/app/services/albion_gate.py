@@ -55,6 +55,7 @@ REGEAR_RECOG = 1      # user: mesmo nível dos registers (membro esperando)
 # Poder escalar pro scan_dispatcher se a lista crescer muito, pelo comentário
 # em guild_verifier.run_forever — enquanto isso, cabe folgada no pool reserved.
 GUILD_VERIFY = 5
+LINK_PROFILE = 6     # perfil frio aberto por link público
 NEW_ELIGIBLE = 10     # batalha NOVA (descoberta/deep-fetch) — topo da cadeia de fundo
 NEW_SMALL = 11
 WARM = 12            # profile_warmer de FUNDO (companion warm + backfill de participantes)

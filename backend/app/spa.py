@@ -67,7 +67,7 @@ async def _og_for_path(
         image_url = f"{s.frontend_url}/players/embed/{region}/{quote(name, safe='')}.png"
         if image_version:
             image_url += f"?v={image_version}"
-        return (f"{name} — Perfil Albion", f"Perfil de {name} no Ziggs.", image_url)
+        return (f"{region_code.upper()}  ·  {name}", "", image_url)
 
     m = _EVENT_RE.match(path)
     if m:
@@ -102,20 +102,21 @@ async def _og_for_path(
         from app.services.profile_warmer import request_refresh
         from sqlalchemy import select
         metadata = await guild_preview_metadata(m.group(1))
-        if metadata is not None:
-            _, image_version = metadata
-            s = get_settings()
-            return ("", "", f"{s.frontend_url}/public/guilds/embed/{quote(m.group(1), safe='')}.png?v={image_version}")
         async with AsyncSessionLocal() as db:
             region = await _resolve_region_for_guild(db, m.group(1))
             if region is not None:
+                from app.services.albion_gate import LINK_PROFILE
                 gp = await db.scalar(select(GuildProfile).where(GuildProfile.albion_id == m.group(1)))
                 if gp is None:
-                    db.add(GuildProfile(albion_id=m.group(1), name=m.group(1), region=region, refresh_requested_at=datetime.now(timezone.utc)))
-                elif gp.refresh_requested_at is None:
-                    gp.refresh_requested_at = datetime.now(timezone.utc)
-                await db.commit()
-                request_refresh()
+                    db.add(GuildProfile(albion_id=m.group(1), name=m.group(1), region=region,
+                                        refresh_requested_at=datetime.now(timezone.utc), refresh_priority=LINK_PROFILE))
+                    await db.commit()
+                    request_refresh()
+        if metadata is not None and region is not None:
+            name, image_version = metadata
+            s = get_settings()
+            prefix = {"americas": "AM", "europe": "EU", "asia": "AS"}[region]
+            return (f"{prefix}  ·  {name}", "", f"{s.frontend_url}/public/guilds/embed/{quote(m.group(1), safe='')}.png?v={image_version}")
 
     m = _ALLIANCE_RE.match(path)
     if m:
@@ -127,19 +128,20 @@ async def _og_for_path(
         from sqlalchemy import select
         s = get_settings()
         metadata = await alliance_preview_metadata(m.group(1))
-        if metadata is not None:
-            _, image_version = metadata
-            return ("", "", f"{s.frontend_url}/public/alliances/embed/{quote(m.group(1), safe='')}.png?v={image_version}")
         async with AsyncSessionLocal() as db:
             region = await _resolve_region_for_alliance(db, m.group(1))
             if region is not None:
+                from app.services.albion_gate import LINK_PROFILE
                 ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == m.group(1)))
                 if ap is None:
-                    db.add(AllianceProfile(albion_id=m.group(1), name=m.group(1), region=region, refresh_requested_at=datetime.now(timezone.utc)))
-                elif ap.refresh_requested_at is None:
-                    ap.refresh_requested_at = datetime.now(timezone.utc)
-                await db.commit()
-                request_refresh()
+                    db.add(AllianceProfile(albion_id=m.group(1), name=m.group(1), region=region,
+                                           refresh_requested_at=datetime.now(timezone.utc), refresh_priority=LINK_PROFILE))
+                    await db.commit()
+                    request_refresh()
+        if metadata is not None and region is not None:
+            name, image_version = metadata
+            prefix = {"americas": "AM", "europe": "EU", "asia": "AS"}[region]
+            return (f"{prefix}  ·  [{name}]", "", f"{s.frontend_url}/public/alliances/embed/{quote(m.group(1), safe='')}.png?v={image_version}")
 
     if path.startswith(("guild/", "alliance/")):
         return ("Perfil de guilda — Ziggs", "", None)
@@ -244,7 +246,9 @@ async def _inject_og(
         html = re.sub(r'<meta\s+name="twitter:card"[^>]*/?>', "", html)
         tags = [
             f'<meta property="og:image" content="{_esc(image)}" />',
-            f'<meta property="og:image:type" content="image/png" />',
+            '<meta property="og:image:type" content="image/png" />',
+            '<meta property="og:image:width" content="1200" />',
+            '<meta property="og:image:height" content="436" />',
             '<meta name="twitter:card" content="summary_large_image" />',
         ]
         html = html.replace("</head>", "\n".join(tags) + "\n</head>", 1)

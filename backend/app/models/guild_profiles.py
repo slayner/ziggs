@@ -49,6 +49,7 @@ class GuildProfile(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     refresh_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refresh_priority: Mapped[int] = mapped_column(default=0, nullable=False)
 
 
 class AllianceProfile(Base):
@@ -72,3 +73,4 @@ class AllianceProfile(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     refresh_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refresh_priority: Mapped[int] = mapped_column(default=0, nullable=False)

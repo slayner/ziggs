@@ -56,7 +56,39 @@ def test_empty_inventory_list_is_no_gear():
     assert _has_gear(_fake_ev(eq=None, inv=[])) is False
 
 
+def test_profile_silver_total_uses_persisted_death_values():
+    from app.api.routes.players import _silver_dropped
+
+    class _Death:
+        victim_equipment = {"MainHand": {"Type": "T8_2H_BOW@4"}}
+        victim_inventory = []
+        silver_dropped = 12_345_678
+
+    assert asyncio.run(_silver_dropped(None, [_Death()])) == 12_345_678
+
+
+def test_battle_valuation_uses_pke_snapshot():
+    from unittest.mock import AsyncMock, patch
+    from app.services.death_pricing import price_death_loadouts
+
+    raw = (
+        {"MainHand": {"Type": "T8_2H_BOW@4", "LegendarySoul": {"value": 20}}},
+        [{"Type": "T4_BAG", "Count": 2, "LegendarySoul": {"value": 30}}],
+    )
+
+    async def run():
+        with patch(
+            "app.services.death_pricing.get_battle_prices_with_presumption",
+            new=AsyncMock(return_value=({"T8_2H_BOW@4": 100, "T4_BAG": 25}, {})),
+        ), patch("app.services.death_pricing.awakened_value", side_effect=lambda _item, soul: (soul or {}).get("value", 0)):
+            totals, _basis, _count = await price_death_loadouts(None, [raw])
+            assert totals == [230]
+
+    asyncio.run(run())
+
+
 def test_battle_snapshot_uses_the_same_death_pricing_as_raw_kill():
+
     from unittest.mock import AsyncMock, patch
     from app.services.death_pricing import price_death_loadouts
 

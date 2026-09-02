@@ -29,6 +29,7 @@ from app.config import get_settings
 from app.models.battles import (
     Battle, BattleGuild, BattleKillEvent, BattleParticipant, BattleSide, BattleSyncCursor,
 )
+from app.models.players import PlayerKillEvent
 from app.services import battle_sides, search_index
 from app.services.lethality import ORANGE_GROUP_LIMIT, is_likely_lethal
 from app.services.albion_gate import (
@@ -540,6 +541,13 @@ def _write_deep_data(battle_id: int, raw: dict | None, events: list[dict]) -> bo
         db.flush()
         _t_flush3 = _t.monotonic()
 
+        priced_events = {
+            event.albion_event_id: event.id
+            for event in db.scalars(select(PlayerKillEvent).where(
+                PlayerKillEvent.region == battle.region,
+                PlayerKillEvent.albion_event_id.in_([row[0] for row in kill_rows]),
+            ))
+        }
         has_large_group = False
         small_group_failed = False
         zero_fame = False
@@ -547,6 +555,7 @@ def _write_deep_data(battle_id: int, raw: dict | None, events: list[dict]) -> bo
             krow, vrow = participant_rows.get(kid), participant_rows.get(vid)
             db.add(BattleKillEvent(
                 battle_id=battle.id, albion_event_id=albion_event_id,
+                player_kill_event_id=priced_events.get(albion_event_id),
                 timestamp=_parse_dt(ts), fame=fame,
                 killer_participant_id=krow.id if krow else None,
                 victim_participant_id=vrow.id if vrow else None,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.routes.battles import SUPPORT_ELIGIBLE_FIGHT_POINTS, TANK_ELIGIBLE_FIGHT_POINTS, _wbase
+from app.models.battles import Battle, BattleParticipant
 from app.models.catalog import Weapon
 from app.models.players import AlbionPlayer, PlayerKillEvent, PlayerWeaponStat
 
@@ -195,7 +197,7 @@ def _default_avatar(name: str) -> str:
     return avatars[abs(value) % len(avatars)]
 
 
-def _avatar_image(player: AlbionPlayer) -> Image.Image | None:
+def _avatar_image(player) -> Image.Image | None:
     avatar = player.avatar or _default_avatar(player.name)
     path = _AVATAR_DIR / f"{avatar}.png"
     if not path.is_file():
@@ -272,10 +274,41 @@ def preview_weapon_bases(db: Session, albion_id: str, region: str) -> list[str]:
     )
     return [weapon_base for weapon_base, _ in _top_weapons(db, player)] if player is not None else []
 
-
 def cached_preview_weapon_bases(weapon_bases: list[str]) -> set[str]:
     """Armas cuja arte T7 excelente já está pronta no cache de render."""
     return {weapon_base for weapon_base in weapon_bases if _item_icon(weapon_base) is not None}
+
+
+def battle_participant_preview_id(db: Session, name: str, region: str) -> str | None:
+    row = db.execute(
+        select(BattleParticipant.albion_player_id)
+        .join(Battle, Battle.id == BattleParticipant.battle_id)
+        .where(Battle.region == region, BattleParticipant.name.ilike(name))
+        .order_by(Battle.start_time.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return row
+
+
+def _battle_preview_player(db: Session, albion_id: str, region: str):
+    row = db.execute(
+        select(BattleParticipant, Battle.start_time)
+        .join(Battle, Battle.id == BattleParticipant.battle_id)
+        .where(Battle.region == region, BattleParticipant.albion_player_id == albion_id)
+        .order_by(Battle.start_time.desc())
+        .limit(1)
+    ).first()
+    if row is None:
+        return None
+    participant, updated_at = row
+    return SimpleNamespace(
+        id=None, albion_id=participant.albion_player_id, region=region, name=participant.name,
+        avatar=None, guild_name=participant.guild_name, alliance_name=participant.alliance_name,
+        alliance_tag=None, kill_fame=0, death_fame=0, pve_fame=0, crafting_fame=0,
+        gather_wood=0, gather_hide=0, gather_ore=0, gather_rock=0, gather_fiber=0,
+        fishing_fame=0, stats_updated_at=updated_at, last_seen_at=updated_at,
+        lifetime_statistics=None, partial_preview=True,
+    )
 
 
 def render_player_preview(
@@ -291,9 +324,12 @@ def render_player_preview(
         )
     )
     if player is None:
-        return None
+        player = _battle_preview_player(db, albion_id, region)
+        if player is None:
+            return None
 
-    if player.lifetime_statistics is None:
+    partial_preview = getattr(player, "partial_preview", False)
+    if not partial_preview and player.lifetime_statistics is None:
         return None
 
     if cache_path.exists():
@@ -313,7 +349,7 @@ def render_player_preview(
     pve_fame = player.pve_fame or 0
     crafting_fame = player.crafting_fame or 0
     kd_ratio = kill_fame / death_fame if death_fame > 0 else float("inf")
-    silver_dropped = sum(
+    silver_dropped = 0 if partial_preview else sum(
         event.silver_dropped or 0
         for event in db.scalars(
             select(PlayerKillEvent).where(
@@ -341,7 +377,7 @@ def render_player_preview(
     # Mantém Crafting imediatamente à direita de PvE, inclusive em perfis novos.
     stats.append(("PvE Fame", _fmt_num(pve_fame), _fame_color(pve_fame)))
     stats.append(("Crafting", _fmt_num(crafting_fame), _fame_color(crafting_fame)))
-    weapons = _top_weapons(db, player)
+    weapons = [] if partial_preview else _top_weapons(db, player)
     if available_weapon_bases is not None:
         weapons = [entry for entry in weapons if entry[0] in available_weapon_bases]
 

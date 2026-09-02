@@ -1822,7 +1822,7 @@ pub fn run() {
                 }
             }
             // Periodic price upload: drains the sniffer buffer every 60s,
-            // aggregates lowest sell_price_min per (item, quality, city) and
+            // aggregates lowest sell_price_min per (item, quality, city, region) and
             // enqueues for transfer (respects PvP pause; persists on failure).
             {
                 let prices_buf = Arc::clone(&state.sniffer.prices);
@@ -1838,15 +1838,16 @@ pub fn run() {
                             }
                             b.drain(..).collect()
                         };
-                        // Lowest sell_price_min per (item_id, quality, city).
+                        // Lowest sell_price_min per (item_id, quality, city, region).
                         let mut best: std::collections::HashMap<String, serde_json::Value> =
                             std::collections::HashMap::new();
                         for row in raw {
                             let key = format!(
-                                "{}|{}|{}",
+                                "{}|{}|{}|{}",
                                 row.get("item_id").and_then(|v| v.as_str()).unwrap_or(""),
                                 row.get("quality").and_then(|v| v.as_i64()).unwrap_or(1),
                                 row.get("city").and_then(|v| v.as_str()).unwrap_or(""),
+                                row.get("region").and_then(|v| v.as_str()).unwrap_or("west"),
                             );
                             let price = row
                                 .get("sell_price_min")

@@ -25,9 +25,16 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as _pg_insert
+from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
+
+
+def _dialect_insert(db: AsyncSession):
+    bind = getattr(db, "bind", None)
+    return _pg_insert if bind is None or bind.dialect.name == "postgresql" else _sqlite_insert
+
 
 from app.models.catalog import GameRole
 from app.models.prices import ItemPrice, ItemPriceLatest
@@ -96,8 +103,19 @@ def _tier_from_game_id(game_id: str) -> int:
 
 # ── constantes ────────────────────────────────────────────────────────────────
 
-_BASE_URL = "https://west.albion-online-data.com/api/v2/stats/prices"
-_HISTORY_URL = "https://west.albion-online-data.com/api/v2/stats/history"
+# Hosts AODP por região do Albion (west = Americas, east = Asia, europe = Europe)
+_AODP_HOSTS = {
+    "west": "https://west.albion-online-data.com/api/v2/stats/prices",
+    "east": "https://east.albion-online-data.com/api/v2/stats/prices",
+    "europe": "https://europe.albion-online-data.com/api/v2/stats/prices",
+}
+_AODP_HISTORY_HOSTS = {
+    "west": "https://west.albion-online-data.com/api/v2/stats/history",
+    "east": "https://east.albion-online-data.com/api/v2/stats/history",
+    "europe": "https://europe.albion-online-data.com/api/v2/stats/history",
+}
+_REGION_MAP = {"americas": "west", "asia": "east", "europe": "europe"}
+
 _DEFAULT_CITY = "Caerleon"
 _PRICE_TTL = timedelta(hours=1)
 _HISTORY_TTL = timedelta(hours=4)
@@ -130,6 +148,7 @@ async def upsert_companion_prices(
     db: AsyncSession,
     rows: list[dict[str, Any]],
     source_install: str | None = None,
+    region: str = "west",
 ) -> tuple[int, int]:
     """Insere preços reportados por companions (packet capture do mercado).
 
@@ -142,7 +161,8 @@ async def upsert_companion_prices(
     """
     now = datetime.now(timezone.utc)
     history_rows: list[dict[str, Any]] = []
-    latest_by_key: dict[tuple[str, str, int], dict[str, Any]] = {}
+    region = _REGION_MAP.get(region, region)
+    latest_by_key: dict[tuple[str, str, int, str], dict[str, Any]] = {}
     rejected = 0
     for r in rows:
         iid = r.get("item_id")
@@ -161,19 +181,20 @@ async def upsert_companion_prices(
         pd_dt = _parse_dt(pd_raw)
         city = r.get("city", _DEFAULT_CITY)
         quality = int(r.get("quality", 1) or 1)
+        row_region = _REGION_MAP.get(str(r.get("region") or region).strip().lower(), str(r.get("region") or region).strip().lower())
         history_rows.append({
             "item_id": iid, "city": city, "quality": quality,
             "sell_price_min": int(price), "price_date": pd_dt, "recorded_at": now,
-            "source_install": source_install,
+            "source_install": source_install, "region": row_region,
         })
         # Dedup por (item_id, city, quality): fica o de price_date mais recente
         # (mesma regra do _upsert_latest). O companion manda N ordens do mesmo
         # item num lote; sem isto o ON CONFLICT teria que desempatar no SQL.
-        key = (iid, city, quality)
+        key = (iid, city, quality, row_region)
         prev = latest_by_key.get(key)
         if prev is None or pd_dt > prev["price_date"]:
             latest_by_key[key] = {
-                "item_id": iid, "city": city, "quality": quality,
+                "item_id": iid, "city": city, "quality": quality, "region": row_region,
                 "sell_price_min": int(price), "price_date": pd_dt, "recorded_at": now,
             }
     if not history_rows:
@@ -186,9 +207,13 @@ async def upsert_companion_prices(
     # — só sobrescreve se o novo price_date for estritamente mais recente que o
     # existente. Sem o SELECT por row do caminho legado.
     latest_rows = list(latest_by_key.values())
-    stmt = _pg_insert(ItemPriceLatest).values(latest_rows)
+    insert = _dialect_insert(db)
+    stmt = insert(ItemPriceLatest).values(latest_rows)
     stmt = stmt.on_conflict_do_update(
-        index_elements=[ItemPriceLatest.item_id, ItemPriceLatest.city, ItemPriceLatest.quality],
+        index_elements=[
+            ItemPriceLatest.item_id, ItemPriceLatest.city,
+            ItemPriceLatest.quality, ItemPriceLatest.region,
+        ],
         set_={"sell_price_min": stmt.excluded.sell_price_min,
               "price_date": stmt.excluded.price_date,
               "recorded_at": stmt.excluded.recorded_at},
@@ -559,24 +584,60 @@ BATTLE_PRICE_TTL = timedelta(days=7)  # preços de loot de batalha: reusar cache
 # re-buscar a cada 8h custa menos AODP e estabiliza a precificação.
 
 
-async def _fetch_spot_prices(item_ids: list[str]) -> list[dict[str, Any]]:
+async def _fetch_spot_prices(item_ids: list[str], region: str = "west") -> list[dict[str, Any]]:
     """Preço atual (não histórico) — aceita id com @enchant direto, diferente
     de /stats/history (que devolve [] pra qualquer id com @enchant).
 
     Materiais brutos/refinados também usam UniqueName no ADP."""
+    host = _AODP_HOSTS.get(region, _AODP_HOSTS["west"])
     adp_ids = [_game_to_unique(i) for i in item_ids]
     ids_str = ",".join(adp_ids)
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
-            f"{_BASE_URL}/{ids_str}.json",
+            f"{host}/{ids_str}.json",
             params={"locations": ",".join(CITIES), "qualities": "1,2,3,4"},
         )
         resp.raise_for_status()
         return resp.json()
 
 
-async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, int]:
-    """Preco de loot: vendas historicas; spot so como fallback conservador."""
+async def _fetch_history(item_ids: list[str], region: str = "west") -> list[dict]:
+    """Busca histórico diário das 5 cidades para uma lista de itens (qualidades 1-4).
+
+    item_ids vêm em game_name; ADP usa UniqueName. Converte antes de chamar.
+    """
+    host = _AODP_HISTORY_HOSTS.get(region, _AODP_HISTORY_HOSTS["west"])
+    adp_ids = [_game_to_unique(i) for i in item_ids]
+    ids_str = ",".join(adp_ids)
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(
+            f"{host}/{ids_str}.json",
+            params={
+                "locations": ",".join(CITIES),
+                "qualities": "1,2,3,4",
+                "time-scale": 24,
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _battle_fallback_regions(region: str) -> tuple[str, ...]:
+    if region == "east":
+        return ("west", "europe")
+    if region == "europe":
+        return ("west",)
+    return ("europe",)
+
+
+async def get_battle_prices(
+    db: AsyncSession,
+    item_ids: list[str],
+    region: str = "west",
+    _allow_fallback: bool = True,
+) -> dict[str, int]:
+    """Preço de loot regional: cache próprio, AODP local e fallback regional."""
+    region = _REGION_MAP.get(region, region)
     unique = list(dict.fromkeys(item_ids))
     if not unique:
         return {}
@@ -586,9 +647,7 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
     # Ids que não converteram (item fora do mapa) ficam como T_xxx — não
     # buscamos nem gravamos, só devolvem 0 pro caller.
     game_ids = [_unique_to_game(i) for i in unique]
-    market_game_ids = [gid for gid in game_ids if not _is_unconverted(gid)]
-    if not market_game_ids:
-        return {}
+    market_game_ids = game_ids
     # Lê do cache e FECHA a transação antes do HTTP — uma read transaction aberta
     # durante o fetch bloqueia o auto-checkpoint do WAL e contentiona com outros
     # writers. Copiar pra dict e commitar solta a tx antes da rede.
@@ -602,21 +661,28 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
     rows = (await db.scalars(
         select(ItemPriceLatest).where(
             ItemPriceLatest.item_id.in_(market_game_ids),
-            ItemPriceLatest.city == _BATTLE_SENTINEL,
+            ItemPriceLatest.region == region,
         )
     )).all()
-    cached = {}
-    stale_ids = set()
-    for r in rows:
-        cached[r.item_id] = r.sell_price_min
-        ra = _aware(r.recorded_at)
-        if ra is None or ra < ttl_before:
-            stale_ids.add(r.item_id)
+    latest_by_item: dict[str, ItemPriceLatest] = {}
+    for row in rows:
+        if row.city == _AVG_SENTINEL:
+            continue
+        current = latest_by_item.get(row.item_id)
+        if current is None or _aware(row.price_date) > _aware(current.price_date):
+            latest_by_item[row.item_id] = row
+    cached = {item_id: row.sell_price_min for item_id, row in latest_by_item.items()}
+    stale_ids = {
+        item_id for item_id, row in latest_by_item.items()
+        if _aware(row.recorded_at) < ttl_before
+    }
     await db.commit()  # fecha a read-only tx antes do HTTP
     # Dedup: vários UniqueNames podem mapear pro mesmo game_name.
     # Sem isto, o ON CONFLICT DO UPDATE recebe chaves duplicadas no mesmo
     # INSERT e estoura CardinalityViolation.
-    missing = list(dict.fromkeys(i for i in market_game_ids if i not in cached or i in stale_ids))
+    missing = list(dict.fromkeys(
+        i for i in market_game_ids if not cached.get(i) or i in stale_ids
+    ))
     if missing:
         now = datetime.now(timezone.utc)
         t_fetch0 = time.monotonic()
@@ -624,10 +690,11 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
         # o /stats/history retorna vazio pra varios itens @enchant. Qualidade 5
         # (Masterpiece) e' rarissima e inflaciona; o resto entra, inclusive q1
         # (recursos e a maioria do loot real).
-        tasks = [_fetch_spot_prices(missing[i:i + _BATCH_SIZE]) for i in range(0, len(missing), _BATCH_SIZE)]
+        tasks = [_fetch_spot_prices(missing[i:i + _BATCH_SIZE], region) for i in range(0, len(missing), _BATCH_SIZE)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         t_fetch = time.monotonic() - t_fetch0
         by_item: dict[str, list[int]] = {}
+        price_dates: dict[str, datetime] = {}
         for result in results:
             if not isinstance(result, list):
                 continue
@@ -640,7 +707,11 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
                 uid = row["item_id"]
                 if int(row["sell_price_min"]) > _TIER_CAP.get(_tier_from_game_id(uid), _TIER_CAP[8]):
                     continue
-                by_item.setdefault(_unique_to_game(uid), []).append(int(row["sell_price_min"]))
+                item_id = _unique_to_game(uid)
+                by_item.setdefault(item_id, []).append(int(row["sell_price_min"]))
+                raw_date = row.get("sell_price_min_date")
+                if raw_date:
+                    price_dates[item_id] = max(price_dates.get(item_id, datetime.min.replace(tzinfo=timezone.utc)), _parse_dt(raw_date))
         rows = []
         for item_id in missing:
             vals = sorted(v for v in by_item.get(item_id, []) if v > 0)
@@ -667,16 +738,20 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
                 else:
                     price = round(statistics.median(s))
             cached[item_id] = price
-            rows.append({"item_id": item_id, "city": _BATTLE_SENTINEL, "quality": 1,
-                         "sell_price_min": price, "price_date": now, "recorded_at": now})
+            rows.append({"item_id": item_id, "city": _BATTLE_SENTINEL, "quality": 1, "region": region,
+                         "sell_price_min": price, "price_date": price_dates.get(item_id, now), "recorded_at": now})
         if rows:
             t_c0 = time.monotonic()
             # ON CONFLICT DO UPDATE (não DO NOTHING): preços stale re-buscados
             # precisam sobrescrever o cache antigo. Antes era DO NOTHING, que
             # mantinha o preço stale pra sempre mesmo após re-buscar.
-            stmt = _pg_insert(ItemPriceLatest).values(rows)
+            insert = _dialect_insert(db)
+            stmt = insert(ItemPriceLatest).values(rows)
             stmt = stmt.on_conflict_do_update(
-                index_elements=[ItemPriceLatest.item_id, ItemPriceLatest.city, ItemPriceLatest.quality],
+                index_elements=[
+                    ItemPriceLatest.item_id, ItemPriceLatest.city,
+                    ItemPriceLatest.quality, ItemPriceLatest.region,
+                ],
                 set_={"sell_price_min": stmt.excluded.sell_price_min,
                       "price_date": stmt.excluded.price_date,
                       "recorded_at": stmt.excluded.recorded_at},
@@ -696,6 +771,19 @@ async def get_battle_prices(db: AsyncSession, item_ids: list[str]) -> dict[str, 
     for gid, price in cached.items():
         uid = game_to_uid.get(gid, gid)
         result[uid] = price
+
+    if _allow_fallback:
+        unresolved = [uid for uid in unique if not result.get(uid)]
+        for fallback_region in _battle_fallback_regions(region):
+            if not unresolved:
+                break
+            fallback_prices = await get_battle_prices(
+                db, unresolved, region=fallback_region, _allow_fallback=False,
+            )
+            for uid, price in fallback_prices.items():
+                if price > 0 and not result.get(uid):
+                    result[uid] = price
+            unresolved = [uid for uid in unresolved if not result.get(uid)]
     return result
 
 
@@ -1164,6 +1252,7 @@ def _craft_cost_estimate(
 async def get_battle_prices_with_presumption(
     db: AsyncSession,
     item_ids: list[str],
+    region: str = "west",
 ) -> tuple[dict[str, int], dict[str, str]]:
     """`get_battle_prices` + cadeia de fallback (qualidade -> equivalência ->
     presunção de craft). Devolve (price_by_id, basis_by_id) onde basis é
@@ -1171,7 +1260,7 @@ async def get_battle_prices_with_presumption(
     unique = list(dict.fromkeys(item_ids))
     if not unique:
         return {}, {}
-    spot = await get_battle_prices(db, unique)
+    spot = await get_battle_prices(db, unique, region=region)
     out: dict[str, int] = dict(spot)
     basis: dict[str, str] = {
         uid: _BASIS_EXACT if p > 0 else _BASIS_MISSING for uid, p in spot.items()
@@ -1186,6 +1275,7 @@ async def get_battle_prices_with_presumption(
         rows = (await db.scalars(
             select(ItemPriceLatest).where(
                 ItemPriceLatest.item_id.in_(missing),
+                ItemPriceLatest.region == _REGION_MAP.get(region, region),
                 ItemPriceLatest.quality.in_([1, 2, 3, 4, 5]),
                 ItemPriceLatest.sell_price_min > 0,
             ).order_by(ItemPriceLatest.quality)
@@ -1206,7 +1296,7 @@ async def get_battle_prices_with_presumption(
                 journal_fallbacks.setdefault(empty_uid, []).append(uid)
         if journal_fallbacks:
             # Tenta spot dos EMPTY, depois equivalência (já está no cache _BATTLE_SENTINEL).
-            empty_spot = await get_battle_prices(db, list(journal_fallbacks.keys()))
+            empty_spot = await get_battle_prices(db, list(journal_fallbacks.keys()), region=region)
             for empty_uid, empty_price in empty_spot.items():
                 if empty_price <= 0:
                     continue
@@ -1227,7 +1317,7 @@ async def get_battle_prices_with_presumption(
                 equiv_map.setdefault(equiv, []).append(uid)
         equiv_ids = list(dict.fromkeys(equiv_ids))
         if equiv_ids:
-            equiv_spot = await get_battle_prices(db, equiv_ids)
+            equiv_spot = await get_battle_prices(db, equiv_ids, region=region)
             for equiv_uid, equiv_price in equiv_spot.items():
                 if equiv_price <= 0:
                     continue
@@ -1258,7 +1348,7 @@ async def get_battle_prices_with_presumption(
                 # Materiais são eles mesmos itens viveis em `get_battle_prices`.
                 # Não recursa em presunção: se um material falha, presume aborta
                 # pra aquele item (decisão documentada em AGENTS.md).
-                mat_prices = await get_battle_prices(db, list(material_ids))
+                mat_prices = await get_battle_prices(db, list(material_ids), region=region)
 
                 # Fallback de artefato: para cada artefato `_ARTEFACT_*` sem
                 # preço (qualquer faction: AVALON/MORGANA/HELL/UNDEAD/KEEPER/
@@ -1273,7 +1363,7 @@ async def get_battle_prices_with_presumption(
                         if alt not in mat_prices:
                             artefact_alt_ids.add(alt)
                 if artefact_alt_ids:
-                    alt_prices = await get_battle_prices(db, list(artefact_alt_ids))
+                    alt_prices = await get_battle_prices(db, list(artefact_alt_ids), region=region)
                     for ruid_orig, rprice in list(mat_prices.items()):
                         if rprice > 0 or "_ARTEFACT_" not in ruid_orig:
                             continue

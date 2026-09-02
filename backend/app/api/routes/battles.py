@@ -770,6 +770,12 @@ async def _combined_detail(db: AsyncSession, battle_ids: list[int], public_id: s
                 m["equipment"].append(build)
 
     events = (await db.scalars(select(BattleKillEvent).where(BattleKillEvent.battle_id.in_(battle_ids)))).all()
+    player_values = {
+        event.id: event.silver_dropped
+        for event in (await db.scalars(select(PlayerKillEvent).where(
+            PlayerKillEvent.id.in_([event.player_kill_event_id for event in events if event.player_kill_event_id]),
+        ))).all()
+    }
     kills_between: dict[tuple[str, str], int] = {}
     for ev in events:
         k = pid_to_player.get(ev.killer_participant_id) if ev.killer_participant_id else None
@@ -844,7 +850,8 @@ async def _combined_detail(db: AsyncSession, battle_ids: list[int], public_id: s
             "victim_equipment": ev.victim_equipment,
             "killer_inventory": ev.killer_inventory,
             "victim_inventory": ev.victim_inventory,
-            "silver_dropped": ev.silver_dropped,
+            "silver_dropped": player_values.get(ev.player_kill_event_id, ev.silver_dropped),
+
         })
     kill_timeline.sort(key=lambda e: e["t"])
 

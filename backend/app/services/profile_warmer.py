@@ -357,18 +357,18 @@ async def sync_refresh_requests() -> int:
         players = (await db.scalars(
             select(AlbionPlayer)
             .where(AlbionPlayer.refresh_requested_at.isnot(None))
-            .order_by(AlbionPlayer.refresh_requested_at)
+            .order_by(AlbionPlayer.refresh_priority, AlbionPlayer.refresh_requested_at)
             .limit(REFRESH_BATCH_SIZE)
         )).all()
         if not players:
             return 0
-        # Materializa (albion_id, region) e commit antes do HTTP — read tx
-        # aberta durante await impede wal_checkpoint.
-        refresh_list = [(p.albion_id, p.region) for p in players]
+        # Materializa antes do HTTP — transação de leitura aberta durante await
+        # impede wal_checkpoint.
+        refresh_list = [(p.albion_id, p.region, p.refresh_priority) for p in players]
         await db.commit()
         async with make_client() as client:
-            async with albion_scope(PROFILE):
-                for albion_id, region in refresh_list:
+            for albion_id, region, priority in refresh_list:
+                async with albion_scope(priority):
                     _refresh_progress[albion_id] = "queued"
                     host = HOSTS.get(region)
                     ok = False
@@ -413,16 +413,16 @@ async def sync_guild_refresh_requests() -> int:
         guilds = (await db.scalars(
             select(GuildProfile)
             .where(GuildProfile.refresh_requested_at.isnot(None))
-            .order_by(GuildProfile.refresh_requested_at)
+            .order_by(GuildProfile.refresh_priority, GuildProfile.refresh_requested_at)
             .limit(REFRESH_BATCH_SIZE)
         )).all()
         if not guilds:
             return 0
-        refresh_list = [(g.albion_id, g.region) for g in guilds]
+        refresh_list = [(g.albion_id, g.region, g.refresh_priority) for g in guilds]
         await db.commit()
         async with make_client() as client:
-            async with albion_scope(PROFILE):
-                for albion_id, region in refresh_list:
+            for albion_id, region, priority in refresh_list:
+                async with albion_scope(priority):
                     _refresh_progress[f"g:{albion_id}"] = "queued"
                     host = HOSTS.get(region)
                     ok = False
@@ -452,16 +452,16 @@ async def sync_alliance_refresh_requests() -> int:
         alliances = (await db.scalars(
             select(AllianceProfile)
             .where(AllianceProfile.refresh_requested_at.isnot(None))
-            .order_by(AllianceProfile.refresh_requested_at)
+            .order_by(AllianceProfile.refresh_priority, AllianceProfile.refresh_requested_at)
             .limit(REFRESH_BATCH_SIZE)
         )).all()
         if not alliances:
             return 0
-        refresh_list = [(a.albion_id, a.region) for a in alliances]
+        refresh_list = [(a.albion_id, a.region, a.refresh_priority) for a in alliances]
         await db.commit()
         async with make_client() as client:
-            async with albion_scope(PROFILE):
-                for albion_id, region in refresh_list:
+            for albion_id, region, priority in refresh_list:
+                async with albion_scope(priority):
                     _refresh_progress[f"a:{albion_id}"] = "queued"
                     host = HOSTS.get(region)
                     ok = False
@@ -494,6 +494,10 @@ def request_refresh() -> None:
     refresh_event.set()
 
 
+def _has_verified_lifetime(player: AlbionPlayer | None) -> bool:
+    return bool(player and (player.lifetime_statistics or {}).get("Timestamp"))
+
+
 async def warm_bot_profile(name: str, region: str) -> dict:
     """Entrega o estado persistido para /profile e só agenda trabalho lento.
 
@@ -509,7 +513,7 @@ async def warm_bot_profile(name: str, region: str) -> dict:
         player = await db.scalar(select(AlbionPlayer).where(
             AlbionPlayer.region == region, func.lower(AlbionPlayer.name) == name.lower()
         ))
-        if player is not None and player.lifetime_statistics is not None:
+        if _has_verified_lifetime(player):
             updated_at = player.stats_updated_at
             stale = updated_at is None or datetime.now(timezone.utc) - _aware(updated_at) > BOT_PREVIEW_STALE_AFTER
             if stale and player.refresh_requested_at is None:
@@ -605,6 +609,9 @@ async def warm_by_name(name: str, region: str) -> dict:
                     from app.api.routes.players import _raw_has_profile_data
                     valid = _raw_has_profile_data(raw)
                     await upsert_player(db, raw, region, stats_verified=valid)
+                    if not valid:
+                        log.info("warm: %s (%s) — snapshot da Albion sem Timestamp", name, region)
+                        return {"status": "invalid_snapshot"}
                     await sync_player_kills(client, db, host, region, raw["Id"])
             log.info("warm: %s (%s) — bootstrap de %s", name, region, raw["Id"])
             return {"status": "bootstrapped"}

@@ -13,7 +13,6 @@
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::sniffer::CaptureMsg;
 

@@ -54,10 +54,9 @@ Requires Rust 1.77+, Windows SDK, and MSVC Build Tools.
 ```bash
 sudo apt-get install -y build-essential pkg-config libssl-dev libgtk-3-dev \
   libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
-  patchelf dpkg rpm
+  patchelf dpkg rpm xdg-utils
 cd companion
-npm install
-npm run tauri -- build --config src-tauri/tauri.linux.conf.json
+scripts/build-linux.sh
 ```
 
 The Linux bundle emits AppImage and Debian packages without Windows drivers or

@@ -1476,6 +1476,7 @@ async def _enqueue_guild_member_warm(guild_id: str, region: str) -> None:
             for p in players:
                 if p.refresh_requested_at is None:
                     p.refresh_requested_at = datetime.now(timezone.utc)
+                    p.refresh_priority = LOW_WARM
             await db.commit()
         if players:
             log.info("guild warm: enfileirados %d membros de %s (%s) para warm de baixa prioridade",
@@ -1634,7 +1635,7 @@ async def guild_preview_metadata(albion_id: str) -> tuple[str, str] | None:
             .where(BattleGuild.albion_guild_id == albion_id)
         )
         version = int(_aware(version_at).timestamp()) if version_at is not None else 0
-        return (bg.guild_name or albion_id, f"{version}-r{PREVIEW_RENDER_VERSION}")
+        return ((gp.name if gp is not None else bg.guild_name) or albion_id, f"{version}-r{PREVIEW_RENDER_VERSION}")
 
 
 async def _render_guild_preview(albion_id: str):
@@ -1682,7 +1683,7 @@ async def alliance_preview_metadata(albion_id: str) -> tuple[str, str] | None:
             .where(BattleGuild.alliance_id == albion_id)
         )
         version = int(_aware(version_at).timestamp()) if version_at is not None else 0
-        return (bg.alliance_name or albion_id, f"{version}-r{PREVIEW_RENDER_VERSION}")
+        return ((ap.name if ap is not None else bg.alliance_name) or albion_id, f"{version}-r{PREVIEW_RENDER_VERSION}")
 
 
 async def _render_alliance_preview(albion_id: str):

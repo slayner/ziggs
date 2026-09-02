@@ -93,10 +93,21 @@ async def _price_events(db: AsyncSession, events: list[PlayerKillEvent]) -> int:
     foram atualizados (todos com gear; podem ficar 0 se preço ausente, mas
     nunca reprocessam — já foram escritos)."""
     t0 = time.monotonic()
-    totals, basis_by_id, item_count = await price_death_loadouts(
-        db, [(ev.victim_equipment, ev.victim_inventory) for ev in events],
-    )
+    totals_by_event: dict[int, int] = {}
+    basis_by_id: dict[str, str] = {}
+    item_count = 0
+    for region in {event.region for event in events}:
+        regional_events = [event for event in events if event.region == region]
+        totals, basis, count = await price_death_loadouts(
+            db,
+            [(event.victim_equipment, event.victim_inventory) for event in regional_events],
+            region=region,
+        )
+        totals_by_event.update({event.id: total for event, total in zip(regional_events, totals)})
+        basis_by_id.update(basis)
+        item_count += count
     t_fetch = time.monotonic() - t0
+
 
     # Conta bases pra log de auditoria — quantos itens saíram de cada estágio
     # da cadeia de presunção (exact|quality|equivalent|presumed|missing).
@@ -106,9 +117,21 @@ async def _price_events(db: AsyncSession, events: list[PlayerKillEvent]) -> int:
         basis_counts[b] = basis_counts.get(b, 0) + 1
 
     updated = 0
-    for ev, total in zip(events, totals):
+    event_ids = [event.id for event in events]
+    projections = {
+        event.player_kill_event_id: event
+        for event in (await db.scalars(select(BattleKillEvent).where(
+            BattleKillEvent.player_kill_event_id.in_(event_ids),
+        ))).all()
+    }
+    for ev in events:
+        total = totals_by_event[ev.id]
         ev.silver_dropped = total
+        projection = projections.get(ev.id)
+        if projection is not None:
+            projection.silver_dropped = total
         updated += 1
+
     # A outbox é escrita na mesma transação da precificação: uma kill nunca
     # fica com preço calculado sem poder chegar ao bot.
     from app.services.juicy_kill_delivery import enqueue_priced_events
@@ -125,43 +148,35 @@ async def _price_events(db: AsyncSession, events: list[PlayerKillEvent]) -> int:
     return updated
 
 
-async def _process_battle_batch(db: AsyncSession) -> int:
-    """Precifica mortes recentes e drena o histórico de batalhas aos poucos."""
-    cutoffs = _recent_cutoffs()
-    rows = []
-    for region, cutoff in cutoffs.items():
-        rows.extend((await db.scalars(
-            select(BattleKillEvent)
-            .join(Battle, Battle.id == BattleKillEvent.battle_id)
-            .where(
-                Battle.region == region,
-                BattleKillEvent.silver_dropped.is_(None),
-                BattleKillEvent.timestamp > cutoff,
-            )
-            .order_by(BattleKillEvent.timestamp.asc(), BattleKillEvent.id.asc())
-            .limit(BATTLE_BATCH_PER_REGION)
-        )).all())
-    recent_ids = {event.id for event in rows}
-    history = (await db.scalars(
-        select(BattleKillEvent)
-        .where(BattleKillEvent.silver_dropped.is_(None))
-        .order_by(BattleKillEvent.timestamp.asc(), BattleKillEvent.id.asc())
+async def _reconcile_battle_values(db: AsyncSession) -> int:
+    """Vincula projeções de batalha ao ledger canônico e replica seu snapshot."""
+    rows = (await db.execute(
+        select(BattleKillEvent, PlayerKillEvent)
+        .join(Battle, Battle.id == BattleKillEvent.battle_id)
+        .join(
+            PlayerKillEvent,
+            (PlayerKillEvent.region == Battle.region)
+            & (PlayerKillEvent.albion_event_id == BattleKillEvent.albion_event_id),
+        )
+        .where(
+            (BattleKillEvent.player_kill_event_id.is_(None))
+            | (BattleKillEvent.silver_dropped.is_(None)),
+        )
         .limit(BATTLE_HISTORY_BATCH_SIZE)
     )).all()
-    rows.extend(event for event in history if event.id not in recent_ids)
-    if not rows:
-        return 0
-    t0 = time.monotonic()
-    totals, _basis, _item_count = await price_death_loadouts(
-        db, [(event.victim_equipment, event.victim_inventory) for event in rows],
-    )
-    for event, total in zip(rows, totals):
-        event.silver_dropped = total
-    await db.commit()
-    elapsed = time.monotonic() - t0
-    if elapsed > 2.0:
-        log.warning("silver_dropped: LENTO — %d mortes de batalha em %.1fs", len(rows), elapsed)
+    for battle_event, player_event in rows:
+        battle_event.player_kill_event_id = player_event.id
+        if player_event.silver_dropped is not None:
+            battle_event.silver_dropped = player_event.silver_dropped
+    if rows:
+        await db.commit()
     return len(rows)
+
+
+async def _process_battle_batch(db: AsyncSession) -> int:
+    """Atualiza a projeção de batalha a partir do ledger canônico."""
+    return await _reconcile_battle_values(db)
+
 
 
 async def _process_batch(db: AsyncSession) -> int:

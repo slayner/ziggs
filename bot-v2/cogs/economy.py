@@ -145,9 +145,12 @@ class Economy(commands.Cog):
     @app_commands.command(name="pay", description=loc("Transfers silver from your balance to another user", "cmd_desc_pay"))
     @app_commands.guild_only()
     @app_commands.describe(alvo=loc("Who will receive it", "opt_desc_pay_alvo"),
-                            quantia=loc("How much to send (e.g.: 100k, 1.5m, 2,500,000) or `all`/`tudo`", "opt_desc_pay_quantia"))
-    @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"))
-    async def pay(self, interaction: Interaction, alvo: discord.Member, quantia: str) -> None:
+                            quantia=loc("How much to send (e.g.: 100k, 1.5m, 2,500,000) or `all`/`tudo`", "opt_desc_pay_quantia"),
+                            motivo=loc("Short reason for the transaction (optional)", "opt_desc_economy_motivo"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"),
+                         motivo=loc("reason", "opt_name_motivo"))
+    async def pay(self, interaction: Interaction, alvo: discord.Member, quantia: str,
+                  motivo: Optional[str] = None) -> None:
         await interaction.response.defer()
         if not await _check_access(interaction, "pay"):
             return
@@ -177,7 +180,7 @@ class Economy(commands.Cog):
 
         result = await _post(f"/bot/economy/pay/{interaction.guild_id}", {
             "from_user_id": interaction.user.id, "to_user_id": target.id, "amount": amount,
-            "request_id": str(interaction.id),
+            "request_id": str(interaction.id), "reason": motivo or None,
         })
         if result is None:
             await _reply(interaction, t(lang, "pay_process_fail"))
@@ -194,9 +197,12 @@ class Economy(commands.Cog):
     @app_commands.command(name="addmoney", description=loc("Adds silver to a user's balance", "cmd_desc_addmoney"))
     @app_commands.guild_only()
     @app_commands.describe(alvo=loc("Target user", "opt_desc_addmoney_alvo"),
-                            quantia=loc("How much to add (e.g.: 100k, 1.5m)", "opt_desc_addmoney_quantia"))
-    @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"))
-    async def addmoney(self, interaction: Interaction, alvo: str, quantia: str) -> None:
+                             quantia=loc("How much to add (e.g.: 100k, 1.5m)", "opt_desc_addmoney_quantia"),
+                             motivo=loc("Short reason for the transaction (optional)", "opt_desc_economy_motivo"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"),
+                         motivo=loc("reason", "opt_name_motivo"))
+    async def addmoney(self, interaction: Interaction, alvo: str, quantia: str,
+                       motivo: Optional[str] = None) -> None:
         await interaction.response.defer()
         if not await _check_access(interaction, "addmoney"):
             return
@@ -219,9 +225,10 @@ class Economy(commands.Cog):
         ok_targets = []
         for target in targets:
             result = await _post(f"/bot/economy/add/{interaction.guild_id}",
-                                  {"discord_user_id": target.id, "amount": amount,
-                                   "actor_discord_id": interaction.user.id,
-                                   "request_id": f"{interaction.id}:{target.id}"})
+                                   {"discord_user_id": target.id, "amount": amount,
+                                    "actor_discord_id": interaction.user.id,
+                                    "request_id": f"{interaction.id}:{target.id}",
+                                    "reason": motivo or None})
             if result is not None:
                 ok_targets.append(target)
 
@@ -242,9 +249,12 @@ class Economy(commands.Cog):
     @app_commands.command(name="removemoney", description=loc("Removes silver from a user's balance (no value = removes everything)", "cmd_desc_removemoney"))
     @app_commands.guild_only()
     @app_commands.describe(alvo=loc("Target user", "opt_desc_removemoney_alvo"),
-                            quantia=loc("How much to remove (blank or `all`/`tudo` = removes everything)", "opt_desc_removemoney_quantia"))
-    @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"))
-    async def removemoney(self, interaction: Interaction, alvo: discord.Member, quantia: Optional[str] = None) -> None:
+                             quantia=loc("How much to remove (blank or `all`/`tudo` = removes everything)", "opt_desc_removemoney_quantia"),
+                             motivo=loc("Short reason for the transaction (optional)", "opt_desc_economy_motivo"))
+    @app_commands.rename(alvo=loc("user", "opt_name_alvo"), quantia=loc("amount", "opt_name_quantia"),
+                         motivo=loc("reason", "opt_name_motivo"))
+    async def removemoney(self, interaction: Interaction, alvo: discord.Member,
+                          quantia: Optional[str] = None, motivo: Optional[str] = None) -> None:
         await interaction.response.defer()
         if not await _check_access(interaction, "removemoney"):
             return
@@ -273,7 +283,7 @@ class Economy(commands.Cog):
         result = await _post(f"/bot/economy/remove/{interaction.guild_id}", {
             "discord_user_id": target.id, "amount": amount, "allow_negative": allow_negative,
             "actor_discord_id": interaction.user.id,
-            "request_id": str(interaction.id),
+            "request_id": str(interaction.id), "reason": motivo or None,
         })
         if result is None:
             await _reply(interaction, t(lang, "remove_fail"))
@@ -573,13 +583,13 @@ class TransactionsView(discord.ui.View):
         self.next_btn.disabled = self.last_btn.disabled = (self.page >= self.max_page)
 
     def _event_ref(self, tx: dict) -> str:
-        title = tx.get("event_title") or f"#{tx['event_id']}"
+        label = f"event #{tx['event_id']}"
         channel_id = tx.get("event_channel_id")
         message_id = tx.get("event_message_id")
         if not channel_id or not message_id:
-            return title
+            return label
         jump = f"https://discord.com/channels/{self.guild_id}/{channel_id}/{message_id}"
-        return f"[{title}]({jump})"
+        return f"[{label}]({jump})"
 
     def _line(self, tx: dict) -> str:
         target = f"<@{self.target_id}>"
@@ -596,10 +606,14 @@ class TransactionsView(discord.ui.View):
         elif kind == "event_deficit":
             action = t(self.lang, "tx_action_event_deficit", event=self._event_ref(tx), target=target)
         elif kind in ("add", "remove"):
-            action = t(self.lang, f"tx_action_{kind}", actor=actor, target=target, amount=amount)
+            action_sign = "+" if kind == "add" else "-"
+            action = t(self.lang, f"tx_action_{kind}", actor=actor, target=target,
+                       amount=f"**{action_sign}{amount}**")
         elif kind == "pay":
+            action_sign = "+" if tx["direction"] == "in" else "-"
             action = t(self.lang, "tx_action_pay_in" if tx["direction"] == "in" else "tx_action_pay_out",
-                       actor=actor, target=target, counterparty=counterparty or target, amount=amount)
+                       actor=actor, target=target, counterparty=counterparty or target,
+                       amount=f"**{action_sign}{amount}**")
         elif kind == "forfeit":
             action = t(self.lang, "tx_action_forfeit_actor" if actor_id else "tx_action_forfeit",
                        actor=actor, target=target, amount=amount)
@@ -620,8 +634,13 @@ class TransactionsView(discord.ui.View):
             detail = t(self.lang, "tx_detail_deficit")
         undone = f" · *{t(self.lang, 'tx_undone')}*" if tx.get("undone") else ""
         meta = f"{_format_tx_date(tx.get('created_at'))} · #{tx['id']}"
+        reason = (tx.get("reason") or "").strip()
+        if reason:
+            meta += f" · {discord.utils.escape_mentions(discord.utils.escape_markdown(reason))}"
         if detail:
             meta += f" · {detail}"
+        if kind in ("add", "remove", "pay"):
+            return f"{action}\n{meta}{undone}"
         return f"{action} **{sign}{amount}**\n{meta}{undone}"
 
     def build_embed(self, data: dict, offset: int) -> discord.Embed:

@@ -702,6 +702,7 @@ def dns_targets() -> dict:
 class PriceRowIn(BaseModel):
     item_id: str
     city: str
+    region: str = "west"
     quality: int = 1
     sell_price_min: int
     # ISO string — companion envia o timestamp do capture.
@@ -710,6 +711,7 @@ class PriceRowIn(BaseModel):
 
 class PriceSubmitIn(BaseModel):
     rows: list[PriceRowIn]
+    region: str = "west"
 
 
 class PriceSubmitOut(BaseModel):
@@ -816,7 +818,9 @@ async def prices_submit(
     total_rejected = 0
     for i in range(0, len(all_rows), _CHUNK_SIZE):
         chunk = all_rows[i : i + _CHUNK_SIZE]
-        accepted, rejected = await prices.upsert_companion_prices(db, chunk, source_install=install)
+        accepted, rejected = await prices.upsert_companion_prices(
+            db, chunk, source_install=install, region=payload.region,
+        )
         total_accepted += accepted
         total_rejected += rejected
 

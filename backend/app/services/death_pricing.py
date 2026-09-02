@@ -46,13 +46,14 @@ def death_items(equipment: dict | None, inventory: list[dict] | None) -> list[tu
 async def price_death_loadouts(
     db: AsyncSession,
     loadouts: list[tuple[dict | None, list[dict] | None]],
+    region: str = "west",
 ) -> tuple[list[int], dict[str, str], int]:
     """Precifica cada equipamento de vítima com a cadeia usada pelas juicy kills."""
     items_by_loadout = [death_items(equipment, inventory) for equipment, inventory in loadouts]
     item_ids = list({item_id for items in items_by_loadout for item_id, _count, _soul in items})
     if not item_ids:
         return [0] * len(loadouts), {}, 0
-    prices, basis = await get_battle_prices_with_presumption(db, item_ids)
+    prices, basis = await get_battle_prices_with_presumption(db, item_ids, region=region)
     totals = [
         sum((prices.get(item_id, 0) + awakened_value(item_id, soul)) * count for item_id, count, soul in items)
         for items in items_by_loadout

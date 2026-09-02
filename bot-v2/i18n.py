@@ -410,6 +410,11 @@ T: dict[str, dict[str, str]] = {
         "en": "Current balance: **{balance}** | Total earned: **{total_earned}**",
         "es": "Saldo actual: **{balance}** | Total recibido: **{total_earned}**",
     },
+    "opt_desc_economy_motivo": {
+        "pt": "Motivo curto da transação (opcional)",
+        "en": "Short reason for the transaction (optional)",
+        "es": "Motivo breve de la transacción (opcional)",
+    },
     "tx_system": {"pt": "Sistema", "en": "System", "es": "Sistema"},
     "tx_undone": {"pt": "revertida", "en": "reverted", "es": "revertida"},
     "tx_action_pay_in": {
@@ -1117,6 +1122,11 @@ CMD_I18N: dict[str, dict[str, str]] = {
         "pt": "Motivo curto do ajuste (opcional)",
         "en": "Short reason for the adjustment (optional)",
         "es": "Motivo breve del ajuste (opcional)",
+    },
+    "opt_desc_economy_motivo": {
+        "pt": "Motivo curto da transação (opcional)",
+        "en": "Short reason for the transaction (optional)",
+        "es": "Motivo breve de la transacción (opcional)",
     },
 
     "cmd_desc_undo": {"pt": "Reverte uma transação de economia pelo ID", "en": "Reverts an economy transaction by its ID", "es": "Revierte una transacción de economía por su ID"},

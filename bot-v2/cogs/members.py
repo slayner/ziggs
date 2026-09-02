@@ -274,15 +274,13 @@ class Members(commands.Cog):
         if warm and warm.get("status") == "not_found":
             await interaction.edit_original_response(content=t(lang, "profile_not_found", name=name), embed=None)
             return
-        if warm and warm.get("status") in {"search_failed", "fetch_failed", "error"}:
+        if warm and warm.get("status") in {"search_failed", "fetch_failed", "invalid_snapshot", "error"}:
             await interaction.edit_original_response(content=t(lang, "retry_later"), embed=None)
             return
 
         preview_status = await http_client.get_json(status_path, timeout=10, tag="profile")
         if preview_status and preview_status.get("ready"):
-            version = urllib.parse.quote(str(preview_status.get("updated_at") or ""), safe="")
-            public_url = f"{profile_url}?v={version}" if version else profile_url
-            await interaction.edit_original_response(content=public_url)
+            await interaction.edit_original_response(content=profile_url)
             if warm and warm.get("status") == "stale":
                 asyncio.create_task(self._wait_for_profile_refresh(
                     interaction, name, region, lang, profile_url, status_path,
@@ -311,9 +309,7 @@ class Members(commands.Cog):
         while time.monotonic() < deadline:
             status = await http_client.get_json(status_path, timeout=10, tag="profile")
             if status and status.get("ready") and not status.get("refreshing"):
-                version = urllib.parse.quote(str(status.get("updated_at") or ""), safe="")
-                updated_url = f"{profile_url}?v={version}" if version else profile_url
-                await interaction.edit_original_response(content=updated_url)
+                await interaction.edit_original_response(content=profile_url)
                 return
             await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
 

@@ -822,6 +822,13 @@ impl Sniffer {
                                 if self.capture_prices.load(Ordering::Relaxed) {
                                     if let Some(city) = &city {
                                         let ts = crate::photon_parser::now_iso_utc();
+                                        let region = self
+                                            .aodp_server
+                                            .lock()
+                                            .await
+                                            .as_ref()
+                                            .map(|server| server.region())
+                                            .unwrap_or("west");
                                         let mut buf = self.prices.lock().await;
                                         for o in &cap.offers {
                                             // Convert UniqueName (game's ItemTypeId)
@@ -831,6 +838,7 @@ impl Sniffer {
                                             buf.push(serde_json::json!({
                                                 "item_id": game_name,
                                                 "city": city,
+                                                "region": region,
                                                 "quality": o.quality,
                                                 "sell_price_min": o.unit_price_silver,
                                                 "price_date": ts,

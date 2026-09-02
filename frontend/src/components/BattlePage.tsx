@@ -1210,12 +1210,8 @@ function victimItems(e: KillEvent): { id: string; qty: number }[] {
   return items;
 }
 
-function buildValue(items: { id: string; qty: number }[], prices: Map<string, number>): number {
-  return items.reduce((sum, it) => sum + (prices.get(it.id) ?? 0) * it.qty, 0);
-}
-
-function killValue(event: KillEvent, prices: Map<string, number>): number {
-  return event.silver_dropped ?? buildValue(victimItems(event), prices);
+function killValue(event: KillEvent): number | null {
+  return event.silver_dropped;
 }
 
 // preço de loot pra batalhas — vai pro nosso backend (não direto na API
@@ -1369,15 +1365,15 @@ function KillFeed({ events, prices }: { events: KillEvent[]; prices: Map<string,
   }, [expanded]);
 
   const rows = useMemo(
-    () => events.map((e, i) => ({ e, i, value: killValue(e, prices) })),
-    [events, prices],
+    () => events.map((e, i) => ({ e, i, value: killValue(e) })),
+    [events],
   );
 
   const sorted = useMemo(() => {
     const dir = sortDir === "asc" ? 1 : -1;
     return [...rows].sort((a, b) => {
       if (sortKey === "fame") return dir * (a.e.fame - b.e.fame);
-      if (sortKey === "value") return dir * (a.value - b.value);
+      if (sortKey === "value") return dir * ((a.value ?? -1) - (b.value ?? -1));
       return dir * (new Date(a.e.t).getTime() - new Date(b.e.t).getTime());
     });
   }, [rows, sortKey, sortDir]);
@@ -1438,7 +1434,7 @@ function KillFeed({ events, prices }: { events: KillEvent[]; prices: Map<string,
                 </span>
               </div>
               <div className="w-[176px] shrink-0 grid grid-cols-2 gap-2 text-right tabular-nums">
-                <span className="text-zinc-600">{fameShort(value)}</span>
+                <span className="text-zinc-600">{value === null ? "—" : fameShort(value)}</span>
                 <span className="text-amber-400/80">{fameShort(e.fame)}</span>
               </div>
             </button>
@@ -1599,9 +1595,6 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
     return new Set(low.map(g => g.label));
   }, [allParticipants]);
 
-  // preço só do que a vítima largou — calculado uma vez aqui em cima e
-  // reaproveitado na lista de mortes, no total do header e no "Prata" por
-  // guilda, em vez de cada um buscar/recalcular por conta própria.
   useEffect(() => {
     if (!battle) return;
     const ids = battle.kill_timeline.flatMap(e => victimItems(e).map(i => i.id));
@@ -1610,17 +1603,17 @@ export default function BattlePage({ code, albionIds, onBack }: BattlePageProps)
   }, [battle]);
 
   const killValues = useMemo(
-    () => battle ? battle.kill_timeline.map(e => ({ e, value: killValue(e, prices) })) : [],
-    [battle, prices],
+    () => battle ? battle.kill_timeline.map(e => ({ e, value: killValue(e) })) : [],
+    [battle],
   );
-  const totalSilver = useMemo(() => killValues.reduce((s, k) => s + k.value, 0), [killValues]);
+  const totalSilver = useMemo(() => killValues.reduce((s, k) => s + (k.value ?? 0), 0), [killValues]);
   // "Prata" na lista de guildas é o que a guilda PERDEU morrendo, não o que
   // ganhou matando — por isso por vítima, não por matador.
   const silverByVictim = useMemo(() => {
     const m = new Map<string, number>();
     for (const { e, value } of killValues) {
       if (!e.victim) continue;
-      m.set(e.victim, (m.get(e.victim) ?? 0) + value);
+      m.set(e.victim, (m.get(e.victim) ?? 0) + (value ?? 0));
     }
     return m;
   }, [killValues]);

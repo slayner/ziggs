@@ -72,6 +72,7 @@ class AlbionPlayer(Base):
     # Setado por POST /players/{id}/refresh — o profile_warmer prioriza essas
     # linhas na fila e limpa o campo depois de re-sincronizar.
     refresh_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    refresh_priority: Mapped[int] = mapped_column(default=0, nullable=False)
 
 
 class PlayerSnapshot(Base):

@@ -174,6 +174,9 @@ class BattleKillEvent(Base):
         ForeignKey("battles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     albion_event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    player_kill_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("player_kill_events.id", ondelete="SET NULL"), index=True
+    )
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     fame: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
 

@@ -37,12 +37,13 @@ class ItemPrice(Base):
     # desta instalação, apaga tudo dela". Como o histórico é append-only, o
     # expurgo retroativo é um DELETE por esta coluna. Indexado por isso.
     source_install: Mapped[str | None] = mapped_column(String(32), index=True)
+    region: Mapped[str] = mapped_column(String(16), default="west", nullable=False, index=True)
 
 
 class ItemPriceLatest(Base):
-    """Último preço conhecido — upsert a cada sync, 1 linha por (item_id, city, quality)."""
+    """Último preço conhecido — upsert a cada sync, 1 linha por (item_id, city, quality, region)."""
     __tablename__ = "item_prices_latest"
-    __table_args__ = (UniqueConstraint("item_id", "city", "quality"),)
+    __table_args__ = (UniqueConstraint("item_id", "city", "quality", "region"),)
 
     id: Mapped[int] = pk()
     item_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
@@ -51,6 +52,8 @@ class ItemPriceLatest(Base):
     sell_price_min: Mapped[int] = mapped_column(BigInt(), default=0, nullable=False)
     price_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Região do Albion (west/east/europe) — separa mercados entre servidores.
+    region: Mapped[str] = mapped_column(String(16), default="west", nullable=False)
 
 
 class ItemPriceHistory(Base):

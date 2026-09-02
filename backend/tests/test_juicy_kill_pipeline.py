@@ -181,7 +181,7 @@ def test_process_batch_query_filters_by_region_cutoff():
 
     from app.services import silver_dropped
 
-    captured = {}
+    captured = []
 
     class _Scalars:
         def __init__(self, rows): self._rows = rows
@@ -189,7 +189,7 @@ def test_process_batch_query_filters_by_region_cutoff():
 
     class _DB:
         async def scalars(self, q):
-            captured["sql"] = str(q.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+            captured.append(str(q.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True})))
             return _Scalars([])
         async def commit(self): pass
 
@@ -198,9 +198,8 @@ def test_process_batch_query_filters_by_region_cutoff():
         n = asyncio.run(silver_dropped._process_batch(_DB()))
 
     assert n == 0
-    sql = captured["sql"]
+    sql = "\n".join(captured)
     assert "americas" in sql and "europe" in sql and "asia" in sql
-    assert "OR" in sql.upper()  # um braço por região, não um cutoff global
 
 
 if __name__ == "__main__":

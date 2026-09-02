@@ -259,6 +259,23 @@ def test_preview_crafting_fica_a_direita_de_pve_e_cache_de_armas_e_reutilizado(m
     assert pp.cached_preview_weapon_bases(["2H_KNUCKLES_SET2", "2H_ARCANESTAFF"]) == {"2H_KNUCKLES_SET2"}
 
 
+def test_rota_nao_publica_snapshot_invalido_como_perfil_pronto():
+    """Payload sem Timestamp pode provar que a conta existe, mas não que o
+    perfil foi aquecido. A resposta pronta deve sempre vir do row persistido e
+    somente quando `valid` for verdadeiro."""
+    by_name = inspect.getsource(pl.get_player_by_name)
+    by_id = inspect.getsource(pl.get_player)
+    assert "refreshed is not None and valid" in by_name
+    assert "refreshed is not None and valid" in by_id
+    assert "_build_profile_payload(db, refreshed, raw)" not in by_name
+    assert "_build_profile_payload(db, refreshed, raw)" not in by_id
+
+
+def test_cold_load_preserva_erro_terminal_para_proxima_request():
+    src = inspect.getsource(pl._cold_load_player)
+    assert 'not entry[1].startswith("error:")' in src
+
+
 def test_upsert_player_rejeita_snapshot_sem_timestamp():
     """A Albion retorna intermitentemente LifetimeStatistics com Timestamp
     null e todas as contagens zeradas. upsert_player deve tratar isso como
