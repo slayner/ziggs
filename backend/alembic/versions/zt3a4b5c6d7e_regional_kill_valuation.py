@@ -49,11 +49,10 @@ def upgrade() -> None:
         UPDATE battle_kill_events AS bke
         SET player_kill_event_id = pke.id,
             silver_dropped = pke.silver_dropped
-        FROM battles AS battle
-        JOIN player_kill_events AS pke
-          ON pke.region = battle.region
-         AND pke.albion_event_id = bke.albion_event_id
+        FROM battles AS battle, player_kill_events AS pke
         WHERE battle.id = bke.battle_id
+          AND pke.region = battle.region
+          AND pke.albion_event_id = bke.albion_event_id
           AND bke.player_kill_event_id IS NULL
         """
     )
