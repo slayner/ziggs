@@ -14,7 +14,10 @@
 //   PartyPlayerJoined (233): event when someone joins the party
 //   PartyPlayerLeft (235):  event when someone leaves the party
 
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    time::{Duration, Instant},
+};
 
 #[derive(Clone, Debug)]
 pub enum PhotonValue {
@@ -69,16 +72,40 @@ pub struct ParsedOperation {
     pub parameters: HashMap<u8, PhotonValue>,
 }
 
+const MAX_FRAGMENT_LENGTH: usize = 1_048_576;
+const MAX_PENDING_FRAGMENT_BYTES: usize = 4_194_304;
+const FRAGMENT_TTL: Duration = Duration::from_secs(30);
+
+struct PendingFragment {
+    buffer: Vec<u8>,
+    received: Vec<bool>,
+    received_bytes: usize,
+    updated_at: Instant,
+}
+
 pub struct PhotonParser {
-    /// Pending fragments: startSequenceNumber → (buffer, received bitmap)
-    fragments: HashMap<i32, (Vec<u8>, Vec<bool>)>,
+    fragments: HashMap<i32, PendingFragment>,
+    pending_fragment_bytes: usize,
 }
 
 impl PhotonParser {
     pub fn new() -> Self {
         Self {
             fragments: HashMap::new(),
+            pending_fragment_bytes: 0,
         }
+    }
+
+    fn expire_fragments(&mut self, now: Instant) {
+        let mut released = 0;
+        self.fragments.retain(|_, fragment| {
+            let expired = now.duration_since(fragment.updated_at) >= FRAGMENT_TTL;
+            if expired {
+                released += fragment.buffer.len();
+            }
+            !expired
+        });
+        self.pending_fragment_bytes -= released;
     }
 
     /// Parse a complete UDP datagram. Returns extracted operations.
@@ -249,29 +276,60 @@ impl PhotonParser {
         let start_seq = read_i32_be(payload, &mut offset);
         let _ = read_i32_be(payload, &mut offset);
         let _ = read_i32_be(payload, &mut offset);
-        let total_length = read_i32_be(payload, &mut offset) as usize;
-        let fragment_offset = read_i32_be(payload, &mut offset) as usize;
+        let total_length = read_i32_be(payload, &mut offset);
+        let fragment_offset = read_i32_be(payload, &mut offset);
         let fragment_data = &payload[offset..];
+        let now = Instant::now();
+        self.expire_fragments(now);
 
-        let entry = self
-            .fragments
-            .entry(start_seq)
-            .or_insert_with(|| (vec![0u8; total_length], vec![false; total_length]));
-
-        let (buf, received) = entry;
-        if fragment_offset + fragment_data.len() <= buf.len() {
-            buf[fragment_offset..fragment_offset + fragment_data.len()]
-                .copy_from_slice(fragment_data);
-            for i in fragment_offset..fragment_offset + fragment_data.len() {
-                received[i] = true;
-            }
+        if total_length <= 0 || fragment_offset < 0 {
+            return;
+        }
+        let total_length = total_length as usize;
+        let fragment_offset = fragment_offset as usize;
+        let Some(fragment_end) = fragment_offset.checked_add(fragment_data.len()) else {
+            return;
+        };
+        if total_length > MAX_FRAGMENT_LENGTH || fragment_end > total_length {
+            return;
         }
 
-        // All bytes received — reparse as SendReliable
-        if received.iter().all(|&r| r) {
-            let complete = std::mem::take(buf);
-            self.fragments.remove(&start_seq);
-            self.parse_message(&complete, ops);
+        if !self.fragments.contains_key(&start_seq) {
+            let Some(pending_bytes) = self.pending_fragment_bytes.checked_add(total_length) else {
+                return;
+            };
+            if pending_bytes > MAX_PENDING_FRAGMENT_BYTES {
+                return;
+            }
+            self.fragments.insert(
+                start_seq,
+                PendingFragment {
+                    buffer: vec![0u8; total_length],
+                    received: vec![false; total_length],
+                    received_bytes: 0,
+                    updated_at: now,
+                },
+            );
+            self.pending_fragment_bytes = pending_bytes;
+        }
+
+        let entry = self.fragments.get_mut(&start_seq).expect("fragmento pendente");
+        if entry.buffer.len() != total_length {
+            return;
+        }
+        entry.buffer[fragment_offset..fragment_end].copy_from_slice(fragment_data);
+        for received in &mut entry.received[fragment_offset..fragment_end] {
+            if !*received {
+                *received = true;
+                entry.received_bytes += 1;
+            }
+        }
+        entry.updated_at = now;
+
+        if entry.received_bytes == total_length {
+            let complete = self.fragments.remove(&start_seq).expect("fragmento pendente");
+            self.pending_fragment_bytes -= complete.buffer.len();
+            self.parse_message(&complete.buffer, ops);
         }
     }
 }
@@ -1730,11 +1788,73 @@ mod tests {
         assert_eq!(decode_zigzag_32(3), -2);
     }
 
+    fn fragment_payload(start_seq: i32, total_length: i32, fragment_offset: i32, data: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(20 + data.len());
+        payload.extend_from_slice(&start_seq.to_be_bytes());
+        payload.extend_from_slice(&0i32.to_be_bytes());
+        payload.extend_from_slice(&0i32.to_be_bytes());
+        payload.extend_from_slice(&total_length.to_be_bytes());
+        payload.extend_from_slice(&fragment_offset.to_be_bytes());
+        payload.extend_from_slice(data);
+        payload
+    }
+
     #[test]
     fn test_empty_packet() {
         let mut parser = PhotonParser::new();
         let ops = parser.parse(&[0u8; 5]);
         assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_fragment_rejects_negative_and_oversize_lengths() {
+        let mut parser = PhotonParser::new();
+        let mut ops = Vec::new();
+        parser.parse_fragment(&fragment_payload(1, -1, 0, &[]), &mut ops);
+        parser.parse_fragment(&fragment_payload(2, 1, -1, &[]), &mut ops);
+        parser.parse_fragment(
+            &fragment_payload(3, (MAX_FRAGMENT_LENGTH + 1) as i32, 0, &[]),
+            &mut ops,
+        );
+        assert!(parser.fragments.is_empty());
+        assert_eq!(parser.pending_fragment_bytes, 0);
+    }
+
+    #[test]
+    fn test_fragment_rejects_aggregate_limit() {
+        let mut parser = PhotonParser::new();
+        let mut ops = Vec::new();
+        for sequence in 0..(MAX_PENDING_FRAGMENT_BYTES / MAX_FRAGMENT_LENGTH) {
+            parser.parse_fragment(
+                &fragment_payload(sequence as i32, MAX_FRAGMENT_LENGTH as i32, 0, &[]),
+                &mut ops,
+            );
+        }
+        parser.parse_fragment(
+            &fragment_payload(99, 1, 0, &[]),
+            &mut ops,
+        );
+        assert_eq!(parser.fragments.len(), MAX_PENDING_FRAGMENT_BYTES / MAX_FRAGMENT_LENGTH);
+        assert_eq!(parser.pending_fragment_bytes, MAX_PENDING_FRAGMENT_BYTES);
+    }
+
+    #[test]
+    fn test_fragment_expiry_releases_aggregate_capacity() {
+        let mut parser = PhotonParser::new();
+        let mut ops = Vec::new();
+        parser.parse_fragment(
+            &fragment_payload(1, MAX_FRAGMENT_LENGTH as i32, 0, &[]),
+            &mut ops,
+        );
+        parser
+            .fragments
+            .get_mut(&1)
+            .expect("fragmento pendente")
+            .updated_at = Instant::now() - FRAGMENT_TTL;
+        parser.parse_fragment(&fragment_payload(2, 1, 0, &[]), &mut ops);
+        assert!(!parser.fragments.contains_key(&1));
+        assert!(parser.fragments.contains_key(&2));
+        assert_eq!(parser.pending_fragment_bytes, 1);
     }
 
     #[test]

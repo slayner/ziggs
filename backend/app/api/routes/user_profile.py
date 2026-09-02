@@ -6,7 +6,8 @@ das imagens é pública (o perfil de jogador é visto por qualquer visitante).
 from __future__ import annotations
 
 import os
-from typing import Literal
+import tempfile
+from typing import BinaryIO, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -69,6 +70,27 @@ def _crop_tuple(x: float | None, y: float | None, w: float | None, h: float | No
     return (x, y, w, h)
 
 
+def _read_upload(file: UploadFile, kind: Literal["avatar", "banner"]) -> BinaryIO:
+    limit = user_profile._MAX_BYTES[kind]
+    temporary = tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+    total = 0
+    try:
+        while True:
+            chunk = file.file.read(1024 * 1024)
+            if not chunk:
+                if total == 0:
+                    raise user_profile.ProfileServiceError("arquivo vazio")
+                temporary.seek(0)
+                return temporary
+            total += len(chunk)
+            if total > limit:
+                raise user_profile.ProfileServiceError(f"imagem grande demais (limite {limit // (1024 * 1024)} MB)")
+            temporary.write(chunk)
+    except Exception:
+        temporary.close()
+        raise
+
+
 # Uploads são `def` (não async) DE PROPÓSITO: FastAPI roda rota sync em
 # threadpool, então re-encodar um GIF de 100 MB no Pillow não congela o event
 # loop onde rodam battle_tracker e os demais serviços de fundo.
@@ -83,15 +105,17 @@ def upload_avatar(
     db: Session = Depends(deps.db_session),
 ) -> dict:
     _require_verified(db, user)
-    data = file.file.read()
-    if not data:
-        raise HTTPException(400, "arquivo vazio")
+    try:
+        upload = _read_upload(file, "avatar")
+    except user_profile.ProfileServiceError as e:
+        raise HTTPException(400, str(e))
     submission = None
     try:
-        submission = user_profile.submit_media(
-            db, user, "avatar", data, _crop_tuple(crop_x, crop_y, crop_w, crop_h),
-        )
-        db.commit()
+        with upload:
+            submission = user_profile.submit_media(
+                db, user, "avatar", upload, _crop_tuple(crop_x, crop_y, crop_w, crop_h),
+            )
+            db.commit()
     except user_profile.ProfileServiceError as e:
         raise HTTPException(400, str(e))
     except IntegrityError:
@@ -130,15 +154,17 @@ def upload_banner(
     db: Session = Depends(deps.db_session),
 ) -> dict:
     _require_verified(db, user)
-    data = file.file.read()
-    if not data:
-        raise HTTPException(400, "arquivo vazio")
+    try:
+        upload = _read_upload(file, "banner")
+    except user_profile.ProfileServiceError as e:
+        raise HTTPException(400, str(e))
     submission = None
     try:
-        submission = user_profile.submit_media(
-            db, user, "banner", data, _crop_tuple(crop_x, crop_y, crop_w, crop_h),
-        )
-        db.commit()
+        with upload:
+            submission = user_profile.submit_media(
+                db, user, "banner", upload, _crop_tuple(crop_x, crop_y, crop_w, crop_h),
+            )
+            db.commit()
     except user_profile.ProfileServiceError as e:
         raise HTTPException(400, str(e))
     except IntegrityError:

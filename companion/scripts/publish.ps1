@@ -1,9 +1,8 @@
 #!/usr/bin/env powershell
 # companion/scripts/publish.ps1
-# Empacota o ultimo build do companion num release completo:
-#   1. GitHub release no slayner/ziggs (publico, exe + sig)
-#   2. Atualiza companion-release.json (manifest do auto-updater, URL aponta pro GitHub)
-#   3. Commit + push no ziggs-site
+# Publica os artefatos assinados do ultimo build em um release do GitHub:
+#   1. GitHub release no slayner/ziggs (artefatos + assinaturas)
+#   2. Atualiza companion-release.json com os artefatos descobertos
 #
 # Uso: cd companion ; powershell -ExecutionPolicy Bypass -File scripts/publish.ps1 [-Notes "texto"]
 # Pre-requisito: build ja feito (npm run tauri build com signing key no env)
@@ -21,24 +20,53 @@ $version = $tauriConf.version
 
 Write-Host "=== Publicando companion v$version ===" -ForegroundColor Cyan
 
-# --- Acha os artefatos do build (versao atual) ---
-$bundleDir = "src-tauri/target/release/bundle/nsis"
-$exeName = Get-ChildItem $bundleDir -Filter "*_${version}_*-setup.exe" | Select-Object -First 1
-if (-not $exeName) {
-    Write-Host "ERRO: nenhum *-setup.exe em $bundleDir" -ForegroundColor Red
+# --- Acha os artefatos assinados do build (versao atual) ---
+$artifactSpecs = @(
+    @{ Platform = "windows-x86_64"; Directory = "src-tauri/target/release/bundle/nsis"; Filter = "*_${version}_*-setup.exe" }
+    @{ Platform = "linux-x86_64"; Directory = "src-tauri/target/release/bundle/deb"; Filter = "*_${version}_*.deb" }
+)
+$artifacts = @()
+
+foreach ($spec in $artifactSpecs) {
+    if (-not (Test-Path $spec.Directory)) {
+        continue
+    }
+
+    $matches = @(Get-ChildItem $spec.Directory -File -Filter $spec.Filter)
+    if ($matches.Count -gt 1) {
+        Write-Host "ERRO: mais de um artefato para $($spec.Platform) em $($spec.Directory)" -ForegroundColor Red
+        exit 1
+    }
+    if ($matches.Count -eq 0) {
+        continue
+    }
+
+    $artifact = $matches[0]
+    $sigPath = "$($artifact.FullName).sig"
+    if (-not (Test-Path $sigPath)) {
+        Write-Host "ERRO: $sigPath nao encontrado - build nao foi assinado" -ForegroundColor Red
+        Write-Host "Configure TAURI_SIGNING_PRIVATE_KEY e TAURI_SIGNING_PRIVATE_KEY_PASSWORD" -ForegroundColor Yellow
+        exit 1
+    }
+
+    $artifacts += @{
+        Platform = $spec.Platform
+        Path = $artifact.FullName
+        Name = $artifact.Name
+        SigPath = $sigPath
+    }
+}
+
+if ($artifacts.Count -eq 0) {
+    Write-Host "ERRO: nenhum artefato assinado encontrado para v$version" -ForegroundColor Red
     Write-Host "Rode 'npm run tauri build' primeiro (com TAURI_SIGNING_PRIVATE_KEY no env)" -ForegroundColor Yellow
     exit 1
 }
-$exePath = $exeName.FullName
-$sigPath = "$exePath.sig"
-if (-not (Test-Path $sigPath)) {
-    Write-Host "ERRO: $sigPath nao encontrado - build nao foi assinado" -ForegroundColor Red
-    Write-Host "Configure TAURI_SIGNING_PRIVATE_KEY e TAURI_SIGNING_PRIVATE_KEY_PASSWORD" -ForegroundColor Yellow
-    exit 1
-}
 
-Write-Host "Exe: $($exeName.Name)"
-Write-Host "Sig: $(Split-Path $sigPath -Leaf)"
+foreach ($artifact in $artifacts) {
+    Write-Host "Artefato ($($artifact.Platform)): $($artifact.Name)"
+    Write-Host "Sig: $(Split-Path $artifact.SigPath -Leaf)"
+}
 
 # --- Notes do release ---
 if (-not $Notes) {
@@ -60,7 +88,13 @@ if ($LASTEXITCODE -eq 0 -and $existingTag) {
     Start-Sleep -Seconds 2
 }
 
-gh release create $tag $exePath $sigPath --repo $repo --title "v$version" --notes $Notes --latest 2>&1
+$releaseAssets = @()
+foreach ($artifact in $artifacts) {
+    $releaseAssets += $artifact.Path
+    $releaseAssets += $artifact.SigPath
+}
+
+gh release create $tag $releaseAssets --repo $repo --title "v$version" --notes $Notes --latest 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRO: gh release create falhou" -ForegroundColor Red
     exit 1
@@ -69,55 +103,34 @@ Write-Host "  Release criado: https://github.com/slayner/ziggs/releases/tag/$tag
 
 # --- 2. Atualiza companion-release.json ---
 Write-Host ""
-Write-Host "[2/3] Atualizando manifest..." -ForegroundColor Yellow
+Write-Host "[2/2] Atualizando manifest..." -ForegroundColor Yellow
 
-# Le a assinatura (base64 do conteudo do .sig)
-$sigContent = Get-Content $sigPath -Raw
-
-# GitHub replaces spaces in asset names with dots, so "Ziggs Companion" becomes
-# "Ziggs.Companion" in the download URL.
-$exeUrlName = "Ziggs.Companion_${version}_x64-setup.exe"
-$downloadUrl = "https://github.com/slayner/ziggs/releases/download/v$version/$exeUrlName"
+$platforms = @{}
+$downloads = @{}
+foreach ($artifact in $artifacts) {
+    $url = "https://github.com/slayner/ziggs/releases/download/v$version/$([uri]::EscapeDataString($artifact.Name))"
+    $platforms[$artifact.Platform] = @{
+        signature = (Get-Content $artifact.SigPath -Raw).Trim()
+        url = $url
+    }
+    $downloads[$artifact.Platform] = @{ url = $url }
+}
 
 $manifest = @{
     version = $version
     notes = $Notes
     pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-    platforms = @{
-        "windows-x86_64" = @{
-            signature = $sigContent.Trim()
-            url = $downloadUrl
-        }
-    }
+    platforms = $platforms
+    downloads = $downloads
 }
 
 $manifestPath = "../backend/data/companion-release.json"
 $manifest | ConvertTo-Json -Depth 5 | Set-Content $manifestPath -NoNewline
 Write-Host "  $manifestPath atualizado"
 
-# Copia o manifest pra VPS de producao (backend data + static companion dir)
-$sshKey = "$env:USERPROFILE\.ssh\hetzner_ziggs"
-$prodHost = "root@167.233.241.191"
-scp -i $sshKey $manifestPath "${prodHost}:/home/ziggs/ziggs/backend/data/companion-release.json"
-ssh -i $sshKey $prodHost "cp /home/ziggs/ziggs/backend/data/companion-release.json /var/www/ziggs.xyz/companion/latest.json" 2>&1 | Out-Null
-Write-Host "  Manifest copiado pra VPS de producao"
-
-# --- 3. Commit + push no ziggs-site ---
 Write-Host ""
-Write-Host "[3/3] Commit no ziggs-site..." -ForegroundColor Yellow
-Set-Location ..
-git add backend/data/companion-release.json companion/src-tauri/tauri.conf.json
-$commitMsg = "companion: release v$version"
-git commit -m $commitMsg 2>&1 | Out-Null
-git push origin master 2>&1 | Out-Null
-Write-Host "  Commitado e pushed"
-
-# --- Reinicia backend na VPS de producao pra servir o novo manifest ---
-ssh -i $sshKey $prodHost "systemctl restart ziggs-backend" 2>&1 | Out-Null
-Write-Host "  Backend reiniciado na producao"
-
-Write-Host ""
-Write-Host "=== Release v$version publicado! ===" -ForegroundColor Green
-Write-Host "  GitHub:  https://github.com/slayner/ziggs/releases/tag/$tag"
-Write-Host "  Download: $downloadUrl"
-Write-Host "  Auto-updater ativo - companions instalados vao atualizar sozinhos"
+Write-Host "=== Release v$version preparado! ===" -ForegroundColor Green
+Write-Host "  GitHub: https://github.com/slayner/ziggs/releases/tag/$tag"
+foreach ($artifact in $artifacts) {
+    Write-Host "  Download ($($artifact.Platform)): https://github.com/slayner/ziggs/releases/download/v$version/$($artifact.Name)"
+}

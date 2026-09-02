@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from PIL import Image
 
+from app.api.routes import user_profile as user_profile_routes
 from app.services import user_profile
 
 
@@ -50,6 +51,28 @@ def _raises(fn) -> str:
     except user_profile.ProfileServiceError as e:
         return str(e)
     raise AssertionError("esperava ProfileServiceError")
+
+
+def test_leitura_de_upload_respeita_limite_em_chunks():
+    class Stream:
+        def __init__(self):
+            self.read_sizes = []
+
+        def read(self, size):
+            self.read_sizes.append(size)
+            return b"x" * size
+
+    stream = Stream()
+    msg = _raises(lambda: user_profile_routes._read_upload(SimpleNamespace(file=stream), "avatar"))
+    assert "25 MB" in msg
+    assert max(stream.read_sizes) == 1024 * 1024
+    assert sum(stream.read_sizes) == 26 * 1024 * 1024
+
+
+def test_leitura_de_upload_aceita_limite_exato():
+    data = b"x" * (25 * 1024 * 1024)
+    with user_profile_routes._read_upload(SimpleNamespace(file=io.BytesIO(data)), "avatar") as upload:
+        assert upload.read() == data
 
 
 def test_rejeita_acima_do_limite():

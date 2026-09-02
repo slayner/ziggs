@@ -15,6 +15,8 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -2315,6 +2317,8 @@ def bot_economy_pay(
     _require_bot_secret(authorization)
     if body.amount <= 0:
         raise HTTPException(400, "amount deve ser positivo")
+    if body.from_user_id == body.to_user_id:
+        raise HTTPException(400, "não é possível pagar a si mesmo")
     if body.request_id:
         previous = db.scalar(select(EconomyTransaction).where(
             EconomyTransaction.request_id == body.request_id,
@@ -2327,10 +2331,25 @@ def bot_economy_pay(
                 "ok": True, "from_balance": sender.balance,
                 "to_balance": receiver.balance, "transaction_id": previous.id,
             }
-    sender = _get_or_create_balance(db, guild_id, body.from_user_id)
+    user_ids = sorted((body.from_user_id, body.to_user_id))
+    insert = pg_insert if db.bind.dialect.name == "postgresql" else sqlite_insert
+    db.execute(insert(EconomyBalance).values([
+        {"guild_id": guild_id, "discord_user_id": user_id}
+        for user_id in user_ids
+    ]).on_conflict_do_nothing(
+        index_elements=[EconomyBalance.guild_id, EconomyBalance.discord_user_id],
+    ))
+    balances = {
+        balance.discord_user_id: balance
+        for balance in db.scalars(select(EconomyBalance).where(
+            EconomyBalance.guild_id == guild_id,
+            EconomyBalance.discord_user_id.in_(user_ids),
+        ).order_by(EconomyBalance.discord_user_id).with_for_update()).all()
+    }
+    sender = balances[body.from_user_id]
+    receiver = balances[body.to_user_id]
     if sender.balance < body.amount:
         return {"ok": False, "from_balance": sender.balance}
-    receiver = _get_or_create_balance(db, guild_id, body.to_user_id)
     before = {"from_balance": sender.balance, "to_balance": receiver.balance}
     sender.balance -= body.amount
     receiver.balance += body.amount

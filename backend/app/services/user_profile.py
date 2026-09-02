@@ -13,6 +13,7 @@ import os
 import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import BinaryIO
 
 from PIL import Image, ImageSequence
 from sqlalchemy import select
@@ -87,14 +88,17 @@ def _save_gif(img: Image.Image, kind: str, crop_px: tuple[int, int, int, int] | 
 
 
 def _save_image(
-    kind: str, user_id: int, image_bytes: bytes, crop: Crop | None = None,
+    kind: str, user_id: int, image_source: bytes | BinaryIO, crop: Crop | None = None,
     stem: str | None = None,
 ) -> str:
     limit = _MAX_BYTES[kind]
-    if len(image_bytes) > limit:
-        raise ProfileServiceError(f"imagem grande demais (limite {limit // (1024 * 1024)} MB)")
+    if isinstance(image_source, bytes):
+        if len(image_source) > limit:
+            raise ProfileServiceError(f"imagem grande demais (limite {limit // (1024 * 1024)} MB)")
+        image_source = io.BytesIO(image_source)
     try:
-        img = Image.open(io.BytesIO(image_bytes))
+        image_source.seek(0)
+        img = Image.open(image_source)
         img.load()  # Image.open é lazy — só decodifica de verdade aqui, é onde arquivo corrompido/não-imagem falha (inclui DecompressionBombError)
     except Exception:
         raise ProfileServiceError("arquivo não é uma imagem válida")
@@ -191,7 +195,7 @@ def _lock_user(db: Session, user_id: int) -> User | None:
 
 
 def submit_media(
-    db: Session, user: User, kind: str, image_bytes: bytes, crop: Crop | None = None,
+    db: Session, user: User, kind: str, image_source: bytes | BinaryIO, crop: Crop | None = None,
 ) -> ProfileMediaSubmission:
     if kind not in ("avatar", "banner"):
         raise ProfileServiceError("tipo de imagem inválido")
@@ -209,7 +213,7 @@ def submit_media(
         raise ProfileServiceError(f"já existe {kind} aguardando aprovação")
 
     stem = f"pending-{kind}-{uuid.uuid4().hex}"
-    rel = _save_image(kind, user.id, image_bytes, crop, stem=stem)
+    rel = _save_image(kind, user.id, image_source, crop, stem=stem)
     submission = ProfileMediaSubmission(user_id=user.id, kind=kind, path=rel)
     db.add(submission)
     return submission
