@@ -45,6 +45,7 @@ from app.services import (
     gold_price, guild_verifier, highscores_cache, kill_sweeper, market_snapshot, player_count_snapshot, player_tracker, profile_warmer, registration_checker, regear_retry,
     juicy_kill_delivery, render_recovery, scan_dispatcher, search_index, silver_dropped, small_battle_discovery, weapon_stats,
 )
+from app.services.item_catalog import load_catalog
 
 
 async def _bg_web_is_idle() -> bool:
@@ -55,6 +56,19 @@ async def _bg_web_is_idle() -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import sys
+    sys.stdout.write(">>> LIFESPAN START <<<\n")
+    sys.stdout.flush()
+    from app.services.item_catalog import load_catalog, catalog_size
+    try:
+        load_catalog()
+        from app.services.item_catalog import catalog_size
+        size = catalog_size()
+        sys.stdout.write(f"✅ Item catalog loaded: {size} entries\n")
+        sys.stdout.flush()
+    except Exception as e:
+        sys.stdout.write(f"❌ Item catalog load failed: {e}\n")
+        sys.stdout.flush()
     if get_settings().disable_background_fetchers:
         print("⚠️  DISABLE_BACKGROUND_FETCHERS=true — fetchers de background desligados.")
         tasks: list[asyncio.Task] = []

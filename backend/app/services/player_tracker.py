@@ -81,6 +81,7 @@ def make_client() -> httpx.AsyncClient:
 
 async def upsert_player(
     db: AsyncSession, data: dict, region: str, *, commit: bool = True, stats_verified: bool = False,
+    touch_last_seen: bool = True,
 ) -> AlbionPlayer:
     """Salva/atualiza jogador e tira snapshot quando a guilda muda (ou quando
     o último snapshot já passou de SNAPSHOT_MAX_AGE — dá resolução pro
@@ -164,26 +165,19 @@ async def upsert_player(
         await db.flush()
     else:
         player.name = name
-        # Guilda/aliança do snapshot do evento/search pode ser ANTIGA (o
-        # jogador trocou de guilda depois). Só sobrescreve se veio de um
-        # payload COM LifetimeStatistics (perfil completo, estado atual) —
-        # evento do feed global traz a guilda de quando a luta aconteceu.
-        if has_lifetime:
+        if avatar:
+            player.avatar = avatar
+        # Só a consulta direta de /players/{id} pode substituir o snapshot
+        # completo. Eventos carregam estado histórico/parcial e não podem
+        # regressar fama, guilda ou coleta de um perfil já warm.
+        if stats_verified:
             player.guild_id = guild_id
             player.guild_name = guild_name
             player.alliance_id = alliance_id
             player.alliance_name = alliance_name
             player.alliance_tag = alliance_tag
-        if avatar:
-            player.avatar = avatar
-        # kill_fame/death_fame: só sobrescreve se veio do perfil completo
-        # (has_lifetime). O feed global/search traz valores do snapshot do
-        # evento, que podem ser MENORES que os atuais (o evento aconteceu no
-        # passado) — sobrescrever faz a fama regredir.
-        if has_lifetime:
             player.kill_fame = kill_fame
             player.death_fame = death_fame
-        if has_lifetime:
             player.lifetime_statistics = lifetime
             player.pve_fame = pve_fame
             player.crafting_fame = crafting_fame
@@ -194,7 +188,8 @@ async def upsert_player(
             player.gather_rock = gather["rock"]
             player.gather_fiber = gather["fiber"]
             player.fishing_fame = fishing_fame
-        player.last_seen_at = now
+        if touch_last_seen:
+            player.last_seen_at = now
         if stats_verified:
             player.stats_updated_at = now
         player.is_deleted = False
@@ -311,7 +306,7 @@ async def _fetch_kill_page(client: httpx.AsyncClient, host: str, offset: int, li
             if attempt == 1:
                 raise
             await asyncio.sleep(random.uniform(0.7, 1.3))
-    data = response.json()
+    data = await asyncio.to_thread(response.json)
     if not isinstance(data, list):
         raise ValueError(f"feed de kills inválido em offset {offset}")
     return data
@@ -363,13 +358,13 @@ async def _upsert_event_players(db: AsyncSession, ev: dict, region: str, skip_id
         p = ev.get(role)
         if p and p.get("Id") and p.get("Id") != skip_id:
             try:
-                await upsert_player(db, p, region, commit=False)
+                await upsert_player(db, p, region, commit=False, stats_verified=False, touch_last_seen=False)
             except Exception as e:
                 log.debug("player_tracker: skip %s (%s): %s", p.get("Id"), region, e)
     for participant in (ev.get("Participants") or []):
         if participant and participant.get("Id") and participant.get("Id") != skip_id:
             try:
-                await upsert_player(db, participant, region, commit=False)
+                await upsert_player(db, participant, region, commit=False, stats_verified=False, touch_last_seen=False)
             except Exception as e:
                 log.debug("player_tracker: skip participant %s (%s): %s", participant.get("Id"), region, e)
 
@@ -432,6 +427,38 @@ async def sync_player_kills(client: httpx.AsyncClient, db: AsyncSession, host: s
                 log.debug("player_tracker: skip sync event %s (%s): %s", ev.get("EventId"), region, e)
         if events:
             log.info("sync_kills: %s (%s) — %d %s ingeridos", albion_id, region, len(events), kind)
+    return count
+
+
+async def sync_player_kills_from_events(db: AsyncSession, region: str, albion_id: str, events: list[dict]) -> int:
+    """Sincroniza kills/mortes a partir de eventos JÁ BUSCADOS (sem HTTP).
+    
+    Usado pelo scan_dispatcher quando um VPS worker reporta uma profile task
+    com kills_events pré-buscados. Mesma lógica de dedupe e upsert do
+    sync_player_kills, mas sem chamadas à API — os eventos já vêm no payload.
+    
+    O próprio `albion_id` NÃO é re-upsertado a partir desses eventos (skip_id).
+    """
+    count = 0
+    for ev in events:
+        # Dedupe: evento já registrado no ledger → pula
+        event_id = str(ev.get("EventId") or "")
+        if event_id and await db.scalar(
+            select(PlayerKillEvent.id).where(
+                PlayerKillEvent.region == region,
+                PlayerKillEvent.albion_event_id == event_id,
+            )
+        ) is not None:
+            await db.commit()
+            continue
+        await _upsert_event_players(db, ev, region, skip_id=albion_id)
+        try:
+            await _record_kill_event(db, ev, region, commit=False)
+            await db.commit()
+            count += 1
+        except Exception as e:
+            await db.rollback()
+            log.debug("player_tracker: skip sync event %s (%s): %s", ev.get("EventId"), region, e)
     return count
 
 

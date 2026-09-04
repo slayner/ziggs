@@ -217,7 +217,7 @@ class _RateLimiter:
 #     máx um por rodada (1/rate) — cascata de erros concorrentes = 1 backoff.
 # Sawtooth clássico (TCP): converge no rate sustentável logo abaixo do teto.
 RATE_MAX = 0.7        # teto: pico permitido (req/s, POR HOST — 3 hosts independentes)
-RATE_MIN = 0.1        # piso: nunca recua abaixo disso
+RATE_MIN = 0.35       # piso: mantém o caminho interativo responsivo sob sobrecarga
 RATE_INCREASE = 0.01  # +req/s por resposta 2xx (recuperação gradual até o teto)
 RATE_DECREASE = 0.5   # ×req/s por rodada com sobrecarga (backoff)
 _RATE_ERROR_CODES = frozenset({429, 502, 503, 504})  # sinais de sobrecarga da Albion

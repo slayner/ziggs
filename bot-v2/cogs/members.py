@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 import urllib.parse
 from typing import Optional
@@ -36,6 +37,7 @@ _UA = (
 )
 _API_TIMEOUT = 10
 _API_RETRIES = 3
+_DISCORD_MENTION_RE = re.compile(r"^<@!?(\d+)>$")
 
 # Retry da API do Albion no /profile: mesma filosofia do /register — em vez
 # de devolver erro e obrigar o usuário a rodar de novo, re-tenta com feedback
@@ -54,31 +56,47 @@ def _num(v) -> str:
 
 
 async def _fetch_albion(url: str) -> dict | list | None:
-    try:
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=_API_TIMEOUT),
-            headers={"User-Agent": _UA},
-        ) as s:
-            async with s.get(url) as r:
-                if r.status != 200:
-                    return None
-                return await r.json(content_type=None)
-    except Exception:
-        return None
+    deadline = asyncio.get_running_loop().time() + 60
+    while True:
+        retry = False
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=_API_TIMEOUT),
+                headers={"User-Agent": _UA},
+            ) as s:
+                async with s.get(url) as r:
+                    if r.status == 200:
+                        return await r.json(content_type=None)
+                    retry = r.status in (429, 502, 503, 504)
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            retry = True
+        if not retry or asyncio.get_running_loop().time() >= deadline:
+            return None
+        await asyncio.sleep(min(2, max(0, deadline - asyncio.get_running_loop().time())))
+
+
+async def _get_backend(path: str, *, timeout: float = 10, tag: str = "profile") -> dict | None:
+    return await http_client.get_json(
+        path, timeout=timeout, tag=tag, retry_for=30,
+        raise_on_unavailable=True,
+    )
 
 
 async def _get_guild_region(guild_id: int) -> str:
     """Região configurada da guilda (fallback americas)."""
-    data = await http_client.get_json(f"/bot/guilds/{guild_id}/bank", timeout=5)
+    data = await _get_backend(f"/bot/guilds/{guild_id}/bank", timeout=5)
     region = (data or {}).get("region") if data else None
     return region if region in _HOSTS else "americas"
 
 
-async def _warm_profile(guild_id: int, name: str, region: str) -> dict | None:
+async def _warm_profile(guild_id: int, name: str, region: str, albion_id: str | None = None) -> dict | None:
     """Esquenta o perfil no backend e devolve o estado do warm."""
+    body = {"name": name, "region": region}
+    if albion_id:
+        body["albion_id"] = albion_id
     return await http_client.post_json(
         f"/bot/guilds/{guild_id}/warm",
-        {"name": name, "region": region},
+        body,
         timeout=10, tag="warm", queue_on_failure=False,
     )
 
@@ -90,9 +108,9 @@ async def _resolve_name_and_region(interaction: Interaction, raw: str, guild_id:
     if not raw:
         # Sem nick: busca o nick registrado + região no backend
         await interaction.response.defer()
-        data = await http_client.get_json(
+        data = await _get_backend(
             f"/bot/guilds/{guild_id}/attendance/{interaction.user.id}",
-            timeout=10, tag="profile",
+            timeout=10,
         )
         if data is None:
             return None, "americas", "retry_later"
@@ -101,13 +119,12 @@ async def _resolve_name_and_region(interaction: Interaction, raw: str, guild_id:
         if not name:
             return None, region, "profile_usage"
         return name, region, None
-    elif raw.startswith("<@") or raw.isdigit():
-        # Menção/ID: busca o nick registrado dessa pessoa
+    elif mention := _DISCORD_MENTION_RE.fullmatch(raw):
         await interaction.response.defer()
-        target_id = int(raw.strip("<@!>")) if raw.startswith("<@") else int(raw)
-        data = await http_client.get_json(
+        target_id = int(mention.group(1))
+        data = await _get_backend(
             f"/bot/guilds/{guild_id}/attendance/{target_id}",
-            timeout=10, tag="profile",
+            timeout=10,
         )
         if data is None:
             return None, "americas", "retry_later"
@@ -179,6 +196,11 @@ _REGION_LABELS = {
     "europe": "Europe",
     "asia": "Asia",
 }
+_REGION_ICONS = {
+    "americas": "🌎",
+    "europe": "🌍",
+    "asia": "🌏",
+}
 
 
 class _RegionSelectView(discord.ui.View):
@@ -191,10 +213,12 @@ class _RegionSelectView(discord.ui.View):
         self._lang = lang
         self._on_select = on_select
         self._resolved = False
-        for region, summary in candidates:
-            kf = summary.get("KillFame") or 0
-            label = f"{_REGION_LABELS.get(region, region)} · {kf:,} fame"
-            btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
+        for region, _summary in candidates:
+            btn = discord.ui.Button(
+                label=_REGION_LABELS.get(region, region),
+                emoji=_REGION_ICONS.get(region),
+                style=discord.ButtonStyle.primary,
+            )
             btn.callback = self._make_callback(region)
             self.add_item(btn)
 
@@ -245,7 +269,7 @@ class Members(commands.Cog):
 
         # Nick digitado livremente (não de registro): pode existir em várias
         # regiões. Busca nas 3 em paralelo e oferece botões se achar em >1.
-        region_known = bool(raw and not raw.startswith("<@") and not raw.isdigit())
+        region_known = bool(raw and not _DISCORD_MENTION_RE.fullmatch(raw))
         if region_known:
             searches = await _search_all_regions(name)
             candidates = [(candidate_region, summary) for candidate_region, summary, api_ok in searches if api_ok and summary is not None]
@@ -254,23 +278,43 @@ class Members(commands.Cog):
                     content=t(lang, "retry_later") if any(not api_ok for _, _, api_ok in searches) else t(lang, "profile_not_found", name=name)
                 )
                 return
-            region = max(candidates, key=lambda candidate: candidate[1].get("KillFame") or 0)[0]
+            if len(candidates) > 1:
+                async def select_region(button_interaction: Interaction | None, selected_region: str) -> None:
+                    if button_interaction is not None:
+                        await button_interaction.response.defer()
+                    await interaction.edit_original_response(
+                        content=t(lang, "profile_progress_warm", name=name, region=_REGION_LABELS[selected_region]),
+                        view=None,
+                    )
+                    selected_summary = next(summary for candidate_region, summary in candidates if candidate_region == selected_region)
+                    await self._wait_and_show_preview(
+                        interaction, name, selected_region, lang, guild_id, selected_summary.get("Id"),
+                    )
 
-        await self._wait_and_show_preview(interaction, name, region, lang, guild_id)
+                view = _RegionSelectView(candidates, lang, select_region)
+                await interaction.edit_original_response(
+                    content=t(lang, "profile_region_prompt", name=name),
+                    view=view,
+                )
+                return
+            region = candidates[0][0]
+            albion_id = candidates[0][1].get("Id")
+        else:
+            albion_id = None
+
+        await self._wait_and_show_preview(interaction, name, region, lang, guild_id, albion_id)
 
     async def _wait_and_show_preview(
-        self, interaction: Interaction, name: str, region: str, lang: str, guild_id: int,
+        self, interaction: Interaction, name: str, region: str, lang: str, guild_id: int, albion_id: str | None = None,
     ) -> None:
         """Mostra o andamento e publica o link apenas com preview disponível."""
         encoded_name = urllib.parse.quote(name, safe="")
-        profile_path = f"/players/by-name/{region}/{encoded_name}"
-        preview_path = f"/players/embed/{region}/{encoded_name}.png"
         status_path = f"/players/embed/status/{region}/{encoded_name}"
         region_prefix = {"americas": "am", "europe": "eu", "asia": "as"}[region]
         profile_url = f"{PUBLIC_URL}/{region_prefix}/{encoded_name}"
 
         await interaction.edit_original_response(content=t(lang, "profile_progress_warm", name=name, region=region))
-        warm = await _warm_profile(guild_id, name, region)
+        warm = await _warm_profile(guild_id, name, region, albion_id)
         if warm and warm.get("status") == "not_found":
             await interaction.edit_original_response(content=t(lang, "profile_not_found", name=name), embed=None)
             return
@@ -278,24 +322,16 @@ class Members(commands.Cog):
             await interaction.edit_original_response(content=t(lang, "retry_later"), embed=None)
             return
 
-        preview_status = await http_client.get_json(status_path, timeout=10, tag="profile")
-        if preview_status and preview_status.get("ready"):
+        preview_status = await _get_backend(status_path, timeout=10)
+        if preview_status and preview_status.get("ready") and not preview_status.get("refreshing"):
             await interaction.edit_original_response(content=profile_url)
-            if warm and warm.get("status") == "stale":
-                asyncio.create_task(self._wait_for_profile_refresh(
-                    interaction, name, region, lang, profile_url, status_path,
-                ))
             return
 
         await interaction.edit_original_response(content=t(lang, "profile_progress_loading", name=name))
         deadline = time.monotonic() + _PROFILE_READY_TIMEOUT
         while time.monotonic() < deadline:
-            profile = await http_client.get_json(profile_path, timeout=15, tag="profile")
-            if profile is None or profile.get("_cold_load"):
-                await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
-                continue
-            await interaction.edit_original_response(content=t(lang, "profile_progress_rendering", name=name))
-            if await http_client.get_bytes(preview_path, timeout=120, tag="profile"):
+            status = await _get_backend(status_path, timeout=10)
+            if status and status.get("ready") and not status.get("refreshing"):
                 await interaction.edit_original_response(content=profile_url)
                 return
             await asyncio.sleep(_PROFILE_READY_POLL_INTERVAL)
@@ -307,7 +343,7 @@ class Members(commands.Cog):
         """Atualiza o link publicado depois que o warm substitui o preview antigo."""
         deadline = time.monotonic() + _PROFILE_READY_TIMEOUT
         while time.monotonic() < deadline:
-            status = await http_client.get_json(status_path, timeout=10, tag="profile")
+            status = await _get_backend(status_path, timeout=10)
             if status and status.get("ready") and not status.get("refreshing"):
                 await interaction.edit_original_response(content=profile_url)
                 return
@@ -334,7 +370,7 @@ class Members(commands.Cog):
         member = target or interaction.user
         await interaction.response.defer(ephemeral=True)
 
-        data = await http_client.get_json(
+        data = await _get_backend(
             f"/bot/guilds/{guild_id}/attendance/{member.id}", timeout=10, tag="attendance",
         )
         if data is None:
@@ -402,7 +438,7 @@ class Members(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
-        data = await http_client.get_json(
+        data = await _get_backend(
             f"/bot/guilds/{guild_id}/lowattendance", timeout=15, tag="lowattendance",
         )
         if data is None:

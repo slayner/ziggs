@@ -15,7 +15,7 @@ from app.api.routes.render import (
     retry_delay,
 )
 from app.db import AsyncSessionLocal
-from app.models.renders import RenderMiss
+from app.models.renders import KnownLootedItem, RenderMiss
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +59,9 @@ async def _recover_due() -> int:
         )).all())
         # Do not keep a read transaction open while waiting on the CDN.
         await db.commit()
+        known_looted = set((await db.scalars(
+            select(KnownLootedItem.key).where(KnownLootedItem.kind == "item")
+        )).all())
         for miss in misses:
             try:
                 outcome = await recover_render_miss(miss.kind, miss.key, miss.quality, miss.size)
@@ -74,7 +77,11 @@ async def _recover_due() -> int:
             else:
                 miss.miss_count += 1
                 miss.last_attempt_at = now
-                miss.next_retry_at = now + retry_delay(miss.miss_count)
+                miss.next_retry_at = now + (
+                    _UNAVAILABLE_RETRY_DELAY
+                    if miss.kind == "item" and miss.key in known_looted
+                    else retry_delay(miss.miss_count)
+                )
             await asyncio.sleep(RETRY_DELAY)
         if misses:
             await db.commit()

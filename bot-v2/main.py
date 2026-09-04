@@ -172,7 +172,7 @@ def _register_loops() -> None:
         ("offline_queue", offline_queue_loop),
     ]:
         _LOOP_REGISTRY.append((name, loop))
-    for cog_name in ["Events", "EventEmbeds", "AuditLog", "RegearThreads",
+    for cog_name in ["Events", "EventEmbeds", "BotAuditLog", "RegearThreads",
                      "LootlogThreads", "Nodes", "JuicyKills", "BattleFeed",
                      "VoicePresence", "MassinfoAccess", "ProfileModeration",
                      "ScanDashboard", "MemberSync", "Forfeit", "EnergyControl"]:

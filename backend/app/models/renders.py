@@ -22,3 +22,18 @@ class RenderMiss(Base):
     )
     last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     next_retry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+
+
+class KnownLootedItem(Base):
+    """Itens que apareceram em lootlog/reconcile — sabemos que existem,
+    então retentamos o render indefinidamente."""
+    __tablename__ = "known_looted_items"
+
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )

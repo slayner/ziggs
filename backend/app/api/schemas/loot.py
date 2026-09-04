@@ -131,6 +131,7 @@ class DeathLossOut(BaseModel):
 class ReconcileLooterItem(BaseModel):
     item_id: str
     item_name: str
+    looted_by_guild: str | None = None
     status: str            # "missing" | "deposited" | "died"
     quantity: int
     silver_value: int      # unitário

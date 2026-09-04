@@ -70,6 +70,7 @@ interface ZiggsData {
   region: string;
   first_seen_at: string;
   last_seen_at: string;
+  stats_updated_at: string | null;
   // Estado de refresh compartilhado — vem do backend (refresh_requested_at do
   // AlbionPlayer). Enquanto não é null, TODOS os visitantes do perfil vêem o
   // botão em "atualizando" — não é mais estado local só de quem clicou.
@@ -908,7 +909,10 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
       .catch(() => {
         if (refreshIdentityRef.current !== identity) return;
         // POST falhou (rede/502) — ainda assim tenta polling do estado, o
-        // backend pode ter recebido. Se nem o polling roda, restaura o botão.
+        // backend pode ter recebido. Mantém refreshing=true pra o botão
+        // continuar girando e o stage aparecer.
+        setRefreshing(true);
+        setRefreshStage("queued");
         startRefreshPoll();
       });
   }
@@ -1200,7 +1204,7 @@ export default function PlayerProfilePage({ region, name, activityId, onBack }: 
                   {refreshing ? (
                     <span className="text-amber-400/80">{refreshStatusLabel()}</span>
                   ) : (
-                    <>{ageLabel(z.last_seen_at, t("justNowLabel"), t("justAgoSuffix"))}</>
+                    <>{ageLabel(z.stats_updated_at ?? z.last_seen_at, t("justNowLabel"), t("justAgoSuffix"))}</>
                   )}
                 </div>
               </div>

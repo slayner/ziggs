@@ -13,6 +13,7 @@ Rotas:
 """
 from __future__ import annotations
 
+import asyncio
 import gzip
 import io
 import os
@@ -20,10 +21,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_async_session
-from app.models.scan_worker import FEED_PAGE_SIZE
+from app.models.players import AlbionPlayer
+from app.models.scan_worker import FEED_PAGE_SIZE, FEED_PROFILE
 from app.services import scan_dispatcher
 
 router = APIRouter(prefix="/scan", tags=["scan"])
@@ -107,6 +110,9 @@ class ClaimOut(BaseModel):
     region: str
     feed_type: str
     page_offset: int
+    # Profile task fields (only present when feed_type == "profile")
+    subject_id: str | None = None
+    player_name: str | None = None
 
 
 @router.post("/claim")
@@ -122,12 +128,22 @@ async def scan_claim(
     task = await scan_dispatcher.claim_work(db, body.worker_id, body.region)
     if task is None:
         raise HTTPException(204)
+    player_name = None
+    if task.feed_type == FEED_PROFILE and task.subject_id:
+        player_name = await db.scalar(
+            select(AlbionPlayer.name).where(
+                AlbionPlayer.albion_id == task.subject_id,
+                AlbionPlayer.region == task.region,
+            ).limit(1)
+        )
     return ClaimOut(
         task_id=task.id,
-        lease_token=task.lease_token or "",
+        lease_token=getattr(task, "_attempt_lease_token", task.lease_token) or "",
         region=task.region,
         feed_type=task.feed_type,
         page_offset=task.page_offset,
+        subject_id=task.subject_id,
+        player_name=player_name,
     )
 
 
@@ -143,6 +159,8 @@ class ReportIn(BaseModel):
     chunk_index: int | None = Field(default=None, ge=0)
     chunk_count: int | None = Field(default=None, ge=1, le=128)
     latency_ms: int | None = Field(default=None, ge=0, le=120_000)
+    upstream_status_code: int | None = Field(default=None, ge=100, le=599)
+    backoff_seconds: int | None = Field(default=None, ge=0, le=3600)
 
 
 class ReportOut(BaseModel):
@@ -176,7 +194,8 @@ async def _read_report(request: Request) -> ReportIn:
         if len(raw) > wire_limit:
             raise HTTPException(413, "report payload too large")
     try:
-        return ReportIn.model_validate_json(_decode_report_body(bytes(raw), encoding))
+        body = _decode_report_body(bytes(raw), encoding)
+        return await asyncio.to_thread(ReportIn.model_validate_json, body)
     except ValidationError as exc:
         raise HTTPException(422, exc.errors()) from exc
 
@@ -208,6 +227,8 @@ async def scan_report(
                 chunk_index=body.chunk_index if body.chunk_index is not None else -1,
                 chunk_count=body.chunk_count if body.chunk_count is not None else 0,
                 latency_ms=body.latency_ms,
+                upstream_status_code=body.upstream_status_code,
+                backoff_seconds=body.backoff_seconds,
             )
         elif any(value is not None for value in chunk_fields):
             raise ValueError("metadados de chunk incompletos")
@@ -217,6 +238,8 @@ async def scan_report(
                 body.found_count, body.error_count,
                 data=body.data,
                 latency_ms=body.latency_ms,
+                upstream_status_code=body.upstream_status_code,
+                backoff_seconds=body.backoff_seconds,
             )
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc

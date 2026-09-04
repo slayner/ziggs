@@ -25,9 +25,8 @@ from app.api.schemas.loot import (
 )
 from app.models.events import EventDeath
 from app.models.events import Event
-from app.models.loot import GuildChestEntry, LootVerification
+from app.models.loot import GuildChestEntry, ItemPriceCache, LootVerification
 from app.models.lootlog import LootLogSubmission
-from app.services import loot
 from app.services.lootlog import _event_window
 
 # Janela de dedup: a mesma coleta vista por loggers diferentes chega com
@@ -130,6 +129,7 @@ def _per_looter(
         # registrada → conservador (marca morto, não acusa de roubo).
         died = (dt is None and bool(deaths)) or (dt is not None and any(d >= dt for d in deaths))
         slot = agg.setdefault((lk, iid), {"name": looter, "item_name": ev.get("item_name") or iid,
+                                          "looted_by_guild": ev.get("looted_by_guild") or None,
                                           "carried": 0, "died": 0})
         slot["died" if died else "carried"] += qty
 
@@ -149,13 +149,13 @@ def _per_looter(
         dep_left = max(0, dep - carried)          # depósito além do carregado
         died_excl = max(0, died - dep_left)        # morto não explicado por depósito
         deposited_shown = min(dep, carried + died)  # cap no total looteado
-        unit = _price(db, price_cache, iid)
+        unit = _price(price_cache, iid)
         entry = by_looter.setdefault(lk, {"name": slot["name"], "items": []})
         for status, qty in (("missing", missing), ("deposited", deposited_shown), ("died", died_excl)):
             if qty > 0:
                 entry["items"].append(ReconcileLooterItem(
-                    item_id=iid, item_name=slot["item_name"], status=status,
-                    quantity=qty, silver_value=unit, value=qty * unit,
+                    item_id=iid, item_name=slot["item_name"], looted_by_guild=slot["looted_by_guild"],
+                    status=status, quantity=qty, silver_value=unit, value=qty * unit,
                     verified=(status == "missing" and (lk, iid) in verified),
                 ))
 
@@ -203,15 +203,8 @@ def toggle_verification(
     return True
 
 
-def _price(db: Session, cache: dict[str, int], item_id: str) -> int:
-    if not item_id:
-        return 0
-    if item_id not in cache:
-        try:
-            cache[item_id] = loot.get_price(db, item_id).silver_value
-        except Exception:
-            cache[item_id] = 0
-    return cache[item_id]
+def _price(cache: dict[str, int], item_id: str) -> int:
+    return cache.get(item_id, 0)
 
 
 def unified_reconcile(db: Session, guild_id: int, event_id: int) -> LootReconcileOut:
@@ -239,13 +232,18 @@ def unified_reconcile(db: Session, guild_id: int, event_id: int) -> LootReconcil
     # Ignora 'Trash' (loot de vendor, não vai pro baú) antes de tudo.
     loot_events = [e for e in _canonical_loot(all_rows) if not _is_trash(e)]
 
-    # Cache de preços: semeia com unit_price já guardado no ingest p/ não
-    # re-bater na API (submissões antigas sem unit_price caem p/ get_price).
-    price_cache: dict[str, int] = {}
-    for ev in loot_events:
-        up = ev.get("unit_price")
-        if up and ev.get("item_id") and ev["item_id"] not in price_cache:
-            price_cache[ev["item_id"]] = up
+    # Cache de preços: a reconciliação é somente leitura local. Consultar a API
+    # Albion aqui fazia uma chamada serial por item e bloqueava a página.
+    item_ids = {row.get("item_id") for row in loot_events if row.get("item_id")}
+    price_cache = {
+        row.item_type: row.silver_value
+        for row in db.scalars(select(ItemPriceCache).where(ItemPriceCache.item_type.in_(item_ids))).all()
+    } if item_ids else {}
+    for row in loot_events:
+        unit_price = row.get("unit_price")
+        item_id = row.get("item_id")
+        if item_id and unit_price and item_id not in price_cache:
+            price_cache[item_id] = int(unit_price)
 
     # 2) baú (GuildChestEntry).
     chest_rows = db.scalars(select(GuildChestEntry).where(
@@ -272,7 +270,7 @@ def unified_reconcile(db: Session, guild_id: int, event_id: int) -> LootReconcil
     chest_out: list[ChestEntryOut] = []
     chest_qty_by_item: dict[str, int] = defaultdict(int)
     for c in chest_rows:
-        unit = c.silver_value if c.silver_value > 0 else _price(db, price_cache, c.item_type)
+        unit = c.silver_value if c.silver_value > 0 else _price(price_cache, c.item_type)
         chest_qty_by_item[c.item_type] += c.quantity
         chest_out.append(ChestEntryOut(
             id=c.id, item_type=c.item_type, item_name=c.item_name,
@@ -298,7 +296,7 @@ def unified_reconcile(db: Session, guild_id: int, event_id: int) -> LootReconcil
         missing = info["total"] - chest_qty
         if missing <= 0:
             continue  # tudo coberto pelo baú
-        unit = _price(db, price_cache, iid)
+        unit = _price(price_cache, iid)
         looters = [{"looted_by": name, "qty": q}
                    for name, q in sorted(info["looters"].items(), key=lambda x: -x[1])]
         not_deposited.append(NotDepositedOut(
@@ -342,7 +340,7 @@ def unified_reconcile(db: Session, guild_id: int, event_id: int) -> LootReconcil
     ) for ev in loot_events]
 
     total_looted_value = sum(
-        (ev.get("unit_price") if ev.get("unit_price") else _price(db, price_cache, ev.get("item_id") or ""))
+        (ev.get("unit_price") if ev.get("unit_price") else _price(price_cache, ev.get("item_id") or ""))
         * int(ev.get("quantity") or 1)
         for ev in loot_events
     )

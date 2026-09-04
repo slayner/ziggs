@@ -290,12 +290,21 @@ def _request(method, path, body=None, timeout=30):
         return 0, None
 
 
-def _fetch_feed_page(host, feed_type, offset):
+def _upstream_result(status_code, data=None):
+    if status_code == 200:
+        return "ok", data, status_code
+    return "http_error", None, status_code
+
+
+def _fetch_feed_page(host, feed_type, offset, subject_id=None):
     """Busca uma página do feed ou deep-process de uma batalha.
     Para deep_process, offset é o battle.id (não o offset do feed).
+    Para profile, subject_id é o albion_id do jogador.
     Retorna (status, data_list)."""
     if feed_type == "deep_process":
         return _fetch_deep_process(host, offset)
+    if feed_type == "profile":
+        return _fetch_profile(host, subject_id)
     if feed_type == "battles":
         url = f"https://{host}/api/gameinfo/battles?sort=recent&limit=51&offset={offset}"
     else:
@@ -309,15 +318,62 @@ def _fetch_feed_page(host, feed_type, offset):
                 raw = resp.read()
                 data = json.loads(raw)
                 if isinstance(data, list):
-                    return "ok", data
-                return "error", None
-            return "error", None
+                    return _upstream_result(resp.status, data)
+                return "invalid_payload", None, resp.status
+            return _upstream_result(resp.status)
     except urllib.error.HTTPError as exc:
-        if exc.code == 429:
-            return "rate_limited", None
-        return "error", None
+        return _upstream_result(exc.code)
     except (urllib.error.URLError, OSError, TimeoutError):
-        return "error", None
+        return "transport_error", None, None
+
+
+def _fetch_profile(host, albion_id):
+    """Busca perfil do jogador + kills/deaths para profile task.
+    Retorna (status, data_list) com um único item contendo:
+      albion_id, name, raw_profile, kills_events (lista).
+    Stdlib only (urllib)."""
+    if not albion_id:
+        return "invalid_task", None, None
+    headers = {"User-Agent": "ZiggsCompanion/0.1 (https://ziggs.xyz)"}
+
+    def _get(url):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as resp:
+                if resp.status == 200:
+                    return _upstream_result(resp.status, json.loads(resp.read()))
+                return _upstream_result(resp.status)
+        except urllib.error.HTTPError as exc:
+            return _upstream_result(exc.code)
+        except (urllib.error.URLError, OSError, TimeoutError):
+            return "transport_error", None, None
+
+    # Perfil do jogador
+    st, raw, status_code = _get(f"https://{host}/api/gameinfo/players/{albion_id}")
+    if st != "ok" or not isinstance(raw, dict) or not raw.get("Id"):
+        return st, None, status_code
+
+    name = raw.get("Name") or albion_id
+
+    # Kills e deaths (paginados, até 50 cada)
+    kills_events = []
+    for kind in ("kills", "deaths"):
+        for page in range(1):  # 1 página de 50, igual ao PLAYER_SYNC_LIMIT do backend
+            st, batch, status_code = _get(f"https://{host}/api/gameinfo/players/{albion_id}/{kind}?limit=50&offset={page * 50}")
+            if st != "ok":
+                return st, None, status_code
+            if not isinstance(batch, list) or not batch:
+                break
+            kills_events.extend(batch)
+            if len(batch) < 50:
+                break
+
+    return "ok", [{
+        "albion_id": albion_id,
+        "name": name,
+        "raw_profile": raw,
+        "kills_events": kills_events,
+    }], 200
 
 
 def _fetch_deep_process(host, battle_id):
@@ -331,34 +387,32 @@ def _fetch_deep_process(host, battle_id):
         try:
             with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as resp:
                 if resp.status == 200:
-                    return "ok", json.loads(resp.read())
-                return "error", None
+                    return _upstream_result(resp.status, json.loads(resp.read()))
+                return _upstream_result(resp.status)
         except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                return "rate_limited", None
-            return "error", None
+            return _upstream_result(exc.code)
         except (urllib.error.URLError, OSError, TimeoutError):
-            return "error", None
+            return "transport_error", None, None
 
     # detail
-    st, raw = _get(f"https://{host}/api/gameinfo/battles/{battle_id}")
+    st, raw, status_code = _get(f"https://{host}/api/gameinfo/battles/{battle_id}")
     if st != "ok" or not isinstance(raw, dict) or not raw.get("id"):
-        return st if st == "rate_limited" else "error", None
+        return st, None, status_code
 
     # eventos paginados
     events = []
     albion_id = raw["id"]
     for page in range(40):
-        st, batch = _get(f"https://{host}/api/gameinfo/events/battle/{albion_id}?offset={page * 51}&limit=51")
-        if st == "rate_limited":
-            return "rate_limited", None
-        if st != "ok" or not isinstance(batch, list) or not batch:
+        st, batch, status_code = _get(f"https://{host}/api/gameinfo/events/battle/{albion_id}?offset={page * 51}&limit=51")
+        if st != "ok":
+            return st, None, status_code
+        if not isinstance(batch, list) or not batch:
             break
         events.extend(batch)
         if len(batch) < 51:
             break
 
-    return "ok", [{"_deep_process": True, "battle_id": battle_id, "raw": raw, "events": events}]
+    return "ok", [{"_deep_process": True, "battle_id": battle_id, "raw": raw, "events": events}], 200
 
 
 def _heartbeat_loop():
@@ -517,20 +571,22 @@ def main():
             _save_report_spool(task_id, reports)
             continue
 
-        log.info("Task %d: %s/%s offset=%d", task_id, region, feed_type, offset)
+        subject_id = task.get("subject_id")
+        task_label = subject_id if feed_type == "profile" else str(offset)
+        log.info("Task %d: %s/%s subject=%s", task_id, region, feed_type, task_label)
         t0 = time.monotonic()
-        result, data = _fetch_feed_page(host, feed_type, offset)
+        result, data, upstream_status_code = _fetch_feed_page(host, feed_type, offset, subject_id)
         elapsed = time.monotonic() - t0
         if result == "ok" and data is not None:
             found_count, error_count = len(data), 0
             log.info("Task %d done: %d items in %.1fs", task_id, found_count, elapsed)
-        elif result == "rate_limited":
+        elif upstream_status_code == 429:
             found_count, error_count = 0, 1
             log.warning("Task %d rate limited (429), pausing 10s", task_id)
             _shutdown.wait(10)
         else:
             found_count, error_count = 0, 1
-            log.warning("Task %d failed (%s) in %.1fs", task_id, result, elapsed)
+            log.warning("Task %d failed (%s, upstream=%s) in %.1fs", task_id, result, upstream_status_code, elapsed)
 
         if not _shutdown.is_set():
             try:
@@ -538,6 +594,8 @@ def main():
                     "worker_id": WORKER_ID, "task_id": task_id, "lease_token": lease_token,
                     "found_count": found_count, "error_count": error_count,
                     "latency_ms": round(elapsed * 1000),
+                    "upstream_status_code": upstream_status_code,
+                    "backoff_seconds": 10 if upstream_status_code == 429 else None,
                 }, data if result == "ok" else None)
             except ValueError as exc:
                 log.error("Task %d não cabe em report seguro: %s", task_id, exc)

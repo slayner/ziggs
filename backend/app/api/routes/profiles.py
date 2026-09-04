@@ -1610,6 +1610,9 @@ async def guild_profile(albion_id: str, db: AsyncSession = Depends(deps.async_db
         _cold_load_tasks[key] = asyncio.create_task(_cold_load_guild(albion_id))
 
     # Retorna stub — o front detecta _cold_load e continua polling.
+    # Inclui refresh_requested_at do DB pra F5 retomar polling automaticamente.
+    if gp is not None and gp.refresh_requested_at is not None:
+        return {"_cold_load": True, "albion_id": albion_id, "refresh_requested_at": _aware(gp.refresh_requested_at).isoformat()}
     return {"_cold_load": True, "albion_id": albion_id}
 
 
@@ -1823,6 +1826,10 @@ async def alliance_profile(albion_id: str, db: AsyncSession = Depends(deps.async
     if task is None or task.done():
         _cold_load_tasks[key] = asyncio.create_task(_cold_load_alliance(albion_id))
 
+    # Inclui refresh_requested_at do DB pra F5 retomar polling automaticamente.
+    ap = await db.scalar(select(AllianceProfile).where(AllianceProfile.albion_id == albion_id))
+    if ap is not None and ap.refresh_requested_at is not None:
+        return {"_cold_load": True, "albion_id": albion_id, "refresh_requested_at": _aware(ap.refresh_requested_at).isoformat()}
     return {"_cold_load": True, "albion_id": albion_id}
 
 

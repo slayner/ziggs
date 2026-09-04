@@ -48,8 +48,7 @@ function fmtTs(s: string): string {
  * de [winStart, winEnd] (janela started-5min…ended+15min, igual ao backend). Se
  * winStart null (sem scheduled/started), não filtra por tempo. */
 function formatRows(
-  raw: string, filterCol: string | null, filterVal: string,
-  winStart: number | null, winEnd: number | null,
+  raw: string, winStart: number | null, winEnd: number | null,
 ): string[] {
   const lines = raw.replace(/\r\n/g, "\n").split("\n");
   let hi = 0;
@@ -58,7 +57,6 @@ function formatRows(
   const header = lines[hi].split(";").map(c => c.trim());
   const idx: Record<string, number> = {};
   header.forEach((h, i) => { idx[h] = i; });
-  const want = filterVal.trim().toLowerCase();
   const out: string[] = [];
   for (let i = hi + 1; i < lines.length; i++) {
     const line = lines[i];
@@ -69,9 +67,6 @@ function formatRows(
       return k !== undefined && k < cols.length ? cols[k].trim() : "";
     };
     if (!get("item_id")) continue;          // linha de morte → descarta
-    if (filterCol && want) {                 // só loot da aliança/guilda da casa
-      if (get(filterCol).toLowerCase() !== want) continue;
-    }
     if (winStart != null) {                   // só logs durante o evento
       const ts = parseTs(get("timestamp_utc"));
       if (ts == null || ts < winStart || ts > winEnd!) continue;
@@ -103,28 +98,7 @@ export default function LootLogPage({ guildId, eventId, events }: Props) {
   const t = useT();
   const [subs, setSubs] = useState<LootLogSubmission[] | null>(null);
   const [busy, setBusy] = useState(false);
-  // Filtro de aliança/guilda da casa: looted_by__alliance == alliance, ou
-  // looted_by__guild == albion_guild_name se a guilda não tem aliança.
-  const [filterCol, setFilterCol] = useState<string | null>(null);
-  const [filterVal, setFilterVal] = useState<string>("");
-
   useEffect(() => { setGuild(guildId); }, [guildId]);
-
-  // Dados da guilda (aliança/nome Albion) p/ filtrar o loot da casa.
-  useEffect(() => {
-    let alive = true;
-    api.guildInfo(guildId)
-      .then(g => {
-        if (!alive) return;
-        const alliance = (g.albion_alliance_name || "").trim();
-        const guildName = (g.albion_guild_name || "").trim();
-        if (alliance) { setFilterCol("looted_by__alliance"); setFilterVal(alliance); }
-        else if (guildName) { setFilterCol("looted_by__guild"); setFilterVal(guildName); }
-        else { setFilterCol(null); setFilterVal(""); }
-      })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [guildId]);
 
   // Guard de "alive": este componente é montado/desmontado toda vez que a
   // sub-aba troca (ReconcileSection alterna entre 2 tipos de componente
@@ -178,7 +152,7 @@ export default function LootLogPage({ guildId, eventId, events }: Props) {
   // separador. Lista única e sólida — só logs durante o evento.
   const combined = [
     FMT_COLS.join(";"),
-    ...loggers.flatMap(s => formatRows(s.raw_text ?? "", filterCol, filterVal, winStart, winEnd)),
+    ...loggers.flatMap(s => formatRows(s.raw_text ?? "", winStart, winEnd)),
   ].join("\n");
 
   return (

@@ -23,6 +23,7 @@ from i18n import t
 
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
 API_SECRET = os.getenv("BOT_API_SECRET", "")
+SYNC_CONCURRENCY = 3
 
 
 async def _get(path: str) -> dict | None:
@@ -59,8 +60,12 @@ class LootlogThreads(commands.Cog):
 
     async def sync_guild(self, guild: discord.Guild) -> None:
         lock = self._guild_locks.setdefault(guild.id, asyncio.Lock())
-        async with lock:
-            await self._sync_guild_unlocked(guild)
+        try:
+            async with asyncio.timeout(30):
+                async with lock:
+                    await self._sync_guild_unlocked(guild)
+        except (TimeoutError, asyncio.TimeoutError):
+            print(f"[lootlog_threads] sync de {guild.id} passou de 30s; próximo tick tenta de novo")
 
     async def _sync_guild_unlocked(self, guild: discord.Guild) -> None:
         cfg = await _guild_command_config(guild.id)
@@ -100,8 +105,21 @@ class LootlogThreads(commands.Cog):
         for ev in work.get("archive") or []:
             await self._archive_thread(guild, lang, ev)
 
+    async def _has_header(self, thread: discord.Thread, name: str) -> bool:
+        bot_id = getattr(getattr(self.bot, "user", None), "id", None)
+        try:
+            history = thread.history(limit=10, oldest_first=True)
+            while True:
+                message = await dtimeout(anext(history))
+                if (bot_id is None or message.author.id == bot_id) and any(
+                    embed.title == name for embed in message.embeds
+                ):
+                    return True
+        except (StopAsyncIteration, AttributeError, *SKIP_EXC):
+            return False
+
     async def _create_thread(self, guild: discord.Guild, channel: discord.TextChannel,
-                             lang: str, ev: dict) -> None:
+                              lang: str, ev: dict) -> None:
         event_id = ev.get("event_id")
         title = ev.get("title") or ""
         if not event_id:
@@ -111,6 +129,7 @@ class LootlogThreads(commands.Cog):
         thread = guild.get_thread(self._thread_ids.get(key, 0))
         if thread is None:
             thread = next((item for item in channel.threads if item.name == name), None)
+        header_exists = thread is not None and await self._has_header(thread, name)
         if thread is None:
             print(f"[lootlog_threads] criando thread '{name}' p/ evento {event_id} no canal {channel.id}")
             try:
@@ -122,10 +141,10 @@ class LootlogThreads(commands.Cog):
                       f"em {channel.id}: {type(e).__name__}: {e}")
                 return
             print(f"[lootlog_threads] ✓ thread {thread.id} criada p/ evento {event_id}")
-            # Embed com o botão '📤 Enviar log' (submissão anônima via modal FileUpload).
+        if not header_exists:
             from cogs.lootlogs import LootlogSubmitView
             embed = discord.Embed(
-                title=t(lang, "ev_lootlog_thread_title", n=event_id, title=title),
+                title=name,
                 description=t(lang, "ev_lootlog_thread_header", n=event_id),
                 color=0x2b2d31,
             )
@@ -134,11 +153,16 @@ class LootlogThreads(commands.Cog):
             except SKIP_EXC as e:
                 print(f"[lootlog_threads] falhou postar embed-botão na thread "
                       f"{thread.id}: {type(e).__name__}: {e}")
+                return
         self._thread_ids[key] = thread.id
-        await _post(
+        acknowledged = await _post(
             f"/bot/events/{guild.id}/{event_id}/lootlog-thread-synced",
             {"lootlog_thread_id": str(thread.id), "clear_dirty": True},
         )
+        if acknowledged is None:
+            print(f"[lootlog_threads] thread {thread.id} criada para evento {event_id}, "
+                  "mas confirmação ao backend falhou; próximo tick tentará de novo")
+
 
     async def _archive_thread(self, guild: discord.Guild, lang: str, ev: dict) -> None:
         tid = ev.get("lootlog_thread_id")
@@ -165,11 +189,16 @@ class LootlogThreads(commands.Cog):
 
 @tasks.loop(seconds=10)
 async def lootlog_thread_work_loop(cog: "LootlogThreads") -> None:
-    for guild in cog.bot.guilds:
-        try:
-            await cog.sync_guild(guild)
-        except Exception as e:
-            print(f"[lootlog_threads] erro no loop ({guild.id}): {type(e).__name__}: {e}")
+    semaphore = asyncio.Semaphore(SYNC_CONCURRENCY)
+
+    async def sync_limited(guild: discord.Guild) -> None:
+        async with semaphore:
+            try:
+                await cog.sync_guild(guild)
+            except Exception as e:
+                print(f"[lootlog_threads] erro no loop ({guild.id}): {type(e).__name__}: {e}")
+
+    await asyncio.gather(*(sync_limited(guild) for guild in cog.bot.guilds))
 
 
 @lootlog_thread_work_loop.before_loop

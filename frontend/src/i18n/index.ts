@@ -936,11 +936,11 @@ const S = {
     recChestPlaceholder: "2025-07-03 13:05  PlayerName  Knight Helmet  5\n2025-07-03 13:06  PlayerName  T4 Bag  1",
     recParsed: "Reconhecido", recSkipped: "ignorado", recNoItems: "Nenhum item reconhecido no log. Confira o formato.",
     recSaving: "Salvando…", recSaved: "Salvo",
-    recTotalLooted: "Looteado", recTotalChest: "Depositado", recMissing: "Faltando", recRegear: "Regear",
+    recTotalLooted: "Looteado", recTotalChest: "Depositado", recMissing: "Faltando", recItemMissing: "Faltando", recRegear: "Regear",
     recLogLoot: "Lootlog", recLogChest: "Baú", recLogDeaths: "Mortes",
     recNotDeposited: "Não depositado (ratted)", recLooted: "Looteado", recInChest: "No baú",
-    recDiedWith: "Morreu com", recRecovered: "Recuperado do cadáver", recDeposited: "Depositado", recDepositedBy: "Depositado por", recEmpty: "Nenhum dado p/ este evento. Envie loggers + baú + mortes.",
-    recStolen: "Roubado", recVerified: "Conferido", recVerifyHint: "Clique nos itens vermelhos p/ marcar como conferido (fica amarelo).", recByPlayer: "Devido por jogador", recNoOwed: "Ninguém devendo — tudo depositado ou perdido em morte.",
+    recDiedWith: "Perdido", recRecovered: "Recuperado do cadáver", recDeposited: "Depositado", recDepositedBy: "Depositado por", recEmpty: "Nenhum dado p/ este evento. Envie loggers + baú + mortes.",
+    recStolen: "Roubado", recVerified: "Conferido", recVerifyHint: "Clique nos itens vermelhos p/ marcar como conferido (fica amarelo).", recByPlayer: "Devido por jogador", recNoOwed: "Ninguém devendo — tudo depositado ou perdido em morte.", recGuildFilters: "Guildas:", recGuildAll: "Todas", recGuildUnknown: "Sem guilda",
 
     // Footer
     footerLegal: "Termos · Privacidade · Cookies",
@@ -1872,11 +1872,11 @@ const S = {
     recChestPlaceholder: "2025-07-03 13:05  PlayerName  Knight Helmet  5\n2025-07-03 13:06  PlayerName  T4 Bag  1",
     recParsed: "Parsed", recSkipped: "skipped", recNoItems: "No items recognized in the log. Check the format.",
     recSaving: "Saving…", recSaved: "Saved",
-    recTotalLooted: "Looted", recTotalChest: "Deposited", recMissing: "Missing", recRegear: "Regear",
+    recTotalLooted: "Looted", recTotalChest: "Deposited", recMissing: "Missing", recItemMissing: "Missing", recRegear: "Regear",
     recLogLoot: "Lootlog", recLogChest: "Chest", recLogDeaths: "Deaths",
     recNotDeposited: "Not deposited (ratted)", recLooted: "Looted", recInChest: "In chest",
-    recDiedWith: "Died with", recRecovered: "Recovered from corpse", recDeposited: "Deposited", recDepositedBy: "Deposited by", recEmpty: "No data for this event. Send loggers + chest + deaths.",
-    recStolen: "Stolen", recVerified: "Verified", recVerifyHint: "Click red items to mark them verified (turns yellow).", recByPlayer: "Owed by player", recNoOwed: "Nobody owing — everything deposited or lost on death.",
+    recDiedWith: "Lost", recRecovered: "Recovered from corpse", recDeposited: "Deposited", recDepositedBy: "Deposited by", recEmpty: "No data for this event. Send loggers + chest + deaths.",
+    recStolen: "Stolen", recVerified: "Verified", recVerifyHint: "Click red items to mark them verified (turns yellow).", recByPlayer: "Owed by player", recNoOwed: "Nobody owing — everything deposited or lost on death.", recGuildFilters: "Guilds:", recGuildAll: "All", recGuildUnknown: "No guild",
 
     // Footer
     footerLegal: "Terms · Privacy · Cookies",
@@ -2807,11 +2807,11 @@ const S = {
     recChestPlaceholder: "2025-07-03 13:05  PlayerName  Knight Helmet  5\n2025-07-03 13:06  PlayerName  T4 Bag  1",
     recParsed: "Reconocido", recSkipped: "ignorado", recNoItems: "Ningún ítem reconocido en el log. Revisa el formato.",
     recSaving: "Guardando…", recSaved: "Guardado",
-    recTotalLooted: "Looteado", recTotalChest: "Depositado", recMissing: "Faltante", recRegear: "Regear",
+    recTotalLooted: "Looteado", recTotalChest: "Depositado", recMissing: "Faltante", recItemMissing: "Faltante", recRegear: "Regear",
     recLogLoot: "Lootlog", recLogChest: "Baúl", recLogDeaths: "Muertes",
     recNotDeposited: "No depositado (ratted)", recLooted: "Looteado", recInChest: "En baúl",
-    recDiedWith: "Murió con", recRecovered: "Recuperado del cadáver", recDeposited: "Depositado", recDepositedBy: "Depositado por", recEmpty: "Sin datos para este evento. Envía loggers + baúl + muertes.",
-    recStolen: "Robado", recVerified: "Verificado", recVerifyHint: "Clic en ítems rojos para marcarlos verificados (se ponen amarillos).", recByPlayer: "Debido por jugador", recNoOwed: "Nadie debiendo — todo depositado o perdido en muerte.",
+    recDiedWith: "Perdido", recRecovered: "Recuperado del cadáver", recDeposited: "Depositado", recDepositedBy: "Depositado por", recEmpty: "Sin datos para este evento. Envía loggers + baúl + muertes.",
+    recStolen: "Robado", recVerified: "Verificado", recVerifyHint: "Clic en ítems rojos para marcarlos verificados (se ponen amarillos).", recByPlayer: "Debido por jugador", recNoOwed: "Nadie debiendo — todo depositado o perdido en muerte.", recGuildFilters: "Gremios:", recGuildAll: "Todos", recGuildUnknown: "Sin gremio",
 
     // Footer
     footerLegal: "Términos · Privacidad · Cookies",

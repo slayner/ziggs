@@ -37,11 +37,11 @@ from app.models.nodes import (  # noqa: F401
 from app.models.companion import (  # noqa: F401
     CompanionScanTask,
 )
-from app.models.scan_worker import ScanReportChunk, ScanWorker, ScanWorkTask  # noqa: F401
+from app.models.scan_worker import ScanHostRateState, ScanReportChunk, ScanWorkAttempt, ScanWorker, ScanWorkTask  # noqa: F401
 from app.models.guild_profiles import GuildProfile, AllianceProfile  # noqa: F401
 from app.models.profile_media import ProfileMediaSubmission  # noqa: F401
 from app.models.craft import CraftCart  # noqa: F401
-from app.models.renders import RenderMiss  # noqa: F401
+from app.models.renders import RenderMiss, KnownLootedItem  # noqa: F401
 from app.models.native_feed import NativeFeedItem, NativeFeedStream  # noqa: F401
 
 __all__ = [
@@ -67,7 +67,7 @@ __all__ = [
     "LootLogSubmission",
     "NodeDef", "NodeEvent", "NodeEventLog", "NodeMap", "NodeMapExclusion", "NodeCalendar",
     "CompanionScanTask",
-    "ScanReportChunk", "ScanWorker", "ScanWorkTask",
+    "ScanHostRateState", "ScanReportChunk", "ScanWorkAttempt", "ScanWorker", "ScanWorkTask",
     "GuildProfile", "AllianceProfile",
     "ProfileMediaSubmission",
     "CraftCart",

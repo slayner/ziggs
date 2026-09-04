@@ -76,7 +76,9 @@ def _format_target_list(members: list[discord.Member], limit: int = MAX_TARGETS_
 
 
 async def _get(path: str) -> Optional[dict]:
-    return await http_client.get_json(path, tag="economy")
+    return await http_client.get_json(
+        path, tag="economy", retry_for=30, raise_on_unavailable=True,
+    )
 
 
 async def _post(path: str, body: dict) -> Optional[dict]:

@@ -30,6 +30,7 @@ from app.api.schemas.lootlog import (
 from app.models.audit import AuditLog
 from app.models.events import Event
 from app.models.lootlog import LootLogSubmission
+from app.models.renders import KnownLootedItem
 from app.models.tenancy import Guild
 
 # Colunas essenciais do .csv do ao-loot-logger (tolera extras/ordem).
@@ -151,9 +152,23 @@ def parse_loot_rows(text: str) -> list[dict]:
             return cols[i] if (i is not None and i < len(cols)) else ""
 
         item_id = get("item_id")
+        item_name = get("item_name")
         looted_by = get("looted_by__name")
         if not item_id or not looted_by:
             continue  # linha de morte / sem coleta
+        if item_id.startswith("IDX_"):
+            try:
+                from app.services.item_catalog import resolve_index, resolve_index_name
+                idx_num = int(item_id.removeprefix("IDX_"))
+                resolved = resolve_index(idx_num)
+                if resolved is None:
+                    # Catálogo não carregado: aborta ingest para não gravar IDX_*
+                    raise RuntimeError("Item catalog not loaded — deploy items.txt before accepting lootlog uploads")
+                item_id = resolved
+                item_name = resolve_index_name(idx_num) or get("item_name")
+            except ValueError:
+                # IDX_ com sufixo não numérico — mantém original
+                pass
         try:
             qty = int(get("quantity") or 1)
         except ValueError:
@@ -161,7 +176,7 @@ def parse_loot_rows(text: str) -> list[dict]:
         rows.append({
             "ts": _parse_ts(get("timestamp_utc")),
             "item_id": item_id,
-            "item_name": get("item_name"),
+            "item_name": item_name,
             "quantity": qty,
             "looted_by": looted_by,
             "looted_by_guild": get("looted_by__guild"),
@@ -387,6 +402,18 @@ def ingest(
     rows = parse_loot_rows(text)
     if not rows:
         raise LootLogServiceError("log vazio (nenhuma coleta com item_id)")
+    known_item_ids = {row["item_id"] for row in rows}
+    existing_known = {
+        item.key for item in db.scalars(
+            select(KnownLootedItem).where(
+                KnownLootedItem.kind == "item",
+                KnownLootedItem.key.in_(known_item_ids),
+            )
+        )
+    }
+    now = datetime.now(timezone.utc)
+    for item_id in known_item_ids - existing_known:
+        db.add(KnownLootedItem(kind="item", key=item_id, first_seen_at=now, last_seen_at=now))
 
     # ponytail: NÃO precifica mais no ingest. Era 1 HTTP por item_id não-cachêd
     # (loot.get_price → API albion-online-data, 5s cada) — num log real com dezenas

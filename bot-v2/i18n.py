@@ -16,14 +16,14 @@ T: dict[str, dict[str, str]] = {
         "es": "No tienes permiso para usar este comando.",
     },
     "unexpected_error": {
-        "pt": "⚠️ Algo deu errado ao executar o comando. Tente de novo em instantes — se continuar, avise um admin.",
-        "en": "⚠️ Something went wrong running the command. Try again in a moment — if it keeps happening, tell an admin.",
-        "es": "⚠️ Algo salió mal al ejecutar el comando. Inténtalo de nuevo en un momento — si persiste, avisa a un admin.",
+        "pt": "Não foi possível executar o comando. Tente novamente em instantes.",
+        "en": "Could not run the command. Try again in a moment.",
+        "es": "No se pudo ejecutar el comando. Inténtalo de nuevo en unos instantes.",
     },
     "backend_unavailable": {
-        "pt": "⚠️ O backend está indisponível no momento. Tente novamente em instantes.",
-        "en": "⚠️ The backend is currently unavailable. Try again in a moment.",
-        "es": "⚠️ El backend no está disponible en este momento. Inténtalo de nuevo en unos instantes.",
+        "pt": "Não foi possível consultar o sistema agora. Tente novamente em instantes.",
+        "en": "Could not reach the system right now. Try again in a moment.",
+        "es": "No se pudo consultar el sistema ahora. Inténtalo de nuevo en unos instantes.",
     },
     "cooldown_wait": {
         "pt": "⏳ Calma! Tente de novo em {seconds}s.",
@@ -175,9 +175,9 @@ T: dict[str, dict[str, str]] = {
         "es": "🧪 Energía: **{energy}**",
     },
     "balance_fetch_fail": {
-        "pt": "⚠️ Não consegui consultar o saldo agora.",
-        "en": "⚠️ Couldn't check the balance right now.",
-        "es": "⚠️ No pude consultar el saldo ahora.",
+        "pt": "Não foi possível consultar o saldo agora.",
+        "en": "Could not check the balance right now.",
+        "es": "No se pudo consultar el saldo ahora.",
     },
     "pay_self": {
         "pt": "❌ Você não pode pagar a si mesmo.",

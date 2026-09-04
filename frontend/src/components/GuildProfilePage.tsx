@@ -630,7 +630,7 @@ export default function GuildProfilePage({ mode, albionId, onBack }: {
         }
         startRefreshPoll();
       })
-      .catch(() => { if (refreshIdentityRef.current === identity) startRefreshPoll(); });  // POST falhou — tenta polling do estado
+      .catch(() => { if (refreshIdentityRef.current === identity) { setRefreshing(true); setRefreshStage("queued"); startRefreshPoll(); } });  // POST falhou — mantém refreshing e tenta polling do estado
   }
 
   function startRefreshPoll() {

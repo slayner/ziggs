@@ -7,6 +7,17 @@ dados crus. O backend faz upsert (nunca confia no client, mas as VPS são
 nossas — o dado vem direto da API pública).
 
 Workers registram com segredo de bootstrap e usam credencial individual.
+
+feed_type:
+  'battles'       — GET /api/gameinfo/battles?sort=recent&limit=51&offset={offset}
+  'kills'         — GET /api/gameinfo/events?limit=51&offset={offset}
+  'deep_process'  — deep-process de batalha light: busca detail + events
+                     paginados de /api/gameinfo/battles/{id} + /events/battle/{id}.
+                     page_offset guarda o battle.id (não o offset do feed).
+  'profile'       — fetch de perfil de jogador + kills/deaths (prioridade alta).
+                     subject_id = albion_id do jogador. page_offset = 0.
+                     Worker autenticado (VPS) busca /players/{id} + /events/player/{id}.
+                     Dado NÃO inclui info privada — só nome/id/região públicos.
 """
 from __future__ import annotations
 
@@ -23,6 +34,12 @@ WORK_CLAIM_TTL = timedelta(seconds=120)
 FEED_PAGE_SIZE = 51
 SCAN_REGIONS = ("americas", "europe", "asia")
 MAX_PENDING_PER_REGION = 50
+
+# Feed types suportados
+FEED_BATTLES = "battles"
+FEED_KILLS = "kills"
+FEED_DEEP_PROCESS = "deep_process"
+FEED_PROFILE = "profile"
 
 
 class ScanWorker(Base):
@@ -60,11 +77,15 @@ class ScanWorkTask(Base):
     """Task de feed polling ou deep-process delegado.
 
     feed_type:
-      'battles'      — GET /api/gameinfo/battles?sort=recent&limit=51&offset={offset}
-      'kills'        — GET /api/gameinfo/events?limit=51&offset={offset}
-      'deep_process' — deep-process de batalha light: busca detail + events
-                       paginados de /api/gameinfo/battles/{id} + /events/battle/{id}.
-                       page_offset guarda o battle.id (não o offset do feed).
+      'battles'       — GET /api/gameinfo/battles?sort=recent&limit=51&offset={offset}
+      'kills'         — GET /api/gameinfo/events?limit=51&offset={offset}
+      'deep_process'  — deep-process de batalha light: busca detail + events
+                        paginados de /api/gameinfo/battles/{id} + /events/battle/{id}.
+                        page_offset guarda o battle.id (não o offset do feed).
+      'profile'       — fetch de perfil de jogador + kills/deaths (prioridade alta).
+                        subject_id = albion_id do jogador. page_offset = 0.
+                        Worker autenticado (VPS) busca /players/{id} + /events/player/{id}.
+                        Dado NÃO inclui info privada — só nome/id/região públicos.
 
     status:
       'pending'  — aguardando um worker pegar
@@ -75,8 +96,11 @@ class ScanWorkTask(Base):
 
     id: Mapped[int] = pk()
     region: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    feed_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    feed_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     page_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    subject_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    preferred_worker_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    affinity_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False, index=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), index=True)
@@ -89,6 +113,35 @@ class ScanWorkTask(Base):
     missing_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     lap_id: Mapped[int | None] = mapped_column(BigInt(), index=True)
+
+
+class ScanWorkAttempt(Base):
+    __tablename__ = "scan_work_attempts"
+    __table_args__ = (UniqueConstraint("lease_token", name="uq_scan_work_attempt_lease"),)
+
+    id: Mapped[int] = pk()
+    task_id: Mapped[int] = mapped_column(BigInt(), nullable=False, index=True)
+    worker_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    lease_token: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="claimed", nullable=False, index=True)
+    is_hedge: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    report_status_code: Mapped[int | None] = mapped_column(Integer())
+
+
+class ScanHostRateState(Base):
+    __tablename__ = "scan_host_rate_states"
+
+    id: Mapped[int] = pk()
+    region: Mapped[str] = mapped_column(String(16), nullable=False, unique=True, index=True)
+    backoff_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_status_code: Mapped[int | None] = mapped_column(Integer())
+    consecutive_rate_limits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
 
 
 class ScanStreamState(Base):

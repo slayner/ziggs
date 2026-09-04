@@ -4436,6 +4436,7 @@ def bot_lowattendance(
 class BotWarmIn(BaseModel):
     name: str
     region: str
+    albion_id: str | None = None
 
 
 @router.post("/bot/guilds/{guild_id}/warm")
@@ -4451,7 +4452,7 @@ async def bot_warm(
     region = (body.region or "").strip().lower()
     if not name or region not in HOSTS:
         raise HTTPException(400, "name/region inválidos")
-    return await profile_warmer.warm_bot_profile(name, region)
+    return await profile_warmer.warm_bot_profile(name, region, body.albion_id)
 
 
 def _require_member(db: Session, user: User, guild_id: int) -> GuildMember:

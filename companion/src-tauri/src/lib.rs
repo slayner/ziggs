@@ -475,7 +475,7 @@ fn spell_cache_path() -> std::path::PathBuf {
         // Bump filename when table CONTENT changes: old cache deserializes
         // without error (new fields are Option), so a rename is needed for
         // users to pick up improvements.
-        .join("spell_names_v6.json")
+        .join("spell_names_v7.json")
 }
 
 /// Loads from disk cache or downloads from backend. Retries until success:

@@ -629,6 +629,7 @@ export type ReconcileItemStatus = "missing" | "deposited" | "died";
 export interface ReconcileLooterItem {
   item_id: string;
   item_name: string;
+  looted_by_guild: string | null;
   status: ReconcileItemStatus;
   quantity: number;
   silver_value: number;

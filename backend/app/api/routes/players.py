@@ -17,6 +17,7 @@ from app.api.routes.battles import (
 )
 from app.db import AsyncSessionLocal, SyncSessionLocal
 from app.models.battles import Battle, BattleKillEvent, BattleParticipant
+from app.models.dashboard_cache import DashboardCache
 from app.models.players import AlbionPlayer, DeletedProfile, PlayerKillEvent, PlayerSnapshot, PlayerWeaponStat, SearchEntry
 from app.services import battle_groups, user_profile
 from app.services.albion_gate import EMBED, LINK_PROFILE, PROFILE, WARM, albion_scope, queue_depth, slot
@@ -175,7 +176,7 @@ async def _battle_history(
     )).all()
     # Em lote — um commit só pra lista inteira, não um por batalha (pode ser
     # centenas pra jogador ativo desde que DEEP_PROCESS_MIN_PLAYERS virou 0).
-    groups = await battle_groups.get_or_create_groups_bulk(db, [battle.id for battle, _ in rows])
+    groups = await battle_groups.get_existing_groups_bulk(db, [battle.id for battle, _ in rows])
     public_ids = {bid: g.public_id for bid, g in groups.items()}
     fc = factions_cache if factions_cache is not None else {}
     # Batch: 3 queries fixas pra todas as batalhas, em vez de 3 por batalha.
@@ -184,7 +185,7 @@ async def _battle_history(
         fc.update(await _factions_summary_bulk(db, missing_bids))
     out = []
     for battle, bp in rows:
-        public_id = public_ids[battle.id]
+        public_id = public_ids.get(battle.id)
         out.append({
             "public_id": public_id,
             "region": battle.region,
@@ -221,7 +222,7 @@ async def _battle_links_bulk(
     if not ids:
         return {}
     battles = (await db.scalars(select(Battle).where(Battle.region == region, Battle.albion_id.in_(ids)))).all()
-    groups = await battle_groups.get_or_create_groups_bulk(db, [b.id for b in battles])
+    groups = await battle_groups.get_existing_groups_bulk(db, [b.id for b in battles])
     public_ids = {bid: g.public_id for bid, g in groups.items()}
     fc = factions_cache if factions_cache is not None else {}
     # Batch: 3 queries fixas pra todas as batalhas, em vez de 3 por batalha.
@@ -231,7 +232,7 @@ async def _battle_links_bulk(
     silver_by_battle = await _battle_silver_by_battle(db, [battle.id for battle in battles])
     out: dict[str, tuple[str | None, list[dict], int]] = {}
     for b in battles:
-        out[b.albion_id] = (public_ids[b.id], fc.get(b.id, []), silver_by_battle.get(b.id, 0))
+        out[b.albion_id] = (public_ids.get(b.id), fc.get(b.id, []), silver_by_battle.get(b.id, 0))
     return out
 
 
@@ -603,6 +604,15 @@ async def _guild_history(db: AsyncSession, player: AlbionPlayer) -> list[dict]:
     return out
 
 
+async def _warm_profile_payload(db: AsyncSession, player: AlbionPlayer) -> dict:
+    cached = await _cached_profile_payload(db, player)
+    if cached is not None:
+        return cached
+    payload = await _build_profile_payload(db, player, _synthetic_raw(player))
+    await _cache_profile_payload(db, player, payload)
+    return payload
+
+
 async def _build_profile_payload(db: AsyncSession, player: AlbionPlayer, raw: dict) -> dict:
     guild_history = await _guild_history(db, player)
 
@@ -665,6 +675,7 @@ async def _build_profile_payload(db: AsyncSession, player: AlbionPlayer, raw: di
             "region": player.region,
             "first_seen_at": _aware(player.first_seen_at).isoformat(),
             "last_seen_at": _aware(player.last_seen_at).isoformat(),
+            "stats_updated_at": _aware(player.stats_updated_at).isoformat() if player.stats_updated_at else None,
             # Estado de refresh compartilhado entre todos os visitantes — enquanto
             # não é None, o profile_warmer ainda vai re-sincronizar esse jogador
             # (botão ⟳ do perfil). O front mostra "atualizando" pra TODOS que
@@ -763,6 +774,37 @@ async def search_players(q: str = Query(min_length=2), region: str = "americas",
     return {"players": players}
 
 
+def _player_payload_cache_key(player: AlbionPlayer) -> str:
+    return f"player:{player.region}:{player.albion_id}"
+
+
+async def _cached_profile_payload(db: AsyncSession, player: AlbionPlayer) -> dict | None:
+    if player.stats_updated_at is None:
+        return None
+    row = await db.get(DashboardCache, _player_payload_cache_key(player))
+    if row is None or not isinstance(row.payload, dict):
+        return None
+    revision = _aware(player.stats_updated_at).isoformat()
+    if row.payload.get("_profile_revision") != revision:
+        return None
+    payload = dict(row.payload)
+    payload.pop("_profile_revision", None)
+    return payload
+
+
+async def _cache_profile_payload(db: AsyncSession, player: AlbionPlayer, payload: dict) -> None:
+    if player.stats_updated_at is None:
+        return
+    cached = {**payload, "_profile_revision": _aware(player.stats_updated_at).isoformat()}
+    key = _player_payload_cache_key(player)
+    row = await db.get(DashboardCache, key)
+    if row is None:
+        db.add(DashboardCache(key=key, payload=cached))
+    else:
+        row.payload = cached
+    await db.commit()
+
+
 def _synthetic_raw(player: AlbionPlayer) -> dict:
     """Reconstrói o formato bruto da API do Albion a partir do que já temos
     salvo — cobre os campos que o perfil realmente lê (ver
@@ -852,7 +894,9 @@ def get_load_progress(region: str, name: str):
     return {"stage": entry[1] if entry else None, "albion_queue": queue_depth(EMBED)}
 
 
-async def _cold_load_player(region: str, name: str, host: str, priority: int = EMBED) -> None:
+async def _cold_load_player(
+    region: str, name: str, host: str, priority: int = EMBED, albion_id: str | None = None,
+) -> None:
     """Busca e grava o perfil base para a primeira visita.
     Roda como asyncio.create_task — não atrelada à request HTTP, sobrevive ao
     client desconectar. Atualiza _load_progress em cada etapa; limpa no final.
@@ -871,35 +915,38 @@ async def _cold_load_player(region: str, name: str, host: str, priority: int = E
         async with make_client() as c:
             async with albion_scope(attempt_priority):
                 started = asyncio.get_running_loop().time()
-                try:
-                    resp = await _get_with_retry(c, f"https://{host}/api/gameinfo/search", params={"q": name})
-                    resp.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 429 or e.response.status_code >= 500:
+                player_id = albion_id
+                if player_id is None:
+                    try:
+                        resp = await _get_with_retry(c, f"https://{host}/api/gameinfo/search", params={"q": name})
+                        resp.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        if e.response.status_code == 429 or e.response.status_code >= 500:
+                            return "retry"
+                        _load_progress[progress_key] = (token, f"error:{e.response.status_code}")
+                        return "done"
+                    except httpx.RequestError:
                         return "retry"
-                    _load_progress[progress_key] = (token, f"error:{e.response.status_code}")
-                    return "done"
-                except httpx.RequestError:
-                    return "retry"
-                if attempt_priority == EMBED:
-                    log.info("embed: busca de %s concluida em %.1fs", name,
-                             asyncio.get_running_loop().time() - started)
-                candidates = resp.json().get("players", [])
-                # Nomes da Albion diferenciam maiúsculas/minúsculas — "Moskka" e
-                # "MosKKa" são DUAS contas distintas. Prioriza match exato; só cai
-                # pra case-insensitive se não achar nenhum (ex: erro de digitação
-                # na URL) — nunca o contrário, senão pode resolver pra conta errada.
-                match = next((p for p in candidates if p.get("Name") == name), None)
-                if match is None:
-                    match = next((p for p in candidates if p.get("Name", "").lower() == name.lower()), None)
-                if match is None:
-                    _load_progress[progress_key] = (token, "error:notfound")
-                    return "done"
+                    if attempt_priority == EMBED:
+                        log.info("embed: busca de %s concluida em %.1fs", name,
+                                 asyncio.get_running_loop().time() - started)
+                    candidates = resp.json().get("players", [])
+                    # Nomes da Albion diferenciam maiúsculas/minúsculas — "Moskka" e
+                    # "MosKKa" são DUAS contas distintas. Prioriza match exato; só cai
+                    # pra case-insensitive se não achar nenhum (ex: erro de digitação
+                    # na URL) — nunca o contrário, senão pode resolver pra conta errada.
+                    match = next((p for p in candidates if p.get("Name") == name), None)
+                    if match is None:
+                        match = next((p for p in candidates if p.get("Name", "").lower() == name.lower()), None)
+                    if match is None:
+                        _load_progress[progress_key] = (token, "error:notfound")
+                        return "done"
+                    player_id = match["Id"]
                 _load_progress[progress_key] = (token, "details")
                 raw = None
                 valid_snapshot = False
                 for attempt in range(3):
-                    raw = await _fetch_player_raw(c, host, match["Id"])
+                    raw = await _fetch_player_raw(c, host, player_id)
                     if raw is None:
                         _load_progress[progress_key] = (token, "error:notfound")
                         return "done"
@@ -908,6 +955,9 @@ async def _cold_load_player(region: str, name: str, host: str, priority: int = E
                         break
                     await asyncio.sleep(1)
                 if raw is None:
+                    _load_progress[progress_key] = (token, "error:notfound")
+                    return "done"
+                if raw.get("Name", "").lower() != name.lower():
                     _load_progress[progress_key] = (token, "error:notfound")
                     return "done"
                 # Grava o jogador mesmo com snapshot bugado da Albion (Timestamp
@@ -930,14 +980,16 @@ async def _cold_load_player(region: str, name: str, host: str, priority: int = E
                             player.refresh_priority = LINK_PROFILE
                             await db.commit()
                             request_refresh()
+                if not valid_snapshot:
+                    return "retry"
                 from app.services.profile_preview import invalidate_cache
                 invalidate_cache(raw["Id"], region)
+                _load_progress[progress_key] = (token, "build")
+                await _render_profile_preview(raw["Id"], region)
                 ready = _cold_load_ready.get(progress_key)
                 if ready is not None:
                     ready.set()
                 asyncio.create_task(_sync_cold_load_activities(raw["Id"], region, host))
-                if not valid_snapshot:
-                    return "retry"
                 return "loaded"
 
     async def _work() -> None:
@@ -989,12 +1041,14 @@ async def _sync_cold_load_activities(albion_id: str, region: str, host: str) -> 
         log.debug("cold load: atividades de %s (%s) falharam: %s", albion_id, region, e)
 
 
-def _start_cold_load(region: str, name: str, host: str, priority: int = EMBED) -> asyncio.Task:
+def _start_cold_load(
+    region: str, name: str, host: str, priority: int = EMBED, albion_id: str | None = None,
+) -> asyncio.Task:
     key = f"{region}:{name.lower()}"
     task = _cold_load_tasks.get(key)
     if task is None or task.done():
         _cold_load_ready[key] = asyncio.Event()
-        task = asyncio.create_task(_cold_load_player(region, name, host, priority))
+        task = asyncio.create_task(_cold_load_player(region, name, host, priority, albion_id))
         _cold_load_tasks[key] = task
     return task
 
@@ -1073,7 +1127,7 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
     cached = await db.scalar(
         select(AlbionPlayer).where(AlbionPlayer.region == region, func.lower(AlbionPlayer.name) == name.lower())
     )
-    if cached is not None and cached.lifetime_statistics is not None and not _player_has_bad_snapshot(cached):
+    if cached is not None and cached.stats_updated_at is not None and cached.lifetime_statistics is not None and not _player_has_bad_snapshot(cached):
         # Cache com perfil completo (LifetimeStatistics já foi carregado alguma
         # vez) — serve na hora. Se só vimos o player via feed/search (sem
         # LifetimeStatistics), kill_fame/death_fame/pve/gathering estão zeros e
@@ -1081,57 +1135,8 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
         # completo. Cai pro fluxo de cold load abaixo.
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
         await db.commit()
-        return await _build_profile_payload(db, cached, _synthetic_raw(cached))
+        return await _warm_profile_payload(db, cached)
 
-    if cached is not None and cached.lifetime_statistics is not None and _player_has_bad_snapshot(cached):
-        # Temos o perfil, mas o snapshot salvo veio de uma resposta inválida da
-        # Albion (Timestamp null). Não reclassificamos como cold nem sobrescrevemos
-        # o snapshot anterior: servimos o que temos e deixamos o warmer corrigir.
-        await db.commit()
-        return await _build_profile_payload(db, cached, _synthetic_raw(cached))
-
-    if cached is not None and cached.lifetime_statistics is None:
-        # Cache incompleto (visto via feed/search mas nunca warmed). Tenta
-        # buscar o perfil completo SÍNCRONO com timeout curto — se a Albion
-        # responder rápido, o usuário vê o perfil completo na mesma request,
-        # sem stub nem polling. Se falhar/timeout, cai pro cold load async.
-        # PULA se já tem cold load em andamento (não compete por slot do pool).
-        progress_key = f"{region}:{name.lower()}"
-        existing_task = _cold_load_tasks.get(progress_key)
-        if cached.albion_id and (existing_task is None or existing_task.done()):
-            try:
-                async with make_client() as c:
-                    async with albion_scope(PROFILE):
-                        raw = await asyncio.wait_for(
-                            _fetch_player_raw(c, host, cached.albion_id),
-                            timeout=8.0,
-                        )
-                    if raw is not None:
-                        # Upsert síncrono (rápido — é só DB) + kills via warmer
-                        # em background. Assim o usuário vê stats completas na
-                        # mesma request sem esperar a sync de kills (2 requests
-                        # HTTP lentos que segurariam conexão do pool DB).
-                        # stats_verified só quando o snapshot da Albion é real.
-                        valid = _raw_has_profile_data(raw)
-                        await upsert_player(db, raw, region, stats_verified=valid)
-                        await db.commit()
-                        refreshed = await db.scalar(
-                            select(AlbionPlayer).where(AlbionPlayer.albion_id == raw["Id"], AlbionPlayer.region == region)
-                        )
-                        if refreshed is not None and valid and refreshed.lifetime_statistics is not None and not _player_has_bad_snapshot(refreshed):
-                            refreshed.refresh_requested_at = datetime.now(timezone.utc)
-                            await db.commit()
-                            return await _build_profile_payload(db, refreshed, _synthetic_raw(refreshed))
-
-            except (asyncio.TimeoutError, httpx.RequestError, Exception):
-                pass  # cai pro cold load async abaixo
-        # Síncrono falhou (ou já tem task rodando) — enfileira warm no
-        # profile_warmer (não depende de o usuário ficar polling).
-        if cached.albion_id:
-            try:
-                await request_refresh(db, cached.albion_id, region)
-            except Exception:
-                pass
 
     # Cold load: dispara task em background (ou junta-se a uma em andamento).
     # Se já tem task rodando, só retorna o stage atual — a barra continua de
@@ -1155,17 +1160,21 @@ async def get_player_by_name(region: str, name: str, db: AsyncSession = Depends(
         else:
             raise HTTPException(502, f"Albion API: {kind}")
 
-    # Dispara task em background (ou junta-se a uma em andamento).
+# Dispara task em background (ou junta-se a uma em andamento).
     _start_cold_load(region, name, host)
 
     # Cold load em andamento — retorna 200 com payload stub. O front detecta
     # _cold_load=true e mostra a barra de progresso (polling de /load-progress)
     # até o perfil estar pronto no DB, quando a próxima leitura retorna o
     # perfil completo. Não é 202 porque o front espera 200 com JSON.
+    # Inclui refresh_requested_at do DB pra F5 retomar polling automaticamente.
+    refresh_at = None
+    if cached is not None:
+        refresh_at = _aware(cached.refresh_requested_at).isoformat() if cached.refresh_requested_at else None
     return {
         "Id": None, "Name": name, "_cold_load": True,
         "_ziggs": {"region": region, "first_seen_at": None, "last_seen_at": None,
-                   "refresh_requested_at": None, "guild_history": [], "fame_history": [],
+                   "refresh_requested_at": refresh_at, "guild_history": [], "fame_history": [],
                    "battle_history": [], "top_weapons": [], "kills": [], "deaths": [],
                    "silver_dropped": 0},
     }
@@ -1180,46 +1189,14 @@ async def get_player(albion_id: str, region: str | None = None, db: AsyncSession
     Cache-first: mesma lógica de get_player_by_name — só busca ao vivo se
     nunca vimos esse ID antes."""
     cached = await db.scalar(select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id))
-    if cached is not None and cached.lifetime_statistics is not None and not _player_has_bad_snapshot(cached):
+    if cached is not None and cached.stats_updated_at is not None and cached.lifetime_statistics is not None and not _player_has_bad_snapshot(cached):
         # Mesma lógica de get_player_by_name: só serve o cache se já temos o
         # perfil completo (LifetimeStatistics). Sem ele, kill_fame/death_fame/
         # pve/gathering estão zeros e o perfil mostra nada — cai pro cold load.
         # Libera read tx antes do await (_build_profile_payload faz HTTP).
         await db.commit()
-        return await _build_profile_payload(db, cached, _synthetic_raw(cached))
+        return await _warm_profile_payload(db, cached)
 
-    if cached is not None and cached.lifetime_statistics is not None and _player_has_bad_snapshot(cached):
-        # Perfil salvo mas com snapshot bugado da Albion — servimos o que temos
-        # e deixamos o warmer corrigir; não reclassificamos como cold.
-        await db.commit()
-        return await _build_profile_payload(db, cached, _synthetic_raw(cached))
-
-    if cached is not None and cached.lifetime_statistics is None and cached.region:
-        # Cache incompleto (visto via feed/search mas nunca warmed). Tenta
-        # buscar o perfil completo SÍNCRONO com timeout curto — mesma
-        # estratégia de get_player_by_name. Se falhar, cai pro fluxo live abaixo.
-        host = HOSTS.get(cached.region)
-        if host:
-            try:
-                async with make_client() as c:
-                    async with albion_scope(PROFILE):
-                        raw = await asyncio.wait_for(
-                            _fetch_player_raw(c, host, albion_id),
-                            timeout=8.0,
-                        )
-                    if raw is not None:
-                        valid = _raw_has_profile_data(raw)
-                        await upsert_player(db, raw, cached.region, stats_verified=valid)
-                        await db.commit()
-                        refreshed = await db.scalar(
-                            select(AlbionPlayer).where(AlbionPlayer.albion_id == albion_id)
-                        )
-                        if refreshed is not None and valid and refreshed.lifetime_statistics is not None and not _player_has_bad_snapshot(refreshed):
-                            refreshed.refresh_requested_at = datetime.now(timezone.utc)
-                            await db.commit()
-                            return await _build_profile_payload(db, refreshed, _synthetic_raw(refreshed))
-            except (asyncio.TimeoutError, httpx.RequestError, Exception):
-                pass  # cai pro fluxo live abaixo
 
     async with make_client() as c:
         async with albion_scope(PROFILE):
@@ -1507,7 +1484,11 @@ async def player_preview_status(region: str, name: str):
         raise HTTPException(404, "Perfil não encontrado")
     from app.services.profile_preview import _cache_path
     updated_at = player.stats_updated_at or player.last_seen_at
-    profile_ready = player.lifetime_statistics is not None and not _player_has_bad_snapshot(player)
+    profile_ready = (
+        player.stats_updated_at is not None
+        and player.lifetime_statistics is not None
+        and not _player_has_bad_snapshot(player)
+    )
     cached_png = _cache_path(player.albion_id, region).is_file()
     return {
         "ready": profile_ready and cached_png,

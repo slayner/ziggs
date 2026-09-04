@@ -22,18 +22,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal, async_engine
-from app.models.battles import Battle, BattleSyncCursor
-from app.models.players import KillSyncCursor, PlayerKillEvent
+from app.models.battles import Battle, BattleParticipant, BattleSyncCursor
+from app.models.players import AlbionPlayer, KillSyncCursor, PlayerKillEvent
 from app.models.scan_worker import (
     FEED_PAGE_SIZE,
+    FEED_PROFILE,
     SCAN_REGIONS,
     WORK_CLAIM_TTL,
     WORKER_HEARTBEAT_TIMEOUT,
+    ScanHostRateState,
     ScanIngestPayload,
     ScanIncident,
     ScanLap,
     ScanReportChunk,
     ScanStreamState,
+    ScanWorkAttempt,
     ScanWorker,
     ScanWorkerRegionMetric,
     ScanWorkTask,
@@ -90,6 +93,19 @@ CLAIM_LOCK_ID = 0x5A494748
 WINDOW_RATE_ALPHA = 0.25
 LATENCY_EWMA_ALPHA = 0.25
 _BACKEND_WORKER_ID = "backend-idle"
+
+# Prioridades de task (maior = mais prioritário no claim).
+# Feed recente usa 2/1 e backfill usa 0; profiles explícitos precisam furar a fila.
+# Profile tasks:
+#   PRIORITY_PROFILE_EXPLICIT = 100 (usuário aguardando refresh)
+#   PRIORITY_PROFILE_BATTLE = 90 (participantes de batalha recém deep-processada)
+#   PRIORITY_PROFILE_WARM = 10 (warm de fundo do companion / backfill)
+PRIORITY_PROFILE_EXPLICIT = 100
+PRIORITY_PROFILE_BATTLE = 90
+PRIORITY_PROFILE_WARM = 10
+
+# Afinidade de worker para profile tasks
+AFFINITY_TTL = timedelta(hours=2)  # worker preferido expira após 2h
 
 _foreground_inflight = 0
 _last_foreground_activity = time.monotonic()
@@ -307,17 +323,26 @@ async def mark_dead_workers(db: AsyncSession) -> int:
 
 
 async def _release_expired_claims(db: AsyncSession) -> int:
+    now = _now()
+    await db.execute(update(ScanWorkAttempt).where(
+        ScanWorkAttempt.status == "claimed", ScanWorkAttempt.expires_at < now,
+    ).values(status="expired", completed_at=now))
+    active_attempt = select(ScanWorkAttempt.id).where(
+        ScanWorkAttempt.task_id == ScanWorkTask.id,
+        ScanWorkAttempt.status == "claimed",
+        ScanWorkAttempt.expires_at >= now,
+    )
     expired_streams = (await db.execute(
         select(ScanWorkTask.region, ScanWorkTask.feed_type).where(
             ScanWorkTask.status == "claimed",
-            ScanWorkTask.claim_expires_at < _now(),
+            ~active_attempt.exists(),
         ).distinct()
     )).all()
     result = await db.execute(
         update(ScanWorkTask)
         .where(
             ScanWorkTask.status == "claimed",
-            ScanWorkTask.claim_expires_at < _now(),
+            ~active_attempt.exists(),
         )
         .values(
             status="pending",
@@ -724,6 +749,81 @@ async def _ensure_deep_process_tasks(db: AsyncSession, active_workers: int) -> i
     return created
 
 
+async def enqueue_profile_tasks_for_battle(
+    db: AsyncSession,
+    battle: Battle,
+    *,
+    priority: int = PRIORITY_PROFILE_BATTLE,
+    preferred_worker_id: str | None = None,
+) -> int:
+    """Enfileira tasks de perfil distribuído para participantes de uma batalha
+    recém deep-processada.
+
+    Cada participante vira uma task 'profile' com:
+      - subject_id = albion_player_id (chave primária do Albion)
+      - region = região da batalha
+      - feed_type = 'profile'
+      - page_offset = 0 (não usado para profile)
+      - priority = priority (default PRIORITY_PROFILE_BATTLE = 1)
+      - preferred_worker_id = worker que fez o deep_process (se houver)
+      - affinity_expires_at = now + AFFINITY_TTL
+
+    Isso substitui o fetch direto do backend via profile_warmer — os workers
+    VPS autenticados buscam /players/{id} + /events/player/{id} da API pública
+    e reportam o dado canônico. O backend valida/persiste e gera preview antes
+    de limpar player.refresh_requested_at.
+
+    NÃO expõe info privada ao worker — o payload da task só tem nome/id/região
+    públicos do jogador.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Pega albion_ids dos participantes da batalha
+    participant_ids = (await db.scalars(
+        select(BattleParticipant.albion_player_id).where(BattleParticipant.battle_id == battle.id)
+    )).all()
+
+    if not participant_ids:
+        return 0
+
+    created = 0
+    for albion_id in participant_ids:
+        # Checa se já existe task de profile pendente/claimed pra este jogador
+        existing = await db.scalar(
+            select(ScanWorkTask.id).where(
+                ScanWorkTask.feed_type == FEED_PROFILE,
+                ScanWorkTask.region == battle.region,
+                ScanWorkTask.subject_id == albion_id,
+                ScanWorkTask.status.in_(("pending", "claimed", "reported")),
+            ).limit(1)
+        )
+        if existing:
+            continue
+
+        # Preferred worker: quem fez o deep-process tem afinidade para os
+        # profiles dos participantes. A afinidade é suave: qualquer VPS pode
+        # assumir quando ele está indisponível ou após expirar.
+        preferred_worker = preferred_worker_id
+
+        try:
+            async with db.begin_nested():
+                db.add(ScanWorkTask(
+                    region=battle.region,
+                    feed_type=FEED_PROFILE,
+                    page_offset=0,
+                    subject_id=albion_id,
+                    preferred_worker_id=preferred_worker,
+                    affinity_expires_at=now + AFFINITY_TTL if preferred_worker else None,
+                    priority=priority,
+                    status="pending",
+                ))
+                await db.flush()
+            created += 1
+        except IntegrityError:
+            continue
+    return created
+
+
 async def generate_tasks(db: AsyncSession) -> int:
     await _release_expired_claims(db)
     await _retry_failed_tasks(db)
@@ -766,6 +866,50 @@ async def generate_tasks(db: AsyncSession) -> int:
     return created
 
 
+HEDGE_DELAY = timedelta(seconds=25)
+HEDGE_FEED_TYPES = (FEED_PROFILE, "deep_process")
+
+
+async def _claim_attempt(db: AsyncSession, task: ScanWorkTask, worker_id: str, *, is_hedge: bool) -> ScanWorkTask:
+    now = _now()
+    lease_token = uuid.uuid4().hex
+    db.add(ScanWorkAttempt(
+        task_id=task.id, worker_id=worker_id, lease_token=lease_token, is_hedge=is_hedge,
+        claimed_at=now, expires_at=now + WORK_CLAIM_TTL,
+    ))
+    if not is_hedge:
+        task.status = "claimed"
+        task.claimed_by = worker_id
+        task.lease_token = lease_token
+        task.attempt_count += 1
+        task.claimed_at = now
+        task.claim_expires_at = now + WORK_CLAIM_TTL
+    task._attempt_lease_token = lease_token
+    return task
+
+
+async def _claim_hedge(db: AsyncSession, worker_id: str) -> ScanWorkTask | None:
+    now = _now()
+    existing_hedge = select(ScanWorkAttempt.id).where(
+        ScanWorkAttempt.task_id == ScanWorkTask.id,
+        ScanWorkAttempt.is_hedge.is_(True),
+        ScanWorkAttempt.status == "claimed",
+    )
+    task = await db.scalar(
+        select(ScanWorkTask).where(
+            ScanWorkTask.status == "claimed",
+            ScanWorkTask.feed_type.in_(HEDGE_FEED_TYPES),
+            ScanWorkTask.claimed_at <= now - HEDGE_DELAY,
+            ScanWorkTask.claimed_by != worker_id,
+            ~existing_hedge.exists(),
+        ).order_by(ScanWorkTask.priority.desc(), ScanWorkTask.claimed_at.asc())
+        .with_for_update(skip_locked=True).limit(1)
+    )
+    if task is None:
+        return None
+    return await _claim_attempt(db, task, worker_id, is_hedge=True)
+
+
 async def _claim_next(
     db: AsyncSession,
     worker_id: str,
@@ -785,6 +929,10 @@ async def _claim_next(
             ),
         )
         .outerjoin(
+            ScanHostRateState,
+            ScanHostRateState.region == ScanWorkTask.region,
+        )
+        .outerjoin(
             ScanWorkerRegionMetric,
             and_(
                 ScanWorkerRegionMetric.worker_id == worker_id,
@@ -793,8 +941,13 @@ async def _claim_next(
         )
         .where(
             ScanWorkTask.status == "pending",
+            or_(ScanHostRateState.backoff_until.is_(None), ScanHostRateState.backoff_until <= now),
+            # Profile tasks são exclusivamente de VPS autenticada; o helper do
+            # backend nunca recebe payload privado nem substitui o worker.
+            ScanWorkTask.feed_type != FEED_PROFILE if worker_id == _BACKEND_WORKER_ID else True,
             # deep_process não tem ScanStreamState — só aplica filtro de
             # circuit/paused pra battles/kills (que têm stream state).
+            # profile também não tem stream state.
             or_(
                 ScanStreamState.id.is_(None),
                 and_(
@@ -815,9 +968,26 @@ async def _claim_next(
         query = query.where(ScanWorkTask.priority == 0)
     elif recent_only:
         query = query.where(ScanWorkTask.priority > 0)
+
+    # Afinidade suave: a continuação deep de uma batalha prefere o worker que
+    # coletou a etapa anterior; após expirar, qualquer VPS pode assumir.
     order = [ScanWorkTask.priority.desc()]
     if prefer_latency:
         order.append(ScanWorkerRegionMetric.ewma_latency_ms.asc().nullsfirst())
+
+    order.append(
+        case(
+            (
+                and_(
+                    ScanWorkTask.feed_type == "deep_process",
+                    ScanWorkTask.preferred_worker_id == worker_id,
+                    ScanWorkTask.affinity_expires_at > now,
+                ),
+                0,
+            ),
+            else_=1,
+        )
+    )
     order.extend((
         ScanStreamState.last_claimed_at.asc().nullsfirst(),
         ScanWorkTask.id.asc(),
@@ -830,12 +1000,7 @@ async def _claim_next(
     )).first()
     if task is None:
         return None
-    task.status = "claimed"
-    task.claimed_by = worker_id
-    task.lease_token = uuid.uuid4().hex
-    task.attempt_count += 1
-    task.claimed_at = now
-    task.claim_expires_at = now + WORK_CLAIM_TTL
+    await _claim_attempt(db, task, worker_id, is_hedge=False)
     # stream pode ser None (deep_process não tem ScanStreamState)
     stream = await db.scalar(select(ScanStreamState).where(
         ScanStreamState.region == task.region,
@@ -864,10 +1029,20 @@ async def claim_work(
     )
     if held is not None:
         if not held.lease_token:
-            held.lease_token = uuid.uuid4().hex
-            held.attempt_count += 1
-        held.claimed_at = _now()
-        held.claim_expires_at = _now() + WORK_CLAIM_TTL
+            await _claim_attempt(db, held, worker_id, is_hedge=False)
+        else:
+            attempt = await db.scalar(select(ScanWorkAttempt).where(
+                ScanWorkAttempt.task_id == held.id,
+                ScanWorkAttempt.worker_id == worker_id,
+                ScanWorkAttempt.lease_token == held.lease_token,
+                ScanWorkAttempt.status == "claimed",
+            ).with_for_update().limit(1))
+            if attempt is None:
+                await _claim_attempt(db, held, worker_id, is_hedge=False)
+            else:
+                attempt.expires_at = _now() + WORK_CLAIM_TTL
+                held.claimed_at = _now()
+                held.claim_expires_at = attempt.expires_at
         await db.commit()
         return held
 
@@ -902,6 +1077,10 @@ async def claim_work(
     recent_only = ingest_backlog >= INGEST_BACKPRESSURE or pressured
     backfill_due = _backfill_due(recent_only)
     prefer_latency = _affinity_due()
+    task = await _claim_hedge(db, worker_id)
+    if task is not None:
+        await db.commit()
+        return task
     task = await _claim_next(
         db, worker_id, backfill_only=backfill_due, recent_only=recent_only,
         prefer_latency=prefer_latency,
@@ -1014,6 +1193,40 @@ async def _release_task(db: AsyncSession, task_id: int) -> None:
     await db.commit()
 
 
+async def _locked_valid_attempt(
+    db: AsyncSession, task_id: int, worker_id: str, lease_token: str
+) -> ScanWorkAttempt:
+    attempt = await db.scalar(select(ScanWorkAttempt).where(
+        ScanWorkAttempt.task_id == task_id,
+        ScanWorkAttempt.worker_id == worker_id,
+        ScanWorkAttempt.lease_token == lease_token,
+    ).with_for_update().limit(1))
+    if attempt is None or attempt.status != "claimed" or attempt.expires_at <= _now():
+        raise PermissionError("stale lease")
+    return attempt
+
+
+async def _record_host_status(
+    db: AsyncSession, region: str, status_code: int | None, backoff_seconds: int | None
+) -> None:
+    if status_code is None:
+        return
+    state = await db.scalar(select(ScanHostRateState).where(
+        ScanHostRateState.region == region
+    ).with_for_update())
+    if state is None:
+        state = ScanHostRateState(region=region, consecutive_rate_limits=0)
+        db.add(state)
+    state.last_status_code = status_code
+    state.updated_at = _now()
+    if status_code in (429, 502, 503, 504):
+        state.consecutive_rate_limits += 1
+        state.backoff_until = _now() + timedelta(seconds=backoff_seconds or min(300, 10 * (2 ** (state.consecutive_rate_limits - 1))))
+    elif 200 <= status_code < 400:
+        state.consecutive_rate_limits = 0
+        state.backoff_until = None
+
+
 async def report_chunk(
     db: AsyncSession,
     worker_id: str,
@@ -1027,6 +1240,8 @@ async def report_chunk(
     chunk_index: int,
     chunk_count: int,
     latency_ms: int | None = None,
+    upstream_status_code: int | None = None,
+    backoff_seconds: int | None = None,
 ) -> tuple[int, int]:
     """Persiste partes de um payload grande e só enfileira quando completo."""
     task = await db.scalar(
@@ -1034,18 +1249,18 @@ async def report_chunk(
     )
     if task is None:
         raise LookupError("tarefa não encontrada")
-    if task.status == "reported" and task.claimed_by == worker_id and task.lease_token:
-        if secrets.compare_digest(task.lease_token, lease_token):
+    if task.status == "reported":
+        succeeded = await db.scalar(select(ScanWorkAttempt.id).where(
+            ScanWorkAttempt.task_id == task.id,
+            ScanWorkAttempt.worker_id == worker_id,
+            ScanWorkAttempt.lease_token == lease_token,
+            ScanWorkAttempt.status == "succeeded",
+        ).limit(1))
+        if succeeded is not None:
             queued = await db.scalar(select(ScanIngestPayload).where(ScanIngestPayload.task_id == task.id))
             return (len(queued.payload), 0) if queued is not None else (0, 0)
-    if (
-        task.status != "claimed"
-        or task.claimed_by != worker_id
-        or not task.lease_token
-        or not secrets.compare_digest(task.lease_token, lease_token)
-        or not task.claim_expires_at
-        or task.claim_expires_at <= _now()
-    ):
+    await _locked_valid_attempt(db, task_id, worker_id, lease_token)
+    if task.status != "claimed":
         raise PermissionError("stale lease")
     if (
         len(payload_sha256) != 64
@@ -1098,7 +1313,8 @@ async def report_chunk(
         raise ValueError("payload reconstruído deve ser uma lista")
     accepted, rejected = await report_work(
         db, worker_id, task_id, lease_token, found_count, error_count,
-        data=data, latency_ms=latency_ms,
+        data=data, latency_ms=latency_ms, upstream_status_code=upstream_status_code,
+        backoff_seconds=backoff_seconds,
     )
     await db.execute(delete(ScanReportChunk).where(
         ScanReportChunk.task_id == task_id,
@@ -1117,6 +1333,8 @@ async def report_work(
     error_count: int,
     data: list[dict] | None = None,
     latency_ms: int | None = None,
+    upstream_status_code: int | None = None,
+    backoff_seconds: int | None = None,
 ) -> tuple[int, int]:
     task = await db.scalar(
         select(ScanWorkTask)
@@ -1126,25 +1344,22 @@ async def report_work(
     )
     if task is None:
         raise LookupError("tarefa não encontrada")
-    if (
-        task.status == "reported"
-        and task.claimed_by == worker_id
-        and task.lease_token
-        and secrets.compare_digest(task.lease_token, lease_token)
-    ):
-        queued = await db.scalar(
-            select(ScanIngestPayload).where(ScanIngestPayload.task_id == task.id)
-        )
-        return (len(queued.payload), 0) if queued is not None else (0, 0)
-    if (
-        task.status != "claimed"
-        or task.claimed_by != worker_id
-        or not task.lease_token
-        or not secrets.compare_digest(task.lease_token, lease_token)
-        or not task.claim_expires_at
-        or task.claim_expires_at <= _now()
-    ):
+    if task.status == "reported":
+        succeeded = await db.scalar(select(ScanWorkAttempt.id).where(
+            ScanWorkAttempt.task_id == task.id,
+            ScanWorkAttempt.worker_id == worker_id,
+            ScanWorkAttempt.lease_token == lease_token,
+            ScanWorkAttempt.status == "succeeded",
+        ).limit(1))
+        if succeeded is not None:
+            queued = await db.scalar(
+                select(ScanIngestPayload).where(ScanIngestPayload.task_id == task.id)
+            )
+            return (len(queued.payload), 0) if queued is not None else (0, 0)
+    attempt = await _locked_valid_attempt(db, task_id, worker_id, lease_token)
+    if task.status != "claimed":
         raise PermissionError("stale lease")
+    await _record_host_status(db, task.region, upstream_status_code, backoff_seconds)
     if data is not None and len(data) > FEED_PAGE_SIZE and task.feed_type != "deep_process":
         raise ValueError("página maior que o limite do feed")
     if latency_ms is not None:
@@ -1165,6 +1380,15 @@ async def report_work(
         metric.ewma_latency_ms = _next_latency(metric.ewma_latency_ms, latency_ms)
         metric.last_seen_at = _now()
     if error_count and not data:
+        attempt.status = "failed"
+        attempt.completed_at = _now()
+        attempt.report_status_code = upstream_status_code
+        active_attempts = int(await db.scalar(select(func.count()).select_from(ScanWorkAttempt).where(
+            ScanWorkAttempt.task_id == task.id, ScanWorkAttempt.status == "claimed",
+        )) or 0)
+        if active_attempts:
+            await db.commit()
+            return 0, error_count
         await _record_stream_result(db, task, False)
         task.status = "failed"
         task.claimed_by = None
@@ -1191,6 +1415,14 @@ async def report_work(
         await db.commit()
         return 0, error_count
     payload = data or []
+    attempt.status = "succeeded"
+    attempt.completed_at = _now()
+    attempt.report_status_code = upstream_status_code
+    await db.execute(update(ScanWorkAttempt).where(
+        ScanWorkAttempt.task_id == task.id,
+        ScanWorkAttempt.id != attempt.id,
+        ScanWorkAttempt.status == "claimed",
+    ).values(status="cancelled", completed_at=_now()))
     await _record_stream_result(db, task, True, len(payload))
     queued = await db.scalar(
         select(ScanIngestPayload)
@@ -1256,6 +1488,16 @@ async def _apply_ingest_payload(
                 ok = await asyncio.to_thread(_write_deep_data, battle.id, raw, events)
                 if ok:
                     accepted += 1
+                    # A população de participantes é distribuída: em vez de o
+                    # backend buscar perfis diretamente, enfileira profile tasks
+                    # de menor prioridade com afinidade ao worker deste deep-process.
+                    refreshed_battle = await db.get(Battle, battle.id)
+                    if refreshed_battle is not None:
+                        await enqueue_profile_tasks_for_battle(
+                            db,
+                            refreshed_battle,
+                            preferred_worker_id=ingest.worker_id,
+                        )
                 else:
                     b = await db.get(Battle, battle.id)
                     if b is not None:
@@ -1283,7 +1525,7 @@ async def _apply_ingest_payload(
             except Exception as exc:
                 log.warning("scan_dispatcher: captura battle %s: %s", raw.get("id"), exc)
                 errors += 1
-    else:
+    elif task.feed_type == "kills":
         for event in payload:
             try:
                 accepted += await capture_discovered_items(
@@ -1296,6 +1538,62 @@ async def _apply_ingest_payload(
                 )
             except Exception as exc:
                 log.debug("scan_dispatcher: captura kill %s/%s: %s", task.region, event.get("EventId"), exc)
+                errors += 1
+    elif task.feed_type == FEED_PROFILE:
+        # Profile task: worker VPS buscou /players/{id} + /events/player/{id}
+        # Payload contém um único item com: albion_id, name, region, raw_profile, kills_events
+        # Backend valida/persiste dados canônicos, gera preview, limpa refresh_requested_at
+        from app.services.player_tracker import upsert_player, sync_player_kills_from_events
+        from app.services.profile_warmer import _render_player_preview_async
+        from app.models.players import AlbionPlayer
+        for item in payload:
+            if not isinstance(item, dict):
+                errors += 1
+                continue
+            albion_id = item.get("albion_id") or task.subject_id
+            name = item.get("name")
+            raw_profile = item.get("raw_profile")
+            kills_events = item.get("kills_events") or []
+            if (
+                not albion_id
+                or raw_profile is None
+                or not isinstance(raw_profile, dict)
+                or str(raw_profile.get("Id") or "") != task.subject_id
+            ):
+                errors += 1
+                continue
+            try:
+                # Valida snapshot (tem Timestamp nas lifetime stats?)
+                from app.api.routes.players import _raw_has_profile_data
+                valid_snapshot = _raw_has_profile_data(raw_profile)
+                if not valid_snapshot:
+                    log.info("scan_dispatcher: profile %s (%s) — snapshot sem Timestamp", albion_id, task.region)
+                    errors += 1
+                    continue
+                # Upsert do perfil (núcleo: fama/guilda/lifetime stats)
+                await upsert_player(db, raw_profile, task.region, stats_verified=True)
+                # Sync de kills/deaths a partir dos eventos pré-buscados pelo worker
+                if kills_events:
+                    await sync_player_kills_from_events(db, task.region, albion_id, kills_events)
+                # Gera preview PNG
+                await _render_player_preview_async(albion_id, task.region)
+                # Limpa refresh_requested_at — worker VPS completou o refresh
+                player = await db.scalar(
+                    select(AlbionPlayer).where(
+                        AlbionPlayer.albion_id == albion_id,
+                        AlbionPlayer.region == task.region,
+                    )
+                )
+                if player is not None and player.refresh_requested_at is not None:
+                    player.refresh_requested_at = None
+                # O refresh só fica concluído após persistir profile, eventos e PNG.
+                from app.services.profile_warmer import _refresh_done_at, _refresh_progress
+                _refresh_done_at[albion_id] = _now()
+                _refresh_progress.pop(albion_id, None)
+                accepted += 1
+                log.info("scan_dispatcher: profile %s (%s) — aceito via VPS worker", albion_id, task.region)
+            except Exception as exc:
+                log.warning("scan_dispatcher: profile %s (%s) falhou: %s", albion_id, task.region, exc)
                 errors += 1
     return accepted, errors
 
@@ -1413,20 +1711,15 @@ async def renew_lease(
         .with_for_update(skip_locked=True)
         .limit(1)
     )
-    if (
-        task is None
-        or task.status != "claimed"
-        or task.claimed_by != worker_id
-        or not task.lease_token
-        or not secrets.compare_digest(task.lease_token, lease_token)
-        or not task.claim_expires_at
-        or task.claim_expires_at <= _now()
-    ):
+    if task is None or task.status != "claimed":
         raise PermissionError("stale lease")
-    task.claimed_at = _now()
-    task.claim_expires_at = _now() + WORK_CLAIM_TTL
+    attempt = await _locked_valid_attempt(db, task_id, worker_id, lease_token)
+    attempt.expires_at = _now() + WORK_CLAIM_TTL
+    if task.claimed_by == worker_id and task.lease_token and secrets.compare_digest(task.lease_token, lease_token):
+        task.claimed_at = _now()
+        task.claim_expires_at = attempt.expires_at
     await db.commit()
-    return task.claim_expires_at
+    return attempt.expires_at
 
 
 async def get_worker_stats(db: AsyncSession) -> dict:
@@ -1799,6 +2092,7 @@ async def run_idle_worker_forever(web_is_idle: Callable[[], Awaitable[bool]]) ->
     while True:
         task = None
         active_vps = 0
+        should_wait = False
         try:
             async with AsyncSessionLocal() as db:
                 active_vps = await count_active_workers(db)
@@ -1807,17 +2101,18 @@ async def run_idle_worker_forever(web_is_idle: Callable[[], Awaitable[bool]]) ->
                         ScanIngestPayload.status.in_(("pending", "processing"))
                     )
                 ) or 0)
-                if ingest_backlog:
-                    await asyncio.sleep(2)
-                    continue
-                if active_vps > 0 and not await web_is_idle():
-                    await asyncio.sleep(2)
-                    continue
-                task = await _claim_next(
-                    db,
-                    _BACKEND_WORKER_ID,
-                    backfill_only=active_vps > 0,
-                )
+                should_wait = bool(ingest_backlog)
+                if not should_wait and active_vps > 0:
+                    should_wait = not await web_is_idle()
+                if not should_wait:
+                    task = await _claim_next(
+                        db,
+                        _BACKEND_WORKER_ID,
+                        backfill_only=active_vps > 0,
+                    )
+            if should_wait:
+                await asyncio.sleep(2)
+                continue
             if task is None:
                 await asyncio.sleep(5)
                 continue

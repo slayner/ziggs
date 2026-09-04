@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.db import AsyncSessionLocal
-from app.models.renders import RenderMiss
+from app.models.renders import RenderMiss, KnownLootedItem
 
 router = APIRouter(prefix="/render", tags=["render"])
 
@@ -264,6 +264,29 @@ def retry_delay(miss_count: int) -> timedelta:
     return _RETRY_DELAYS[min(max(miss_count, 1) - 1, len(_RETRY_DELAYS) - 1)]
 
 
+async def _is_known_looted(kind: str, key: str) -> bool:
+    """Verifica se o item é conhecido como lootado (apareceu em lootlog/reconcile)."""
+    if kind != "item":
+        return False
+    async with AsyncSessionLocal() as db:
+        item = await db.get(KnownLootedItem, (kind, key))
+        return item is not None
+
+
+async def _mark_known_looted(kind: str, key: str) -> None:
+    """Marca um item como conhecido (apareceu em lootlog/reconcile)."""
+    if kind != "item":
+        return
+    async with AsyncSessionLocal() as db:
+        item = await db.get(KnownLootedItem, (kind, key))
+        now = datetime.now(timezone.utc)
+        if item is None:
+            db.add(KnownLootedItem(kind=kind, key=key, first_seen_at=now, last_seen_at=now))
+        else:
+            item.last_seen_at = now
+        await db.commit()
+
+
 async def _record_render_miss(kind: str, key: str, quality: int, size: int) -> None:
     """Insert once; retries themselves update the existing row in the worker."""
     global _last_miss_error_log
@@ -419,7 +442,8 @@ async def _cached_render(
 
 
 async def recover_render_miss(kind: str, key: str, quality: int, size: int) -> bool | None:
-    """Retry one queued miss: true=recovered, false=still absent, none=CDN error."""
+    """Retry one queued miss: true=recovered, false=still absent, none=CDN error.
+    Para itens conhecidos como lootados (lootlog/reconcile), retenta indefinidamente."""
     try:
         cache_path = _cache_path(kind, key, quality, size)
     except ValueError:
@@ -429,6 +453,7 @@ async def recover_render_miss(kind: str, key: str, quality: int, size: int) -> b
     fallback = _spell_display_names().get(key) if kind == "spell" else (
         _item_render_fallback(key) if kind == "item" else None
     )
+    is_known = await _is_known_looted(kind, key)
     async with key_lock:
         missing = _cached_missing_render(cache_path, mkey)
         if not missing and _cache_has_real_render(cache_path, key):
@@ -441,6 +466,10 @@ async def recover_render_miss(kind: str, key: str, quality: int, size: int) -> b
         except httpx.HTTPError:
             return None
         if content is None:
+            if is_known:
+                # Item conhecido como lootado: não marca como ausente permanente,
+                # agenda retry imediato (próximo ciclo do worker)
+                return False
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             _missing_path(cache_path).touch(exist_ok=True)
             return False

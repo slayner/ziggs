@@ -19,14 +19,16 @@ from sqlalchemy.ext.compiler import compiles
 from app.models.base import Base
 from app.services import scan_dispatcher
 from app.models.scan_worker import (
+    ScanHostRateState,
     ScanIngestPayload,
     ScanReportChunk,
+    ScanWorkAttempt,
     ScanStreamState,
     ScanWorker,
     ScanWorkerRegionMetric,
     ScanWorkTask,
 )
-from app.services.scan_dispatcher import report_chunk
+from app.services.scan_dispatcher import report_chunk, report_work
 
 
 @compiles(JSONB, "sqlite")
@@ -42,8 +44,8 @@ def _bigint_sqlite(_type, _compiler, **_kw):  # pragma: no cover - shim de teste
 async def _session():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     tables = [
-        ScanWorker.__table__, ScanWorkTask.__table__, ScanIngestPayload.__table__,
-        ScanReportChunk.__table__, ScanStreamState.__table__, ScanWorkerRegionMetric.__table__,
+        ScanWorker.__table__, ScanWorkTask.__table__, ScanWorkAttempt.__table__, ScanHostRateState.__table__,
+        ScanIngestPayload.__table__, ScanReportChunk.__table__, ScanStreamState.__table__, ScanWorkerRegionMetric.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(lambda sync: Base.metadata.create_all(sync, tables=tables))
@@ -62,11 +64,16 @@ async def test_chunks_so_enfileiram_quando_o_payload_esta_completo():
     try:
         async with Session() as db:
             db.add(ScanWorker(worker_id="worker", name="worker", api_token_hash="x"))
+            expires_at = (datetime.now(timezone.utc) + timedelta(minutes=2)).replace(tzinfo=None)
             db.add(ScanWorkTask(
                 region="europe", feed_type="deep_process", page_offset=99,
                 status="claimed", claimed_by="worker", lease_token=lease,
-                # SQLite perde tzinfo; o serviço real roda em Postgres UTC.
-                claim_expires_at=(datetime.now(timezone.utc) + timedelta(minutes=2)).replace(tzinfo=None),
+                claim_expires_at=expires_at,
+            ))
+            await db.flush()
+            db.add(ScanWorkAttempt(
+                task_id=1, worker_id="worker", lease_token=lease,
+                claimed_at=datetime.now(timezone.utc).replace(tzinfo=None), expires_at=expires_at,
             ))
             await db.commit()
             task = await db.scalar(select(ScanWorkTask))
@@ -102,10 +109,16 @@ async def test_rejeita_upload_que_excede_o_limite_agregado():
     try:
         async with Session() as db:
             db.add(ScanWorker(worker_id="worker", name="worker", api_token_hash="x"))
+            expires_at = (datetime.now(timezone.utc) + timedelta(minutes=2)).replace(tzinfo=None)
             db.add(ScanWorkTask(
                 region="europe", feed_type="deep_process", page_offset=100,
                 status="claimed", claimed_by="worker", lease_token=lease,
-                claim_expires_at=(datetime.now(timezone.utc) + timedelta(minutes=2)).replace(tzinfo=None),
+                claim_expires_at=expires_at,
+            ))
+            await db.flush()
+            db.add(ScanWorkAttempt(
+                task_id=1, worker_id="worker", lease_token=lease,
+                claimed_at=datetime.now(timezone.utc).replace(tzinfo=None), expires_at=expires_at,
             ))
             await db.commit()
             task = await db.scalar(select(ScanWorkTask))

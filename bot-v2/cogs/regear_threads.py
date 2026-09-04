@@ -23,6 +23,7 @@ from i18n import t
 
 SITE_URL = os.getenv("BOT_SITE_URL", "").rstrip("/")
 API_SECRET = os.getenv("BOT_API_SECRET", "")
+SYNC_CONCURRENCY = 3
 
 
 async def _get(path: str) -> dict | None:
@@ -66,8 +67,12 @@ class RegearThreads(commands.Cog):
 
     async def sync_guild(self, guild: discord.Guild) -> None:
         lock = self._guild_locks.setdefault(guild.id, asyncio.Lock())
-        async with lock:
-            await self._sync_guild_unlocked(guild)
+        try:
+            async with asyncio.timeout(30):
+                async with lock:
+                    await self._sync_guild_unlocked(guild)
+        except (TimeoutError, asyncio.TimeoutError):
+            print(f"[regear_threads] sync de {guild.id} passou de 30s; próximo tick tenta de novo")
 
     async def _sync_guild_unlocked(self, guild: discord.Guild) -> None:
         cfg = await _guild_command_config(guild.id)
@@ -181,11 +186,16 @@ class RegearThreads(commands.Cog):
 
 @tasks.loop(seconds=10)
 async def regear_thread_work_loop(cog: "RegearThreads") -> None:
-    for guild in cog.bot.guilds:
-        try:
-            await cog.sync_guild(guild)
-        except Exception as e:
-            print(f"[regear_threads] erro no loop ({guild.id}): {type(e).__name__}: {e}")
+    semaphore = asyncio.Semaphore(SYNC_CONCURRENCY)
+
+    async def sync_limited(guild: discord.Guild) -> None:
+        async with semaphore:
+            try:
+                await cog.sync_guild(guild)
+            except Exception as e:
+                print(f"[regear_threads] erro no loop ({guild.id}): {type(e).__name__}: {e}")
+
+    await asyncio.gather(*(sync_limited(guild) for guild in cog.bot.guilds))
 
 
 @regear_thread_work_loop.before_loop

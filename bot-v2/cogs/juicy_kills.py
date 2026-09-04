@@ -130,8 +130,12 @@ class JuicyKills(commands.Cog):
 
     async def sync_guild(self, guild: discord.Guild) -> None:
         lock = self._locks.setdefault(guild.id, asyncio.Lock())
-        async with lock:
-            await self._sync_guild_unlocked(guild)
+        try:
+            async with asyncio.timeout(30):
+                async with lock:
+                    await self._sync_guild_unlocked(guild)
+        except (TimeoutError, asyncio.TimeoutError):
+            print(f"[juicy_kills] sync de {guild.id} passou de 30s; próximo tick tenta de novo")
 
     async def _sync_guild_unlocked(self, guild: discord.Guild) -> None:
         cfg = await _guild_command_config(guild.id)

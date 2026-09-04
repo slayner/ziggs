@@ -1,12 +1,8 @@
-"""Guarda: o botão ⟳ de refresh do perfil tem que (1) aplicar cooldown de 5min
-pós-atualização, (2) mostrar estado compartilhado enquanto
-refresh_requested_at != null, (3) não apagar refresh_requested_at quando o
-fetch falha (retry automático no próximo ciclo).
+"""Guarda: o botão ⟳ de refresh do perfil tem que aplicar cooldown após
+sucesso e expor estado compartilhado somente enquanto há trabalho ativo.
 
-Já regrediu uma vez: o polling do front desistia em 15s mas o warmer demora
-minutos com a fila cheia — o usuário via o botão parar de girar mas o refresh
-continuava no backend, e clicar de novo sobrescrevia sem ganho. Outro usuário
-olhando o mesmo perfil não sabia que tinha refresh em andamento."""
+Falhas da Albion não podem deixar refresh_requested_at preso: o perfil já
+cacheado continua utilizável e o usuário pode tentar de novo."""
 import inspect
 from datetime import timedelta
 
@@ -24,16 +20,13 @@ def test_warm_player_retorna_bool():
     assert sig.return_annotation in (bool, "bool"), "_warm_player deve declarar -> bool"
 
 
-def test_sync_refresh_requests_so_limpa_em_sucesso_ou_host_invalido():
-    """O loop que limpa refresh_requested_at tem que respeitar o retorno de
-    _warm_player (ok) — limpa só se ok=True OU host=None (host inválido não
-    vale retry). Sem isso, fetch falho limpava o pedido e o usuário tinha que
-    clicar de novo no ⟳. Timeout também esquece (não adianta refazer se a
-    Albion travou por 15min)."""
+def test_sync_refresh_requests_enfileira_task_vps_sem_limpar_estado():
+    """O refresh cria uma task de VPS e mantém o estado até a ingestão canônica."""
     src = inspect.getsource(pw.sync_refresh_requests)
-    assert "_warm_with_timeout" in src, "deve envolver _warm_player com timeout"
-    assert "if ok or host is None" in src, "só limpa refresh_requested_at em sucesso ou host inválido"
-    assert "error:timeout" in src, "timeout esquece o pedido (não fica em loop)"
+    assert "FEED_PROFILE" in src
+    assert "PRIORITY_PROFILE_EXPLICIT" in src
+    assert "refresh_requested_at = None" not in src
+    assert "_warm_player" not in src
 
 
 def test_refresh_cooldown_keyed_no_refresh_de_verdade_nao_no_last_seen():
@@ -52,22 +45,68 @@ def test_refresh_cooldown_keyed_no_refresh_de_verdade_nao_no_last_seen():
     assert "player.last_seen_at" not in src, "cooldown NÃO pode gatear no last_seen_at do jogador"
 
 
-def test_refresh_done_at_armado_so_em_sucesso():
-    """O cooldown só arma quando o refresh REALMENTE aconteceu — timeout/host
-    inválido não pode bloquear o retry do usuário."""
-    src = inspect.getsource(pw.sync_refresh_requests)
-    # O loop desempacota `for albion_id, region in refresh_list:` — usa a var
-    # de loop, não `player.albion_id`. Casar o que o código realmente faz.
-    assert "_refresh_done_at[albion_id]" in src, "arma o cooldown em sucesso"
-    assert "if ok:" in src, "só em sucesso (não em timeout/host inválido)"
+def test_refresh_done_at_armado_so_apos_ingestao_vps():
+    """O cooldown só arma após persistir e renderizar o report da VPS."""
+    from app.services import scan_dispatcher
+
+    src = inspect.getsource(scan_dispatcher._apply_ingest_payload)
+    assert "_refresh_done_at[albion_id]" in src
+    assert "_render_player_preview_async" in src
+    assert src.index("_render_player_preview_async") < src.index("_refresh_done_at[albion_id]")
 
 
-def test_payload_expose_refresh_requested_at():
-    """Sem expor refresh_requested_at no payload _ziggs, o front não consegue
-    saber que tem refresh em andamento — cada visitante só vê o próprio estado
-    local e clica de novo. Com o campo exposto, TODOS vêem 'atualizando'."""
+def test_payload_expoe_estado_de_refresh_e_data_real_do_snapshot():
+    """A idade exibida do perfil vem do fetch direto da Albion, não do feed."""
     src = inspect.getsource(pl._build_profile_payload)
     assert "refresh_requested_at" in src, "_ziggs deve expor refresh_requested_at"
+    assert "stats_updated_at" in src, "_ziggs deve expor a data do snapshot"
+
+
+def test_payload_warm_usa_cache_versionado_por_snapshot():
+    """F5 de perfil warm não pode recomputar agregações pesadas."""
+    src = inspect.getsource(pl._warm_profile_payload)
+    assert "_cached_profile_payload" in src
+    assert "_cache_profile_payload" in src
+    cache_src = inspect.getsource(pl._cached_profile_payload)
+    assert "stats_updated_at" in cache_src
+
+
+def test_payload_de_perfil_nao_cria_battle_groups():
+    """Abrir perfil warm é leitura: não pode criar grupos nem disputar escrita."""
+    history_src = inspect.getsource(pl._battle_history)
+    links_src = inspect.getsource(pl._battle_links_bulk)
+    assert "get_existing_groups_bulk" in history_src
+    assert "get_existing_groups_bulk" in links_src
+    assert "await battle_groups.get_or_create_groups_bulk" not in history_src
+    assert "await battle_groups.get_or_create_groups_bulk" not in links_src
+
+
+def test_eventos_nao_alteram_snapshot_de_perfil_warm():
+    """Participar de batalha não equivale a consultar o perfil na Albion."""
+    src = inspect.getsource(pt._upsert_event_players)
+    assert "touch_last_seen=False" in src
+    assert "stats_verified=False" in src
+
+
+def test_snapshot_completo_so_e_atualizado_por_fetch_direto():
+    """Dados embutidos em eventos podem ser antigos ou parciais; não podem
+    regressar fama PvP, PvE, crafting ou gathering de um perfil warm."""
+    src = inspect.getsource(pt.upsert_player)
+    assert "if stats_verified:" in src
+    assert src.index("if stats_verified:") < src.index("player.kill_fame = kill_fame")
+    assert src.index("if stats_verified:") < src.index("player.lifetime_statistics = lifetime")
+
+
+def test_warmer_usa_idade_do_snapshot_direto():
+    """Um evento recente não pode tornar fresco um perfil sem stats diretas."""
+    src = inspect.getsource(pw._warm_player)
+    assert "player.stats_updated_at" in src
+
+
+def test_feed_nao_decodifica_json_grande_no_event_loop():
+    """O parser do feed não pode atrasar leituras cacheadas de perfis warm."""
+    src = inspect.getsource(pt._fetch_kill_page)
+    assert "await asyncio.to_thread(response.json)" in src
 
 
 def test_queue_refresh_if_stale_respeita_em_andamento():
@@ -97,23 +136,19 @@ def test_warm_player_grava_nucleo_antes_da_sync_de_kills():
         "upsert do núcleo do perfil deve vir ANTES da sync de kills"
 
 
-def test_cold_load_grava_nucleo_antes_da_sync_de_kills():
-    """Bug do 'primeira carga não salva': o cold load (by-name) rodava
-    sync_player_kills ANTES do upsert_player. O jogador podia NÃO existir no
-    banco ainda (primeira visita de verdade), e _record_kill_event resolve
-    killer_player_id/victim_player_id por lookup no banco — sem a linha do
-    jogador, os FKs ficam NULL. Como o dedupe é por (region, albion_event_id),
-    as kills/deaths ficavam orfanadas PRA SEME, e nem o refresh (warmer)
-    recuperava (os eventos já estavam no ledger, o sync pula). Regrediu em
-    produção: perfil mostrava fame (escalar, salva pelo upsert final) mas
-    as listas de kills/deaths vinham vazias até a galera clicar em ⟳ — que
-    também não resolvia. Mesma ordem do _warm_player (ver teste acima)."""
+def test_cold_load_grava_nucleo_e_sync_antes_de_ficar_pronto():
+    """A primeira visita só fica warm depois de persistir o snapshot completo
+    e sincronizar kills/deaths; assim não exige um refresh manual em seguida."""
     cold_load_src = inspect.getsource(pl._cold_load_player)
     assert cold_load_src.index("await upsert_player(") < cold_load_src.index(
-        "_sync_cold_load_activities("
-    ), "cold load deve gravar o núcleo antes de disparar a sync de kills"
-    activities_src = inspect.getsource(pl._sync_cold_load_activities)
-    assert "sync_player_kills(" in activities_src, "a task separada deve sincronizar kills/deaths"
+        "await sync_player_kills("
+    ), "cold load deve gravar o núcleo antes da sync de kills"
+    assert cold_load_src.index("await sync_player_kills(") < cold_load_src.index(
+        "await _render_profile_preview("
+    ), "cold load renderiza o preview após sincronizar kills/deaths"
+    assert cold_load_src.index("await _render_profile_preview(") < cold_load_src.index(
+        "ready.set()"
+    ), "cold load só fica pronto após publicar o preview"
 
 
 def test_get_player_by_id_grava_nucleo_antes_da_sync_de_kills():
@@ -135,6 +170,23 @@ def test_warm_by_name_grava_nucleo_antes_da_sync_de_kills():
         "warm_by_name (bootstrap) deve gravar o núcleo ANTES da sync de kills"
 
 
+def test_warm_by_name_renderiza_preview_apos_bootstrap():
+    """O /profile só pode concluir depois de gerar o PNG que o Discord usa no preview."""
+    src = inspect.getsource(pw.warm_by_name)
+    assert src.index("sync_player_kills(") < src.index("await _render_player_preview_async("), \
+        "bootstrap deve renderizar o preview depois de sincronizar as atividades"
+
+
+def test_warm_bot_profile_reaproveita_cold_load_e_cache_do_site():
+    """O /profile só publica cache pronto ou aguarda o cold-load idêntico ao site."""
+    src = inspect.getsource(pw.warm_bot_profile)
+    assert "stats_updated_at" in src
+    assert "_start_cold_load" in src
+    assert "priority=EMBED" in src
+    assert "warm_by_name(name, region)" not in src
+
+
+
 def test_sync_player_kills_dedupe_antes_do_upsert_pesado():
     """Perf: evento já no ledger pula _upsert_event_players (um db.commit() por
     player). Sem o dedupe ANTES, um refresh de jogador ativo refazia centenas de
@@ -147,15 +199,13 @@ def test_sync_player_kills_dedupe_antes_do_upsert_pesado():
         "dedupe (SELECT de existência) deve vir antes do upsert dos players"
 
 
-def test_sync_refresh_reseta_stage_pr_queued_em_falha():
-    """Fetch falhou → pedido fica na fila (retry automático). Stage volta pra
-    'queued' — senão o usuário vê 'buscando perfil' pra sempre num pedido que
-    já falhou e está esperando refazer."""
-    src = inspect.getsource(pw.sync_refresh_requests)
-    # O loop desempacota `for albion_id, region in refresh_list:` — usa a var
-    # de loop, não `player.albion_id`. Casar o que o código realmente faz.
-    assert "_refresh_progress[albion_id] = \"queued\"" in src, "reseta stage em falha"
-    assert "_refresh_progress.pop(albion_id, None)" in src, "limpa stage em sucesso"
+def test_ingestao_vps_limpa_stage_apos_preview():
+    """O stage só termina após o worker concluir profile, eventos e preview."""
+    from app.services import scan_dispatcher
+
+    src = inspect.getsource(scan_dispatcher._apply_ingest_payload)
+    assert "_refresh_progress.pop(albion_id, None)" in src
+    assert src.index("_render_player_preview_async") < src.index("_refresh_progress.pop(albion_id, None)")
 
 
 def test_endpoint_refresh_progress_existe():
@@ -261,14 +311,13 @@ def test_preview_crafting_fica_a_direita_de_pve_e_cache_de_armas_e_reutilizado(m
 
 def test_rota_nao_publica_snapshot_invalido_como_perfil_pronto():
     """Payload sem Timestamp pode provar que a conta existe, mas não que o
-    perfil foi aquecido. A resposta pronta deve sempre vir do row persistido e
-    somente quando `valid` for verdadeiro."""
+    perfil foi aquecido. Só snapshot direto válido pode sair do cold-load."""
     by_name = inspect.getsource(pl.get_player_by_name)
     by_id = inspect.getsource(pl.get_player)
-    assert "refreshed is not None and valid" in by_name
-    assert "refreshed is not None and valid" in by_id
-    assert "_build_profile_payload(db, refreshed, raw)" not in by_name
-    assert "_build_profile_payload(db, refreshed, raw)" not in by_id
+    assert "cached.stats_updated_at is not None" in by_name
+    assert "cached.stats_updated_at is not None" in by_id
+    assert "not _player_has_bad_snapshot(cached)" in by_name
+    assert "not _player_has_bad_snapshot(cached)" in by_id
 
 
 def test_cold_load_preserva_erro_terminal_para_proxima_request():
@@ -289,9 +338,9 @@ def test_upsert_player_rejeita_snapshot_sem_timestamp():
     warm_by_name_src = inspect.getsource(pw.warm_by_name)
     assert "_raw_has_profile_data" in warm_by_name_src, "warm_by_name deve validar snapshot"
     get_player_src = inspect.getsource(pl.get_player)
-    assert get_player_src.count("_raw_has_profile_data") >= 2, "get_player deve validar snapshot em ambos os caminhos"
+    assert "_raw_has_profile_data" in get_player_src, "get_player deve validar snapshot direto"
     get_by_name_src = inspect.getsource(pl.get_player_by_name)
-    assert "_raw_has_profile_data" in get_by_name_src, "get_player_by_name deve validar snapshot"
+    assert "cached.stats_updated_at is not None" in get_by_name_src, "get_player_by_name só serve snapshot direto"
     # O profile JSON (cache-first) também precisa detectar snapshot bugado
     assert "_player_has_bad_snapshot" in get_by_name_src, "get_player_by_name cache-first deve checar snapshot bugado"
     assert "_player_has_bad_snapshot" in get_player_src, "get_player cache-first deve checar snapshot bugado"

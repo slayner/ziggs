@@ -17,6 +17,23 @@ function fmtDate(iso: string | null): string {
   return isNaN(d.getTime()) ? "—" : d.toLocaleString();
 }
 
+function ItemIcon({ itemId, itemName, size }: { itemId: string; itemName: string; size: number }) {
+  const [attempt, setAttempt] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!failed) return;
+    const timer = window.setInterval(() => {
+      setFailed(false);
+      setAttempt(current => current + 1);
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [failed]);
+  const src = `${itemRenderUrl(itemId)}${itemRenderUrl(itemId).includes("?") ? "&" : "?"}retry=${attempt}`;
+  if (failed) return <span title={itemName || itemId} style={{ width: size, height: size, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--border)", borderRadius: 3, color: "var(--hint)", fontSize: Math.max(11, size - 6) }}>?</span>;
+  return <img src={src} alt="" width={size} height={size} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded ? 1 : 0.45 }} />;
+}
+
 /** Orquestra Log (reconcile/baú) e Lootlog como sub-abas do mesmo evento:
  * seletor de evento único (compartilhado), as próprias abas SÃO o header do
  * quadrante (ocupam a largura toda, centralizadas — nada de botões soltos
@@ -30,6 +47,8 @@ export default function ReconcileSection({ guildId }: Props) {
   const [rec, setRec] = useState<UnifiedReconcile | null>(null);
   const [busy, setBusy] = useState(false);
   const [sub, setSub] = useState<SubTab>("log");
+  const [visibleStatuses, setVisibleStatuses] = useState(new Set(["missing", "verified", "deposited", "died"]));
+  const [visibleGuilds, setVisibleGuilds] = useState<Set<string> | null>(null);
 
   useEffect(() => { setGuild(guildId); }, [guildId]);
 
@@ -77,6 +96,10 @@ export default function ReconcileSection({ guildId }: Props) {
     { label: t("recMissing"), value: rec.missing_value, color: "var(--gold)" },
     { label: t("recRegear"), value: rec.total_regear_value, color: "var(--info)" },
   ] : [], [rec, t]);
+
+  const guilds = useMemo(() => rec ? [...new Set(
+    rec.looters.flatMap(looter => looter.items.map(item => item.looted_by_guild || ""))
+  )].sort((a, b) => a.localeCompare(b)) : [], [rec]);
 
   return (
     <div>
@@ -179,7 +202,7 @@ export default function ReconcileSection({ guildId }: Props) {
                               ? <span className="hint">—</span>
                               : d.recovered_items.map((r, j) => (
                                 <span key={j} style={{ display: "inline-flex", alignItems: "center", gap: 4, marginRight: 10 }}>
-                                  {r.item_id && <img src={itemRenderUrl(r.item_id)} alt="" width={18} height={18} />}
+                                   {r.item_id && <ItemIcon itemId={r.item_id} itemName={r.item_name || r.item_id} size={18} />}
                                   {(r.item_id ? (ITEM_BY_ID.get(r.item_id) ? itemLocalName(ITEM_BY_ID.get(r.item_id)!, lang) : r.item_name) : r.item_name) || "?"}
                                   <span className="hint">×{r.quantity}</span>
                                 </span>
@@ -245,13 +268,42 @@ export default function ReconcileSection({ guildId }: Props) {
             <strong style={{ color: "var(--gold)" }}>{t("recByPlayer")}</strong>
             <span className="hint" style={{ fontSize: 11 }}>{t("recVerifyHint")}</span>
           </div>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", margin: "8px 0 2px", fontSize: 11 }}>
-            {([["var(--red)", t("recStolen")], ["var(--gold)", t("recVerified")], ["var(--green)", t("recDeposited")], ["var(--muted)", t("recDiedWith")]] as [string, string][]).map(([c, lbl]) => (
-              <span key={lbl} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--muted)" }}>
-                <span style={{ width: 9, height: 9, borderRadius: 2, background: c, display: "inline-block" }} />{lbl}
-              </span>
-            ))}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0 2px", fontSize: 11 }}>
+            {([
+              ["missing", "var(--red)", t("recItemMissing")],
+              ["verified", "var(--gold)", t("recVerified")],
+              ["deposited", "var(--green)", t("recDeposited")],
+              ["died", "var(--muted)", t("recDiedWith")],
+            ] as [string, string, string][]).map(([status, color, label]) => {
+              const active = visibleStatuses.has(status);
+              return <button
+                key={status} type="button"
+                onClick={() => setVisibleStatuses(current => {
+                  const next = new Set(current);
+                  if (next.has(status)) next.delete(status); else next.add(status);
+                  return next;
+                })}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 7px", borderRadius: 5, border: `1px solid ${color}`, background: "transparent", color: "var(--muted)", opacity: active ? 1 : 0.4, cursor: "pointer", fontSize: 11 }}
+              >
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: color, display: "inline-block" }} />{label}
+              </button>;
+            })}
           </div>
+          {guilds.length > 0 && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0 2px", fontSize: 11 }}>
+              <span className="hint" style={{ alignSelf: "center" }}>{t("recGuildFilters")}</span>
+              <button type="button" onClick={() => setVisibleGuilds(null)} style={{ padding: "3px 7px", borderRadius: 5, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", opacity: visibleGuilds === null ? 1 : 0.4, cursor: "pointer", fontSize: 11 }}>{t("recGuildAll")}</button>
+              {guilds.map(guild => {
+                const active = visibleGuilds === null || visibleGuilds.has(guild);
+                const label = guild || t("recGuildUnknown");
+                return <button key={guild || "unknown"} type="button" onClick={() => setVisibleGuilds(current => {
+                  const next = new Set(current ?? guilds);
+                  if (next.has(guild)) next.delete(guild); else next.add(guild);
+                  return next;
+                })} style={{ padding: "3px 7px", borderRadius: 5, border: "1px solid var(--border)", background: "transparent", color: "var(--muted)", opacity: active ? 1 : 0.4, cursor: "pointer", fontSize: 11 }}>{label}</button>;
+              })}
+            </div>
+          )}
 
           {rec.looters.length === 0 ? (
             <p className="hint" style={{ marginTop: 10 }}>{t("recNoOwed")}</p>
@@ -267,7 +319,10 @@ export default function ReconcileSection({ guildId }: Props) {
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                     {l.items.map((it, j) => {
-                      const clickable = it.status === "missing";
+                      const displayStatus = it.status === "missing" && it.verified ? "verified" : it.status;
+                       if (!visibleStatuses.has(displayStatus)) return null;
+                       if (visibleGuilds !== null && !visibleGuilds.has(it.looted_by_guild || "")) return null;
+                       const clickable = it.status === "missing";
                       const color = it.status === "deposited" ? "var(--green)"
                         : it.status === "died" ? "var(--muted)"
                         : it.verified ? "var(--gold)" : "var(--red)";
@@ -288,8 +343,8 @@ export default function ReconcileSection({ guildId }: Props) {
                             cursor: clickable ? "pointer" : "default", fontSize: 12,
                           }}
                         >
-                          <img src={itemRenderUrl(it.item_id)} alt="" width={22} height={22} />
-                          <span style={{ color: it.status === "died" ? "var(--muted)" : "var(--text)" }}>{name}</span>
+                          <ItemIcon itemId={it.item_id} itemName={name} size={22} />
+                          <span title={known ? undefined : it.item_id} style={{ color: it.status === "died" ? "var(--muted)" : "var(--text)" }}>{name}</span>
                           <span style={{ color, fontWeight: 600 }}>×{it.quantity}</span>
                         </button>
                       );

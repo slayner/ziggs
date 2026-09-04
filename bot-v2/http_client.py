@@ -161,23 +161,32 @@ async def _on_exception(e: Exception) -> None:
 
 async def get_json(
     path: str, *, timeout: float = 5, tag: str = "",
-    raise_on_unavailable: bool = False,
+    raise_on_unavailable: bool = False, retry_for: float = 0,
 ) -> dict | None:
     if not _ensure_ready(raise_on_unavailable):
         return None
-    try:
-        async with session().get(f"{_site_url()}{path}", headers=_headers(),
-                                 timeout=aiohttp.ClientTimeout(total=timeout)) as r:
-            if r.status == 200:
-                return await r.json()
-            if r.status == 401 and tag:
-                print(f"[{tag}] 401 em GET {path} — BOT_API_SECRET do bot não bate com o backend")
-            await r.read()  # drena pra liberar a conexão de volta pro pool
-    except Exception as e:
-        await _on_exception(e)
-        if raise_on_unavailable and _is_transport_error(e):
-            raise BackendUnavailable(str(e)) from e
-    return None
+    deadline = asyncio.get_running_loop().time() + retry_for
+    while True:
+        retry = False
+        try:
+            async with session().get(f"{_site_url()}{path}", headers=_headers(),
+                                     timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+                if r.status == 200:
+                    return await r.json()
+                retry = r.status in (429, 502, 503, 504)
+                if r.status == 401 and tag:
+                    print(f"[{tag}] 401 em GET {path} — BOT_API_SECRET do bot não bate com o backend")
+                await r.read()
+        except Exception as e:
+            await _on_exception(e)
+            retry = _is_transport_error(e)
+            if not retry:
+                return None
+        if not retry or asyncio.get_running_loop().time() >= deadline:
+            if raise_on_unavailable:
+                raise BackendUnavailable(f"GET {path} indisponível")
+            return None
+        await asyncio.sleep(min(2, max(0, deadline - asyncio.get_running_loop().time())))
 
 
 async def get_bytes(path: str, *, timeout: float = 20, tag: str = "") -> bytes | None:
