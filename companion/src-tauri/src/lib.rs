@@ -381,8 +381,12 @@ async fn get_captured_loot(
                 item_name_es: es,
                 quantity: l.quantity as i64,
                 looted_by: l.looted_by.clone(),
-                looted_by_guild: String::new(),
+                looted_by_guild: l.looted_by_guild.clone(),
+                looted_by_alliance: l.looted_by_alliance.clone(),
                 looted_from: l.looted_from.clone(),
+                looted_from_guild: l.looted_from_guild.clone(),
+                looted_from_alliance: l.looted_from_alliance.clone(),
+                server_region: if l.server_region.is_empty() { "west".into() } else { l.server_region.clone() },
             }
         })
         .collect())

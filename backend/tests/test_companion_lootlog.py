@@ -2,7 +2,9 @@
 import asyncio
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine
+from sqlalchemy import BigInteger, create_engine
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 
 from app.models.base import Base
@@ -10,6 +12,17 @@ from app.models.loot import ItemPriceCache
 from app.api.routes.companion import (
     SilverEstimateIn, SilverEstimateItemIn, companion_lootlog_silver_estimate,
 )
+from app.services.lootlog import parse_loot_rows
+
+
+@compiles(JSONB, "sqlite")
+def _jsonb_sqlite(_type, _compiler, **_kw):
+    return "JSON"
+
+
+@compiles(BigInteger, "sqlite")
+def _bigint_sqlite(_type, _compiler, **_kw):
+    return "INTEGER"
 
 
 def _session():
@@ -26,7 +39,28 @@ class _AsyncDb:
         return self.db.scalars(statement)
 
 
+def test_csv_do_companion_preserva_metadados_do_loot_logger():
+    rows = parse_loot_rows(
+        "timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name;server__region\n"
+        "2026-09-05T00:00:00Z;Alliance;Ziggs;Zezinho;T4_BAG;Adept's Bag;2;Enemies;Rivals;Fulano;europe"
+    )
+    assert rows == [{
+        "ts": "2026-09-05T00:00:00+00:00",
+        "item_id": "T4_BAG",
+        "item_name": "Adept's Bag",
+        "quantity": 2,
+        "looted_by": "Zezinho",
+        "looted_by_guild": "Ziggs",
+        "looted_by_alliance": "Alliance",
+        "looted_from": "Fulano",
+        "looted_from_guild": "Rivals",
+        "looted_from_alliance": "Enemies",
+        "server_region": "europe",
+    }]
+
+
 def test_estimativa_de_prata_usa_apenas_cache_local():
+
     db = _session()
     db.add(ItemPriceCache(
         item_type="T4_BAG", silver_value=123,

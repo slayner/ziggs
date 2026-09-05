@@ -180,7 +180,11 @@ def parse_loot_rows(text: str) -> list[dict]:
             "quantity": qty,
             "looted_by": looted_by,
             "looted_by_guild": get("looted_by__guild"),
+            "looted_by_alliance": get("looted_by__alliance"),
             "looted_from": get("looted_from__name"),
+            "looted_from_guild": get("looted_from__guild"),
+            "looted_from_alliance": get("looted_from__alliance"),
+            "server_region": get("server__region"),
         })
     return rows
 

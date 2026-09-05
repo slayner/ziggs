@@ -1,26 +1,30 @@
 #!/usr/bin/env powershell
 # companion/scripts/publish.ps1
-# Publica os artefatos assinados do ultimo build em um release do GitHub:
-#   1. GitHub release no slayner/ziggs (artefatos + assinaturas)
-#   2. Atualiza companion-release.json com os artefatos descobertos
+# Publishes signed artifacts from the latest build to a GitHub release:
+#   1. GitHub release on slayner/ziggs (artifacts and signatures)
+#   2. Updates and publishes companion-release.json with the discovered artifacts
 #
-# Uso: cd companion ; powershell -ExecutionPolicy Bypass -File scripts/publish.ps1 [-Notes "texto"]
-# Pre-requisito: build ja feito (npm run tauri build com signing key no env)
+# Usage: cd companion ; powershell -ExecutionPolicy Bypass -File scripts/publish.ps1 [-Notes "text"]
+# Prerequisite: build completed with the signing key available in the environment
 
 param(
     [string]$Notes = ""
 )
 
+$VpsHost = "root@167.233.241.191"
+$SshKey = Join-Path $HOME ".ssh/hetzner_ziggs"
+$VpsManifestPath = "/home/ziggs/ziggs/backend/data/companion-release.json"
+
 $ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot/..
 
-# --- Carrega config do companion ---
+# --- Load Companion configuration ---
 $tauriConf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
 $version = $tauriConf.version
 
-Write-Host "=== Publicando companion v$version ===" -ForegroundColor Cyan
+Write-Host "=== Publishing Companion v$version ===" -ForegroundColor Cyan
 
-# --- Acha os artefatos assinados do build (versao atual) ---
+# --- Find signed artifacts from the current build ---
 $artifactSpecs = @(
     @{ Platform = "windows-x86_64"; Directory = "src-tauri/target/release/bundle/nsis"; Filter = "*_${version}_*-setup.exe" }
     @{ Platform = "linux-x86_64"; Directory = "src-tauri/target/release/bundle/deb"; Filter = "*_${version}_*.deb" }
@@ -34,7 +38,7 @@ foreach ($spec in $artifactSpecs) {
 
     $matches = @(Get-ChildItem $spec.Directory -File -Filter $spec.Filter)
     if ($matches.Count -gt 1) {
-        Write-Host "ERRO: mais de um artefato para $($spec.Platform) em $($spec.Directory)" -ForegroundColor Red
+        Write-Host "ERROR: more than one artifact for $($spec.Platform) in $($spec.Directory)" -ForegroundColor Red
         exit 1
     }
     if ($matches.Count -eq 0) {
@@ -44,8 +48,8 @@ foreach ($spec in $artifactSpecs) {
     $artifact = $matches[0]
     $sigPath = "$($artifact.FullName).sig"
     if (-not (Test-Path $sigPath)) {
-        Write-Host "ERRO: $sigPath nao encontrado - build nao foi assinado" -ForegroundColor Red
-        Write-Host "Configure TAURI_SIGNING_PRIVATE_KEY e TAURI_SIGNING_PRIVATE_KEY_PASSWORD" -ForegroundColor Yellow
+        Write-Host "ERROR: $sigPath not found - build was not signed" -ForegroundColor Red
+        Write-Host "Set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD" -ForegroundColor Yellow
         exit 1
     }
 
@@ -58,17 +62,17 @@ foreach ($spec in $artifactSpecs) {
 }
 
 if ($artifacts.Count -eq 0) {
-    Write-Host "ERRO: nenhum artefato assinado encontrado para v$version" -ForegroundColor Red
-    Write-Host "Rode 'npm run tauri build' primeiro (com TAURI_SIGNING_PRIVATE_KEY no env)" -ForegroundColor Yellow
+    Write-Host "ERROR: no signed artifacts found for v$version" -ForegroundColor Red
+    Write-Host "Run 'npm run tauri build' first with TAURI_SIGNING_PRIVATE_KEY configured" -ForegroundColor Yellow
     exit 1
 }
 
 foreach ($artifact in $artifacts) {
-    Write-Host "Artefato ($($artifact.Platform)): $($artifact.Name)"
-    Write-Host "Sig: $(Split-Path $artifact.SigPath -Leaf)"
+    Write-Host "Artifact ($($artifact.Platform)): $($artifact.Name)"
+    Write-Host "Signature: $(Split-Path $artifact.SigPath -Leaf)"
 }
 
-# --- Notes do release ---
+# --- Release notes ---
 if (-not $Notes) {
     $Notes = "Companion v$version"
 }
@@ -79,11 +83,11 @@ Write-Host "[1/4] GitHub release..." -ForegroundColor Yellow
 $tag = "v$version"
 $repo = "slayner/ziggs"
 
-# Deleta release anterior se existir (mesma tag)
+# Replace an existing release with the same tag.
 $existingTag = $null
 try { $existingTag = gh release view $tag --repo $repo 2>&1 } catch {}
 if ($LASTEXITCODE -eq 0 -and $existingTag) {
-    Write-Host "  Release $tag ja existe, deletando..."
+    Write-Host "  Release $tag already exists, replacing it..."
     gh release delete $tag --repo $repo --yes 2>&1 | Out-Null
     Start-Sleep -Seconds 2
 }
@@ -96,14 +100,14 @@ foreach ($artifact in $artifacts) {
 
 gh release create $tag $releaseAssets --repo $repo --title "v$version" --notes $Notes --latest 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERRO: gh release create falhou" -ForegroundColor Red
+    Write-Host "ERROR: gh release create failed" -ForegroundColor Red
     exit 1
 }
-Write-Host "  Release criado: https://github.com/slayner/ziggs/releases/tag/$tag"
+Write-Host "  Release created: https://github.com/slayner/ziggs/releases/tag/$tag"
 
-# --- 2. Atualiza companion-release.json ---
+# --- Update companion-release.json ---
 Write-Host ""
-Write-Host "[2/2] Atualizando manifest..." -ForegroundColor Yellow
+Write-Host "[2/3] Updating manifest..." -ForegroundColor Yellow
 
 $platforms = @{}
 $downloads = @{}
@@ -126,10 +130,29 @@ $manifest = @{
 
 $manifestPath = "../backend/data/companion-release.json"
 $manifest | ConvertTo-Json -Depth 5 | Set-Content $manifestPath -NoNewline
-Write-Host "  $manifestPath atualizado"
+Write-Host "  $manifestPath updated"
 
 Write-Host ""
-Write-Host "=== Release v$version preparado! ===" -ForegroundColor Green
+Write-Host "[3/3] Publishing manifest to the VPS..." -ForegroundColor Yellow
+scp -o IdentitiesOnly=yes -i $SshKey $manifestPath "${VpsHost}:/tmp/companion-release.json"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: manifest upload failed" -ForegroundColor Red
+    exit 1
+}
+ssh -o IdentitiesOnly=yes -i $SshKey $VpsHost "install -o ziggs -g ziggs -m 0644 /tmp/companion-release.json $VpsManifestPath"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: manifest installation on the VPS failed" -ForegroundColor Red
+    exit 1
+}
+$publishedVersion = (Invoke-RestMethod "https://ziggs.xyz/companion/latest.json").version
+if ($publishedVersion -ne $version) {
+    Write-Host "ERROR: production announced v$publishedVersion, expected v$version" -ForegroundColor Red
+    exit 1
+}
+Write-Host "  Production announces v$publishedVersion"
+
+Write-Host ""
+Write-Host "=== Release v$version published! ===" -ForegroundColor Green
 Write-Host "  GitHub: https://github.com/slayner/ziggs/releases/tag/$tag"
 foreach ($artifact in $artifacts) {
     Write-Host "  Download ($($artifact.Platform)): https://github.com/slayner/ziggs/releases/download/v$version/$($artifact.Name)"

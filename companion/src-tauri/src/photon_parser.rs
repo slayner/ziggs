@@ -10,6 +10,7 @@
 //   Join (2):             response with map, name, guild of local player
 //   ChangeCluster (41):   response on map change
 //   NewCharacter (29):    event when another player appears
+//   CharacterStats (125): event with player guild and alliance metadata
 //   PartyJoined (231):     event with full party roster
 //   PartyPlayerJoined (233): event when someone joins the party
 //   PartyPlayerLeft (235):  event when someone leaves the party
@@ -1029,6 +1030,45 @@ pub struct LootEvent {
     pub item_index: i32,     // param 4 — numeric item ID
     pub quantity: i32,       // param 5
     pub is_silver: bool,     // param 3 — true = silver, not an item
+    #[serde(default)]
+    pub looted_by_guild: String,
+    #[serde(default)]
+    pub looted_by_alliance: String,
+    #[serde(default)]
+    pub looted_from_guild: String,
+    #[serde(default)]
+    pub looted_from_alliance: String,
+    #[serde(default)]
+    pub server_region: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CharacterMetadata {
+    pub guild_name: String,
+    pub alliance_name: String,
+}
+
+pub fn extract_character_stats(op: &ParsedOperation) -> Option<(String, CharacterMetadata)> {
+    if op.message_type != 4 || op.albion_code != 125 {
+        return None;
+    }
+    let name = op.parameters.get(&0)?.as_string()?.to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let guild_name = op
+        .parameters
+        .get(&1)
+        .and_then(|value| value.as_string())
+        .unwrap_or_default()
+        .to_string();
+    let alliance_name = op
+        .parameters
+        .get(&2)
+        .and_then(|value| value.as_string())
+        .unwrap_or_default()
+        .to_string();
+    Some((name, CharacterMetadata { guild_name, alliance_name }))
 }
 
 /// Albion player name: 3-20 chars, alphanumeric.
@@ -1088,6 +1128,7 @@ pub fn extract_loot(op: &ParsedOperation) -> Option<LootEvent> {
         item_index,
         quantity,
         is_silver: false,
+        ..Default::default()
     })
 }
 
@@ -1215,6 +1256,7 @@ pub fn self_loot_event(
         item_index,
         quantity,
         is_silver: false,
+        ..Default::default()
     }
 }
 
@@ -1855,6 +1897,23 @@ mod tests {
         assert!(!parser.fragments.contains_key(&1));
         assert!(parser.fragments.contains_key(&2));
         assert_eq!(parser.pending_fragment_bytes, 1);
+    }
+
+    #[test]
+    fn character_stats_extracts_player_metadata() {
+        let operation = ParsedOperation {
+            message_type: 4,
+            albion_code: 125,
+            parameters: HashMap::from([
+                (0, PhotonValue::String("Zezinho".into())),
+                (1, PhotonValue::String("Ziggs".into())),
+                (2, PhotonValue::String("Alliance".into())),
+            ]),
+        };
+        let (name, metadata) = extract_character_stats(&operation).unwrap();
+        assert_eq!(name, "Zezinho");
+        assert_eq!(metadata.guild_name, "Ziggs");
+        assert_eq!(metadata.alliance_name, "Alliance");
     }
 
     #[test]
