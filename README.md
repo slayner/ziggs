@@ -21,25 +21,47 @@ React/TypeScript frontend.
 - **Lootlog capture**: Parses `/loot` chat output and generates CSV files
   compatible with ao-loot-logger. Optional auto-submit to guild events.
 
-## Requirements
+## Platform support
 
-- Windows 10/11 (64-bit)
-- Administrator privileges (for WinDivert packet capture and wintun tunnel).
-  No external driver installation needed — WinDivert DLL + .sys are bundled.
-- Rust 1.77+ with MSVC build tools
-- Node.js 18+
+### Windows 10/11 (64-bit)
+
+Full feature set: distributed battle scanner, packet capture, Damage Meter,
+local lootlog CSV, market capture, DNS application, and WireGuard split tunnel.
+Administrator privileges are required for WinDivert and wintun. The required
+DLL and driver are bundled with the Windows installer.
+
+### Linux x86_64 (beta)
+
+The Linux MVP provides the distributed battle and kill scanners without root
+privileges. Packet capture, Damage Meter, local lootlog CSV, market capture,
+DNS application, and the WireGuard split tunnel are not available yet.
 
 ## Building from source
 
-```sh
+### Windows
+
+```powershell
 cd companion
 npm install
-npm run tauri dev    # development build with hot reload
-npm run tauri build  # production build (outputs to src-tauri/target/release/bundle/)
+npm run tauri dev
+npm run tauri build
 ```
 
-The build requires the Rust toolchain, Windows SDK, and MSVC build tools. The
-Tauri CLI handles frontend bundling automatically.
+Requires Rust 1.77+, Windows SDK, and MSVC Build Tools.
+
+### Ubuntu/WSL2 Linux
+
+```bash
+sudo apt-get install -y build-essential pkg-config libssl-dev libgtk-3-dev \
+  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+  patchelf dpkg rpm
+cd companion
+npm install
+npm run tauri -- build --config src-tauri/tauri.linux.conf.json
+```
+
+The Linux bundle emits AppImage and Debian packages without Windows drivers or
+NSIS resources. Use the Linux configuration only for the Linux MVP build.
 
 ## Configuration
 
