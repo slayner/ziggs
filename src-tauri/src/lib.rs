@@ -381,8 +381,12 @@ async fn get_captured_loot(
                 item_name_es: es,
                 quantity: l.quantity as i64,
                 looted_by: l.looted_by.clone(),
-                looted_by_guild: String::new(),
+                looted_by_guild: l.looted_by_guild.clone(),
+                looted_by_alliance: l.looted_by_alliance.clone(),
                 looted_from: l.looted_from.clone(),
+                looted_from_guild: l.looted_from_guild.clone(),
+                looted_from_alliance: l.looted_from_alliance.clone(),
+                server_region: if l.server_region.is_empty() { "west".into() } else { l.server_region.clone() },
             }
         })
         .collect())
@@ -475,7 +479,7 @@ fn spell_cache_path() -> std::path::PathBuf {
         // Bump filename when table CONTENT changes: old cache deserializes
         // without error (new fields are Option), so a rename is needed for
         // users to pick up improvements.
-        .join("spell_names_v6.json")
+        .join("spell_names_v7.json")
 }
 
 /// Loads from disk cache or downloads from backend. Retries until success:
@@ -1822,7 +1826,7 @@ pub fn run() {
                 }
             }
             // Periodic price upload: drains the sniffer buffer every 60s,
-            // aggregates lowest sell_price_min per (item, quality, city) and
+            // aggregates lowest sell_price_min per (item, quality, city, region) and
             // enqueues for transfer (respects PvP pause; persists on failure).
             {
                 let prices_buf = Arc::clone(&state.sniffer.prices);
@@ -1838,15 +1842,16 @@ pub fn run() {
                             }
                             b.drain(..).collect()
                         };
-                        // Lowest sell_price_min per (item_id, quality, city).
+                        // Lowest sell_price_min per (item_id, quality, city, region).
                         let mut best: std::collections::HashMap<String, serde_json::Value> =
                             std::collections::HashMap::new();
                         for row in raw {
                             let key = format!(
-                                "{}|{}|{}",
+                                "{}|{}|{}|{}",
                                 row.get("item_id").and_then(|v| v.as_str()).unwrap_or(""),
                                 row.get("quality").and_then(|v| v.as_i64()).unwrap_or(1),
                                 row.get("city").and_then(|v| v.as_str()).unwrap_or(""),
+                                row.get("region").and_then(|v| v.as_str()).unwrap_or("west"),
                             );
                             let price = row
                                 .get("sell_price_min")
