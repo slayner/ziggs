@@ -28,4 +28,21 @@ if ($Set) {
 }
 
 $conf | ConvertTo-Json -Depth 10 | ForEach-Object { [System.IO.File]::WriteAllText($path, $_, [System.Text.UTF8Encoding]::new($false)) }
+
+$cargoPath = "$PSScriptRoot/../src-tauri/Cargo.toml"
+$cargo = Get-Content $cargoPath -Raw
+$cargo = [regex]::Replace($cargo, '(?m)^version\s*=\s*"[^"]+"', "version = `"$($conf.version)`"", 1)
+[System.IO.File]::WriteAllText($cargoPath, $cargo, [System.Text.UTF8Encoding]::new($false))
+
+$packagePath = "$PSScriptRoot/../package.json"
+$package = Get-Content $packagePath -Raw | ConvertFrom-Json
+$package.version = $conf.version
+$package | ConvertTo-Json -Depth 10 | ForEach-Object { [System.IO.File]::WriteAllText($packagePath, $_, [System.Text.UTF8Encoding]::new($false)) }
+
+$lockPath = "$PSScriptRoot/../package-lock.json"
+$lock = Get-Content $lockPath -Raw | ConvertFrom-Json
+$lock.version = $conf.version
+$lock.packages."".version = $conf.version
+$lock | ConvertTo-Json -Depth 100 | ForEach-Object { [System.IO.File]::WriteAllText($lockPath, $_, [System.Text.UTF8Encoding]::new($false)) }
+
 Write-Host "Version bumped to: $($conf.version)"

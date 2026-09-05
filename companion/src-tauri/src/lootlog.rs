@@ -109,14 +109,14 @@ pub fn resolve(index: i32) -> (String, String, String, String) {
     )
 }
 
-// Load from disk cache, or download from the backend on a 60s retry loop. A single
-// failure at boot would leave every entry as `IDX_n`.
+// Carrega o cache para resposta imediata e sempre busca o catálogo atual depois.
+// Uma falha ou resposta vazia não pode deixar os itens permanentemente como IDX_n.
 pub async fn load_item_names() {
     if let Ok(bytes) = std::fs::read(item_cache_path()) {
         if let Ok(v) = serde_json::from_slice::<Vec<crate::api::ItemName>>(&bytes) {
             if !v.is_empty() {
+                tracing::info!(count = v.len(), "item catalog loaded from cache");
                 store(v);
-                return;
             }
         }
     }
@@ -124,16 +124,17 @@ pub async fn load_item_names() {
     loop {
         match api.items().await {
             Ok(v) if !v.is_empty() => {
+                let count = v.len();
                 if let Ok(bytes) = serde_json::to_vec(&v) {
-                    let _ = std::fs::write(item_cache_path(), bytes);
+                    if let Err(e) = crate::persist::atomic_write(&item_cache_path(), &bytes) {
+                        tracing::warn!("item catalog cache write failed: {e:#}");
+                    }
                 }
+                tracing::info!(count, "item catalog refreshed from backend");
                 store(v);
                 return;
             }
-            Ok(_) => {
-                tracing::info!("item catalog empty on backend");
-                return;
-            }
+            Ok(_) => tracing::warn!("item catalog empty on backend, retrying in 60s"),
             Err(e) => tracing::warn!("item catalog fetch failed, retrying in 60s: {e:#}"),
         }
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -164,7 +165,11 @@ pub fn build_csv_from_loot(events: &[LootEvent]) -> String {
             e.looted_from_alliance,
             e.looted_from_guild,
             e.looted_from,
-            if e.server_region.is_empty() { "west" } else { &e.server_region },
+            if e.server_region.is_empty() {
+                "west"
+            } else {
+                &e.server_region
+            },
         ));
     }
     lines.join("\n")

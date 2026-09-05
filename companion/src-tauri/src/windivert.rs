@@ -8,7 +8,7 @@
 //   - SNIFF mode: copies packets without intercepting, game is unaffected
 //
 // WinDivert.dll and WinDivert64.sys are bundled in resources/ (LGPLv3).
-// Requires admin (already required by the companion for wintun).
+// Requer privilégios de administrador.
 
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -96,7 +96,8 @@ unsafe fn load_dll() -> Result<Funcs, String> {
     Ok(Funcs {
         open: get_func(module, b"WinDivertOpen\0").ok_or("WinDivertOpen export missing")?,
         recv: get_func(module, b"WinDivertRecv\0").ok_or("WinDivertRecv export missing")?,
-        shutdown: get_func(module, b"WinDivertShutdown\0").ok_or("WinDivertShutdown export missing")?,
+        shutdown: get_func(module, b"WinDivertShutdown\0")
+            .ok_or("WinDivertShutdown export missing")?,
         close: get_func(module, b"WinDivertClose\0").ok_or("WinDivertClose export missing")?,
     })
 }
@@ -138,7 +139,10 @@ pub fn start_capture(
                 1275 => "DLL_NOT_FOUND — WinDivert.dll missing dependencies (VC++ runtime?)",
                 _ => "see WinDivert docs",
             };
-            return Err(format!("WinDivertOpen failed: GetLastError={} ({})", err, hint));
+            return Err(format!(
+                "WinDivertOpen failed: GetLastError={} ({})",
+                err, hint
+            ));
         }
         #[cfg(not(target_os = "windows"))]
         {

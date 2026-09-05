@@ -1,7 +1,7 @@
 [package]
 name = "ziggs-companion"
-version = "0.2.0"
-description = "Ziggs Companion — battle scanner, DNS optimizer, lootlog helper"
+version = "0.2.15"
+description = "Ziggs Companion — damage meter e lootlog"
 authors = ["Ziggs"]
 edition = "2021"
 rust-version = "1.77"
@@ -33,19 +33,9 @@ directories = "5"
 dirs = "5"
 url = "2"
 rand = "0.8"
-hickory-resolver = "0.24"
-ping = "0.5"
 chrono = "0.4"
-# WireGuard tunnel (Phase 1.5 — ExitLag-style routing)
-boringtun = { version = "0.7", default-features = false }
-socket2 = "0.5"
-base64 = "0.22"
-hex = "0.4"
-sha2 = "0.10"
-rand_core = "0.6"
 
 [target.'cfg(windows)'.dependencies]
-wintun = "0.5"
 windows-sys = { version = "0.48", features = [
     "Win32_Security",
     "Win32_Foundation",

@@ -29,33 +29,13 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
-use crate::aodp::{self, AodpBatch, AodpServer};
 #[cfg(target_os = "windows")]
 use crate::photon_parser::{
-    extract_attach_container, extract_character_stats, extract_detach_container, extract_gold, extract_health,
-    extract_history_request, extract_history_response, extract_inventory_move, extract_loot,
-    extract_market, extract_new_character, extract_new_loot_item, extract_new_loot_owner,
-    extract_party, extract_player_state, self_loot_event, PhotonParser,
+    extract_attach_container, extract_character_stats, extract_detach_container, extract_health,
+    extract_inventory_move, extract_loot, extract_new_character, extract_new_loot_item,
+    extract_new_loot_owner, extract_party, extract_player_state, self_loot_event, PhotonParser,
 };
-use crate::photon_parser::{DamageAcc, HistoryReq, LootEvent, PhotonValue};
-
-/// Cities with real marketplaces — we only report prices when the player is
-/// in one of these. Includes the 3 Rests (Arthur's/Merlyn's/Morgana's) which
-/// have their own crafting stations and share the Smuggler's Network.
-const MARKET_CITIES: [&str; 12] = [
-    "Martlock",
-    "Bridgewatch",
-    "Lymhurst",
-    "Fort Sterling",
-    "Thetford",
-    "Caerleon",
-    "Brecilien",
-    "Black Market",
-    "Arthur's Rest",
-    "Merlyn's Rest",
-    "Morgana's Rest",
-    "Smuggler's Den",
-];
+use crate::photon_parser::{DamageAcc, LootEvent, PhotonValue};
 
 /// Packet dedup window. `open_all` listens on ALL interfaces on purpose
 /// (VPN/ExitLag/virtual adapters — listening on only one would lose traffic
@@ -186,25 +166,9 @@ pub struct Sniffer {
     /// target_id. Filtering after would require per-target breakdown — much
     /// more memory than keeping two totals.
     pub damage_vs_players: Arc<Mutex<HashMap<i64, DamageAcc>>>,
-    /// Price rows ready for POST /companion/prices/submit — drained
-    /// periodically by the upload task in lib.rs.
-    pub prices: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// Market history rows ready for POST /companion/market-history/submit.
-    pub market_history: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// Pending history requests (message_id → info), awaiting response.
-    history_pending: Arc<Mutex<HashMap<u64, HistoryReq>>>,
-    /// Market order batches ready for AODP upload (verbatim).
-    pub aodp_out: Arc<Mutex<Vec<AodpBatch>>>,
-    /// Last AODP region inferred from the Albion server IP (per packet).
-    pub aodp_server: Arc<Mutex<Option<AodpServer>>>,
-    /// Capture gates — mirror the config toggles (set_config syncs them).
-    /// The sniffer always runs (name/map/party feed the UI), but only
-    /// accumulates loot/damage/prices when the gate is on.
+    /// Capture gates — mirror the configuration toggles.
     pub capture_loot: Arc<AtomicBool>,
     pub capture_damage: Arc<AtomicBool>,
-    pub capture_prices: Arc<AtomicBool>,
-    /// Forward market orders to AODP (return data to the community).
-    pub feed_aodp: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     /// WinDivert capture handle (0 = not started). Lives for the session,
     /// shutdown on stop/restart. See `windivert.rs`.
@@ -238,15 +202,8 @@ impl Sniffer {
             character_metadata: Arc::new(Mutex::new(HashMap::new())),
             damage: Arc::new(Mutex::new(HashMap::new())),
             damage_vs_players: Arc::new(Mutex::new(HashMap::new())),
-            prices: Arc::new(Mutex::new(Vec::new())),
-            market_history: Arc::new(Mutex::new(Vec::new())),
-            history_pending: Arc::new(Mutex::new(HashMap::new())),
-            aodp_out: Arc::new(Mutex::new(Vec::new())),
-            aodp_server: Arc::new(Mutex::new(None)),
             capture_loot: Arc::new(AtomicBool::new(false)),
             capture_damage: Arc::new(AtomicBool::new(false)),
-            capture_prices: Arc::new(AtomicBool::new(false)),
-            feed_aodp: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "windows")]
             windivert_handle: Arc::new(AtomicI64::new(0)),
@@ -266,15 +223,8 @@ impl Sniffer {
             character_metadata: Arc::clone(&self.character_metadata),
             damage: Arc::clone(&self.damage),
             damage_vs_players: Arc::clone(&self.damage_vs_players),
-            prices: Arc::clone(&self.prices),
-            market_history: Arc::clone(&self.market_history),
-            history_pending: Arc::clone(&self.history_pending),
-            aodp_out: Arc::clone(&self.aodp_out),
-            aodp_server: Arc::clone(&self.aodp_server),
             capture_loot: Arc::clone(&self.capture_loot),
             capture_damage: Arc::clone(&self.capture_damage),
-            capture_prices: Arc::clone(&self.capture_prices),
-            feed_aodp: Arc::clone(&self.feed_aodp),
             generation: Arc::clone(&self.generation),
             #[cfg(target_os = "windows")]
             windivert_handle: Arc::clone(&self.windivert_handle),
@@ -329,11 +279,8 @@ impl Sniffer {
                 format!("=== session {} ===\n", crate::photon_parser::now_iso_utc()),
             );
         }
-        self.debug_log(
-            "info",
-            "Sniffer starting — WinDivert (WFP layer)…",
-        )
-        .await;
+        self.debug_log("info", "Sniffer starting — WinDivert (WFP layer)…")
+            .await;
 
         // The channel lives for the entire session.
         let (tx, rx) = mpsc::channel::<CaptureMsg>();
@@ -426,10 +373,6 @@ impl Sniffer {
                         None => continue,
                     };
                     last_packet_time = Instant::now();
-                    // AODP region: inferred from the Albion server IP in the IP header.
-                    if let Some(srv) = albion_server_from_frame(&data, l2_hint) {
-                        *self.aodp_server.lock().await = Some(srv);
-                    }
                     let photon_data = &data[off..];
 
                     // Dedup: byte-identical copy from another interface (bridged
@@ -814,194 +757,6 @@ impl Sniffer {
                                 }
                             }
                         }
-
-                        // Market: marketplace responses while the player browses.
-                        // Feeds OUR database (by city) and forwards to AODP (verbatim).
-                        if self.capture_prices.load(Ordering::Relaxed)
-                            || self.feed_aodp.load(Ordering::Relaxed)
-                        {
-                            let cap = extract_market(op);
-                            if !cap.raw_orders.is_empty() {
-                                let (city, raw_map, map_name) = {
-                                    let s = self.stats.lock().await;
-                                    let city = MARKET_CITIES
-                                        .iter()
-                                        .find(|c| s.last_map_name.contains(*c))
-                                        .map(|c| c.to_string());
-                                    (city, s.last_map.clone(), s.last_map_name.clone())
-                                };
-
-                                // Our database: only in known market cities.
-                                if self.capture_prices.load(Ordering::Relaxed) {
-                                    if let Some(city) = &city {
-                                        let ts = crate::photon_parser::now_iso_utc();
-                                        let region = self
-                                            .aodp_server
-                                            .lock()
-                                            .await
-                                            .as_ref()
-                                            .map(|server| server.region())
-                                            .unwrap_or("west");
-                                        let mut buf = self.prices.lock().await;
-                                        for o in &cap.offers {
-                                            // Convert UniqueName (game's ItemTypeId)
-                                            // → game_name (English in-game name), which is
-                                            // the canonical ID in our price database.
-                                            let game_name = crate::to_game_name(&o.item_id).await;
-                                            buf.push(serde_json::json!({
-                                                "item_id": game_name,
-                                                "city": city,
-                                                "region": region,
-                                                "quality": o.quality,
-                                                "sell_price_min": o.unit_price_silver,
-                                                "price_date": ts,
-                                            }));
-                                        }
-                                        let len = buf.len();
-                                        if len > 5000 {
-                                            buf.drain(..len - 5000);
-                                        }
-                                    }
-                                }
-
-                                // AODP: forward raw orders. Numeric LocationId (current
-                                // cluster) filled when the order doesn't have one — same
-                                // as the official client does.
-                                if self.feed_aodp.load(Ordering::Relaxed) {
-                                    let server = self.aodp_server.lock().await.clone();
-                                    let numeric_loc = raw_map.trim_start_matches('0');
-                                    // Accept numeric clusters (real cities, Rests)
-                                    // AND BLACKBANK-* (Smuggler's Den) — the
-                                    // official AODP client accepts both.
-                                    let is_valid_loc = !numeric_loc.is_empty()
-                                        && (numeric_loc.chars().all(|c| c.is_ascii_digit())
-                                            || numeric_loc.starts_with("BLACKBANK-"));
-                                    if let Some(server) = server {
-                                        if is_valid_loc {
-                                            let orders: Vec<serde_json::Value> = cap
-                                                .raw_orders
-                                                .iter()
-                                                .map(|o| {
-                                                    let mut o = o.clone();
-                                                    let empty = o
-                                                        .get("LocationId")
-                                                        .and_then(|l| l.as_str())
-                                                        .map_or(true, |l| l.is_empty());
-                                                    if empty {
-                                                        o["LocationId"] = serde_json::Value::String(
-                                                            numeric_loc.to_string(),
-                                                        );
-                                                    }
-                                                    o
-                                                })
-                                                .collect();
-                                            let natsmsg =
-                                                serde_json::json!({ "Orders": orders }).to_string();
-                                            let mut buf = self.aodp_out.lock().await;
-                                            buf.push(AodpBatch {
-                                                server_id: server.id,
-                                                base_url: server.base_url,
-                                                topic: "marketorders.ingest".into(),
-                                                natsmsg,
-                                            });
-                                            // Cap: max 50 pending batches.
-                                            let len = buf.len();
-                                            if len > 50 {
-                                                buf.drain(..len - 50);
-                                            }
-                                        } else {
-                                            self.debug_log(
-                                                "warn",
-                                                &format!(
-                                                    "AODP: invalid location ({}), skipping send",
-                                                    map_name
-                                                ),
-                                            )
-                                            .await;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Market history: aggregate chart from the game itself.
-                        // Request carries item/quality/scale; response carries buckets —
-                        // correlated by message-id. Stored in OUR database
-                        // (independent of AODP).
-                        if self.capture_prices.load(Ordering::Relaxed) {
-                            if let Some((mid, info)) = extract_history_request(op) {
-                                let mut pend = self.history_pending.lock().await;
-                                pend.insert(mid, info);
-                                // Cap: discard old orphan requests (response never came).
-                                if pend.len() > 256 {
-                                    let drop: Vec<u64> =
-                                        pend.keys().take(pend.len() - 256).copied().collect();
-                                    for k in drop {
-                                        pend.remove(&k);
-                                    }
-                                }
-                            }
-                            if let Some((mid, buckets)) = extract_history_response(op) {
-                                let info = self.history_pending.lock().await.remove(&mid);
-                                if let Some(info) = info {
-                                    let location = {
-                                        let s = self.stats.lock().await;
-                                        s.last_map.trim_start_matches('0').to_string()
-                                    };
-                                    // Albion server region (detected from packet IPs) —
-                                    // markets are separated by server.
-                                    let region = self
-                                        .aodp_server
-                                        .lock()
-                                        .await
-                                        .as_ref()
-                                        .map(|s| s.region())
-                                        .unwrap_or("west");
-                                    let mut buf = self.market_history.lock().await;
-                                    for b in buckets {
-                                        buf.push(serde_json::json!({
-                                            "albion_id": info.albion_id,
-                                            "region": region,
-                                            "quality": info.quality,
-                                            "location": location,
-                                            "timescale": info.timescale,
-                                            "bucket_ts": b.bucket_ts,
-                                            "item_count": b.item_count,
-                                            "silver_amount": b.silver_amount,
-                                        }));
-                                    }
-                                    let len = buf.len();
-                                    if len > 10000 {
-                                        buf.drain(..len - 10000);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Gold: gold market price (global, no location).
-                        // Only needs the server region — forwards to AODP.
-                        if self.feed_aodp.load(Ordering::Relaxed) {
-                            if let Some(g) = extract_gold(op) {
-                                if let Some(server) = self.aodp_server.lock().await.clone() {
-                                    let natsmsg = serde_json::json!({
-                                        "Prices": g.prices,
-                                        "Timestamps": g.timestamps,
-                                    })
-                                    .to_string();
-                                    let mut buf = self.aodp_out.lock().await;
-                                    buf.push(AodpBatch {
-                                        server_id: server.id,
-                                        base_url: server.base_url,
-                                        topic: "goldprices.ingest".into(),
-                                        natsmsg,
-                                    });
-                                    let len = buf.len();
-                                    if len > 50 {
-                                        buf.drain(..len - 50);
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => { /* no packets — continue loop */ }
@@ -1072,13 +827,7 @@ impl Sniffer {
             loot.looted_from_alliance = player.alliance_name.clone();
         }
         drop(metadata);
-        loot.server_region = self
-            .aodp_server
-            .lock()
-            .await
-            .as_ref()
-            .map(|server| server.region().to_string())
-            .unwrap_or_else(|| "west".into());
+        loot.server_region = "local".into();
         let (len, save_error) = {
             let mut buf = self.loot.lock().await;
             if is_duplicate_loot(&buf, &loot) {
@@ -1227,30 +976,6 @@ fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
     None
 }
 
-/// Infers the AODP region from the IPs (src/dst) in the IPv4 header.
-/// Src IP (bytes 12-15) and dst IP (16-19) — one of them is the Albion server.
-fn albion_server_from_frame(data: &[u8], l2_hint: usize) -> Option<AodpServer> {
-    for &l2 in &[l2_hint, 0, 14, 4] {
-        if data.len() < l2 + 20 {
-            continue;
-        }
-        let vihl = data[l2];
-        if vihl >> 4 != 4 {
-            continue;
-        }
-        if data[l2 + 9] != 17 {
-            continue;
-        } // UDP
-        let src = [data[l2 + 12], data[l2 + 13], data[l2 + 14], data[l2 + 15]];
-        let dst = [data[l2 + 16], data[l2 + 17], data[l2 + 18], data[l2 + 19]];
-        if let Some(s) = aodp::server_for_ip(src).or_else(|| aodp::server_for_ip(dst)) {
-            return Some(s);
-        }
-        return None; // Valid IP header but neither side is a known Albion server
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::photon_offset;
@@ -1342,27 +1067,15 @@ mod tests {
     fn loot_dedup_catches_identical_event_from_two_interfaces() {
         let mut buf = vec![loot_ev("Alice", "Bob", 2958, 3)];
         // Same identity (same copy arriving from the other interface) → dup.
-        assert!(is_duplicate_loot(
-            &buf,
-            &loot_ev("Alice", "Bob", 2958, 3)
-        ));
+        assert!(is_duplicate_loot(&buf, &loot_ev("Alice", "Bob", 2958, 3)));
         buf.push(loot_ev("Alice", "Bob", 2958, 3));
 
         // Different item from same body, same second → not dup.
-        assert!(!is_duplicate_loot(
-            &buf,
-            &loot_ev("Alice", "Bob", 1001, 3)
-        ));
+        assert!(!is_duplicate_loot(&buf, &loot_ev("Alice", "Bob", 1001, 3)));
         // Different quantity → not dup.
-        assert!(!is_duplicate_loot(
-            &buf,
-            &loot_ev("Alice", "Bob", 2958, 5)
-        ));
+        assert!(!is_duplicate_loot(&buf, &loot_ev("Alice", "Bob", 2958, 5)));
         // Different looter → not dup.
-        assert!(!is_duplicate_loot(
-            &buf,
-            &loot_ev("Carol", "Bob", 2958, 3)
-        ));
+        assert!(!is_duplicate_loot(&buf, &loot_ev("Carol", "Bob", 2958, 3)));
     }
 
     #[test]

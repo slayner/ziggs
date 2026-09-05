@@ -33,24 +33,18 @@ $artifacts = @()
 
 foreach ($spec in $artifactSpecs) {
     if (-not (Test-Path $spec.Directory)) {
-        continue
+        throw "ERROR: artifact directory for $($spec.Platform) not found: $($spec.Directory)"
     }
 
     $matches = @(Get-ChildItem $spec.Directory -File -Filter $spec.Filter)
-    if ($matches.Count -gt 1) {
-        Write-Host "ERROR: more than one artifact for $($spec.Platform) in $($spec.Directory)" -ForegroundColor Red
-        exit 1
-    }
-    if ($matches.Count -eq 0) {
-        continue
+    if ($matches.Count -ne 1) {
+        throw "ERROR: expected exactly one artifact for $($spec.Platform) in $($spec.Directory); found $($matches.Count)"
     }
 
     $artifact = $matches[0]
     $sigPath = "$($artifact.FullName).sig"
-    if (-not (Test-Path $sigPath)) {
-        Write-Host "ERROR: $sigPath not found - build was not signed" -ForegroundColor Red
-        Write-Host "Set TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD" -ForegroundColor Yellow
-        exit 1
+    if (-not (Test-Path $sigPath -PathType Leaf) -or (Get-Item $sigPath).Length -eq 0) {
+        throw "ERROR: valid signature not found for $($artifact.Name)"
     }
 
     $artifacts += @{
@@ -61,10 +55,8 @@ foreach ($spec in $artifactSpecs) {
     }
 }
 
-if ($artifacts.Count -eq 0) {
-    Write-Host "ERROR: no signed artifacts found for v$version" -ForegroundColor Red
-    Write-Host "Run 'npm run tauri build' first with TAURI_SIGNING_PRIVATE_KEY configured" -ForegroundColor Yellow
-    exit 1
+if ($artifacts.Count -ne $artifactSpecs.Count) {
+    throw "ERROR: release requires all configured platform artifacts."
 }
 
 foreach ($artifact in $artifacts) {
@@ -98,7 +90,11 @@ foreach ($artifact in $artifacts) {
     $releaseAssets += $artifact.SigPath
 }
 
-gh release create $tag $releaseAssets --repo $repo --title "v$version" --notes $Notes --latest 2>&1
+$releaseTarget = (git rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $releaseTarget) {
+    throw "ERROR: could not determine the release commit"
+}
+gh release create $tag $releaseAssets --repo $repo --target $releaseTarget --title "v$version" --notes $Notes --latest 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: gh release create failed" -ForegroundColor Red
     exit 1
@@ -113,6 +109,10 @@ $platforms = @{}
 $downloads = @{}
 foreach ($artifact in $artifacts) {
     $url = "https://github.com/slayner/ziggs/releases/download/v$version/$([uri]::EscapeDataString($artifact.Name))"
+    $publishedName = [uri]::UnescapeDataString(([uri]$url).Segments[-1])
+    if ($publishedName -cne $artifact.Name) {
+        throw "URL do manifesto não corresponde ao artefato selecionado: '$publishedName' != '$($artifact.Name)'"
+    }
     $platforms[$artifact.Platform] = @{
         signature = (Get-Content $artifact.SigPath -Raw).Trim()
         url = $url

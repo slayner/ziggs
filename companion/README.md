@@ -1,147 +1,98 @@
 # Ziggs Companion
 
-Desktop application for Albion Online guilds using the Ziggs platform. Provides
-distributed battle scanning, route optimization via WireGuard tunneling, DNS
-testing, damage meter, and lootlog capture. Built with Tauri 2 (Rust core) and
-React/TypeScript frontend.
+Aplicativo desktop para Albion Online focado em dois recursos locais:
 
-## Features
+- **Damage Meter**: captura pacotes Photon do Albion com WinDivert e mostra o dano da sessão por jogador.
+- **Lootlog**: captura eventos de loot e exporta CSV compatível com ao-loot-logger.
 
-- **Battle scanner**: Distributed scanning of Albion battle IDs across regions
-  (Americas, Europe, Asia). Reports found/missing battles back to the Ziggs
-  backend, which validates against the public Albion API.
-- **Route optimization**: WireGuard tunnel to a VPS near the Albion datacenter,
-  reducing latency. Split-tunneling: only Albion traffic goes through the
-  tunnel. Automatic fallback to direct route if the VPS is unreachable.
-- **DNS tester**: Pings Cloudflare, Google, Quad9, and OpenDNS to score the
-  best resolver for the player's location.
-- **Damage meter**: Captures damage events from Photon network packets via
-  WinDivert. Shows per-player breakdown by skill, timeline, and DPS. Players only
-  (no mobs).
-- **Lootlog capture**: Parses `/loot` chat output and generates CSV files
-  compatible with ao-loot-logger. Optional auto-submit to guild events.
+O aplicativo também mantém atualização automática e relatórios de falha. Não executa túnel, otimização de DNS, escaneamento distribuído, captura de mercado ou envio ao AODP.
 
-## Platform support
+## Plataformas
 
 ### Windows 10/11 (64-bit)
 
-Full feature set: distributed battle scanner, packet capture, Damage Meter,
-local lootlog CSV, market capture, DNS application, and WireGuard split tunnel.
-Administrator privileges are required for WinDivert and wintun. The required
-DLL and driver are bundled with the Windows installer.
+A captura de pacotes requer privilégios de administrador e usa WinDivert, incluído no instalador.
 
-### Linux x86_64 (beta)
+### Linux x86_64
 
-The Linux MVP provides the distributed battle and kill scanners without root
-privileges. Packet capture, Damage Meter, local lootlog CSV, market capture,
-DNS application, and the WireGuard split tunnel are not available yet.
+A interface pode ser compilada, mas a captura de pacotes via WinDivert não está disponível.
 
-## Building from source
-
-### Windows
+## Desenvolvimento
 
 ```powershell
 cd companion
 npm install
 npm run tauri dev
+```
+
+```powershell
+npm run build
 npm run tauri build
 ```
 
-Requires Rust 1.77+, Windows SDK, and MSVC Build Tools.
+### Build Linux assinada pelo Windows
 
-### Ubuntu/WSL2 Linux
+O pacote Linux é compilado em um staging nativo do WSL 2, nunca em `/mnt/c`.
+Instale uma vez no Ubuntu do WSL as dependências de build do Tauri:
 
 ```bash
-sudo apt-get install -y build-essential pkg-config libssl-dev libgtk-3-dev \
-  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
-  patchelf dpkg rpm xdg-utils
-cd companion
-scripts/build-linux.sh
+sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev \
+  libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+  libxdo-dev patchelf dpkg xdg-utils rsync file
 ```
 
-The Linux bundle emits AppImage and Debian packages without Windows drivers or
-NSIS resources. Use the Linux configuration only for the Linux MVP build.
+Depois, execute na raiz do repositório pelo terminal Windows:
 
-## Configuration
+```powershell
+powershell -ExecutionPolicy Bypass -File .\companion\scripts\build-linux.ps1
+```
 
-User configuration is stored at:
+O script usa `Ubuntu` e o usuário WSL `gabriel` por padrão. Em outro ambiente,
+informe ambos explicitamente:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\companion\scripts\build-linux.ps1 -Distro Ubuntu -WslUser seu-usuario
+```
+
+A chave privada é lida diretamente de `%USERPROFILE%\.tauri\ziggs-companion.key`
+pelo assinador Tauri dentro do WSL. Após a compilação, o script pede a senha com
+entrada oculta diretamente no terminal WSL. A senha não é enviada ao PowerShell,
+não aparece nos argumentos do processo Windows, não é salva em arquivo temporário
+nem em variável persistente. Para a única chamada do assinador, ela existe
+brevemente no ambiente do subprocesso Linux; execute a build em uma sessão WSL
+local confiável. A build gera somente o `.deb`, sua assinatura `.deb.sig` e
+`SHA256SUMS` em `~/artifacts/ziggs-companion/v<versão>/` no WSL. Ela não instala,
+publica, cria release, altera o manifesto do updater nem acessa a VPS.
+
+## Configuração
+
+A configuração local fica em:
+
 - Windows: `%APPDATA%\ziggs-companion\config.json`
 - Linux: `~/.config/ziggs-companion/config.json`
 - macOS: `~/Library/Application Support/ziggs-companion/config.json`
 
-Key settings:
-- `api_base_url`: Backend API URL (default: `http://localhost:8000`)
-- `region`: Albion region (americas, europe, asia)
-- `character_name`: Your in-game character name
-- `tunnel_enabled`: Enable WireGuard route optimization
-- `tunnel_endpoint`: VPS endpoint address
-- `tunnel_server_pubkey`: VPS WireGuard public key
-- `tunnel_client_privkey`: Client WireGuard private key
-- `autostart`: Launch on system startup
-- `minimize_to_tray`: Keep running in system tray when closed
-- `collect_battles`, `collect_prices`, `collect_damage_meter`,
-  `collect_auto_lootlog`: Toggle individual collectors
+As opções disponíveis controlam o Damage Meter, o Lootlog, o início automático e a minimização para a bandeja.
 
-## Tunnel setup
+## Estrutura
 
-Route optimization uses a WireGuard VPS near the Albion datacenter. The
-companion auto-configures the endpoint and server public key based on the
-Albion region detected from game traffic. The client private key is
-generated automatically on first launch.
-
-The companion tests latency (direct vs tunnel) before activating and falls
-back to direct routing automatically if the VPS becomes unreachable.
-
-## Code signing
-
-The build can sign Windows binaries via Microsoft Artifact Signing (Azure).
-Without signing environment variables set, the build skips signing (binaries
-work but may trigger SmartScreen warnings on Windows 11).
-
-## Project structure
-
-```
+```text
 companion/
-├── src/                        React/TypeScript frontend
-│   ├── App.tsx                 Main UI (tabs: Route, Damage, Lootlog)
-│   ├── i18n.ts                 PT/EN/ES translations
-│   └── styles.css              Global styles
-├── src-tauri/                  Rust core
-│   ├── src/
-│   │   ├── lib.rs              Entry point, Tauri commands, background workers
-│   │   ├── config.rs           CompanionConfig (JSON persistence)
-│   │   ├── api.rs              HTTP client for backend API
-│   │   ├── scanner.rs          Battle scan worker (claim/report cycle)
-│   │   ├── sniffer.rs          WinDivert packet capture, Photon event parsing
-│   │   ├── photon_parser.rs    Photon protocol decoder, damage accumulator
-│   │   ├── tunnel.rs           WireGuard tunnel (boringtun + wintun)
-│   │   ├── tunnel_presets.rs   WireGuard endpoints per Albion region
-│   │   ├── dns.rs              DNS resolver tester
-│   │   ├── lootlog.rs          /loot parser, CSV generator
-│   │   ├── aodp.rs             Albion-Online-Data-Project feed (prices)
-│   │   ├── albion_ips.rs       Resolve Albion hostnames to IPs (cached)
-│   │   ├── albion_detect.rs    Detect running Albion process
-│   │   ├── zone_detect.rs      Detect PvP zone from game state
-│   │   ├── transfer.rs         Upload queue (prices, market history)
-│   │   ├── persist.rs          Install ID persistence
-│   │   ├── maps.rs             Map name lookup
-│   │   └── winutil.rs          Windows admin check
-│   ├── resources/
-│   │   └── wintun.dll          Windows virtual network driver
-│   └── tauri.conf.json         Tauri config (bundle, updater, tray)
+├── src/                    Interface React/TypeScript
+├── src-tauri/src/
+│   ├── lib.rs              Comandos Tauri e ciclo do aplicativo
+│   ├── sniffer.rs          Captura WinDivert e processamento Photon
+│   ├── photon_parser.rs    Decodificador Photon e acumulador de dano
+│   ├── lootlog.rs          Catálogo de itens, sessão e exportação CSV
+│   ├── crash_report.rs     Relatórios de falha
+│   └── api.rs              Catálogos de habilidades/itens e falhas
+└── scripts/publish.ps1     Publicação de artefatos assinados
 ```
 
-## Privacy
+## Privacidade
 
-The companion does not collect or transmit personal data. Packet capture is
-processed locally. Battle scan and price data are submitted to the Ziggs
-backend, which validates everything against the public Albion API. No
-telemetry, no analytics, no tracking.
+Damage Meter e Lootlog são processados localmente. O CSV de loot é salvo localmente. O aplicativo consulta somente os catálogos necessários e pode enviar relatórios de falha pendentes.
 
-Discord login is optional and only used for lootlog auto-submit. The
-companion stores a bearer token (30-day validity) in the local config file.
-No Discord credentials are stored.
+## Licença
 
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT. Veja [LICENSE](LICENSE).
