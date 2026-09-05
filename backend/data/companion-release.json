@@ -1,23 +1,19 @@
 {
-  "version": "0.2.12",
-  "notes": "Adds Linux support and platform-aware feature gating. Windows: full feature set. Linux: distributed battle and kill scanner MVP.",
-  "pub_date": "2026-09-01T14:25:00Z",
+  "version": "0.2.13",
+  "notes": "Updates the Windows installer, improves loot logger CSV metadata, and fixes updater manifest publishing.",
+  "pub_date": "2026-09-05T03:03:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlVuSkZKdVM4amllT3NsT3AvR3N1SWRwUVNUUllrL2RpdUVVYmxxVlVEdnFLMndydGliZEl6ZUtNZUhOOEdMYkVYaWd3UTFpTmVIVXhSSUEvQnRNc2c0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjgzNTU1CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4xMl94NjQtc2V0dXAuZXhlClVIZDMyZCtiTFRveGVyZGw3VVVQdEtpaktjbmVhNzRyeWNjY1JXMTI4S1B3bWRLMEJNMDV1ZExibXBBM3pkdXpKN1NmcVRHRVBNR3BTREUxVVg1WkN3PT0K",
-      "url": "https://github.com/slayner/ziggs/releases/download/v0.2.12/Ziggs.Companion_0.2.12_x64-setup.exe"
-    },
-    "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5ZlF5SjljV2RYVXJKWE1FV1BJUElZSFJzNUl3amk0SUl6U0RCbWl4eTZRK0haQy93ait0S21UTUtHUkZIYXo1N3ZZM2g2c3VxKytNa2poaFpoWVozT1F3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjgzNjE5CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4xMl9hbWQ2NC5kZWIKenFRazcrbDRla0tUOFFadG83S2xaUWdtRzhkejBuMUl6YkRFdnhSdE1xNUZnbHQ1NFFzZXJXUlQ5ZkNXeWlodlJnSFNPT01pT3BLdmFZaXFQMXRrQ2c9PQo=",
-      "url": "https://github.com/slayner/ziggs/releases/download/v0.2.12/ziggs-companion_0.2.12_amd64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUWlg0RUh1Ykp5Zlo5c1RvS1ExTEwrQVI5MVhsWURiYTN4S2RQbDRlRExwNnZQVXdWVDBCM0JpNC9qU2liencvT2kxNzJ4WFd5WWZpYzYxYTF0bVVMLzdTbytnM3FHaHdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NTc3MzI3CWZpbGU6WmlnZ3MgQ29tcGFuaW9uXzAuMi4xM194NjQtc2V0dXAuZXhlCjNFcDh2eHVsU3RyOW9hWFduV3RWWkp4ZEpEZW9zOVR4UU5XK3FDV3Y1Nkw1WmFCYlJRM1FWVXFmQlhoR2RUYW1JQVAvU2JtZjRmTXE2MWhpMC9JUERRPT0K",
+      "url": "https://github.com/slayner/ziggs/releases/download/v0.2.13/Ziggs.Companion_0.2.13_x64-setup.exe"
     }
   },
   "downloads": {
     "windows-x86_64": {
-      "url": "https://github.com/slayner/ziggs/releases/download/v0.2.12/Ziggs.Companion_0.2.12_x64-setup.exe"
+      "url": "https://github.com/slayner/ziggs/releases/download/v0.2.13/Ziggs.Companion_0.2.13_x64-setup.exe"
     },
     "linux-x86_64": {
-      "url": "https://github.com/slayner/ziggs/releases/download/v0.2.12/ziggs-companion_0.2.12_amd64.deb"
+      "url": "https://github.com/slayner/ziggs/releases/download/v0.2.13/Ziggs.Companion_0.2.13_amd64.deb"
     }
   }
 }
