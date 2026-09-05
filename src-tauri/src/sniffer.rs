@@ -1,3 +1,5 @@
+#![cfg_attr(not(target_os = "windows"), allow(dead_code, unused_imports))]
+
 // Packet sniffer: captures Albion UDP packets via WinDivert (WFP layer).
 //
 // WinDivert hooks at the Windows Filtering Platform network layer, ABOVE
@@ -13,23 +15,29 @@
 // Requires admin.
 
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "windows", test))]
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(any(target_os = "windows", test))]
+use std::collections::HashSet;
+#[cfg(any(target_os = "windows", test))]
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+#[cfg(target_os = "windows")]
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
 use crate::aodp::{self, AodpBatch, AodpServer};
+#[cfg(target_os = "windows")]
 use crate::photon_parser::{
-    extract_attach_container, extract_detach_container, extract_gold, extract_health,
+    extract_attach_container, extract_character_stats, extract_detach_container, extract_gold, extract_health,
     extract_history_request, extract_history_response, extract_inventory_move, extract_loot,
     extract_market, extract_new_character, extract_new_loot_item, extract_new_loot_owner,
-    extract_party, extract_player_state, self_loot_event, DamageAcc, HistoryReq, LootEvent,
-    PhotonParser, PhotonValue,
+    extract_party, extract_player_state, self_loot_event, PhotonParser,
 };
+use crate::photon_parser::{DamageAcc, HistoryReq, LootEvent, PhotonValue};
 
 /// Cities with real marketplaces — we only report prices when the player is
 /// in one of these. Includes the 3 Rests (Arthur's/Merlyn's/Morgana's) which
@@ -169,6 +177,7 @@ pub struct Sniffer {
     pub debug: Arc<Mutex<Vec<DebugLine>>>,
     /// Entity ID → name mapping (NewCharacter), used to resolve the damage meter.
     pub entities: Arc<Mutex<HashMap<i64, String>>>,
+    pub character_metadata: Arc<Mutex<HashMap<String, crate::photon_parser::CharacterMetadata>>>,
     /// Damage/healing accumulated by causer_id this session.
     pub damage: Arc<Mutex<HashMap<i64, DamageAcc>>>,
     /// Same accumulation, but only for hits whose TARGET is a known player.
@@ -226,6 +235,7 @@ impl Sniffer {
             loot: Arc::new(Mutex::new(loot)),
             debug: Arc::new(Mutex::new(Vec::new())),
             entities: Arc::new(Mutex::new(HashMap::new())),
+            character_metadata: Arc::new(Mutex::new(HashMap::new())),
             damage: Arc::new(Mutex::new(HashMap::new())),
             damage_vs_players: Arc::new(Mutex::new(HashMap::new())),
             prices: Arc::new(Mutex::new(Vec::new())),
@@ -253,6 +263,7 @@ impl Sniffer {
             loot: Arc::clone(&self.loot),
             debug: Arc::clone(&self.debug),
             entities: Arc::clone(&self.entities),
+            character_metadata: Arc::clone(&self.character_metadata),
             damage: Arc::clone(&self.damage),
             damage_vs_players: Arc::clone(&self.damage_vs_players),
             prices: Arc::clone(&self.prices),
@@ -287,16 +298,21 @@ impl Sniffer {
         self.generation.load(Ordering::Acquire) == generation
     }
 
-    /// Main loop: starts WinDivert capture and processes packets.
-    ///
-    /// WinDivert capture blocks on a dedicated thread (WinDivertRecv blocks),
-    /// sending packets via std::mpsc. The async task processes received
-    /// packets without blocking the executor.
+    /// Main loop: starts the platform capture backend and processes packets.
+    #[cfg(target_os = "windows")]
     pub async fn run(&self) {
         let generation = self.prepare_start();
         self.run_generation(generation).await;
     }
 
+    #[cfg(not(target_os = "windows"))]
+    pub async fn run(&self) {
+        let mut stats = self.stats.lock().await;
+        stats.running = false;
+        stats.error = Some("Captura de pacotes indisponível nesta plataforma.".into());
+    }
+
+    #[cfg(target_os = "windows")]
     pub async fn run_generation(&self, generation: u64) {
         {
             let mut s = self.stats.lock().await;
@@ -692,6 +708,16 @@ impl Sniffer {
                             }
                         }
 
+                        if let Some((name, metadata)) = extract_character_stats(op) {
+                            let mut players = self.character_metadata.lock().await;
+                            if players.len() >= 5000 && !players.contains_key(&name) {
+                                if let Some(evicted) = players.keys().next().cloned() {
+                                    players.remove(&evicted);
+                                }
+                            }
+                            players.insert(name, metadata);
+                        }
+
                         // Damage meter: id→name registration + damage/heal accumulation.
                         // Entity registration always runs (cheap, and the meter needs
                         // names seen BEFORE the toggle is turned on).
@@ -809,6 +835,13 @@ impl Sniffer {
                                 if self.capture_prices.load(Ordering::Relaxed) {
                                     if let Some(city) = &city {
                                         let ts = crate::photon_parser::now_iso_utc();
+                                        let region = self
+                                            .aodp_server
+                                            .lock()
+                                            .await
+                                            .as_ref()
+                                            .map(|server| server.region())
+                                            .unwrap_or("west");
                                         let mut buf = self.prices.lock().await;
                                         for o in &cap.offers {
                                             // Convert UniqueName (game's ItemTypeId)
@@ -818,6 +851,7 @@ impl Sniffer {
                                             buf.push(serde_json::json!({
                                                 "item_id": game_name,
                                                 "city": city,
+                                                "region": region,
                                                 "quality": o.quality,
                                                 "sell_price_min": o.unit_price_silver,
                                                 "price_date": ts,
@@ -1020,7 +1054,31 @@ impl Sniffer {
         }
     }
 
-    async fn push_loot(&self, loot: LootEvent) {
+    #[cfg(not(target_os = "windows"))]
+    pub async fn run_generation(&self, _generation: u64) {
+        let mut stats = self.stats.lock().await;
+        stats.running = false;
+        stats.error = Some("Captura de pacotes indisponível nesta plataforma.".into());
+    }
+
+    async fn push_loot(&self, mut loot: LootEvent) {
+        let metadata = self.character_metadata.lock().await;
+        if let Some(player) = metadata.get(&loot.looted_by) {
+            loot.looted_by_guild = player.guild_name.clone();
+            loot.looted_by_alliance = player.alliance_name.clone();
+        }
+        if let Some(player) = metadata.get(&loot.looted_from) {
+            loot.looted_from_guild = player.guild_name.clone();
+            loot.looted_from_alliance = player.alliance_name.clone();
+        }
+        drop(metadata);
+        loot.server_region = self
+            .aodp_server
+            .lock()
+            .await
+            .as_ref()
+            .map(|server| server.region().to_string())
+            .unwrap_or_else(|| "west".into());
         let (len, save_error) = {
             let mut buf = self.loot.lock().await;
             if is_duplicate_loot(&buf, &loot) {
@@ -1276,6 +1334,7 @@ mod tests {
             item_index: idx,
             quantity: qty,
             is_silver: false,
+            ..Default::default()
         }
     }
 

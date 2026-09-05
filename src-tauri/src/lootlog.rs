@@ -53,7 +53,15 @@ pub struct LootRow {
     pub quantity: i64,
     pub looted_by: String,
     pub looted_by_guild: String,
+    #[serde(default)]
+    pub looted_by_alliance: String,
     pub looted_from: String,
+    #[serde(default)]
+    pub looted_from_guild: String,
+    #[serde(default)]
+    pub looted_from_alliance: String,
+    #[serde(default)]
+    pub server_region: String,
 }
 
 // Item table: packet index → id + localized names. Index matches the ao-bin-dump
@@ -135,7 +143,7 @@ pub async fn load_item_names() {
 // ao-loot-logger CSV header. The backend matches by column name and tolerates
 // extra columns and any order.
 const CSV_HEADER: &str = "timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;\
-item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name";
+item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name;server__region";
 
 // Convert captured LootEvents into ao-loot-logger CSV. Item names stay in English
 // so the file stays interoperable across clients in different languages.
@@ -143,11 +151,20 @@ pub fn build_csv_from_loot(events: &[LootEvent]) -> String {
     let mut lines = Vec::with_capacity(events.len() + 1);
     lines.push(CSV_HEADER.to_string());
     for e in events {
-        // Guild/alliance are not present in the loot packet; backend reconciles by looter name.
         let (item_id, item_name, _, _) = resolve(e.item_index);
         lines.push(format!(
-            "{};{};{};{};{};{};{};{};{};{}",
-            e.ts, "", "", e.looted_by, item_id, item_name, e.quantity, "", "", e.looted_from
+            "{};{};{};{};{};{};{};{};{};{};{}",
+            e.ts,
+            e.looted_by_alliance,
+            e.looted_by_guild,
+            e.looted_by,
+            item_id,
+            item_name,
+            e.quantity,
+            e.looted_from_alliance,
+            e.looted_from_guild,
+            e.looted_from,
+            if e.server_region.is_empty() { "west" } else { &e.server_region },
         ));
     }
     lines.join("\n")
@@ -184,6 +201,7 @@ mod tests {
             item_index,
             quantity: 2,
             is_silver: false,
+            ..Default::default()
         }
     }
 
@@ -228,6 +246,25 @@ mod tests {
             "Grandmaster's Guardian Helmet",
             "CSV must stay in English"
         );
+        assert_eq!(cols.len(), 11, "CSV must match AO Loot Logger columns");
+        assert_eq!(
+            f[cols.iter().position(|c| *c == "server__region").unwrap()],
+            "west"
+        );
+
+        let mut enriched = ev(2958);
+        enriched.looted_by_guild = "Ziggs".into();
+        enriched.looted_by_alliance = "Alliance".into();
+        enriched.looted_from_guild = "Rivals".into();
+        enriched.looted_from_alliance = "Enemies".into();
+        enriched.server_region = "europe".into();
+        let enriched_csv = build_csv_from_loot(&[enriched]);
+        let enriched_fields: Vec<&str> = enriched_csv.lines().nth(1).unwrap().split(';').collect();
+        assert_eq!(enriched_fields[1], "Alliance");
+        assert_eq!(enriched_fields[2], "Ziggs");
+        assert_eq!(enriched_fields[7], "Enemies");
+        assert_eq!(enriched_fields[8], "Rivals");
+        assert_eq!(enriched_fields[10], "europe");
 
         // Unknown index must still emit an item_id so the backend keeps the row.
         assert!(lines[2].contains("IDX_999999"));
