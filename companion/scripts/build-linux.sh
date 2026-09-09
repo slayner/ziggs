@@ -151,6 +151,20 @@ unset signing_password
 signature="$deb.sig"
 [[ -s "$signature" ]] || fail "O Tauri não produziu uma assinatura .sig válida."
 
+# Tauri stores a Minisign envelope as Base64. Validate the exact Debian payload
+# against the public updater key before the artifact ever leaves the WSL build.
+public_key_b64="$(node -e "const c=require('./src-tauri/tauri.conf.json'); process.stdout.write(c.plugins.updater.pubkey)")"
+public_key_id="$(node -e "const key=Buffer.from(process.argv[1], 'base64'); if (key.length !== 42 || key.subarray(0, 2).toString() !== 'Ed') process.exit(1); process.stdout.write(key.subarray(2, 10).toString('hex').toUpperCase())" "$public_key_b64")" \
+  || fail "Chave pública do updater inválida no tauri.conf.json."
+verify_key="$(mktemp "$stage/verify-key.XXXXXX")"
+verify_signature="$(mktemp "$stage/verify-signature.XXXXXX")"
+printf 'untrusted comment: minisign public key %s\n%s\n' "$public_key_id" "$public_key_b64" > "$verify_key"
+printf '%s' "$(tr -d '\r\n' < "$signature")" | base64 -d > "$verify_signature" \
+  || fail "A assinatura Debian não está em Base64 válido."
+minisign -V -p "$verify_key" -x "$verify_signature" -m "$deb" \
+  || fail "A assinatura Debian não corresponde ao pacote gerado."
+rm -f "$verify_key" "$verify_signature"
+
 package_name="$(dpkg-deb -f "$deb" Package)"
 package_version="$(dpkg-deb -f "$deb" Version)"
 package_architecture="$(dpkg-deb -f "$deb" Architecture)"

@@ -8,15 +8,82 @@
 # Prerequisite: build completed with the signing key available in the environment
 
 param(
-    [string]$Notes = ""
+    [string]$Notes = "",
+    [string]$LinuxArtifactDirectory = ""
 )
 
 $VpsHost = "root@167.233.241.191"
 $SshKey = Join-Path $HOME ".ssh/hetzner_ziggs"
 $VpsManifestPath = "/home/ziggs/ziggs/backend/data/companion-release.json"
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot/..
+
+function Assert-TauriSignatureEnvelope([string]$SignaturePath, [string]$ArtifactPath) {
+    $encoded = (Get-Content -LiteralPath $SignaturePath -Raw).Trim()
+    if (-not $encoded) {
+        throw "ERROR: signature is empty: $SignaturePath"
+    }
+    try {
+        $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+    } catch {
+        throw "ERROR: signature is not valid Base64: $SignaturePath"
+    }
+    if (-not $decoded.StartsWith("untrusted comment: signature from tauri secret key`n")) {
+        throw "ERROR: signature does not use the expected Tauri/Minisign envelope: $SignaturePath"
+    }
+
+    # Validate the exact artifact cryptographically with Minisign in WSL. The
+    # updater `.sig` is Base64-wrapped, while Minisign expects its text envelope.
+    $pubkey = (Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).plugins.updater.pubkey
+    $keyBytes = [Convert]::FromBase64String($pubkey)
+    if ($keyBytes.Length -ne 42 -or [Text.Encoding]::ASCII.GetString($keyBytes[0..1]) -ne "Ed") {
+        throw "ERROR: updater public key is invalid"
+    }
+    $keyId = -join ($keyBytes[2..9] | ForEach-Object { $_.ToString("x2") }).ToUpperInvariant()
+    $distro = "Ubuntu"
+    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+        throw "ERROR: WSL Minisign verification is unavailable"
+    }
+    $normalizedArtifactPath = $ArtifactPath -replace '\\', '/'
+    $wslArtifactPath = (& wsl.exe -d $distro -- wslpath -a -u $normalizedArtifactPath | Select-Object -Last 1).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $wslArtifactPath) {
+        throw "ERROR: could not resolve the artifact path inside WSL: $ArtifactPath"
+    }
+    $script = @"
+set -euo pipefail
+key=`$(mktemp)
+signature=`$(mktemp)
+trap 'rm -f "`$key" "`$signature"' EXIT
+printf '%s\n%s\n' 'untrusted comment: minisign public key $keyId' '$pubkey' > "`$key"
+printf '%s' '$encoded' | base64 -d > "`$signature"
+minisign -V -p "`$key" -x "`$signature" -m '$wslArtifactPath'
+"@
+    $output = & wsl.exe -d $distro -- bash -lc $script 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "ERROR: signature verification failed for $(Split-Path $ArtifactPath -Leaf): $output"
+    }
+}
+
+# --- Handle Linux artifact from custom directory ---
+if ($LinuxArtifactDirectory) {
+    $linuxSource = (Resolve-Path -LiteralPath $LinuxArtifactDirectory).Path
+    $linuxTarget = Join-Path $PWD "src-tauri/target/release/bundle/deb"
+    New-Item -ItemType Directory -Force -Path $linuxTarget | Out-Null
+
+    $linuxDebs = @(Get-ChildItem -LiteralPath $linuxSource -File -Filter "*.deb")
+    if ($linuxDebs.Count -ne 1) {
+        throw "ERROR: expected exactly one Linux .deb in $linuxSource; found $($linuxDebs.Count)"
+    }
+    $linuxDeb = $linuxDebs[0]
+    $linuxSignature = "$($linuxDeb.FullName).sig"
+    if (-not (Test-Path -LiteralPath $linuxSignature -PathType Leaf) -or (Get-Item -LiteralPath $linuxSignature).Length -eq 0) {
+        throw "ERROR: valid Linux signature not found for $($linuxDeb.Name)"
+    }
+    Assert-TauriSignatureEnvelope $linuxSignature $linuxDeb.FullName
+
+    Copy-Item -LiteralPath $linuxDeb.FullName, $linuxSignature -Destination $linuxTarget -Force
+}
 
 # --- Load Companion configuration ---
 $tauriConf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
@@ -46,6 +113,7 @@ foreach ($spec in $artifactSpecs) {
     if (-not (Test-Path $sigPath -PathType Leaf) -or (Get-Item $sigPath).Length -eq 0) {
         throw "ERROR: valid signature not found for $($artifact.Name)"
     }
+    Assert-TauriSignatureEnvelope $sigPath $artifact.FullName
 
     $artifacts += @{
         Platform = $spec.Platform

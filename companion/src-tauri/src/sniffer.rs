@@ -85,6 +85,42 @@ fn is_duplicate_loot(buf: &[LootEvent], ev: &LootEvent) -> bool {
     })
 }
 
+/// Maps Albion game-server IP prefixes to region identifiers.
+fn albion_region_from_ip(ip: [u8; 4]) -> Option<&'static str> {
+    match [ip[0], ip[1], ip[2]] {
+        [5, 188, 125] => Some("west"),
+        [5, 45, 187] => Some("east"),
+        [193, 169, 238] => Some("europe"),
+        _ => None,
+    }
+}
+
+/// Extracts server region from a packet frame by checking src/dst IP.
+fn albion_region_from_frame(data: &[u8], l2_hint: usize) -> Option<&'static str> {
+    // L2 offsets to try: hinted offset, then common values
+    let offsets = [l2_hint, 0, 14, 4];
+    for (index, &l2) in offsets.iter().enumerate() {
+        // Skip if this offset was already tried
+        if offsets[..index].contains(&l2) {
+            continue;
+        }
+        // Need at least 20 bytes after L2 offset for IP header
+        if data.len() < l2 + 20 {
+            continue;
+        }
+        // Check for IPv4 header: version 4, protocol UDP (17)
+        let vihl = data[l2];
+        if vihl >> 4 != 4 || data[l2 + 9] != 17 {
+            continue;
+        }
+        // Extract src and dst IP addresses (12-15 and 16-19 bytes after L2)
+        let src = [data[l2 + 12], data[l2 + 13], data[l2 + 14], data[l2 + 15]];
+        let dst = [data[l2 + 16], data[l2 + 17], data[l2 + 18], data[l2 + 19]];
+        return albion_region_from_ip(src).or_else(|| albion_region_from_ip(dst));
+    }
+    None
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SniffStats {
     pub running: bool,
@@ -176,6 +212,8 @@ pub struct Sniffer {
     windivert_handle: Arc<AtomicI64>,
     #[cfg(not(target_os = "windows"))]
     windivert_handle: Arc<AtomicI64>,
+    /// Last recognized Albion game-server region for lootlog export.
+    pub server_region: Arc<Mutex<String>>,
 }
 
 pub enum CaptureMsg {
@@ -209,6 +247,7 @@ impl Sniffer {
             windivert_handle: Arc::new(AtomicI64::new(0)),
             #[cfg(not(target_os = "windows"))]
             windivert_handle: Arc::new(AtomicI64::new(0)),
+            server_region: Arc::new(Mutex::new("west".into())),
         }
     }
 
@@ -230,6 +269,7 @@ impl Sniffer {
             windivert_handle: Arc::clone(&self.windivert_handle),
             #[cfg(not(target_os = "windows"))]
             windivert_handle: Arc::clone(&self.windivert_handle),
+            server_region: Arc::clone(&self.server_region),
         }
     }
 
@@ -373,6 +413,12 @@ impl Sniffer {
                         None => continue,
                     };
                     last_packet_time = Instant::now();
+
+                    // Track the game-server region from validated IPv4/UDP traffic.
+                    if let Some(region) = albion_region_from_frame(&data, l2_hint) {
+                        *self.server_region.lock().await = region.into();
+                    }
+
                     let photon_data = &data[off..];
 
                     // Dedup: byte-identical copy from another interface (bridged
@@ -817,17 +863,31 @@ impl Sniffer {
     }
 
     async fn push_loot(&self, mut loot: LootEvent) {
+        let looted_by = loot.looted_by.clone();
+        let looted_from = loot.looted_from.clone();
         let metadata = self.character_metadata.lock().await;
-        if let Some(player) = metadata.get(&loot.looted_by) {
+        if let Some(player) = metadata.get(&looted_by) {
             loot.looted_by_guild = player.guild_name.clone();
             loot.looted_by_alliance = player.alliance_name.clone();
         }
-        if let Some(player) = metadata.get(&loot.looted_from) {
+        if let Some(player) = metadata.get(&looted_from) {
             loot.looted_from_guild = player.guild_name.clone();
             loot.looted_from_alliance = player.alliance_name.clone();
         }
         drop(metadata);
-        loot.server_region = "local".into();
+
+        let stats = self.stats.lock().await;
+        if loot.looted_by == stats.player_name {
+            loot.looted_by_guild = stats.guild_name.clone();
+            loot.looted_by_alliance = stats.alliance_name.clone();
+        }
+        if loot.looted_from == stats.player_name {
+            loot.looted_from_guild = stats.guild_name.clone();
+            loot.looted_from_alliance = stats.alliance_name.clone();
+        }
+        drop(stats);
+
+        loot.server_region = self.server_region.lock().await.clone();
         let (len, save_error) = {
             let mut buf = self.loot.lock().await;
             if is_duplicate_loot(&buf, &loot) {
