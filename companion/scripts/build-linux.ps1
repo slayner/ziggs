@@ -1,4 +1,4 @@
-#!/usr/bin/env powershell
+﻿#!/usr/bin/env powershell
 # Gera localmente o .deb Linux assinado do Companion dentro do WSL.
 # A senha é digitada no terminal WSL com entrada oculta e nunca passa pelo PowerShell.
 # Não publica artefatos, não altera manifests e não acessa a VPS.
