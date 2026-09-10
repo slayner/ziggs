@@ -42,22 +42,6 @@ pub struct CompanionConfig {
     pub autostart: bool,
     /// Minimize to tray when the window closes.
     pub minimize_to_tray: bool,
-    /// WireGuard tunnel — ExitLag-style routing.
-    #[serde(default)]
-    pub tunnel_enabled: bool,
-    #[serde(default)]
-    pub tunnel_endpoint: String,
-    #[serde(default)]
-    pub tunnel_server_pubkey: String,
-    #[serde(default)]
-    pub tunnel_client_privkey: String,
-    /// Pause outbound data transfers while in a PvP zone — only send while in blue zones.
-    #[serde(default = "default_true")]
-    pub pvp_pause_transfer: bool,
-    /// Forward captured market orders to the Albion Online Data Project.
-    /// Enabled by default.
-    #[serde(default = "default_true")]
-    pub feed_aodp: bool,
     /// Stable identity of THIS installation (one PC = one id). Generated on first
     /// use and persisted. Sent in the X-Ziggs-Install header so the backend
     /// treats app restarts and concurrent rebuild processes as the same companion.
@@ -67,21 +51,6 @@ pub struct CompanionConfig {
     /// index→name mapping without rebuilding the companion. 0 = no offset.
     #[serde(default)]
     pub spell_index_offset: i32,
-    /// Albion region for tunnel server selection. "americas" | "asia" | "europe".
-    /// Auto-detected from AODP server when the game is open; defaults to
-    /// "americas" so the tunnel works without the game running.
-    #[serde(default = "default_region")]
-    pub region: String,
-    /// Per-region VPS assignment. Maps Albion region -> VPS region.
-    /// NOT persisted — cleared on every app launch so the user always starts
-    /// with all servers on "Direct". The matrix is a runtime control, not
-    /// a saved preference.
-    #[serde(skip)]
-    pub tunnel_routing: std::collections::HashMap<String, String>,
-}
-
-fn default_region() -> String {
-    "americas".into()
 }
 
 impl Default for CompanionConfig {
@@ -92,16 +61,8 @@ impl Default for CompanionConfig {
             collect_auto_lootlog: true, // default ON; see field comment
             autostart: true,            // default launch with system
             minimize_to_tray: true,
-            tunnel_enabled: false,
-            tunnel_endpoint: String::new(),
-            tunnel_server_pubkey: String::new(),
-            tunnel_client_privkey: String::new(),
-            pvp_pause_transfer: true,
-            feed_aodp: true,
             install_id: String::new(), // generated on demand by install_id()
             spell_index_offset: 0,
-            region: default_region(),
-            tunnel_routing: std::collections::HashMap::new(),
         }
     }
 }

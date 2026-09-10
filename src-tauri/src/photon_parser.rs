@@ -314,7 +314,10 @@ impl PhotonParser {
             self.pending_fragment_bytes = pending_bytes;
         }
 
-        let entry = self.fragments.get_mut(&start_seq).expect("fragmento pendente");
+        let entry = self
+            .fragments
+            .get_mut(&start_seq)
+            .expect("fragmento pendente");
         if entry.buffer.len() != total_length {
             return;
         }
@@ -328,7 +331,10 @@ impl PhotonParser {
         entry.updated_at = now;
 
         if entry.received_bytes == total_length {
-            let complete = self.fragments.remove(&start_seq).expect("fragmento pendente");
+            let complete = self
+                .fragments
+                .remove(&start_seq)
+                .expect("fragmento pendente");
             self.pending_fragment_bytes -= complete.buffer.len();
             self.parse_message(&complete.buffer, ops);
         }
@@ -1068,7 +1074,13 @@ pub fn extract_character_stats(op: &ParsedOperation) -> Option<(String, Characte
         .and_then(|value| value.as_string())
         .unwrap_or_default()
         .to_string();
-    Some((name, CharacterMetadata { guild_name, alliance_name }))
+    Some((
+        name,
+        CharacterMetadata {
+            guild_name,
+            alliance_name,
+        },
+    ))
 }
 
 /// Albion player name: 3-20 chars, alphanumeric.
@@ -1076,8 +1088,7 @@ pub fn extract_character_stats(op: &ParsedOperation) -> Option<(String, Characte
 /// this filters mechanics that fire the same loot event.
 /// Player names CAN be purely numeric (e.g. "50369333670").
 pub fn is_player_name(name: &str) -> bool {
-    (3..=20).contains(&name.len())
-        && name.chars().all(|c| c.is_ascii_alphanumeric())
+    (3..=20).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// Extract a LootEvent from OtherGrabbedLoot. Ignores silver.
@@ -1429,220 +1440,6 @@ impl DamageAcc {
     }
 }
 
-/// Simplified sell offer — what we store in our price database.
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct MarketOffer {
-    pub item_id: String,
-    pub quality: i32,
-    pub unit_price_silver: i64,
-}
-
-/// Result from parsing a marketplace response: simplified offers (for our
-/// price feed) + raw orders (for verbatim AODP upload).
-#[derive(Clone, Debug, Default)]
-pub struct MarketCapture {
-    pub offers: Vec<MarketOffer>,
-    /// Raw orders (game JSON) — ALL sell orders, unmodified, for AODP upload.
-    /// Prices here are in silver*10000 (original protocol format).
-    pub raw_orders: Vec<serde_json::Value>,
-}
-
-/// Normalize ItemTypeId to ADP/database format. Currently a passthrough —
-/// the conversion to game_name happens in the sniffer via to_game_name
-/// (mapping downloaded from the backend).
-fn normalize_item_id(base_id: &str, _ench: i32) -> String {
-    base_id.to_string()
-}
-
-/// Parse a marketplace response (AuctionGetOffers = sell, AuctionGetRequests = buy).
-///
-/// Detected by structure: array of JSON strings with "UnitPriceSilver" +
-/// "ItemTypeId". Price is ×10000 in the protocol. Both offer and request
-/// orders forwarded to AODP verbatim; only sell offers become prices in our DB.
-pub fn extract_market(op: &ParsedOperation) -> MarketCapture {
-    let mut cap = MarketCapture::default();
-    if op.message_type != 3 {
-        return cap;
-    }
-    for v in op.parameters.values() {
-        let PhotonValue::Array(arr) = v else { continue };
-        for item in arr {
-            let PhotonValue::String(s) = item else {
-                continue;
-            };
-            if !s.starts_with('{') || !s.contains("UnitPriceSilver") {
-                continue;
-            }
-            let Ok(j) = serde_json::from_str::<serde_json::Value>(s) else {
-                continue;
-            };
-            let atype = j.get("AuctionType").and_then(|a| a.as_str()).unwrap_or("");
-            if atype != "offer" && atype != "request" {
-                continue;
-            }
-            let Some(base_id) = j
-                .get("ItemTypeId")
-                .and_then(|x| x.as_str())
-                .map(String::from)
-            else {
-                continue;
-            };
-            let raw_price = j
-                .get("UnitPriceSilver")
-                .and_then(|x| x.as_i64())
-                .unwrap_or(0);
-            if raw_price <= 0 {
-                continue;
-            }
-            // Raw order for AODP (verbatim): sell and buy.
-            cap.raw_orders.push(j.clone());
-            // Our DB only stores sell offers (id with @enchant, price/10000).
-            if atype == "offer" {
-                let ench = j
-                    .get("EnchantmentLevel")
-                    .and_then(|x| x.as_i64())
-                    .unwrap_or(0) as i32;
-                let item_id = normalize_item_id(&base_id, ench);
-                let quality = j.get("QualityLevel").and_then(|x| x.as_i64()).unwrap_or(1) as i32;
-                cap.offers.push(MarketOffer {
-                    item_id,
-                    quality,
-                    unit_price_silver: raw_price / 10_000,
-                });
-            }
-        }
-    }
-    cap
-}
-
-/// Market history request info (AuctionGetItemAverageStats), kept for
-/// correlating with the response via message-id (param 255).
-#[derive(Clone, Debug)]
-pub struct HistoryReq {
-    pub albion_id: i32,
-    pub quality: i32,
-    pub timescale: i32,
-}
-
-/// A single bucket from the in-game market history chart.
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct HistoryBucket {
-    pub bucket_ts: i64,
-    pub item_count: i64,
-    pub silver_amount: i64,
-}
-
-/// Detect market history REQUEST and return (message_id, info).
-/// Structure: request (type 2) with item id@1, quality@2, timescale@3 (0..=2),
-/// message id@255. Timescale 0..=2 makes the signature distinctive.
-/// Applies the protocol's negative item id quirk (128-256 arrive negative).
-pub fn extract_history_request(op: &ParsedOperation) -> Option<(u64, HistoryReq)> {
-    if op.message_type != 2 {
-        return None;
-    }
-    let msg_id = op.parameters.get(&255)?.as_i64()? as u64;
-    let mut albion_id = op.parameters.get(&1)?.as_i64()? as i32;
-    let quality = op.parameters.get(&2).and_then(|v| v.as_i64()).unwrap_or(1) as i32;
-    let timescale = op.parameters.get(&3)?.as_i64()? as i32;
-    if !(0..=2).contains(&timescale) {
-        return None;
-    }
-    if !(1..=5).contains(&quality) {
-        return None;
-    }
-    // Protocol quirk: ids 128-256 arrive as negative (signed byte).
-    if albion_id < 0 && albion_id > -129 {
-        albion_id += 256;
-    }
-    if albion_id < 1 {
-        return None;
-    }
-    Some((
-        msg_id,
-        HistoryReq {
-            albion_id,
-            quality,
-            timescale,
-        },
-    ))
-}
-
-/// Detect market history RESPONSE: (message_id, buckets).
-/// Structure: response (type 3) with 3 parallel arrays — item_count@0,
-/// silver@1, timestamp@2 — and message id@255. Applies negative quantity
-/// fix (same as AODP: -124..-1 → +256, < -124 discarded).
-pub fn extract_history_response(op: &ParsedOperation) -> Option<(u64, Vec<HistoryBucket>)> {
-    if op.message_type != 3 {
-        return None;
-    }
-    let msg_id = op.parameters.get(&255)?.as_i64()? as u64;
-    let counts = op.parameters.get(&0)?.as_array()?;
-    let silvers = op.parameters.get(&1)?.as_array()?;
-    let stamps = op.parameters.get(&2)?.as_array()?;
-    let n = counts.len();
-    if n == 0 || silvers.len() != n || stamps.len() != n {
-        return None;
-    }
-    let mut buckets = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut count = counts[i].as_i64()?;
-        let silver = silvers[i].as_i64()?;
-        let ts = stamps[i].as_i64()?;
-        if count < 0 {
-            if count < -124 {
-                continue;
-            } // no known interpretation — discard
-            count += 256;
-        }
-        if count <= 0 || ts <= 0 {
-            continue;
-        }
-        buckets.push(HistoryBucket {
-            bucket_ts: ts,
-            item_count: count,
-            silver_amount: silver,
-        });
-    }
-    if buckets.is_empty() {
-        return None;
-    }
-    Some((msg_id, buckets))
-}
-
-/// Gold market prices (GoldMarketGetAverageInfo response).
-/// Global (no location) — AODP only needs the server region.
-#[derive(Clone, Debug, Default)]
-pub struct GoldPrices {
-    pub prices: Vec<i64>,
-    pub timestamps: Vec<i64>,
-}
-
-/// Detect gold response by structure: two parallel arrays — param 0 = gold
-/// prices (sane range), param 1 = unix timestamps. The timestamp heuristic
-/// (>1e9) distinguishes from other dual-array responses.
-pub fn extract_gold(op: &ParsedOperation) -> Option<GoldPrices> {
-    if op.message_type != 3 {
-        return None;
-    }
-    let prices_arr = op.parameters.get(&0)?.as_array()?;
-    let ts_arr = op.parameters.get(&1)?.as_array()?;
-    if prices_arr.is_empty() || prices_arr.len() != ts_arr.len() {
-        return None;
-    }
-    let prices: Vec<i64> = prices_arr.iter().filter_map(|v| v.as_i64()).collect();
-    let timestamps: Vec<i64> = ts_arr.iter().filter_map(|v| v.as_i64()).collect();
-    if prices.len() != prices_arr.len() || timestamps.len() != ts_arr.len() {
-        return None;
-    }
-    if !timestamps.iter().all(|&t| t > 1_000_000_000) {
-        return None;
-    } // unix > 2001
-    if !prices.iter().all(|&p| (1..=1_000_000).contains(&p)) {
-        return None;
-    } // gold in sane range
-    Some(GoldPrices { prices, timestamps })
-}
-
 pub fn now_iso_utc() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -1681,22 +1478,6 @@ fn epoch_to_ymd_hms(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_normalize_item_id_passthrough() {
-        // normalize_item_id is now a passthrough — conversion to game_name
-        // happens in the sniffer via to_game_name (backend mapping).
-        assert_eq!(normalize_item_id("T4_FIBER", 0), "T4_FIBER");
-        assert_eq!(
-            normalize_item_id("T4_FIBER_LEVEL2@2", 2),
-            "T4_FIBER_LEVEL2@2"
-        );
-        assert_eq!(normalize_item_id("T4_BAG@1", 1), "T4_BAG@1");
-        assert_eq!(
-            normalize_item_id("T4_2H_CURSEDSTAFF", 0),
-            "T4_2H_CURSEDSTAFF"
-        );
-    }
 
     /// A player gets a new entity ID when re-entering visibility, causing
     /// split damage lines and React key collisions that duplicated the list.
@@ -1830,7 +1611,12 @@ mod tests {
         assert_eq!(decode_zigzag_32(3), -2);
     }
 
-    fn fragment_payload(start_seq: i32, total_length: i32, fragment_offset: i32, data: &[u8]) -> Vec<u8> {
+    fn fragment_payload(
+        start_seq: i32,
+        total_length: i32,
+        fragment_offset: i32,
+        data: &[u8],
+    ) -> Vec<u8> {
         let mut payload = Vec::with_capacity(20 + data.len());
         payload.extend_from_slice(&start_seq.to_be_bytes());
         payload.extend_from_slice(&0i32.to_be_bytes());
@@ -1872,11 +1658,11 @@ mod tests {
                 &mut ops,
             );
         }
-        parser.parse_fragment(
-            &fragment_payload(99, 1, 0, &[]),
-            &mut ops,
+        parser.parse_fragment(&fragment_payload(99, 1, 0, &[]), &mut ops);
+        assert_eq!(
+            parser.fragments.len(),
+            MAX_PENDING_FRAGMENT_BYTES / MAX_FRAGMENT_LENGTH
         );
-        assert_eq!(parser.fragments.len(), MAX_PENDING_FRAGMENT_BYTES / MAX_FRAGMENT_LENGTH);
         assert_eq!(parser.pending_fragment_bytes, MAX_PENDING_FRAGMENT_BYTES);
     }
 
@@ -2063,118 +1849,6 @@ mod tests {
         assert_eq!(loot.looted_from, "MOB_DIREWOLF");
         assert_eq!(loot.item_index, 1234);
         assert_eq!(loot.quantity, 3);
-    }
-
-    #[test]
-    fn test_extract_market() {
-        let offer = r#"{"UnitPriceSilver":1250000,"ItemTypeId":"T4_BAG","QualityLevel":2,"EnchantmentLevel":1,"AuctionType":"offer","LocationId":""}"#;
-        let buy = r#"{"UnitPriceSilver":990000,"ItemTypeId":"T4_BAG","QualityLevel":1,"EnchantmentLevel":0,"AuctionType":"request"}"#;
-        let mut params = HashMap::new();
-        params.insert(
-            0u8,
-            PhotonValue::Array(vec![
-                PhotonValue::String(offer.into()),
-                PhotonValue::String(buy.into()),
-            ]),
-        );
-        let op = ParsedOperation {
-            message_type: 3,
-            albion_code: 75,
-            parameters: params,
-        };
-        let cap = extract_market(&op);
-        // Our DB only stores sell ("offer").
-        assert_eq!(cap.offers.len(), 1);
-        assert_eq!(cap.offers[0].item_id, "T4_BAG");
-        assert_eq!(cap.offers[0].unit_price_silver, 125);
-        assert_eq!(cap.offers[0].quality, 2);
-        // AODP gets sell and buy, verbatim (original price ×10000).
-        assert_eq!(cap.raw_orders.len(), 2);
-        assert_eq!(cap.raw_orders[0]["UnitPriceSilver"].as_i64(), Some(1250000));
-    }
-
-    #[test]
-    fn test_extract_history() {
-        // Request: negative item id (-121 → 135), quality 2, timescale 1, msg 42.
-        let mut req = HashMap::new();
-        req.insert(1u8, PhotonValue::Int(-121));
-        req.insert(2u8, PhotonValue::Byte(2));
-        req.insert(3u8, PhotonValue::Byte(1));
-        req.insert(255u8, PhotonValue::Long(42));
-        let op = ParsedOperation {
-            message_type: 2,
-            albion_code: 100,
-            parameters: req,
-        };
-        let (mid, info) = extract_history_request(&op).expect("should detect request");
-        assert_eq!(mid, 42);
-        assert_eq!(info.albion_id, 135); // -121 + 256
-        assert_eq!(info.quality, 2);
-        assert_eq!(info.timescale, 1);
-
-        // Response: 2 buckets + 1 with interpretable negative qty (-120 → 136).
-        let mut resp = HashMap::new();
-        resp.insert(
-            0u8,
-            PhotonValue::Array(vec![PhotonValue::Int(10), PhotonValue::Int(-120)]),
-        );
-        resp.insert(
-            1u8,
-            PhotonValue::Array(vec![PhotonValue::Long(50000), PhotonValue::Long(60000)]),
-        );
-        resp.insert(
-            2u8,
-            PhotonValue::Array(vec![
-                PhotonValue::Long(1784203200),
-                PhotonValue::Long(1784289600),
-            ]),
-        );
-        resp.insert(255u8, PhotonValue::Long(42));
-        let op = ParsedOperation {
-            message_type: 3,
-            albion_code: 100,
-            parameters: resp,
-        };
-        let (mid, buckets) = extract_history_response(&op).expect("should detect response");
-        assert_eq!(mid, 42);
-        assert_eq!(buckets.len(), 2);
-        assert_eq!(buckets[0].item_count, 10);
-        assert_eq!(buckets[1].item_count, 136); // -120 + 256
-    }
-
-    #[test]
-    fn test_extract_gold() {
-        let mut params = HashMap::new();
-        params.insert(
-            0u8,
-            PhotonValue::Array(vec![PhotonValue::Int(4200), PhotonValue::Int(4250)]),
-        );
-        params.insert(
-            1u8,
-            PhotonValue::Array(vec![
-                PhotonValue::Long(1784203200),
-                PhotonValue::Long(1784289600),
-            ]),
-        );
-        let op = ParsedOperation {
-            message_type: 3,
-            albion_code: 99,
-            parameters: params,
-        };
-        let g = extract_gold(&op).expect("should detect gold");
-        assert_eq!(g.prices, vec![4200, 4250]);
-        assert_eq!(g.timestamps, vec![1784203200, 1784289600]);
-
-        // Two arrays but no unix timestamp → not gold.
-        let mut p2 = HashMap::new();
-        p2.insert(0u8, PhotonValue::Array(vec![PhotonValue::Int(5)]));
-        p2.insert(1u8, PhotonValue::Array(vec![PhotonValue::Int(9)]));
-        let op2 = ParsedOperation {
-            message_type: 3,
-            albion_code: 99,
-            parameters: p2,
-        };
-        assert!(extract_gold(&op2).is_none());
     }
 
     #[test]

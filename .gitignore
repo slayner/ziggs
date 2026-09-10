@@ -4,6 +4,7 @@ src-tauri/target-diag/
 src-tauri/gen/
 dist/
 node_modules/
+artifacts/
 tsconfig.tsbuildinfo
 *.pdb
 

@@ -109,8 +109,8 @@ pub fn resolve(index: i32) -> (String, String, String, String) {
     )
 }
 
-// Load the cache for an immediate response, then always refresh from the backend.
-// A failed or empty response must not leave items permanently as `IDX_n`.
+// Carrega o cache para resposta imediata e sempre busca o catálogo atual depois.
+// Uma falha ou resposta vazia não pode deixar os itens permanentemente como IDX_n.
 pub async fn load_item_names() {
     if let Ok(bytes) = std::fs::read(item_cache_path()) {
         if let Ok(v) = serde_json::from_slice::<Vec<crate::api::ItemName>>(&bytes) {
@@ -165,7 +165,11 @@ pub fn build_csv_from_loot(events: &[LootEvent]) -> String {
             e.looted_from_alliance,
             e.looted_from_guild,
             e.looted_from,
-            if e.server_region.is_empty() { "west" } else { &e.server_region },
+            if e.server_region.is_empty() {
+                "west"
+            } else {
+                &e.server_region
+            },
         ));
     }
     lines.join("\n")
