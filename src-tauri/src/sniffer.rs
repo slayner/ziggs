@@ -29,33 +29,13 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
-use crate::aodp::{self, AodpBatch, AodpServer};
 #[cfg(target_os = "windows")]
 use crate::photon_parser::{
-    extract_attach_container, extract_character_stats, extract_detach_container, extract_gold, extract_health,
-    extract_history_request, extract_history_response, extract_inventory_move, extract_loot,
-    extract_market, extract_new_character, extract_new_loot_item, extract_new_loot_owner,
-    extract_party, extract_player_state, self_loot_event, PhotonParser,
+    extract_attach_container, extract_character_stats, extract_detach_container, extract_health,
+    extract_inventory_move, extract_loot, extract_new_character, extract_new_loot_item,
+    extract_new_loot_owner, extract_party, extract_player_state, self_loot_event, PhotonParser,
 };
-use crate::photon_parser::{DamageAcc, HistoryReq, LootEvent, PhotonValue};
-
-/// Cities with real marketplaces — we only report prices when the player is
-/// in one of these. Includes the 3 Rests (Arthur's/Merlyn's/Morgana's) which
-/// have their own crafting stations and share the Smuggler's Network.
-const MARKET_CITIES: [&str; 12] = [
-    "Martlock",
-    "Bridgewatch",
-    "Lymhurst",
-    "Fort Sterling",
-    "Thetford",
-    "Caerleon",
-    "Brecilien",
-    "Black Market",
-    "Arthur's Rest",
-    "Merlyn's Rest",
-    "Morgana's Rest",
-    "Smuggler's Den",
-];
+use crate::photon_parser::{DamageAcc, LootEvent, PhotonValue};
 
 /// Packet dedup window. `open_all` listens on ALL interfaces on purpose
 /// (VPN/ExitLag/virtual adapters — listening on only one would lose traffic
@@ -103,6 +83,180 @@ fn is_duplicate_loot(buf: &[LootEvent], ev: &LootEvent) -> bool {
             && p.quantity == ev.quantity
             && p.is_silver == ev.is_silver
     })
+}
+
+fn add_loot_and_persist(
+    loot: &mut Vec<LootEvent>,
+    event: LootEvent,
+    save: impl FnOnce(&[LootEvent]) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    if is_duplicate_loot(loot, &event) {
+        return Ok(false);
+    }
+
+    loot.push(event);
+    if let Err(error) = save(loot) {
+        loot.pop();
+        return Err(error);
+    }
+    Ok(true)
+}
+
+fn clear_loot_and_persist(
+    loot: &mut Vec<LootEvent>,
+    save: impl FnOnce(&[LootEvent]) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let previous = std::mem::take(loot);
+    if let Err(error) = save(loot) {
+        *loot = previous;
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn fill_missing(target: &mut String, value: &str) -> bool {
+    if target.is_empty() && !value.is_empty() {
+        target.push_str(value);
+        true
+    } else {
+        false
+    }
+}
+
+fn update_metadata_field(target: &mut String, update: &str) {
+    if !update.is_empty() && target != update {
+        target.clear();
+        target.push_str(update);
+    }
+}
+
+fn merge_character_metadata(
+    target: &mut crate::photon_parser::CharacterMetadata,
+    update: &crate::photon_parser::CharacterMetadata,
+) {
+    update_metadata_field(&mut target.guild_name, &update.guild_name);
+    update_metadata_field(&mut target.alliance_name, &update.alliance_name);
+}
+
+fn apply_character_metadata(
+    loot: &mut LootEvent,
+    name: &str,
+    metadata: &crate::photon_parser::CharacterMetadata,
+) -> bool {
+    let mut changed = false;
+    if loot.looted_by == name {
+        changed |= fill_missing(&mut loot.looted_by_guild, &metadata.guild_name);
+        changed |= fill_missing(&mut loot.looted_by_alliance, &metadata.alliance_name);
+    }
+    if loot.looted_from == name {
+        changed |= fill_missing(&mut loot.looted_from_guild, &metadata.guild_name);
+        changed |= fill_missing(&mut loot.looted_from_alliance, &metadata.alliance_name);
+    }
+    changed
+}
+
+fn loot_needs_metadata(
+    loot: &LootEvent,
+    name: &str,
+    metadata: &crate::photon_parser::CharacterMetadata,
+) -> bool {
+    (loot.looted_by == name
+        && ((loot.looted_by_guild.is_empty() && !metadata.guild_name.is_empty())
+            || (loot.looted_by_alliance.is_empty() && !metadata.alliance_name.is_empty())))
+        || (loot.looted_from == name
+            && ((loot.looted_from_guild.is_empty() && !metadata.guild_name.is_empty())
+                || (loot.looted_from_alliance.is_empty() && !metadata.alliance_name.is_empty())))
+}
+
+fn backfill_loot_and_persist(
+    loot: &mut Vec<LootEvent>,
+    name: &str,
+    metadata: &crate::photon_parser::CharacterMetadata,
+    save: impl FnOnce(&[LootEvent]) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    if !loot
+        .iter()
+        .any(|event| loot_needs_metadata(event, name, metadata))
+    {
+        return Ok(false);
+    }
+
+    let previous = loot.clone();
+    for event in loot.iter_mut() {
+        apply_character_metadata(event, name, metadata);
+    }
+    if let Err(error) = save(loot) {
+        *loot = previous;
+        return Err(error);
+    }
+    Ok(true)
+}
+
+fn backfill_pending_metadata_and_persist(
+    loot: &mut Vec<LootEvent>,
+    metadata_by_name: &HashMap<String, crate::photon_parser::CharacterMetadata>,
+    save: impl FnOnce(&[LootEvent]) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    let previous = loot.clone();
+    let mut changed = false;
+
+    for event in loot.iter_mut() {
+        let looted_by = event.looted_by.clone();
+        let looted_from = event.looted_from.clone();
+        if let Some(metadata) = metadata_by_name.get(&looted_by) {
+            changed |= apply_character_metadata(event, &looted_by, metadata);
+        }
+        if looted_from != looted_by {
+            if let Some(metadata) = metadata_by_name.get(&looted_from) {
+                changed |= apply_character_metadata(event, &looted_from, metadata);
+            }
+        }
+    }
+
+    if !changed {
+        return Ok(false);
+    }
+    if let Err(error) = save(loot) {
+        *loot = previous;
+        return Err(error);
+    }
+    Ok(true)
+}
+
+/// Maps Albion game-server IP prefixes to region identifiers.
+fn albion_region_from_ip(ip: [u8; 4]) -> Option<&'static str> {
+    match [ip[0], ip[1], ip[2]] {
+        [5, 188, 125] => Some("west"),
+        [5, 45, 187] => Some("east"),
+        [193, 169, 238] => Some("europe"),
+        _ => None,
+    }
+}
+
+/// Extracts server region from a packet frame by checking src/dst IP.
+fn albion_region_from_frame(data: &[u8], l2_hint: usize) -> Option<&'static str> {
+    // L2 offsets to try: hinted offset, then common values
+    let offsets = [l2_hint, 0, 14, 4];
+    for (index, &l2) in offsets.iter().enumerate() {
+        // Skip if this offset was already tried
+        if offsets[..index].contains(&l2) {
+            continue;
+        }
+        // Need at least 20 bytes after L2 offset for IP header
+        if data.len() < l2 + 20 {
+            continue;
+        }
+        // Check for IPv4 header: version 4, protocol UDP (17)
+        let vihl = data[l2];
+        if vihl >> 4 != 4 || data[l2 + 9] != 17 {
+            continue;
+        }
+        // Extract src and dst IP addresses (12-15 and 16-19 bytes after L2)
+        let src = [data[l2 + 12], data[l2 + 13], data[l2 + 14], data[l2 + 15]];
+        let dst = [data[l2 + 16], data[l2 + 17], data[l2 + 18], data[l2 + 19]];
+        return albion_region_from_ip(src).or_else(|| albion_region_from_ip(dst));
+    }
+    None
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -186,25 +340,9 @@ pub struct Sniffer {
     /// target_id. Filtering after would require per-target breakdown — much
     /// more memory than keeping two totals.
     pub damage_vs_players: Arc<Mutex<HashMap<i64, DamageAcc>>>,
-    /// Price rows ready for POST /companion/prices/submit — drained
-    /// periodically by the upload task in lib.rs.
-    pub prices: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// Market history rows ready for POST /companion/market-history/submit.
-    pub market_history: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// Pending history requests (message_id → info), awaiting response.
-    history_pending: Arc<Mutex<HashMap<u64, HistoryReq>>>,
-    /// Market order batches ready for AODP upload (verbatim).
-    pub aodp_out: Arc<Mutex<Vec<AodpBatch>>>,
-    /// Last AODP region inferred from the Albion server IP (per packet).
-    pub aodp_server: Arc<Mutex<Option<AodpServer>>>,
-    /// Capture gates — mirror the config toggles (set_config syncs them).
-    /// The sniffer always runs (name/map/party feed the UI), but only
-    /// accumulates loot/damage/prices when the gate is on.
+    /// Capture gates — mirror the configuration toggles.
     pub capture_loot: Arc<AtomicBool>,
     pub capture_damage: Arc<AtomicBool>,
-    pub capture_prices: Arc<AtomicBool>,
-    /// Forward market orders to AODP (return data to the community).
-    pub feed_aodp: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     /// WinDivert capture handle (0 = not started). Lives for the session,
     /// shutdown on stop/restart. See `windivert.rs`.
@@ -212,6 +350,8 @@ pub struct Sniffer {
     windivert_handle: Arc<AtomicI64>,
     #[cfg(not(target_os = "windows"))]
     windivert_handle: Arc<AtomicI64>,
+    /// Last recognized Albion game-server region for lootlog export.
+    pub server_region: Arc<Mutex<String>>,
 }
 
 pub enum CaptureMsg {
@@ -238,20 +378,14 @@ impl Sniffer {
             character_metadata: Arc::new(Mutex::new(HashMap::new())),
             damage: Arc::new(Mutex::new(HashMap::new())),
             damage_vs_players: Arc::new(Mutex::new(HashMap::new())),
-            prices: Arc::new(Mutex::new(Vec::new())),
-            market_history: Arc::new(Mutex::new(Vec::new())),
-            history_pending: Arc::new(Mutex::new(HashMap::new())),
-            aodp_out: Arc::new(Mutex::new(Vec::new())),
-            aodp_server: Arc::new(Mutex::new(None)),
             capture_loot: Arc::new(AtomicBool::new(false)),
             capture_damage: Arc::new(AtomicBool::new(false)),
-            capture_prices: Arc::new(AtomicBool::new(false)),
-            feed_aodp: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "windows")]
             windivert_handle: Arc::new(AtomicI64::new(0)),
             #[cfg(not(target_os = "windows"))]
             windivert_handle: Arc::new(AtomicI64::new(0)),
+            server_region: Arc::new(Mutex::new("west".into())),
         }
     }
 
@@ -266,20 +400,14 @@ impl Sniffer {
             character_metadata: Arc::clone(&self.character_metadata),
             damage: Arc::clone(&self.damage),
             damage_vs_players: Arc::clone(&self.damage_vs_players),
-            prices: Arc::clone(&self.prices),
-            market_history: Arc::clone(&self.market_history),
-            history_pending: Arc::clone(&self.history_pending),
-            aodp_out: Arc::clone(&self.aodp_out),
-            aodp_server: Arc::clone(&self.aodp_server),
             capture_loot: Arc::clone(&self.capture_loot),
             capture_damage: Arc::clone(&self.capture_damage),
-            capture_prices: Arc::clone(&self.capture_prices),
-            feed_aodp: Arc::clone(&self.feed_aodp),
             generation: Arc::clone(&self.generation),
             #[cfg(target_os = "windows")]
             windivert_handle: Arc::clone(&self.windivert_handle),
             #[cfg(not(target_os = "windows"))]
             windivert_handle: Arc::clone(&self.windivert_handle),
+            server_region: Arc::clone(&self.server_region),
         }
     }
 
@@ -329,11 +457,8 @@ impl Sniffer {
                 format!("=== session {} ===\n", crate::photon_parser::now_iso_utc()),
             );
         }
-        self.debug_log(
-            "info",
-            "Sniffer starting — WinDivert (WFP layer)…",
-        )
-        .await;
+        self.debug_log("info", "Sniffer starting — WinDivert (WFP layer)…")
+            .await;
 
         // The channel lives for the entire session.
         let (tx, rx) = mpsc::channel::<CaptureMsg>();
@@ -426,10 +551,12 @@ impl Sniffer {
                         None => continue,
                     };
                     last_packet_time = Instant::now();
-                    // AODP region: inferred from the Albion server IP in the IP header.
-                    if let Some(srv) = albion_server_from_frame(&data, l2_hint) {
-                        *self.aodp_server.lock().await = Some(srv);
+
+                    // Track the game-server region from validated IPv4/UDP traffic.
+                    if let Some(region) = albion_region_from_frame(&data, l2_hint) {
+                        *self.server_region.lock().await = region.into();
                     }
+
                     let photon_data = &data[off..];
 
                     // Dedup: byte-identical copy from another interface (bridged
@@ -596,6 +723,10 @@ impl Sniffer {
                             }
                         }
 
+                        if let Some((name, metadata)) = extract_character_stats(op) {
+                            self.record_character_metadata(name, metadata).await;
+                        }
+
                         if self.capture_loot.load(Ordering::Relaxed) {
                             // Loot diagnostic dump: first 20 events with loot-like
                             // structure (2 strings + 1 int), even if extract_loot
@@ -708,16 +839,6 @@ impl Sniffer {
                             }
                         }
 
-                        if let Some((name, metadata)) = extract_character_stats(op) {
-                            let mut players = self.character_metadata.lock().await;
-                            if players.len() >= 5000 && !players.contains_key(&name) {
-                                if let Some(evicted) = players.keys().next().cloned() {
-                                    players.remove(&evicted);
-                                }
-                            }
-                            players.insert(name, metadata);
-                        }
-
                         // Damage meter: id→name registration + damage/heal accumulation.
                         // Entity registration always runs (cheap, and the meter needs
                         // names seen BEFORE the toggle is turned on).
@@ -814,194 +935,6 @@ impl Sniffer {
                                 }
                             }
                         }
-
-                        // Market: marketplace responses while the player browses.
-                        // Feeds OUR database (by city) and forwards to AODP (verbatim).
-                        if self.capture_prices.load(Ordering::Relaxed)
-                            || self.feed_aodp.load(Ordering::Relaxed)
-                        {
-                            let cap = extract_market(op);
-                            if !cap.raw_orders.is_empty() {
-                                let (city, raw_map, map_name) = {
-                                    let s = self.stats.lock().await;
-                                    let city = MARKET_CITIES
-                                        .iter()
-                                        .find(|c| s.last_map_name.contains(*c))
-                                        .map(|c| c.to_string());
-                                    (city, s.last_map.clone(), s.last_map_name.clone())
-                                };
-
-                                // Our database: only in known market cities.
-                                if self.capture_prices.load(Ordering::Relaxed) {
-                                    if let Some(city) = &city {
-                                        let ts = crate::photon_parser::now_iso_utc();
-                                        let region = self
-                                            .aodp_server
-                                            .lock()
-                                            .await
-                                            .as_ref()
-                                            .map(|server| server.region())
-                                            .unwrap_or("west");
-                                        let mut buf = self.prices.lock().await;
-                                        for o in &cap.offers {
-                                            // Convert UniqueName (game's ItemTypeId)
-                                            // → game_name (English in-game name), which is
-                                            // the canonical ID in our price database.
-                                            let game_name = crate::to_game_name(&o.item_id).await;
-                                            buf.push(serde_json::json!({
-                                                "item_id": game_name,
-                                                "city": city,
-                                                "region": region,
-                                                "quality": o.quality,
-                                                "sell_price_min": o.unit_price_silver,
-                                                "price_date": ts,
-                                            }));
-                                        }
-                                        let len = buf.len();
-                                        if len > 5000 {
-                                            buf.drain(..len - 5000);
-                                        }
-                                    }
-                                }
-
-                                // AODP: forward raw orders. Numeric LocationId (current
-                                // cluster) filled when the order doesn't have one — same
-                                // as the official client does.
-                                if self.feed_aodp.load(Ordering::Relaxed) {
-                                    let server = self.aodp_server.lock().await.clone();
-                                    let numeric_loc = raw_map.trim_start_matches('0');
-                                    // Accept numeric clusters (real cities, Rests)
-                                    // AND BLACKBANK-* (Smuggler's Den) — the
-                                    // official AODP client accepts both.
-                                    let is_valid_loc = !numeric_loc.is_empty()
-                                        && (numeric_loc.chars().all(|c| c.is_ascii_digit())
-                                            || numeric_loc.starts_with("BLACKBANK-"));
-                                    if let Some(server) = server {
-                                        if is_valid_loc {
-                                            let orders: Vec<serde_json::Value> = cap
-                                                .raw_orders
-                                                .iter()
-                                                .map(|o| {
-                                                    let mut o = o.clone();
-                                                    let empty = o
-                                                        .get("LocationId")
-                                                        .and_then(|l| l.as_str())
-                                                        .map_or(true, |l| l.is_empty());
-                                                    if empty {
-                                                        o["LocationId"] = serde_json::Value::String(
-                                                            numeric_loc.to_string(),
-                                                        );
-                                                    }
-                                                    o
-                                                })
-                                                .collect();
-                                            let natsmsg =
-                                                serde_json::json!({ "Orders": orders }).to_string();
-                                            let mut buf = self.aodp_out.lock().await;
-                                            buf.push(AodpBatch {
-                                                server_id: server.id,
-                                                base_url: server.base_url,
-                                                topic: "marketorders.ingest".into(),
-                                                natsmsg,
-                                            });
-                                            // Cap: max 50 pending batches.
-                                            let len = buf.len();
-                                            if len > 50 {
-                                                buf.drain(..len - 50);
-                                            }
-                                        } else {
-                                            self.debug_log(
-                                                "warn",
-                                                &format!(
-                                                    "AODP: invalid location ({}), skipping send",
-                                                    map_name
-                                                ),
-                                            )
-                                            .await;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Market history: aggregate chart from the game itself.
-                        // Request carries item/quality/scale; response carries buckets —
-                        // correlated by message-id. Stored in OUR database
-                        // (independent of AODP).
-                        if self.capture_prices.load(Ordering::Relaxed) {
-                            if let Some((mid, info)) = extract_history_request(op) {
-                                let mut pend = self.history_pending.lock().await;
-                                pend.insert(mid, info);
-                                // Cap: discard old orphan requests (response never came).
-                                if pend.len() > 256 {
-                                    let drop: Vec<u64> =
-                                        pend.keys().take(pend.len() - 256).copied().collect();
-                                    for k in drop {
-                                        pend.remove(&k);
-                                    }
-                                }
-                            }
-                            if let Some((mid, buckets)) = extract_history_response(op) {
-                                let info = self.history_pending.lock().await.remove(&mid);
-                                if let Some(info) = info {
-                                    let location = {
-                                        let s = self.stats.lock().await;
-                                        s.last_map.trim_start_matches('0').to_string()
-                                    };
-                                    // Albion server region (detected from packet IPs) —
-                                    // markets are separated by server.
-                                    let region = self
-                                        .aodp_server
-                                        .lock()
-                                        .await
-                                        .as_ref()
-                                        .map(|s| s.region())
-                                        .unwrap_or("west");
-                                    let mut buf = self.market_history.lock().await;
-                                    for b in buckets {
-                                        buf.push(serde_json::json!({
-                                            "albion_id": info.albion_id,
-                                            "region": region,
-                                            "quality": info.quality,
-                                            "location": location,
-                                            "timescale": info.timescale,
-                                            "bucket_ts": b.bucket_ts,
-                                            "item_count": b.item_count,
-                                            "silver_amount": b.silver_amount,
-                                        }));
-                                    }
-                                    let len = buf.len();
-                                    if len > 10000 {
-                                        buf.drain(..len - 10000);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Gold: gold market price (global, no location).
-                        // Only needs the server region — forwards to AODP.
-                        if self.feed_aodp.load(Ordering::Relaxed) {
-                            if let Some(g) = extract_gold(op) {
-                                if let Some(server) = self.aodp_server.lock().await.clone() {
-                                    let natsmsg = serde_json::json!({
-                                        "Prices": g.prices,
-                                        "Timestamps": g.timestamps,
-                                    })
-                                    .to_string();
-                                    let mut buf = self.aodp_out.lock().await;
-                                    buf.push(AodpBatch {
-                                        server_id: server.id,
-                                        base_url: server.base_url,
-                                        topic: "goldprices.ingest".into(),
-                                        natsmsg,
-                                    });
-                                    let len = buf.len();
-                                    if len > 50 {
-                                        buf.drain(..len - 50);
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => { /* no packets — continue loop */ }
@@ -1061,36 +994,105 @@ impl Sniffer {
         stats.error = Some("Captura de pacotes indisponível nesta plataforma.".into());
     }
 
-    async fn push_loot(&self, mut loot: LootEvent) {
-        let metadata = self.character_metadata.lock().await;
-        if let Some(player) = metadata.get(&loot.looted_by) {
-            loot.looted_by_guild = player.guild_name.clone();
-            loot.looted_by_alliance = player.alliance_name.clone();
-        }
-        if let Some(player) = metadata.get(&loot.looted_from) {
-            loot.looted_from_guild = player.guild_name.clone();
-            loot.looted_from_alliance = player.alliance_name.clone();
-        }
-        drop(metadata);
-        loot.server_region = self
-            .aodp_server
-            .lock()
-            .await
-            .as_ref()
-            .map(|server| server.region().to_string())
-            .unwrap_or_else(|| "west".into());
-        let (len, save_error) = {
-            let mut buf = self.loot.lock().await;
-            if is_duplicate_loot(&buf, &loot) {
-                return;
+    async fn record_character_metadata(
+        &self,
+        name: String,
+        metadata: crate::photon_parser::CharacterMetadata,
+    ) {
+        let metadata = {
+            let mut players = self.character_metadata.lock().await;
+            if players.len() >= 5000 && !players.contains_key(&name) {
+                if let Some(evicted) = players.keys().next().cloned() {
+                    players.remove(&evicted);
+                }
             }
-            buf.push(loot);
-            (buf.len(), crate::lootlog::save_session(&buf).err())
+            let cached = players.entry(name.clone()).or_default();
+            merge_character_metadata(cached, &metadata);
+            cached.clone()
         };
-        self.stats.lock().await.loot_count = len as u64;
-        if let Some(e) = save_error {
-            self.debug_log("err", &format!("Failed to persist session loot: {e}"))
-                .await;
+
+        let result = {
+            let mut loot = self.loot.lock().await;
+            let result = backfill_loot_and_persist(
+                &mut loot,
+                &name,
+                &metadata,
+                crate::lootlog::save_session,
+            );
+            if matches!(result, Ok(true)) {
+                self.stats.lock().await.loot_count = loot.len() as u64;
+            }
+            result
+        };
+        if let Err(error) = result {
+            self.debug_log(
+                "err",
+                &format!("não foi possível persistir os metadados do lootlog: {error}"),
+            )
+            .await;
+        }
+    }
+
+    pub async fn clear_captured_loot(&self) -> Result<(), String> {
+        let result = {
+            let mut loot = self.loot.lock().await;
+            let result = clear_loot_and_persist(&mut loot, crate::lootlog::save_session);
+            if result.is_ok() {
+                self.stats.lock().await.loot_count = loot.len() as u64;
+            }
+            result
+        };
+        result.map_err(|error| format!("não foi possível limpar o lootlog salvo: {error}"))
+    }
+
+    async fn push_loot(&self, mut loot: LootEvent) {
+        let looted_by = loot.looted_by.clone();
+        let looted_from = loot.looted_from.clone();
+        {
+            let metadata = self.character_metadata.lock().await;
+            if let Some(player) = metadata.get(&looted_by) {
+                apply_character_metadata(&mut loot, &looted_by, player);
+            }
+            if let Some(player) = metadata.get(&looted_from) {
+                apply_character_metadata(&mut loot, &looted_from, player);
+            }
+        }
+
+        {
+            let stats = self.stats.lock().await;
+            if loot.looted_by == stats.player_name {
+                fill_missing(&mut loot.looted_by_guild, &stats.guild_name);
+                fill_missing(&mut loot.looted_by_alliance, &stats.alliance_name);
+            }
+            if loot.looted_from == stats.player_name {
+                fill_missing(&mut loot.looted_from_guild, &stats.guild_name);
+                fill_missing(&mut loot.looted_from_alliance, &stats.alliance_name);
+            }
+        }
+
+        loot.server_region = self.server_region.lock().await.clone();
+        let metadata_by_name = self.character_metadata.lock().await.clone();
+        let result = {
+            let mut loot_buffer = self.loot.lock().await;
+            let result = (|| {
+                backfill_pending_metadata_and_persist(
+                    &mut loot_buffer,
+                    &metadata_by_name,
+                    crate::lootlog::save_session,
+                )?;
+                add_loot_and_persist(&mut loot_buffer, loot, crate::lootlog::save_session)
+            })();
+            if matches!(result, Ok(true)) {
+                self.stats.lock().await.loot_count = loot_buffer.len() as u64;
+            }
+            result
+        };
+        if let Err(error) = result {
+            self.debug_log(
+                "err",
+                &format!("não foi possível persistir a sessão de loot: {error}"),
+            )
+            .await;
         }
     }
 
@@ -1227,34 +1229,15 @@ fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
     None
 }
 
-/// Infers the AODP region from the IPs (src/dst) in the IPv4 header.
-/// Src IP (bytes 12-15) and dst IP (16-19) — one of them is the Albion server.
-fn albion_server_from_frame(data: &[u8], l2_hint: usize) -> Option<AodpServer> {
-    for &l2 in &[l2_hint, 0, 14, 4] {
-        if data.len() < l2 + 20 {
-            continue;
-        }
-        let vihl = data[l2];
-        if vihl >> 4 != 4 {
-            continue;
-        }
-        if data[l2 + 9] != 17 {
-            continue;
-        } // UDP
-        let src = [data[l2 + 12], data[l2 + 13], data[l2 + 14], data[l2 + 15]];
-        let dst = [data[l2 + 16], data[l2 + 17], data[l2 + 18], data[l2 + 19]];
-        if let Some(s) = aodp::server_for_ip(src).or_else(|| aodp::server_for_ip(dst)) {
-            return Some(s);
-        }
-        return None; // Valid IP header but neither side is a known Albion server
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::photon_offset;
-    use super::{is_duplicate_loot, LootEvent, LOOT_DEDUP_LOOKBACK};
+    use super::{
+        add_loot_and_persist, backfill_loot_and_persist, backfill_pending_metadata_and_persist,
+        clear_loot_and_persist, is_duplicate_loot, merge_character_metadata, LootEvent,
+        LOOT_DEDUP_LOOKBACK,
+    };
+    use crate::photon_parser::CharacterMetadata;
 
     // Minimum UDP/IPv4: [ip header 20][udp 8][payload]. version=4, ihl=5, proto=17.
     fn ipv4_udp(payload: &[u8]) -> Vec<u8> {
@@ -1339,30 +1322,200 @@ mod tests {
     }
 
     #[test]
+    fn metadata_backfill_preserves_known_values_and_persists_the_new_ones() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        loot[0].looted_by_guild = "Guild already known".into();
+        let mut saved = Vec::new();
+
+        let changed = backfill_loot_and_persist(
+            &mut loot,
+            "Alice",
+            &CharacterMetadata {
+                guild_name: "Ziggs".into(),
+                alliance_name: "Alliance".into(),
+            },
+            |events| {
+                saved = events.to_vec();
+                Ok(())
+            },
+        )
+        .expect("o backfill deve persistir");
+
+        assert!(changed);
+        assert_eq!(loot[0].looted_by_guild, "Guild already known");
+        assert_eq!(loot[0].looted_by_alliance, "Alliance");
+        assert_eq!(saved[0].looted_by_guild, "Guild already known");
+        assert_eq!(saved[0].looted_by_alliance, "Alliance");
+    }
+
+    #[test]
+    fn failed_metadata_backfill_restores_existing_metadata() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        loot[0].looted_by_guild = "Guild already known".into();
+
+        let error = backfill_loot_and_persist(
+            &mut loot,
+            "Alice",
+            &CharacterMetadata {
+                guild_name: "Ziggs".into(),
+                alliance_name: "Alliance".into(),
+            },
+            |_| Err(anyhow::anyhow!("disco indisponível")),
+        )
+        .expect_err("a falha de persistência precisa ser devolvida");
+
+        assert!(error.to_string().contains("disco indisponível"));
+        assert_eq!(loot[0].looted_by_guild, "Guild already known");
+        assert!(loot[0].looted_by_alliance.is_empty());
+    }
+
+    #[test]
+    fn pending_metadata_is_persisted_on_a_later_retry() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        let pending = std::collections::HashMap::from([(
+            "Alice".to_string(),
+            CharacterMetadata {
+                guild_name: "Ziggs".into(),
+                alliance_name: "Alliance".into(),
+            },
+        )]);
+        let mut saved = Vec::new();
+
+        let changed = backfill_pending_metadata_and_persist(&mut loot, &pending, |events| {
+            saved = events.to_vec();
+            Ok(())
+        })
+        .expect("o retry deve persistir os metadados pendentes");
+
+        assert!(changed);
+        assert_eq!(loot[0].looted_by_guild, "Ziggs");
+        assert_eq!(loot[0].looted_by_alliance, "Alliance");
+        assert_eq!(saved[0].looted_by_guild, "Ziggs");
+        assert_eq!(saved[0].looted_by_alliance, "Alliance");
+    }
+
+    #[test]
+    fn partial_metadata_does_not_erase_cached_fields() {
+        let mut cached = CharacterMetadata {
+            guild_name: "Ziggs".into(),
+            alliance_name: "Alliance".into(),
+        };
+
+        merge_character_metadata(
+            &mut cached,
+            &CharacterMetadata {
+                guild_name: String::new(),
+                alliance_name: String::new(),
+            },
+        );
+
+        assert_eq!(cached.guild_name, "Ziggs");
+        assert_eq!(cached.alliance_name, "Alliance");
+    }
+
+    #[test]
+    fn newer_nonempty_metadata_replaces_cached_fields() {
+        let mut cached = CharacterMetadata {
+            guild_name: "Old guild".into(),
+            alliance_name: "Old alliance".into(),
+        };
+
+        merge_character_metadata(
+            &mut cached,
+            &CharacterMetadata {
+                guild_name: "New guild".into(),
+                alliance_name: "New alliance".into(),
+            },
+        );
+
+        assert_eq!(cached.guild_name, "New guild");
+        assert_eq!(cached.alliance_name, "New alliance");
+    }
+
+    #[test]
+    fn cached_metadata_updates_only_missing_loot_fields() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        loot[0].looted_by_guild = "Original guild".into();
+        let pending = std::collections::HashMap::from([(
+            "Alice".to_string(),
+            CharacterMetadata {
+                guild_name: "Current guild".into(),
+                alliance_name: "Current alliance".into(),
+            },
+        )]);
+
+        backfill_pending_metadata_and_persist(&mut loot, &pending, |_| Ok(()))
+            .expect("o backfill deve persistir");
+
+        assert_eq!(loot[0].looted_by_guild, "Original guild");
+        assert_eq!(loot[0].looted_by_alliance, "Current alliance");
+    }
+
+    #[test]
+    fn failed_pending_backfill_restores_the_buffer() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        let pending = std::collections::HashMap::from([(
+            "Alice".to_string(),
+            CharacterMetadata {
+                guild_name: "Ziggs".into(),
+                alliance_name: "Alliance".into(),
+            },
+        )]);
+
+        let error = backfill_pending_metadata_and_persist(&mut loot, &pending, |_| {
+            Err(anyhow::anyhow!("disco indisponível"))
+        })
+        .expect_err("a falha de persistência precisa ser devolvida");
+
+        assert!(error.to_string().contains("disco indisponível"));
+        assert!(loot[0].looted_by_guild.is_empty());
+        assert!(loot[0].looted_by_alliance.is_empty());
+    }
+
+    #[test]
+    fn failed_clear_persistence_restores_the_buffer() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+
+        let error =
+            clear_loot_and_persist(&mut loot, |_| Err(anyhow::anyhow!("disco indisponível")))
+                .expect_err("a falha de persistência precisa ser devolvida");
+
+        assert!(error.to_string().contains("disco indisponível"));
+        assert_eq!(loot.len(), 1, "limpar não pode apagar evento não salvo");
+        assert_eq!(loot[0].looted_by, "Alice");
+    }
+
+    #[test]
+    fn failed_loot_persistence_discards_the_new_event() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+
+        let error = add_loot_and_persist(&mut loot, loot_ev("Carol", "Dave", 2, 1), |_| {
+            Err(anyhow::anyhow!("disco indisponível"))
+        })
+        .expect_err("a falha de persistência precisa ser devolvida");
+
+        assert!(error.to_string().contains("disco indisponível"));
+        assert_eq!(
+            loot.len(),
+            1,
+            "evento não persistido não pode ficar na memória"
+        );
+        assert_eq!(loot[0].looted_by, "Alice");
+    }
+
+    #[test]
     fn loot_dedup_catches_identical_event_from_two_interfaces() {
         let mut buf = vec![loot_ev("Alice", "Bob", 2958, 3)];
         // Same identity (same copy arriving from the other interface) → dup.
-        assert!(is_duplicate_loot(
-            &buf,
-            &loot_ev("Alice", "Bob", 2958, 3)
-        ));
+        assert!(is_duplicate_loot(&buf, &loot_ev("Alice", "Bob", 2958, 3)));
         buf.push(loot_ev("Alice", "Bob", 2958, 3));
 
         // Different item from same body, same second → not dup.
-        assert!(!is_duplicate_loot(
-            &buf,
-            &loot_ev("Alice", "Bob", 1001, 3)
-        ));
+        assert!(!is_duplicate_loot(&buf, &loot_ev("Alice", "Bob", 1001, 3)));
         // Different quantity → not dup.
-        assert!(!is_duplicate_loot(
-            &buf,
-            &loot_ev("Alice", "Bob", 2958, 5)
-        ));
+        assert!(!is_duplicate_loot(&buf, &loot_ev("Alice", "Bob", 2958, 5)));
         // Different looter → not dup.
-        assert!(!is_duplicate_loot(
-            &buf,
-            &loot_ev("Carol", "Bob", 2958, 3)
-        ));
+        assert!(!is_duplicate_loot(&buf, &loot_ev("Carol", "Bob", 2958, 3)));
     }
 
     #[test]
