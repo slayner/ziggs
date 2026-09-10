@@ -35,12 +35,26 @@ function Assert-TauriSignatureEnvelope([string]$SignaturePath, [string]$Artifact
 
     # Validate the exact artifact cryptographically with Minisign in WSL. The
     # updater `.sig` is Base64-wrapped, while Minisign expects its text envelope.
-    $pubkey = (Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).plugins.updater.pubkey
-    $keyBytes = [Convert]::FromBase64String($pubkey)
+    $updaterPubkey = (Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).plugins.updater.pubkey
+    try {
+        $publicKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($updaterPubkey)).Trim()
+        $publicKeyLines = @($publicKey -split "`r?`n")
+        if ($publicKeyLines.Count -ne 2 -or -not $publicKeyLines[0].StartsWith("untrusted comment: minisign public key: ")) {
+            throw "unexpected Minisign public-key envelope"
+        }
+        $publicKeyComment = $publicKeyLines[0]
+        $publicKeyPayload = $publicKeyLines[1]
+        $keyBytes = [Convert]::FromBase64String($publicKeyPayload)
+    } catch {
+        throw "ERROR: updater public key is invalid"
+    }
     if ($keyBytes.Length -ne 42 -or [Text.Encoding]::ASCII.GetString($keyBytes[0..1]) -ne "Ed") {
         throw "ERROR: updater public key is invalid"
     }
     $keyId = -join ($keyBytes[2..9] | ForEach-Object { $_.ToString("x2") }).ToUpperInvariant()
+    if ($publicKeyComment -ne "untrusted comment: minisign public key: $keyId") {
+        throw "ERROR: updater public key identifier is invalid"
+    }
     $distro = "Ubuntu"
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
         throw "ERROR: WSL Minisign verification is unavailable"
@@ -55,7 +69,7 @@ set -euo pipefail
 key=`$(mktemp)
 signature=`$(mktemp)
 trap 'rm -f "`$key" "`$signature"' EXIT
-printf '%s\n%s\n' 'untrusted comment: minisign public key $keyId' '$pubkey' > "`$key"
+printf '%s\n%s\n' '$publicKeyComment' '$publicKeyPayload' > "`$key"
 printf '%s' '$encoded' | base64 -d > "`$signature"
 minisign -V -p "`$key" -x "`$signature" -m '$wslArtifactPath'
 "@

@@ -153,12 +153,18 @@ signature="$deb.sig"
 
 # Tauri stores a Minisign envelope as Base64. Validate the exact Debian payload
 # against the public updater key before the artifact ever leaves the WSL build.
-public_key_b64="$(node -e "const c=require('./src-tauri/tauri.conf.json'); process.stdout.write(c.plugins.updater.pubkey)")"
+updater_pubkey="$(node -e "const c=require('./src-tauri/tauri.conf.json'); process.stdout.write(c.plugins.updater.pubkey)")"
+public_key="$(printf '%s' "$updater_pubkey" | base64 -d)" \
+  || fail "Chave pública do updater inválida no tauri.conf.json."
+public_key_b64="$(printf '%s\n' "$public_key" | tail -n 1)"
+public_key_comment="$(printf '%s\n' "$public_key" | head -n 1)"
 public_key_id="$(node -e "const key=Buffer.from(process.argv[1], 'base64'); if (key.length !== 42 || key.subarray(0, 2).toString() !== 'Ed') process.exit(1); process.stdout.write(key.subarray(2, 10).toString('hex').toUpperCase())" "$public_key_b64")" \
   || fail "Chave pública do updater inválida no tauri.conf.json."
+[[ "$public_key_comment" == "untrusted comment: minisign public key: "*"$public_key_id" ]] \
+  || fail "Identificador da chave pública do updater é inválido."
 verify_key="$(mktemp "$stage/verify-key.XXXXXX")"
 verify_signature="$(mktemp "$stage/verify-signature.XXXXXX")"
-printf 'untrusted comment: minisign public key %s\n%s\n' "$public_key_id" "$public_key_b64" > "$verify_key"
+printf '%s\n%s\n' "$public_key_comment" "$public_key_b64" > "$verify_key"
 printf '%s' "$(tr -d '\r\n' < "$signature")" | base64 -d > "$verify_signature" \
   || fail "A assinatura Debian não está em Base64 válido."
 minisign -V -p "$verify_key" -x "$verify_signature" -m "$deb" \
