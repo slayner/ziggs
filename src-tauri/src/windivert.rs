@@ -8,7 +8,7 @@
 //   - SNIFF mode: copies packets without intercepting, game is unaffected
 //
 // WinDivert.dll and WinDivert64.sys are bundled in resources/ (LGPLv3).
-// Requer privilégios de administrador.
+// Administrator privileges are required.
 
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc;

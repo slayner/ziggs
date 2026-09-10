@@ -14,14 +14,18 @@
                                 {
                                     "label":  "main",
                                     "title":  "Ziggs Companion",
-                                    "width":  980,
-                                    "height":  760,
-                                    "minWidth":  1020,
-                                    "minHeight":  660,
-                                    "resizable":  true,
+                                    "width":  1024,
+                                    "height":  768,
+                                    "minWidth":  1024,
+                                    "minHeight":  768,
+                                    "maxWidth":  1024,
+                                    "maxHeight":  768,
+                                    "resizable":  false,
+                                    "maximizable":  false,
                                     "fullscreen":  false,
                                     "visible":  false,
-                                    "decorations":  false
+                                    "decorations":  false,
+                                    "zoomHotkeysEnabled": false
                                 }
                             ],
                 "security":  {
@@ -44,7 +48,7 @@
                                  ],
                    "category":  "Utility",
                    "shortDescription":  "Ziggs Companion",
-                    "longDescription":  "Damage Meter e Lootlog para Albion Online.",
+                    "longDescription":  "Damage Meter and Lootlog for Albion Online.",
                    "windows":  {
                                    "nsis":  {
                                                 "installerHooks":  "nsis/installer-hooks.nsh",

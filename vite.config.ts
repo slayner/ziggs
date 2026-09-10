@@ -8,9 +8,9 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: {
-      // Sem isso o Vite observa src-tauri/target inteiro (17GB+ de build do
-      // Cargo) — quando o linker trava um .dll pra escrever, o watcher do
-      // Node explode com EBUSY não tratado e derruba o `npm run dev` inteiro.
+      // Without this, Vite watches the entire src-tauri/target directory (17 GB+
+      // of Cargo build output). When the linker locks a .dll for writing, the Node
+      // watcher crashes on an unhandled EBUSY and brings down the whole `npm run dev`.
       ignored: ["**/src-tauri/**"],
     },
   },

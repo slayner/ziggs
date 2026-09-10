@@ -109,16 +109,24 @@ pub fn resolve(index: i32) -> (String, String, String, String) {
     )
 }
 
-// Carrega o cache para resposta imediata e sempre busca o catálogo atual depois.
-// Uma falha ou resposta vazia não pode deixar os itens permanentemente como IDX_n.
+// Load the cache for an immediate response and always fetch the current catalog afterward.
+// A failed or empty response must not leave items permanently as IDX_n.
 pub async fn load_item_names() {
-    if let Ok(bytes) = std::fs::read(item_cache_path()) {
-        if let Ok(v) = serde_json::from_slice::<Vec<crate::api::ItemName>>(&bytes) {
-            if !v.is_empty() {
-                tracing::info!(count = v.len(), "item catalog loaded from cache");
-                store(v);
+    match std::fs::read(item_cache_path()) {
+        Ok(bytes) => match serde_json::from_slice::<Vec<crate::api::ItemName>>(&bytes) {
+            Ok(items) if !items.is_empty() => {
+                let count = items.len();
+                tracing::info!(count, "item catalog loaded from cache");
+                store(items);
+                crate::catalog::mark_items_ready(crate::catalog::CatalogSource::Cache, count);
             }
-        }
+            Ok(_) => crate::catalog::mark_items_degraded("cache de itens vazio"),
+            Err(_) => crate::catalog::mark_items_degraded("cache de itens inválido"),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => crate::catalog::mark_items_degraded(format!(
+            "não foi possível ler o cache de itens: {error}"
+        )),
     }
     let api = crate::api::ApiClient::new(crate::config::API_BASE_URL);
     loop {
@@ -132,10 +140,17 @@ pub async fn load_item_names() {
                 }
                 tracing::info!(count, "item catalog refreshed from backend");
                 store(v);
+                crate::catalog::mark_items_ready(crate::catalog::CatalogSource::Backend, count);
                 return;
             }
-            Ok(_) => tracing::warn!("item catalog empty on backend, retrying in 60s"),
-            Err(e) => tracing::warn!("item catalog fetch failed, retrying in 60s: {e:#}"),
+            Ok(_) => {
+                crate::catalog::mark_items_degraded("backend retornou um catálogo de itens vazio");
+                tracing::warn!("item catalog empty on backend, retrying in 60s");
+            }
+            Err(e) => {
+                crate::catalog::mark_items_degraded(format!("falha ao buscar itens: {e:#}"));
+                tracing::warn!("item catalog fetch failed, retrying in 60s: {e:#}");
+            }
         }
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
     }
@@ -145,7 +160,6 @@ pub async fn load_item_names() {
 // extra columns and any order.
 const CSV_HEADER: &str = "timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;\
 item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name;server__region";
-
 // Convert captured LootEvents into ao-loot-logger CSV. Item names stay in English
 // so the file stays interoperable across clients in different languages.
 pub fn build_csv_from_loot(events: &[LootEvent]) -> String {
@@ -197,6 +211,18 @@ pub fn save_csv(csv_text: &str) -> std::io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn item_table_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn clear_item_table() {
+        if let Ok(mut table) = items().write() {
+            table.clear();
+        }
+    }
 
     fn ev(item_index: i32) -> LootEvent {
         LootEvent {
@@ -210,9 +236,47 @@ mod tests {
         }
     }
 
-    // Single test because the global item table would flake under parallel access.
+    #[test]
+    fn unknown_item_index_keeps_a_visible_fallback_in_every_locale() {
+        let _guard = item_table_test_lock().lock().unwrap();
+        clear_item_table();
+
+        assert_eq!(
+            resolve(4172),
+            (
+                "IDX_4172".into(),
+                "IDX_4172".into(),
+                "IDX_4172".into(),
+                "IDX_4172".into(),
+            )
+        );
+    }
+
+    #[test]
+    fn localized_item_names_fall_back_to_english() {
+        let _guard = item_table_test_lock().lock().unwrap();
+        store(vec![crate::api::ItemName {
+            i: 4172,
+            id: "T4_BAG".into(),
+            en: "Adept's Bag".into(),
+            pt: Some("Bolsa do Adepto".into()),
+            es: None,
+        }]);
+
+        assert_eq!(
+            resolve(4172),
+            (
+                "T4_BAG".into(),
+                "Adept's Bag".into(),
+                "Bolsa do Adepto".into(),
+                "Adept's Bag".into(),
+            )
+        );
+    }
+
     #[test]
     fn csv_carries_id_and_name_and_matches_backend_parser() {
+        let _guard = item_table_test_lock().lock().unwrap();
         store(vec![crate::api::ItemName {
             i: 2958,
             id: "T7_HEAD_PLATE_SET3@1".into(),

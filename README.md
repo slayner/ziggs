@@ -1,98 +1,76 @@
 # Ziggs Companion
 
-Aplicativo desktop para Albion Online focado em dois recursos locais:
+A desktop companion for Albion Online focused on two local features:
 
-- **Damage Meter**: captura pacotes Photon do Albion com WinDivert e mostra o dano da sessão por jogador.
-- **Lootlog**: captura eventos de loot e exporta CSV compatível com ao-loot-logger.
+- **Damage Meter**: captures Albion Photon packets through WinDivert and shows session damage by player and ability.
+- **Lootlog**: captures loot events, keeps the session locally, and exports CSV compatible with ao-loot-logger.
 
-O aplicativo também mantém atualização automática e relatórios de falha. Não executa túnel, otimização de DNS, escaneamento distribuído, captura de mercado ou envio ao AODP.
+The application also includes automatic updates, crash reports, system-tray behavior, and autostart. It does **not** provide tunneling, DNS optimization, historic battle or kill discovery, distributed scanning, market capture, or AODP delivery.
 
-## Plataformas
+## Platforms
 
 ### Windows 10/11 (64-bit)
 
-A captura de pacotes requer privilégios de administrador e usa WinDivert, incluído no instalador.
+Packet capture requires administrator privileges and uses WinDivert, which is included in the installer.
 
 ### Linux x86_64
 
-A interface pode ser compilada, mas a captura de pacotes via WinDivert não está disponível.
+The interface can be built and used, but packet capture through WinDivert is not available.
 
-## Desenvolvimento
+## Development
+
+From this repository's root:
 
 ```powershell
-cd companion
 npm install
 npm run tauri dev
 ```
+
+To create a local build:
 
 ```powershell
 npm run build
 npm run tauri build
 ```
 
-### Build Linux assinada pelo Windows
+## Configuration
 
-O pacote Linux é compilado em um staging nativo do WSL 2, nunca em `/mnt/c`.
-Instale uma vez no Ubuntu do WSL as dependências de build do Tauri:
-
-```bash
-sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev \
-  libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-  libxdo-dev patchelf dpkg xdg-utils rsync file
-```
-
-Depois, execute na raiz do repositório pelo terminal Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\companion\scripts\build-linux.ps1
-```
-
-O script usa `Ubuntu` e o usuário WSL `gabriel` por padrão. Em outro ambiente,
-informe ambos explicitamente:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\companion\scripts\build-linux.ps1 -Distro Ubuntu -WslUser seu-usuario
-```
-
-A chave privada é lida diretamente de `%USERPROFILE%\.tauri\ziggs-companion.key`
-pelo assinador Tauri dentro do WSL. Após a compilação, o script pede a senha com
-entrada oculta diretamente no terminal WSL. A senha não é enviada ao PowerShell,
-não aparece nos argumentos do processo Windows, não é salva em arquivo temporário
-nem em variável persistente. Para a única chamada do assinador, ela existe
-brevemente no ambiente do subprocesso Linux; execute a build em uma sessão WSL
-local confiável. A build gera somente o `.deb`, sua assinatura `.deb.sig` e
-`SHA256SUMS` em `~/artifacts/ziggs-companion/v<versão>/` no WSL. Ela não instala,
-publica, cria release, altera o manifesto do updater nem acessa a VPS.
-
-## Configuração
-
-A configuração local fica em:
+Local configuration is stored at:
 
 - Windows: `%APPDATA%\ziggs-companion\config.json`
 - Linux: `~/.config/ziggs-companion/config.json`
 - macOS: `~/Library/Application Support/ziggs-companion/config.json`
 
-As opções disponíveis controlam o Damage Meter, o Lootlog, o início automático e a minimização para a bandeja.
+The available options control Damage Meter, Lootlog, autostart, and minimizing to the system tray. Capture controls are available in **Settings**; disabling a capture does not remove session data that was already collected.
 
-## Estrutura
+### Catalogs and renders
+
+The Companion keeps ability and item names in a local cache. If the backend is unavailable or returns an invalid response, local capture continues and the application retains the last valid catalog. Unnamed abilities retain a visible identifier, while unknown items use `IDX_{index}`. When artwork is unavailable, the name and a fixed-size placeholder remain visible.
+
+### Window and scale
+
+The window uses a fixed **1024 × 768 logical pixels**, without resizing, maximizing, or fullscreen. Operating-system scaling can change the physical pixel count, but not the application's logical area.
+
+Use `Ctrl`/`Cmd` + `-` or `+` — including `=` and the equivalent numeric keypad keys — to adjust only the WebView scale from 80% to 150%. The preference is saved locally and never changes the native window size.
+
+## Structure
 
 ```text
-companion/
-├── src/                    Interface React/TypeScript
+├── src/                    React/TypeScript interface
 ├── src-tauri/src/
-│   ├── lib.rs              Comandos Tauri e ciclo do aplicativo
-│   ├── sniffer.rs          Captura WinDivert e processamento Photon
-│   ├── photon_parser.rs    Decodificador Photon e acumulador de dano
-│   ├── lootlog.rs          Catálogo de itens, sessão e exportação CSV
-│   ├── crash_report.rs     Relatórios de falha
-│   └── api.rs              Catálogos de habilidades/itens e falhas
-└── scripts/publish.ps1     Publicação de artefatos assinados
+│   ├── lib.rs              Tauri commands and application lifecycle
+│   ├── sniffer.rs          WinDivert capture and Photon processing
+│   ├── photon_parser.rs    Photon decoder and damage accumulator
+│   ├── lootlog.rs          Item catalog, session, and CSV export
+│   ├── crash_report.rs     Crash reports
+│   └── api.rs              Ability/item catalogs and failure reporting
+└── package.json            Development and build scripts
 ```
 
-## Privacidade
+## Privacy
 
-Damage Meter e Lootlog são processados localmente. O CSV de loot é salvo localmente. O aplicativo consulta somente os catálogos necessários e pode enviar relatórios de falha pendentes.
+Damage Meter and Lootlog are processed locally. Loot CSV files are saved locally. The application only requests the catalogs it needs and may send pending crash reports.
 
-## Licença
+## License
 
-MIT. Veja [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

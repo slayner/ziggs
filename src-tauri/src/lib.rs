@@ -1,5 +1,8 @@
 pub mod albion_detect;
 pub mod api;
+#[cfg(test)]
+mod capability_config_tests;
+pub mod catalog;
 pub mod config;
 pub mod crash_report;
 pub mod lootlog;
@@ -9,6 +12,8 @@ pub mod photon_parser;
 pub mod sniffer;
 #[cfg(target_os = "windows")]
 pub mod windivert;
+#[cfg(test)]
+mod window_config_tests;
 pub mod winutil;
 
 use sniffer::{DebugLine, SniffStats, Sniffer};
@@ -223,6 +228,10 @@ async fn get_sniffer_debug(state: tauri::State<'_, AppState>) -> Result<Vec<Debu
     Ok(state.sniffer.debug.lock().await.clone())
 }
 #[tauri::command]
+fn get_catalog_status() -> catalog::CatalogStatuses {
+    catalog::statuses()
+}
+#[tauri::command]
 async fn get_captured_loot(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<lootlog::LootRow>, String> {
@@ -263,10 +272,65 @@ fn spell_table() -> &'static Mutex<Vec<api::SpellName>> {
     SPELL_TABLE.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn spell_cache_path() -> std::path::PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| ".".into())
+        .join("ziggs-companion")
+        .join("spell_names_v1.json")
+}
+
+async fn store_spell_names(spells: Vec<api::SpellName>) {
+    *spell_table().lock().await = spells;
+}
+
+async fn load_cached_spell_names() {
+    match std::fs::read(spell_cache_path()) {
+        Ok(bytes) => match serde_json::from_slice::<Vec<api::SpellName>>(&bytes) {
+            Ok(spells) if !spells.is_empty() => {
+                let count = spells.len();
+                store_spell_names(spells).await;
+                catalog::mark_spells_ready(catalog::CatalogSource::Cache, count);
+                tracing::info!(count, "spell catalog loaded from cache");
+            }
+            Ok(_) => catalog::mark_spells_degraded("cache de habilidades vazio"),
+            Err(error) => {
+                catalog::mark_spells_degraded(format!("cache de habilidades inválido: {error}"))
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => catalog::mark_spells_degraded(format!(
+            "não foi possível ler o cache de habilidades: {error}"
+        )),
+    }
+}
+
 async fn load_spell_names() {
+    load_cached_spell_names().await;
     let api = api::ApiClient::new(config::API_BASE_URL);
-    if let Ok(spells) = api.spell_names().await {
-        *spell_table().lock().await = spells;
+    loop {
+        match api.spell_names().await {
+            Ok(spells) if !spells.is_empty() => {
+                let count = spells.len();
+                if let Ok(bytes) = serde_json::to_vec(&spells) {
+                    if let Err(error) = persist::atomic_write(&spell_cache_path(), &bytes) {
+                        tracing::warn!("spell catalog cache write failed: {error:#}");
+                    }
+                }
+                store_spell_names(spells).await;
+                catalog::mark_spells_ready(catalog::CatalogSource::Backend, count);
+                tracing::info!(count, "spell catalog refreshed from backend");
+                return;
+            }
+            Ok(_) => {
+                catalog::mark_spells_degraded("backend retornou um catálogo de habilidades vazio");
+                tracing::warn!("spell catalog empty on backend, retrying in 60s");
+            }
+            Err(error) => {
+                catalog::mark_spells_degraded(format!("falha ao buscar habilidades: {error:#}"));
+                tracing::warn!("spell catalog fetch failed, retrying in 60s: {error:#}");
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
     }
 }
 
@@ -563,6 +627,7 @@ pub fn run() {
             set_config,
             get_sniff_stats,
             get_sniffer_debug,
+            get_catalog_status,
             get_captured_loot,
             clear_captured_loot,
             get_damage_meter,
