@@ -123,6 +123,21 @@ fn fill_missing(target: &mut String, value: &str) -> bool {
     }
 }
 
+fn update_metadata_field(target: &mut String, update: &str) {
+    if !update.is_empty() && target != update {
+        target.clear();
+        target.push_str(update);
+    }
+}
+
+fn merge_character_metadata(
+    target: &mut crate::photon_parser::CharacterMetadata,
+    update: &crate::photon_parser::CharacterMetadata,
+) {
+    update_metadata_field(&mut target.guild_name, &update.guild_name);
+    update_metadata_field(&mut target.alliance_name, &update.alliance_name);
+}
+
 fn apply_character_metadata(
     loot: &mut LootEvent,
     name: &str,
@@ -169,6 +184,37 @@ fn backfill_loot_and_persist(
     let previous = loot.clone();
     for event in loot.iter_mut() {
         apply_character_metadata(event, name, metadata);
+    }
+    if let Err(error) = save(loot) {
+        *loot = previous;
+        return Err(error);
+    }
+    Ok(true)
+}
+
+fn backfill_pending_metadata_and_persist(
+    loot: &mut Vec<LootEvent>,
+    metadata_by_name: &HashMap<String, crate::photon_parser::CharacterMetadata>,
+    save: impl FnOnce(&[LootEvent]) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    let previous = loot.clone();
+    let mut changed = false;
+
+    for event in loot.iter_mut() {
+        let looted_by = event.looted_by.clone();
+        let looted_from = event.looted_from.clone();
+        if let Some(metadata) = metadata_by_name.get(&looted_by) {
+            changed |= apply_character_metadata(event, &looted_by, metadata);
+        }
+        if looted_from != looted_by {
+            if let Some(metadata) = metadata_by_name.get(&looted_from) {
+                changed |= apply_character_metadata(event, &looted_from, metadata);
+            }
+        }
+    }
+
+    if !changed {
+        return Ok(false);
     }
     if let Err(error) = save(loot) {
         *loot = previous;
@@ -953,15 +999,17 @@ impl Sniffer {
         name: String,
         metadata: crate::photon_parser::CharacterMetadata,
     ) {
-        {
+        let metadata = {
             let mut players = self.character_metadata.lock().await;
             if players.len() >= 5000 && !players.contains_key(&name) {
                 if let Some(evicted) = players.keys().next().cloned() {
                     players.remove(&evicted);
                 }
             }
-            players.insert(name.clone(), metadata.clone());
-        }
+            let cached = players.entry(name.clone()).or_default();
+            merge_character_metadata(cached, &metadata);
+            cached.clone()
+        };
 
         let result = {
             let mut loot = self.loot.lock().await;
@@ -1023,9 +1071,17 @@ impl Sniffer {
         }
 
         loot.server_region = self.server_region.lock().await.clone();
+        let metadata_by_name = self.character_metadata.lock().await.clone();
         let result = {
             let mut loot_buffer = self.loot.lock().await;
-            let result = add_loot_and_persist(&mut loot_buffer, loot, crate::lootlog::save_session);
+            let result = (|| {
+                backfill_pending_metadata_and_persist(
+                    &mut loot_buffer,
+                    &metadata_by_name,
+                    crate::lootlog::save_session,
+                )?;
+                add_loot_and_persist(&mut loot_buffer, loot, crate::lootlog::save_session)
+            })();
             if matches!(result, Ok(true)) {
                 self.stats.lock().await.loot_count = loot_buffer.len() as u64;
             }
@@ -1177,8 +1233,9 @@ fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
 mod tests {
     use super::photon_offset;
     use super::{
-        add_loot_and_persist, backfill_loot_and_persist, clear_loot_and_persist, is_duplicate_loot,
-        LootEvent, LOOT_DEDUP_LOOKBACK,
+        add_loot_and_persist, backfill_loot_and_persist, backfill_pending_metadata_and_persist,
+        clear_loot_and_persist, is_duplicate_loot, merge_character_metadata, LootEvent,
+        LOOT_DEDUP_LOOKBACK,
     };
     use crate::photon_parser::CharacterMetadata;
 
@@ -1309,6 +1366,109 @@ mod tests {
 
         assert!(error.to_string().contains("disco indisponível"));
         assert_eq!(loot[0].looted_by_guild, "Guild already known");
+        assert!(loot[0].looted_by_alliance.is_empty());
+    }
+
+    #[test]
+    fn pending_metadata_is_persisted_on_a_later_retry() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        let pending = std::collections::HashMap::from([(
+            "Alice".to_string(),
+            CharacterMetadata {
+                guild_name: "Ziggs".into(),
+                alliance_name: "Alliance".into(),
+            },
+        )]);
+        let mut saved = Vec::new();
+
+        let changed = backfill_pending_metadata_and_persist(&mut loot, &pending, |events| {
+            saved = events.to_vec();
+            Ok(())
+        })
+        .expect("o retry deve persistir os metadados pendentes");
+
+        assert!(changed);
+        assert_eq!(loot[0].looted_by_guild, "Ziggs");
+        assert_eq!(loot[0].looted_by_alliance, "Alliance");
+        assert_eq!(saved[0].looted_by_guild, "Ziggs");
+        assert_eq!(saved[0].looted_by_alliance, "Alliance");
+    }
+
+    #[test]
+    fn partial_metadata_does_not_erase_cached_fields() {
+        let mut cached = CharacterMetadata {
+            guild_name: "Ziggs".into(),
+            alliance_name: "Alliance".into(),
+        };
+
+        merge_character_metadata(
+            &mut cached,
+            &CharacterMetadata {
+                guild_name: String::new(),
+                alliance_name: String::new(),
+            },
+        );
+
+        assert_eq!(cached.guild_name, "Ziggs");
+        assert_eq!(cached.alliance_name, "Alliance");
+    }
+
+    #[test]
+    fn newer_nonempty_metadata_replaces_cached_fields() {
+        let mut cached = CharacterMetadata {
+            guild_name: "Old guild".into(),
+            alliance_name: "Old alliance".into(),
+        };
+
+        merge_character_metadata(
+            &mut cached,
+            &CharacterMetadata {
+                guild_name: "New guild".into(),
+                alliance_name: "New alliance".into(),
+            },
+        );
+
+        assert_eq!(cached.guild_name, "New guild");
+        assert_eq!(cached.alliance_name, "New alliance");
+    }
+
+    #[test]
+    fn cached_metadata_updates_only_missing_loot_fields() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        loot[0].looted_by_guild = "Original guild".into();
+        let pending = std::collections::HashMap::from([(
+            "Alice".to_string(),
+            CharacterMetadata {
+                guild_name: "Current guild".into(),
+                alliance_name: "Current alliance".into(),
+            },
+        )]);
+
+        backfill_pending_metadata_and_persist(&mut loot, &pending, |_| Ok(()))
+            .expect("o backfill deve persistir");
+
+        assert_eq!(loot[0].looted_by_guild, "Original guild");
+        assert_eq!(loot[0].looted_by_alliance, "Current alliance");
+    }
+
+    #[test]
+    fn failed_pending_backfill_restores_the_buffer() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        let pending = std::collections::HashMap::from([(
+            "Alice".to_string(),
+            CharacterMetadata {
+                guild_name: "Ziggs".into(),
+                alliance_name: "Alliance".into(),
+            },
+        )]);
+
+        let error = backfill_pending_metadata_and_persist(&mut loot, &pending, |_| {
+            Err(anyhow::anyhow!("disco indisponível"))
+        })
+        .expect_err("a falha de persistência precisa ser devolvida");
+
+        assert!(error.to_string().contains("disco indisponível"));
+        assert!(loot[0].looted_by_guild.is_empty());
         assert!(loot[0].looted_by_alliance.is_empty());
     }
 
