@@ -30,16 +30,22 @@ pub struct ItemName {
     pub es: Option<String>,
 }
 fn ensure_json(response: &reqwest::Response, label: &str) -> Result<()> {
-    if !response.status().is_success() {
-        return Err(anyhow!("{label} falhou: HTTP {}", response.status()));
-    }
-    if !response
+    let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .contains("json")
-    {
+        .and_then(|value| value.to_str().ok());
+    ensure_json_metadata(response.status(), content_type, label)
+}
+
+fn ensure_json_metadata(
+    status: reqwest::StatusCode,
+    content_type: Option<&str>,
+    label: &str,
+) -> Result<()> {
+    if !status.is_success() {
+        return Err(anyhow!("{label} falhou: HTTP {status}"));
+    }
+    if !content_type.unwrap_or("").contains("json") {
         return Err(anyhow!("{label}: resposta não é JSON"));
     }
     Ok(())
@@ -107,8 +113,23 @@ impl ApiClient {
 
 #[cfg(test)]
 mod tests {
-    use super::crash_report_request;
-    use reqwest::Client;
+    use super::{crash_report_request, ensure_json_metadata};
+    use reqwest::{Client, StatusCode};
+
+    #[test]
+    fn rejects_an_html_response_before_deserializing_a_catalog() {
+        assert!(ensure_json_metadata(StatusCode::OK, Some("text/html"), "habilidades").is_err());
+    }
+
+    #[test]
+    fn accepts_a_successful_json_catalog_response() {
+        assert!(ensure_json_metadata(
+            StatusCode::OK,
+            Some("application/json; charset=utf-8"),
+            "itens"
+        )
+        .is_ok());
+    }
 
     #[test]
     fn crash_report_request_includes_a_valid_installation_header() {
