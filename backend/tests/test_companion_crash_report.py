@@ -1,8 +1,13 @@
 """Crash report: public route limits and safe Discord publishing."""
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import httpx
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
+
+from app.main import app
 
 from app.api.routes.companion import (
     _CRASH_REPORT_CHANNEL_ID,
@@ -37,6 +42,28 @@ def _report(**changes) -> CrashReportIn:
 
 def setup_function(_=None):
     _crash_log.clear()
+
+
+def test_rota_rejeita_relatorio_sem_identificador_de_instalacao():
+    response = TestClient(app).post("/companion/crash-report", json=_report().model_dump())
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid X-Ziggs-Install"
+
+
+def test_rota_aceita_identificador_de_instalacao_valido():
+    settings = SimpleNamespace(discord_bot_token="secret")
+    with patch("app.config.get_settings", return_value=settings), patch(
+        "app.api.routes.companion._send_crash_to_discord", AsyncMock()
+    ) as send:
+        response = TestClient(app).post(
+            "/companion/crash-report",
+            json=_report().model_dump(),
+            headers={"X-Ziggs-Install": INSTALL},
+        )
+
+    assert response.status_code == 204
+    send.assert_awaited_once()
 
 
 def test_limita_por_install_e_por_ip():

@@ -85,6 +85,98 @@ fn is_duplicate_loot(buf: &[LootEvent], ev: &LootEvent) -> bool {
     })
 }
 
+fn add_loot_and_persist(
+    loot: &mut Vec<LootEvent>,
+    event: LootEvent,
+    save: impl FnOnce(&[LootEvent]) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    if is_duplicate_loot(loot, &event) {
+        return Ok(false);
+    }
+
+    loot.push(event);
+    if let Err(error) = save(loot) {
+        loot.pop();
+        return Err(error);
+    }
+    Ok(true)
+}
+
+fn clear_loot_and_persist(
+    loot: &mut Vec<LootEvent>,
+    save: impl FnOnce(&[LootEvent]) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let previous = std::mem::take(loot);
+    if let Err(error) = save(loot) {
+        *loot = previous;
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn fill_missing(target: &mut String, value: &str) -> bool {
+    if target.is_empty() && !value.is_empty() {
+        target.push_str(value);
+        true
+    } else {
+        false
+    }
+}
+
+fn apply_character_metadata(
+    loot: &mut LootEvent,
+    name: &str,
+    metadata: &crate::photon_parser::CharacterMetadata,
+) -> bool {
+    let mut changed = false;
+    if loot.looted_by == name {
+        changed |= fill_missing(&mut loot.looted_by_guild, &metadata.guild_name);
+        changed |= fill_missing(&mut loot.looted_by_alliance, &metadata.alliance_name);
+    }
+    if loot.looted_from == name {
+        changed |= fill_missing(&mut loot.looted_from_guild, &metadata.guild_name);
+        changed |= fill_missing(&mut loot.looted_from_alliance, &metadata.alliance_name);
+    }
+    changed
+}
+
+fn loot_needs_metadata(
+    loot: &LootEvent,
+    name: &str,
+    metadata: &crate::photon_parser::CharacterMetadata,
+) -> bool {
+    (loot.looted_by == name
+        && ((loot.looted_by_guild.is_empty() && !metadata.guild_name.is_empty())
+            || (loot.looted_by_alliance.is_empty() && !metadata.alliance_name.is_empty())))
+        || (loot.looted_from == name
+            && ((loot.looted_from_guild.is_empty() && !metadata.guild_name.is_empty())
+                || (loot.looted_from_alliance.is_empty() && !metadata.alliance_name.is_empty())))
+}
+
+fn backfill_loot_and_persist(
+    loot: &mut Vec<LootEvent>,
+    name: &str,
+    metadata: &crate::photon_parser::CharacterMetadata,
+    save: impl FnOnce(&[LootEvent]) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    if !loot
+        .iter()
+        .any(|event| loot_needs_metadata(event, name, metadata))
+    {
+        return Ok(false);
+    }
+
+    let previous = loot.clone();
+    for event in loot.iter_mut() {
+        apply_character_metadata(event, name, metadata);
+    }
+    if let Err(error) = save(loot) {
+        *loot = previous;
+        return Err(error);
+    }
+    Ok(true)
+}
+
 /// Maps Albion game-server IP prefixes to region identifiers.
 fn albion_region_from_ip(ip: [u8; 4]) -> Option<&'static str> {
     match [ip[0], ip[1], ip[2]] {
@@ -585,6 +677,10 @@ impl Sniffer {
                             }
                         }
 
+                        if let Some((name, metadata)) = extract_character_stats(op) {
+                            self.record_character_metadata(name, metadata).await;
+                        }
+
                         if self.capture_loot.load(Ordering::Relaxed) {
                             // Loot diagnostic dump: first 20 events with loot-like
                             // structure (2 strings + 1 int), even if extract_loot
@@ -695,16 +791,6 @@ impl Sniffer {
                                     }
                                 }
                             }
-                        }
-
-                        if let Some((name, metadata)) = extract_character_stats(op) {
-                            let mut players = self.character_metadata.lock().await;
-                            if players.len() >= 5000 && !players.contains_key(&name) {
-                                if let Some(evicted) = players.keys().next().cloned() {
-                                    players.remove(&evicted);
-                                }
-                            }
-                            players.insert(name, metadata);
                         }
 
                         // Damage meter: id→name registration + damage/heal accumulation.
@@ -862,44 +948,95 @@ impl Sniffer {
         stats.error = Some("Captura de pacotes indisponível nesta plataforma.".into());
     }
 
+    async fn record_character_metadata(
+        &self,
+        name: String,
+        metadata: crate::photon_parser::CharacterMetadata,
+    ) {
+        {
+            let mut players = self.character_metadata.lock().await;
+            if players.len() >= 5000 && !players.contains_key(&name) {
+                if let Some(evicted) = players.keys().next().cloned() {
+                    players.remove(&evicted);
+                }
+            }
+            players.insert(name.clone(), metadata.clone());
+        }
+
+        let result = {
+            let mut loot = self.loot.lock().await;
+            let result = backfill_loot_and_persist(
+                &mut loot,
+                &name,
+                &metadata,
+                crate::lootlog::save_session,
+            );
+            if matches!(result, Ok(true)) {
+                self.stats.lock().await.loot_count = loot.len() as u64;
+            }
+            result
+        };
+        if let Err(error) = result {
+            self.debug_log(
+                "err",
+                &format!("não foi possível persistir os metadados do lootlog: {error}"),
+            )
+            .await;
+        }
+    }
+
+    pub async fn clear_captured_loot(&self) -> Result<(), String> {
+        let result = {
+            let mut loot = self.loot.lock().await;
+            let result = clear_loot_and_persist(&mut loot, crate::lootlog::save_session);
+            if result.is_ok() {
+                self.stats.lock().await.loot_count = loot.len() as u64;
+            }
+            result
+        };
+        result.map_err(|error| format!("não foi possível limpar o lootlog salvo: {error}"))
+    }
+
     async fn push_loot(&self, mut loot: LootEvent) {
         let looted_by = loot.looted_by.clone();
         let looted_from = loot.looted_from.clone();
-        let metadata = self.character_metadata.lock().await;
-        if let Some(player) = metadata.get(&looted_by) {
-            loot.looted_by_guild = player.guild_name.clone();
-            loot.looted_by_alliance = player.alliance_name.clone();
+        {
+            let metadata = self.character_metadata.lock().await;
+            if let Some(player) = metadata.get(&looted_by) {
+                apply_character_metadata(&mut loot, &looted_by, player);
+            }
+            if let Some(player) = metadata.get(&looted_from) {
+                apply_character_metadata(&mut loot, &looted_from, player);
+            }
         }
-        if let Some(player) = metadata.get(&looted_from) {
-            loot.looted_from_guild = player.guild_name.clone();
-            loot.looted_from_alliance = player.alliance_name.clone();
-        }
-        drop(metadata);
 
-        let stats = self.stats.lock().await;
-        if loot.looted_by == stats.player_name {
-            loot.looted_by_guild = stats.guild_name.clone();
-            loot.looted_by_alliance = stats.alliance_name.clone();
+        {
+            let stats = self.stats.lock().await;
+            if loot.looted_by == stats.player_name {
+                fill_missing(&mut loot.looted_by_guild, &stats.guild_name);
+                fill_missing(&mut loot.looted_by_alliance, &stats.alliance_name);
+            }
+            if loot.looted_from == stats.player_name {
+                fill_missing(&mut loot.looted_from_guild, &stats.guild_name);
+                fill_missing(&mut loot.looted_from_alliance, &stats.alliance_name);
+            }
         }
-        if loot.looted_from == stats.player_name {
-            loot.looted_from_guild = stats.guild_name.clone();
-            loot.looted_from_alliance = stats.alliance_name.clone();
-        }
-        drop(stats);
 
         loot.server_region = self.server_region.lock().await.clone();
-        let (len, save_error) = {
-            let mut buf = self.loot.lock().await;
-            if is_duplicate_loot(&buf, &loot) {
-                return;
+        let result = {
+            let mut loot_buffer = self.loot.lock().await;
+            let result = add_loot_and_persist(&mut loot_buffer, loot, crate::lootlog::save_session);
+            if matches!(result, Ok(true)) {
+                self.stats.lock().await.loot_count = loot_buffer.len() as u64;
             }
-            buf.push(loot);
-            (buf.len(), crate::lootlog::save_session(&buf).err())
+            result
         };
-        self.stats.lock().await.loot_count = len as u64;
-        if let Some(e) = save_error {
-            self.debug_log("err", &format!("Failed to persist session loot: {e}"))
-                .await;
+        if let Err(error) = result {
+            self.debug_log(
+                "err",
+                &format!("não foi possível persistir a sessão de loot: {error}"),
+            )
+            .await;
         }
     }
 
@@ -1039,7 +1176,11 @@ fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::photon_offset;
-    use super::{is_duplicate_loot, LootEvent, LOOT_DEDUP_LOOKBACK};
+    use super::{
+        add_loot_and_persist, backfill_loot_and_persist, clear_loot_and_persist, is_duplicate_loot,
+        LootEvent, LOOT_DEDUP_LOOKBACK,
+    };
+    use crate::photon_parser::CharacterMetadata;
 
     // Minimum UDP/IPv4: [ip header 20][udp 8][payload]. version=4, ihl=5, proto=17.
     fn ipv4_udp(payload: &[u8]) -> Vec<u8> {
@@ -1121,6 +1262,85 @@ mod tests {
             is_silver: false,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn metadata_backfill_preserves_known_values_and_persists_the_new_ones() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        loot[0].looted_by_guild = "Guild already known".into();
+        let mut saved = Vec::new();
+
+        let changed = backfill_loot_and_persist(
+            &mut loot,
+            "Alice",
+            &CharacterMetadata {
+                guild_name: "Ziggs".into(),
+                alliance_name: "Alliance".into(),
+            },
+            |events| {
+                saved = events.to_vec();
+                Ok(())
+            },
+        )
+        .expect("o backfill deve persistir");
+
+        assert!(changed);
+        assert_eq!(loot[0].looted_by_guild, "Guild already known");
+        assert_eq!(loot[0].looted_by_alliance, "Alliance");
+        assert_eq!(saved[0].looted_by_guild, "Guild already known");
+        assert_eq!(saved[0].looted_by_alliance, "Alliance");
+    }
+
+    #[test]
+    fn failed_metadata_backfill_restores_existing_metadata() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+        loot[0].looted_by_guild = "Guild already known".into();
+
+        let error = backfill_loot_and_persist(
+            &mut loot,
+            "Alice",
+            &CharacterMetadata {
+                guild_name: "Ziggs".into(),
+                alliance_name: "Alliance".into(),
+            },
+            |_| Err(anyhow::anyhow!("disco indisponível")),
+        )
+        .expect_err("a falha de persistência precisa ser devolvida");
+
+        assert!(error.to_string().contains("disco indisponível"));
+        assert_eq!(loot[0].looted_by_guild, "Guild already known");
+        assert!(loot[0].looted_by_alliance.is_empty());
+    }
+
+    #[test]
+    fn failed_clear_persistence_restores_the_buffer() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+
+        let error =
+            clear_loot_and_persist(&mut loot, |_| Err(anyhow::anyhow!("disco indisponível")))
+                .expect_err("a falha de persistência precisa ser devolvida");
+
+        assert!(error.to_string().contains("disco indisponível"));
+        assert_eq!(loot.len(), 1, "limpar não pode apagar evento não salvo");
+        assert_eq!(loot[0].looted_by, "Alice");
+    }
+
+    #[test]
+    fn failed_loot_persistence_discards_the_new_event() {
+        let mut loot = vec![loot_ev("Alice", "Bob", 1, 1)];
+
+        let error = add_loot_and_persist(&mut loot, loot_ev("Carol", "Dave", 2, 1), |_| {
+            Err(anyhow::anyhow!("disco indisponível"))
+        })
+        .expect_err("a falha de persistência precisa ser devolvida");
+
+        assert!(error.to_string().contains("disco indisponível"));
+        assert_eq!(
+            loot.len(),
+            1,
+            "evento não persistido não pode ficar na memória"
+        );
+        assert_eq!(loot[0].looted_by, "Alice");
     }
 
     #[test]

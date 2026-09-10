@@ -30,6 +30,43 @@ pub struct AppState {
     sniffer_running: Arc<Mutex<bool>>,
     lootlog: Arc<Mutex<lootlog::LootlogStatus>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use super::restore_capture_toggle;
+    use crate::{config::CompanionConfig, sniffer::Sniffer};
+
+    #[test]
+    fn failed_damage_setting_save_restores_the_capture_gate() {
+        let sniffer = Sniffer::new();
+        let previous = CompanionConfig {
+            collect_damage_meter: false,
+            ..CompanionConfig::default()
+        };
+        sniffer.capture_damage.store(true, Ordering::Relaxed);
+
+        restore_capture_toggle(&sniffer, "collect_damage_meter", &previous);
+
+        assert!(!sniffer.capture_damage.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn failed_loot_setting_save_restores_the_capture_gate() {
+        let sniffer = Sniffer::new();
+        let previous = CompanionConfig {
+            collect_auto_lootlog: false,
+            ..CompanionConfig::default()
+        };
+        sniffer.capture_loot.store(true, Ordering::Relaxed);
+
+        restore_capture_toggle(&sniffer, "collect_auto_lootlog", &previous);
+
+        assert!(!sniffer.capture_loot.load(Ordering::Relaxed));
+    }
+}
+
 #[tauri::command]
 async fn get_config(state: tauri::State<'_, AppState>) -> Result<config::CompanionConfig, String> {
     Ok(state.config.lock().await.clone())
@@ -39,8 +76,12 @@ async fn set_config(
     key: String,
     value: serde_json::Value,
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().await;
+    let changed_autostart = key == "autostart";
+    let previous = cfg.clone();
+
     match (key.as_str(), value) {
         ("autostart", serde_json::Value::Bool(v)) => cfg.autostart = v,
         ("minimize_to_tray", serde_json::Value::Bool(v)) => cfg.minimize_to_tray = v,
@@ -63,7 +104,112 @@ async fn set_config(
         }
         _ => return Err("configuração inválida".into()),
     };
-    config::save(&cfg).map_err(|e| e.to_string())
+
+    if changed_autostart {
+        if let Err(error) = apply_autostart(&app, cfg.autostart) {
+            *cfg = previous;
+            return Err(error);
+        }
+    }
+
+    if let Err(error) = config::save(&cfg) {
+        if changed_autostart {
+            let _ = apply_autostart(&app, previous.autostart);
+        }
+        restore_capture_toggle(&state.sniffer, &key, &previous);
+        *cfg = previous;
+        return Err(error.to_string());
+    }
+
+    Ok(())
+}
+
+fn restore_capture_toggle(sniffer: &Sniffer, key: &str, previous: &config::CompanionConfig) {
+    match key {
+        "collect_damage_meter" => sniffer.capture_damage.store(
+            previous.collect_damage_meter,
+            std::sync::atomic::Ordering::Relaxed,
+        ),
+        "collect_auto_lootlog" => sniffer.capture_loot.store(
+            previous.collect_auto_lootlog,
+            std::sync::atomic::Ordering::Relaxed,
+        ),
+        _ => {}
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn apply_autostart(_app: &tauri::AppHandle, enable: bool) -> Result<(), String> {
+    set_autostart(enable)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_autostart(app: &tauri::AppHandle, enable: bool) -> Result<(), String> {
+    let autostart = app.autolaunch();
+    if enable {
+        autostart.enable().map_err(|error| error.to_string())
+    } else {
+        autostart.disable().map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_autostart(enable: bool) -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("não foi possível localizar o executável: {error}"))?;
+    const TASK_NAME: &str = "ZiggsCompanion";
+
+    let output = if enable {
+        // WinDivert needs administrator rights. The scheduled task must preserve
+        // that level and keep the launch unobtrusive after the user signs in.
+        let task_command = format!("\"{}\" --minimized", executable.display());
+        crate::winutil::no_window(std::process::Command::new("schtasks"))
+            .args([
+                "/Create",
+                "/TN",
+                TASK_NAME,
+                "/SC",
+                "ONLOGON",
+                "/TR",
+                &task_command,
+                "/RL",
+                "HIGHEST",
+                "/F",
+            ])
+            .output()
+    } else {
+        crate::winutil::no_window(std::process::Command::new("schtasks"))
+            .args(["/Delete", "/TN", TASK_NAME, "/F"])
+            .output()
+    }
+    .map_err(|error| {
+        let action = if enable { "configurar" } else { "remover" };
+        format!("não foi possível {action} a inicialização automática: {error}")
+    })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !enable
+        && [stderr.as_ref(), stdout.as_ref()].iter().any(|detail| {
+            detail.contains("cannot find") || detail.contains("não foi possível localizar")
+        })
+    {
+        return Ok(());
+    }
+
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    let action = if enable { "criação" } else { "remoção" };
+    Err(format!(
+        "o Windows não aceitou a {action} da tarefa de inicialização automática: {detail}"
+    ))
 }
 #[tauri::command]
 async fn get_sniff_stats(state: tauri::State<'_, AppState>) -> Result<SniffStats, String> {
@@ -109,10 +255,7 @@ async fn get_captured_loot(
 }
 #[tauri::command]
 async fn clear_captured_loot(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.sniffer.loot.lock().await.clear();
-    state.sniffer.stats.lock().await.loot_count = 0;
-    let _ = lootlog::save_session(&[]);
-    Ok(())
+    state.sniffer.clear_captured_loot().await
 }
 static SPELL_TABLE: std::sync::OnceLock<Mutex<Vec<api::SpellName>>> = std::sync::OnceLock::new();
 
@@ -350,6 +493,13 @@ pub fn run() {
         .manage(state)
         .setup(move |app| {
             crash_report::set_version(app.package_info().version.to_string());
+            tauri::async_runtime::spawn(async {
+                if let Err(error) = crash_report::send_pending_once().await {
+                    tracing::debug!(
+                        "não foi possível reenviar o relatório de falha pendente: {error:#}"
+                    );
+                }
+            });
             #[cfg(target_os = "windows")]
             {
                 let _ = app
@@ -386,9 +536,10 @@ pub fn run() {
                 }
             }
             if autostart {
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = app.autolaunch().enable();
+                if let Err(error) = apply_autostart(app.handle(), true) {
+                    tracing::warn!(
+                        "não foi possível configurar a inicialização automática: {error}"
+                    );
                 }
             }
             Ok(())

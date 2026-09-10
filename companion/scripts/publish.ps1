@@ -51,7 +51,9 @@ function Assert-TauriSignatureEnvelope([string]$SignaturePath, [string]$Artifact
     if ($keyBytes.Length -ne 42 -or [Text.Encoding]::ASCII.GetString($keyBytes[0..1]) -ne "Ed") {
         throw "ERROR: updater public key is invalid"
     }
-    $keyId = -join ($keyBytes[2..9] | ForEach-Object { $_.ToString("x2") }).ToUpperInvariant()
+    $keyIdBytes = [byte[]]$keyBytes[2..9]
+    [Array]::Reverse($keyIdBytes)
+    $keyId = (-join ($keyIdBytes | ForEach-Object { $_.ToString("x2") })).ToUpperInvariant()
     if ($publicKeyComment -ne "untrusted comment: minisign public key: $keyId") {
         throw "ERROR: updater public key identifier is invalid"
     }
@@ -73,7 +75,10 @@ printf '%s\n%s\n' '$publicKeyComment' '$publicKeyPayload' > "`$key"
 printf '%s' '$encoded' | base64 -d > "`$signature"
 minisign -V -p "`$key" -x "`$signature" -m '$wslArtifactPath'
 "@
-    $output = & wsl.exe -d $distro -- bash -lc $script 2>&1
+    # Encode the short, generated verifier to preserve newlines and paths with
+    # spaces across the Windows-to-WSL command boundary.
+    $encodedScript = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script))
+    $output = & wsl.exe -d $distro -- bash -lc "printf '%s' '$encodedScript' | base64 -d | bash" 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "ERROR: signature verification failed for $(Split-Path $ArtifactPath -Leaf): $output"
     }

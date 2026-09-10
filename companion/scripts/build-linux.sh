@@ -158,7 +158,7 @@ public_key="$(printf '%s' "$updater_pubkey" | base64 -d)" \
   || fail "Chave pública do updater inválida no tauri.conf.json."
 public_key_b64="$(printf '%s\n' "$public_key" | tail -n 1)"
 public_key_comment="$(printf '%s\n' "$public_key" | head -n 1)"
-public_key_id="$(node -e "const key=Buffer.from(process.argv[1], 'base64'); if (key.length !== 42 || key.subarray(0, 2).toString() !== 'Ed') process.exit(1); process.stdout.write(key.subarray(2, 10).toString('hex').toUpperCase())" "$public_key_b64")" \
+public_key_id="$(node -e "const key=Buffer.from(process.argv[1], 'base64'); if (key.length !== 42 || key.subarray(0, 2).toString() !== 'Ed') process.exit(1); process.stdout.write(Buffer.from(key.subarray(2, 10)).reverse().toString('hex').toUpperCase())" "$public_key_b64")" \
   || fail "Chave pública do updater inválida no tauri.conf.json."
 [[ "$public_key_comment" == "untrusted comment: minisign public key: "*"$public_key_id" ]] \
   || fail "Identificador da chave pública do updater é inválido."
