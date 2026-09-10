@@ -47,7 +47,7 @@ mod tests {
         ] {
             assert!(
                 !present_window.contains(forbidden),
-                "present_window não pode chamar {forbidden}",
+                "present_window must not call {forbidden}",
             );
         }
     }
