@@ -33,7 +33,7 @@ mod tests {
             .find("fn present_window(")
             .expect("present_window deve existir");
         let end = source[start..]
-            .find("\n}\nfn build_tray")
+            .find("\nfn build_tray")
             .map(|offset| start + offset)
             .expect("present_window deve terminar antes da bandeja");
         let present_window = &source[start..end];
