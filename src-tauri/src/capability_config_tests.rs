@@ -8,12 +8,12 @@ mod tests {
             .join("capabilities")
             .join("default.json");
         let config: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(manifest).expect("capability padrão deve existir"),
+            &std::fs::read(manifest).expect("default capability must exist"),
         )
-        .expect("capability padrão deve ser JSON válido");
+        .expect("default capability must be valid JSON");
         let permissions = config["permissions"]
             .as_array()
-            .expect("permissions deve ser uma lista");
+            .expect("permissions must be a list");
         let has = |permission: &str| permissions.iter().any(|value| value == permission);
 
         assert!(has("core:webview:allow-set-webview-zoom"));

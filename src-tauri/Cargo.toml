@@ -1,7 +1,7 @@
 [package]
 name = "ziggs-companion"
 version = "0.2.15"
-description = "Ziggs Companion — damage meter e lootlog"
+description = "Ziggs Companion — Damage Meter and Lootlog"
 authors = ["Ziggs"]
 edition = "2021"
 rust-version = "1.77"

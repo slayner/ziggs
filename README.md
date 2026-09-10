@@ -1,76 +1,76 @@
 # Ziggs Companion
 
-Aplicativo desktop para Albion Online focado em dois recursos locais:
+A desktop companion for Albion Online focused on two local features:
 
-- **Damage Meter**: captura pacotes Photon do Albion com WinDivert e mostra o dano da sessão por jogador e habilidade.
-- **Lootlog**: captura eventos de loot, preserva a sessão local e exporta CSV compatível com ao-loot-logger.
+- **Damage Meter**: captures Albion Photon packets through WinDivert and shows session damage by player and ability.
+- **Lootlog**: captures loot events, keeps the session locally, and exports CSV compatible with ao-loot-logger.
 
-O aplicativo também mantém atualização automática, relatórios de falha, bandeja do sistema e início automático. Não executa túnel, otimização de DNS, descoberta de batalhas ou mortes antigas, escaneamento distribuído, captura de mercado nem envio ao AODP.
+The application also includes automatic updates, crash reports, system-tray behavior, and autostart. It does **not** provide tunneling, DNS optimization, historic battle or kill discovery, distributed scanning, market capture, or AODP delivery.
 
-## Plataformas
+## Platforms
 
-### Windows 10/11 (64 bits)
+### Windows 10/11 (64-bit)
 
-A captura de pacotes requer privilégios de administrador e usa WinDivert, incluído no instalador.
+Packet capture requires administrator privileges and uses WinDivert, which is included in the installer.
 
 ### Linux x86_64
 
-A interface pode ser compilada e usada, mas a captura de pacotes por WinDivert não está disponível.
+The interface can be built and used, but packet capture through WinDivert is not available.
 
-## Desenvolvimento
+## Development
 
-Na raiz deste repositório:
+From this repository's root:
 
 ```powershell
 npm install
 npm run tauri dev
 ```
 
-Para gerar uma build local:
+To create a local build:
 
 ```powershell
 npm run build
 npm run tauri build
 ```
 
-## Configuração
+## Configuration
 
-A configuração local fica em:
+Local configuration is stored at:
 
 - Windows: `%APPDATA%\ziggs-companion\config.json`
 - Linux: `~/.config/ziggs-companion/config.json`
 - macOS: `~/Library/Application Support/ziggs-companion/config.json`
 
-As opções controlam o Damage Meter, o Lootlog, o início automático e a minimização para a bandeja. Os controles de captura ficam em **Configurações**; desligar uma captura não apaga os dados já acumulados na sessão.
+The available options control Damage Meter, Lootlog, autostart, and minimizing to the system tray. Capture controls are available in **Settings**; disabling a capture does not remove session data that was already collected.
 
-### Catálogos e renders
+### Catalogs and renders
 
-O Companion mantém em cache local os nomes de habilidades e itens. Se o backend estiver indisponível ou retornar uma resposta inválida, a captura local continua e o aplicativo mantém o último catálogo válido. Habilidades sem nome usam um identificador visível, e itens desconhecidos usam `IDX_{índice}`. Quando uma arte não está disponível, o nome e um espaço reservado de tamanho fixo continuam visíveis.
+The Companion keeps ability and item names in a local cache. If the backend is unavailable or returns an invalid response, local capture continues and the application retains the last valid catalog. Unnamed abilities retain a visible identifier, while unknown items use `IDX_{index}`. When artwork is unavailable, the name and a fixed-size placeholder remain visible.
 
-### Janela e escala
+### Window and scale
 
-A janela usa **1024 × 768 pixels lógicos**, sem redimensionamento, maximização ou tela cheia. A escala do sistema operacional pode alterar os pixels físicos, mas não a área lógica do aplicativo.
+The window uses a fixed **1024 × 768 logical pixels**, without resizing, maximizing, or fullscreen. Operating-system scaling can change the physical pixel count, but not the application's logical area.
 
-Use `Ctrl`/`Cmd` + `-` ou `+` — incluindo `=` e as teclas numéricas equivalentes — para ajustar somente a escala da WebView entre 80% e 150%. A preferência é salva localmente e não altera o tamanho da janela.
+Use `Ctrl`/`Cmd` + `-` or `+` — including `=` and the equivalent numeric keypad keys — to adjust only the WebView scale from 80% to 150%. The preference is saved locally and never changes the native window size.
 
-## Estrutura
+## Structure
 
 ```text
-├── src/                    Interface React/TypeScript
+├── src/                    React/TypeScript interface
 ├── src-tauri/src/
-│   ├── lib.rs              Comandos Tauri e ciclo do aplicativo
-│   ├── sniffer.rs          Captura WinDivert e processamento Photon
-│   ├── photon_parser.rs    Decodificador Photon e acumulador de dano
-│   ├── lootlog.rs          Catálogo de itens, sessão e exportação CSV
-│   ├── crash_report.rs     Relatórios de falha
-│   └── api.rs              Catálogos de habilidades/itens e falhas
-└── package.json            Scripts de desenvolvimento e build
+│   ├── lib.rs              Tauri commands and application lifecycle
+│   ├── sniffer.rs          WinDivert capture and Photon processing
+│   ├── photon_parser.rs    Photon decoder and damage accumulator
+│   ├── lootlog.rs          Item catalog, session, and CSV export
+│   ├── crash_report.rs     Crash reports
+│   └── api.rs              Ability/item catalogs and failure reporting
+└── package.json            Development and build scripts
 ```
 
-## Privacidade
+## Privacy
 
-Damage Meter e Lootlog são processados localmente. O CSV de loot é salvo localmente. O aplicativo consulta somente os catálogos necessários e pode enviar relatórios de falha pendentes.
+Damage Meter and Lootlog are processed locally. Loot CSV files are saved locally. The application only requests the catalogs it needs and may send pending crash reports.
 
-## Licença
+## License
 
-MIT. Veja [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

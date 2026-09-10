@@ -109,8 +109,8 @@ pub fn resolve(index: i32) -> (String, String, String, String) {
     )
 }
 
-// Carrega o cache para resposta imediata e sempre busca o catálogo atual depois.
-// Uma falha ou resposta vazia não pode deixar os itens permanentemente como IDX_n.
+// Load the cache for an immediate response and always fetch the current catalog afterward.
+// A failed or empty response must not leave items permanently as IDX_n.
 pub async fn load_item_names() {
     match std::fs::read(item_cache_path()) {
         Ok(bytes) => match serde_json::from_slice::<Vec<crate::api::ItemName>>(&bytes) {

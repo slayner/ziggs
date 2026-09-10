@@ -6,8 +6,8 @@ mod tests {
     fn companion_window_is_fixed_and_disables_native_zoom_shortcuts() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
         let config: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(manifest).expect("tauri.conf.json deve existir"))
-                .expect("tauri.conf.json deve ser JSON válido");
+            serde_json::from_slice(&std::fs::read(manifest).expect("tauri.conf.json must exist"))
+                .expect("tauri.conf.json must be valid JSON");
         let window = &config["app"]["windows"][0];
 
         assert_eq!(window["width"], 1024);
@@ -28,14 +28,14 @@ mod tests {
                 .join("src")
                 .join("lib.rs"),
         )
-        .expect("lib.rs deve existir");
+        .expect("lib.rs must exist");
         let start = source
             .find("fn present_window(")
-            .expect("present_window deve existir");
+            .expect("present_window must exist");
         let end = source[start..]
             .find("\nfn build_tray")
             .map(|offset| start + offset)
-            .expect("present_window deve terminar antes da bandeja");
+            .expect("present_window must end before build_tray");
         let present_window = &source[start..end];
 
         for forbidden in [

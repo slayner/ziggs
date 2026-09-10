@@ -48,7 +48,7 @@
                                  ],
                    "category":  "Utility",
                    "shortDescription":  "Ziggs Companion",
-                    "longDescription":  "Damage Meter e Lootlog para Albion Online.",
+                    "longDescription":  "Damage Meter and Lootlog for Albion Online.",
                    "windows":  {
                                    "nsis":  {
                                                 "installerHooks":  "nsis/installer-hooks.nsh",
