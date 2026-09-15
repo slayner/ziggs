@@ -1,6 +1,6 @@
 [package]
 name = "ziggs-companion"
-version = "0.2.16"
+version = "0.2.17"
 description = "Ziggs Companion — Damage Meter and Lootlog"
 authors = ["Ziggs"]
 edition = "2021"
