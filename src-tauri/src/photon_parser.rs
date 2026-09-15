@@ -9,8 +9,8 @@
 // Relevant opcodes (detected by structure, not number):
 //   Join (2):             response with map, name, guild of local player
 //   ChangeCluster (41):   response on map change
-//   NewCharacter (29):    event when another player appears
-//   CharacterStats (125): event with player guild and alliance metadata
+//   NewCharacter (29):    event when another player appears (guild@8, alliance@51 — madvac)
+//   CharacterStats (143): event with player guild and alliance metadata (nome@1, guild@2, alliance@4 — madvac; legado 125: nome@0, guild@1, alliance@2)
 //   PartyJoined (231):     event with full party roster
 //   PartyPlayerJoined (233): event when someone joins the party
 //   PartyPlayerLeft (235):  event when someone leaves the party
@@ -1055,22 +1055,29 @@ pub struct CharacterMetadata {
 }
 
 pub fn extract_character_stats(op: &ParsedOperation) -> Option<(String, CharacterMetadata)> {
-    if op.message_type != 4 || op.albion_code != 125 {
+    if op.message_type != 4 {
         return None;
     }
-    let name = op.parameters.get(&0)?.as_string()?.to_string();
+    // Layout por opcode (diferem!): madvac EvCharacterStats=143 tem
+    // nome@1/guild@2/alliance@4; legado 125 tem nome@0/guild@1/alliance@2.
+    let (ni, gi, ai) = match op.albion_code {
+        143 => (1, 2, 4),
+        125 => (0, 1, 2),
+        _ => return None,
+    };
+    let name = op.parameters.get(&ni)?.as_string()?.to_string();
     if name.is_empty() {
         return None;
     }
     let guild_name = op
         .parameters
-        .get(&1)
+        .get(&gi)
         .and_then(|value| value.as_string())
         .unwrap_or_default()
         .to_string();
     let alliance_name = op
         .parameters
-        .get(&2)
+        .get(&ai)
         .and_then(|value| value.as_string())
         .unwrap_or_default()
         .to_string();
@@ -1273,8 +1280,9 @@ pub fn self_loot_event(
 
 /// Character registration: NewCharacter (event 29) maps entityId → name.
 /// Combat events reference players by numeric ID, not name, so we need this map.
-/// Param 0 = id, param 1 = name (AAT).
-pub fn extract_new_character(op: &ParsedOperation) -> Option<(i64, String)> {
+/// Param 0 = id, param 1 = name (AAT). madvac também lê guild@8/alliance@51
+/// daqui — é a fonte que mais aparece em ZvZ (todo player visível gera um).
+pub fn extract_new_character(op: &ParsedOperation) -> Option<(i64, String, CharacterMetadata)> {
     if op.albion_code != 29 {
         return None;
     }
@@ -1287,7 +1295,26 @@ pub fn extract_new_character(op: &ParsedOperation) -> Option<(i64, String)> {
     if name.is_empty() {
         return None;
     }
-    Some((id, name))
+    let guild_name = op
+        .parameters
+        .get(&8)
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
+        .to_string();
+    let alliance_name = op
+        .parameters
+        .get(&51)
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
+        .to_string();
+    Some((
+        id,
+        name,
+        CharacterMetadata {
+            guild_name,
+            alliance_name,
+        },
+    ))
 }
 
 // HealthUpdate = event 6. causer=param 6, target=param 0, change=param 2
@@ -1687,7 +1714,23 @@ mod tests {
 
     #[test]
     fn character_stats_extracts_player_metadata() {
+        // Layout madvac (EvCharacterStats=143): nome@1, guild@2, alliance@4.
         let operation = ParsedOperation {
+            message_type: 4,
+            albion_code: 143,
+            parameters: HashMap::from([
+                (1, PhotonValue::String("Zezinho".into())),
+                (2, PhotonValue::String("Ziggs".into())),
+                (4, PhotonValue::String("Alliance".into())),
+            ]),
+        };
+        let (name, metadata) = extract_character_stats(&operation).unwrap();
+        assert_eq!(name, "Zezinho");
+        assert_eq!(metadata.guild_name, "Ziggs");
+        assert_eq!(metadata.alliance_name, "Alliance");
+
+        // Legado (125): nome@0, guild@1, alliance@2.
+        let legacy = ParsedOperation {
             message_type: 4,
             albion_code: 125,
             parameters: HashMap::from([
@@ -1696,7 +1739,27 @@ mod tests {
                 (2, PhotonValue::String("Alliance".into())),
             ]),
         };
-        let (name, metadata) = extract_character_stats(&operation).unwrap();
+        let (name, metadata) = extract_character_stats(&legacy).unwrap();
+        assert_eq!(name, "Zezinho");
+        assert_eq!(metadata.guild_name, "Ziggs");
+        assert_eq!(metadata.alliance_name, "Alliance");
+    }
+
+    #[test]
+    fn new_character_carries_guild_and_alliance_like_madvac() {
+        // madvac EvNewCharacter: guild@8, alliance@51.
+        let operation = ParsedOperation {
+            message_type: 4,
+            albion_code: 29,
+            parameters: HashMap::from([
+                (0, PhotonValue::Int(42)),
+                (1, PhotonValue::String("Zezinho".into())),
+                (8, PhotonValue::String("Ziggs".into())),
+                (51, PhotonValue::String("Alliance".into())),
+            ]),
+        };
+        let (id, name, metadata) = extract_new_character(&operation).unwrap();
+        assert_eq!(id, 42);
         assert_eq!(name, "Zezinho");
         assert_eq!(metadata.guild_name, "Ziggs");
         assert_eq!(metadata.alliance_name, "Alliance");

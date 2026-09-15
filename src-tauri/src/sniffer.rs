@@ -842,7 +842,7 @@ impl Sniffer {
                         // Damage meter: id→name registration + damage/heal accumulation.
                         // Entity registration always runs (cheap, and the meter needs
                         // names seen BEFORE the toggle is turned on).
-                        if let Some((id, name)) = extract_new_character(op) {
+                        if let Some((id, name, metadata)) = extract_new_character(op) {
                             // Dump first 3 NewCharacter with ALL params and
                             // array contents. Currently only id (0) and name (1)
                             // are read. Equipment comes in this same event —
@@ -864,7 +864,14 @@ impl Sniffer {
                                 )
                                 .await;
                             }
-                            self.entities.lock().await.insert(id, name);
+                            self.entities.lock().await.insert(id, name.clone());
+                            // madvac lê guild/alliance do próprio NewCharacter (29):
+                            // em ZvZ todo player visível gera um, então é a fonte
+                            // que mais preenche looted_by/from_guild.
+                            if !metadata.guild_name.is_empty() || !metadata.alliance_name.is_empty()
+                            {
+                                self.record_character_metadata(name, metadata).await;
+                            }
                         }
                         if self.capture_damage.load(Ordering::Relaxed) {
                             if let Some(h) = extract_health(op) {
