@@ -10,10 +10,10 @@
 //   Join (2):             response with map, name, guild of local player
 //   ChangeCluster (41):   response on map change
 //   NewCharacter (29):    event when another player appears (guild@8, alliance@51 — madvac)
-//   CharacterStats (143): event with player guild and alliance metadata (nome@1, guild@2, alliance@4 — madvac; legado 125: nome@0, guild@1, alliance@2)
-//   PartyJoined (231):     event with full party roster
-//   PartyPlayerJoined (233): event when someone joins the party
-//   PartyPlayerLeft (235):  event when someone leaves the party
+//   CharacterStats (142): event with player guild and alliance metadata (nome@1, guild@2, alliance@4 — madvac; legado 125: nome@0, guild@1, alliance@2)
+//   PartyJoined (230):     event with full party roster, see `PartyTracker`
+//   PartyPlayerJoined (+2): event when someone joins the party
+//   PartyPlayerLeft (+4):   event when someone leaves the party
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -1009,22 +1009,121 @@ pub fn extract_player_state(op: &ParsedOperation) -> Option<PlayerState> {
     }
 }
 
-/// Party members extracted from PartyJoined (event 231).
-pub fn extract_party(op: &ParsedOperation) -> Option<Vec<String>> {
-    if op.albion_code != 231 {
+const USER_ID_LEN: usize = 16;
+// Where the events that change the party sit, counting from the event with the full list.
+const PARTY_DISBANDED_OFFSET: i16 = 1;
+const PARTY_PLAYER_JOINED_OFFSET: i16 = 2;
+const PARTY_PLAYER_LEFT_OFFSET: i16 = 4;
+
+/// The user ids of the party list, either packed in one byte array or as a list of them.
+fn party_user_ids(value: &PhotonValue) -> Option<Vec<Vec<u8>>> {
+    match value {
+        PhotonValue::Bytes(bytes) if bytes.len() % USER_ID_LEN == 0 => {
+            Some(bytes.chunks(USER_ID_LEN).map(<[u8]>::to_vec).collect())
+        }
+        PhotonValue::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                PhotonValue::Bytes(bytes) if bytes.len() == USER_ID_LEN => Some(bytes.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
+/// The full list of a party, recognized by its shape: ids at 8, names at 9, same length.
+fn party_roster(op: &ParsedOperation) -> Option<Vec<(Vec<u8>, String)>> {
+    let ids = party_user_ids(op.parameters.get(&8)?)?;
+    let PhotonValue::Array(names) = op.parameters.get(&9)? else {
+        return None;
+    };
+    if names.is_empty() || names.len() != ids.len() {
         return None;
     }
-    let mut names = Vec::new();
-    if let Some(PhotonValue::Array(arr)) = op.parameters.get(&9) {
-        for v in arr {
-            if let PhotonValue::String(s) = v {
-                if !s.is_empty() {
-                    names.push(s.clone());
-                }
+    let names: Option<Vec<String>> = names
+        .iter()
+        .map(|name| match name {
+            PhotonValue::String(name) if !name.is_empty() => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    Some(ids.into_iter().zip(names?).collect())
+}
+
+fn user_id_param(op: &ParsedOperation) -> Option<&Vec<u8>> {
+    match op.parameters.get(&1)? {
+        PhotonValue::Bytes(bytes) if bytes.len() == USER_ID_LEN => Some(bytes),
+        _ => None,
+    }
+}
+
+/// Who is in the local player's party.
+///
+/// Event numbers move when the game updates (the full list was 231 and is 230 now), so
+/// the list is found by its shape and the events that change it are counted from it,
+/// since they sit next to it in the game's numbering. Nothing is trusted before a list
+/// arrives, because those other events have no shape of their own to check against.
+#[derive(Default)]
+pub struct PartyTracker {
+    roster_code: Option<i16>,
+    members: Vec<(Vec<u8>, String)>,
+}
+
+impl PartyTracker {
+    /// True when the members changed.
+    pub fn apply(&mut self, op: &ParsedOperation) -> bool {
+        if op.message_type != 4 {
+            return false;
+        }
+        if let Some(members) = party_roster(op) {
+            self.roster_code = Some(op.albion_code);
+            let changed = members != self.members;
+            self.members = members;
+            return changed;
+        }
+        let Some(roster_code) = self.roster_code else {
+            return false;
+        };
+        match op.albion_code.wrapping_sub(roster_code) {
+            PARTY_DISBANDED_OFFSET => {
+                let changed = !self.members.is_empty();
+                self.members.clear();
+                changed
             }
+            PARTY_PLAYER_JOINED_OFFSET => {
+                let (Some(id), Some(name)) = (
+                    user_id_param(op),
+                    op.parameters.get(&2).and_then(PhotonValue::as_string),
+                ) else {
+                    return false;
+                };
+                if name.is_empty() || self.members.iter().any(|(known, _)| known == id) {
+                    return false;
+                }
+                self.members.push((id.clone(), name.to_string()));
+                true
+            }
+            PARTY_PLAYER_LEFT_OFFSET => {
+                let Some(id) = user_id_param(op) else {
+                    return false;
+                };
+                let before = self.members.len();
+                self.members.retain(|(known, _)| known != id);
+                self.members.len() != before
+            }
+            _ => false,
         }
     }
-    Some(names)
+
+    /// For when the local player is the one who left.
+    pub fn clear(&mut self) {
+        self.members.clear();
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.members.iter().map(|(_, name)| name.clone()).collect()
+    }
 }
 
 /// Loot captured from OtherGrabbedLoot event.
@@ -1044,8 +1143,6 @@ pub struct LootEvent {
     pub looted_from_guild: String,
     #[serde(default)]
     pub looted_from_alliance: String,
-    #[serde(default)]
-    pub server_region: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1058,10 +1155,11 @@ pub fn extract_character_stats(op: &ParsedOperation) -> Option<(String, Characte
     if op.message_type != 4 {
         return None;
     }
-    // Layout por opcode (diferem!): madvac EvCharacterStats=143 tem
-    // nome@1/guild@2/alliance@4; legado 125 tem nome@0/guild@1/alliance@2.
+    // Layout por opcode (diferem!): CharacterStats tem nome@1/guild@2/alliance@4; legado
+    // 125 tem nome@0/guild@1/alliance@2. O número muda com o jogo: hoje é 142, e 143 é o
+    // evento seguinte, com uma lista em @2. Por isso a guilda precisa ser texto.
     let (ni, gi, ai) = match op.albion_code {
-        143 => (1, 2, 4),
+        142 | 143 => (1, 2, 4),
         125 => (0, 1, 2),
         _ => return None,
     };
@@ -1069,12 +1167,7 @@ pub fn extract_character_stats(op: &ParsedOperation) -> Option<(String, Characte
     if name.is_empty() {
         return None;
     }
-    let guild_name = op
-        .parameters
-        .get(&gi)
-        .and_then(|value| value.as_string())
-        .unwrap_or_default()
-        .to_string();
+    let guild_name = op.parameters.get(&gi)?.as_string()?.to_string();
     let alliance_name = op
         .parameters
         .get(&ai)
@@ -1474,8 +1567,12 @@ pub fn now_iso_utc() -> String {
         .unwrap_or_default()
         .as_secs();
     // ISO 8601 without external deps — second precision is sufficient for lootlog.
+    // Written like JavaScript's toISOString(), which is what ao-loot-logger emits.
     let (y, mo, d, h, mi, s) = epoch_to_ymd_hms(secs);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, mo, d, h, mi, s)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z",
+        y, mo, d, h, mi, s
+    )
 }
 
 /// Convert epoch seconds to (year, month, day, hour, min, sec) UTC.
@@ -1712,12 +1809,178 @@ mod tests {
         assert_eq!(parser.pending_fragment_bytes, 1);
     }
 
+    fn party_event(code: i16, parameters: Vec<(u8, PhotonValue)>) -> ParsedOperation {
+        ParsedOperation {
+            message_type: 4,
+            albion_code: code,
+            parameters: parameters.into_iter().collect(),
+        }
+    }
+
+    fn party_id(byte: u8) -> Vec<u8> {
+        vec![byte; USER_ID_LEN]
+    }
+
+    fn party_list(code: i16, names: &[&str]) -> ParsedOperation {
+        party_event(
+            code,
+            vec![
+                (
+                    8,
+                    PhotonValue::Bytes((0..names.len() as u8).flat_map(party_id).collect()),
+                ),
+                (
+                    9,
+                    PhotonValue::Array(
+                        names
+                            .iter()
+                            .map(|name| PhotonValue::String(name.to_string()))
+                            .collect(),
+                    ),
+                ),
+            ],
+        )
+    }
+
     #[test]
-    fn character_stats_extracts_player_metadata() {
-        // Layout madvac (EvCharacterStats=143): nome@1, guild@2, alliance@4.
-        let operation = ParsedOperation {
+    fn party_list_is_found_by_its_shape_whatever_its_number() {
+        for code in [230, 231, 400] {
+            let mut party = PartyTracker::default();
+            assert!(party.apply(&party_list(code, &["Slayner", "Fulano"])));
+            assert_eq!(party.names(), ["Slayner", "Fulano"]);
+        }
+    }
+
+    #[test]
+    fn party_list_also_comes_with_one_array_per_id() {
+        let mut party = PartyTracker::default();
+        party.apply(&party_event(
+            230,
+            vec![
+                (
+                    8,
+                    PhotonValue::Array(vec![
+                        PhotonValue::Bytes(party_id(1)),
+                        PhotonValue::Bytes(party_id(2)),
+                    ]),
+                ),
+                (
+                    9,
+                    PhotonValue::Array(vec![
+                        PhotonValue::String("Slayner".into()),
+                        PhotonValue::String("Fulano".into()),
+                    ]),
+                ),
+            ],
+        ));
+        assert_eq!(party.names(), ["Slayner", "Fulano"]);
+    }
+
+    #[test]
+    fn something_else_with_the_same_params_is_not_a_party_list() {
+        let mut party = PartyTracker::default();
+        let names = PhotonValue::Array(vec![PhotonValue::String("Slayner".into())]);
+        for op in [
+            party_event(
+                230,
+                vec![(8, PhotonValue::Bytes(party_id(1))), (9, PhotonValue::Null)],
+            ),
+            // More ids than names.
+            party_event(
+                230,
+                vec![
+                    (8, PhotonValue::Bytes([party_id(1), party_id(2)].concat())),
+                    (9, names.clone()),
+                ],
+            ),
+            party_event(
+                230,
+                vec![(8, PhotonValue::Bytes(vec![1, 2, 3])), (9, names.clone())],
+            ),
+            party_event(230, vec![(9, names.clone())]),
+            party_event(230, vec![(8, PhotonValue::Int(1)), (9, names.clone())]),
+            // A request or a response, not an event.
+            ParsedOperation {
+                message_type: 3,
+                ..party_list(230, &["Slayner"])
+            },
+        ] {
+            assert!(!party.apply(&op));
+        }
+        assert!(party.names().is_empty());
+    }
+
+    #[test]
+    fn party_follows_who_joins_and_leaves_counting_from_the_list() {
+        let mut party = PartyTracker::default();
+        party.apply(&party_list(230, &["Slayner", "Fulano"]));
+
+        let joined = party_event(
+            232,
+            vec![
+                (1, PhotonValue::Bytes(party_id(9))),
+                (2, PhotonValue::String("Beltrana".into())),
+            ],
+        );
+        assert!(party.apply(&joined));
+        assert_eq!(party.names(), ["Slayner", "Fulano", "Beltrana"]);
+        assert!(
+            !party.apply(&joined),
+            "the same player twice changes nothing"
+        );
+
+        let left = party_event(234, vec![(1, PhotonValue::Bytes(party_id(1)))]);
+        assert!(party.apply(&left));
+        assert_eq!(party.names(), ["Slayner", "Beltrana"]);
+        assert!(!party.apply(&left));
+
+        assert!(party.apply(&party_event(231, vec![(1, PhotonValue::Int(1))])));
+        assert!(party.names().is_empty());
+    }
+
+    #[test]
+    fn party_events_mean_nothing_before_a_list_arrives() {
+        let mut party = PartyTracker::default();
+        // Many events carry an id and a name. Without the list there is no telling which.
+        assert!(!party.apply(&party_event(
+            232,
+            vec![
+                (1, PhotonValue::Bytes(party_id(9))),
+                (2, PhotonValue::String("Beltrana".into())),
+            ],
+        )));
+        assert!(party.names().is_empty());
+    }
+
+    #[test]
+    fn a_new_list_replaces_the_old_party() {
+        let mut party = PartyTracker::default();
+        party.apply(&party_list(230, &["Slayner", "Fulano"]));
+        assert!(party.apply(&party_list(230, &["Slayner", "Noxus", "Zezinho"])));
+        assert_eq!(party.names(), ["Slayner", "Noxus", "Zezinho"]);
+        assert!(!party.apply(&party_list(230, &["Slayner", "Noxus", "Zezinho"])));
+    }
+
+    #[test]
+    fn character_stats_ignores_the_next_event_that_has_a_list_in_its_place() {
+        // CharacterStats moved to 142, and 143 is now a history with arrays at those params.
+        let history = ParsedOperation {
             message_type: 4,
             albion_code: 143,
+            parameters: HashMap::from([
+                (1, PhotonValue::String("Zezinho".into())),
+                (2, PhotonValue::Array(vec![])),
+            ]),
+        };
+        assert!(extract_character_stats(&history).is_none());
+    }
+
+    #[test]
+    fn character_stats_extracts_player_metadata() {
+        // Layout madvac (EvCharacterStats=142): nome@1, guild@2, alliance@4.
+        let operation = ParsedOperation {
+            message_type: 4,
+            albion_code: 142,
             parameters: HashMap::from([
                 (1, PhotonValue::String("Zezinho".into())),
                 (2, PhotonValue::String("Ziggs".into())),

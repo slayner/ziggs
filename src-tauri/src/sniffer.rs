@@ -1,18 +1,13 @@
 #![cfg_attr(not(target_os = "windows"), allow(dead_code, unused_imports))]
 
-// Packet sniffer: captures Albion UDP packets via WinDivert (WFP layer).
+// Packet sniffer: captures Albion UDP packets and feeds them to the parser.
 //
-// WinDivert hooks at the Windows Filtering Platform network layer, ABOVE
-// routing and VPN encapsulation. This means packets are captured as raw
-// Albion UDP regardless of ExitLag, Cloudflare WARP, or any VPN/route
-// optimizer being active. No external driver installation needed — WinDivert
-// DLL + .sys are bundled.
+// The user picks the capture method (see `CaptureMethod`): Npcap (npcap.rs) or
+// WinDivert (windivert.rs). Everything after the packet arrives is the same.
 //
 // Each packet is passed to the PhotonParser. Loot events (opcode 256) go to
-// the loot buffer. Debug logs go to the debug buffer (shown in the UI
-// terminal). Online/offline detection: no packets for 5s = offline.
-//
-// Requires admin.
+// the loot buffer. Debug logs go to the debug buffer (warnings are shown on the
+// Lootlog). Online/offline detection: no packets for 5s = offline.
 
 use serde::{Deserialize, Serialize};
 #[cfg(any(target_os = "windows", test))]
@@ -22,22 +17,53 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 #[cfg(any(target_os = "windows", test))]
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(target_os = "windows")]
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
+use crate::config::CaptureMethod;
 #[cfg(target_os = "windows")]
 use crate::photon_parser::{
     extract_attach_container, extract_character_stats, extract_detach_container, extract_health,
     extract_inventory_move, extract_loot, extract_new_character, extract_new_loot_item,
-    extract_new_loot_owner, extract_party, extract_player_state, self_loot_event, PhotonParser,
+    extract_new_loot_owner, extract_player_state, self_loot_event, PartyTracker, PhotonParser,
 };
 use crate::photon_parser::{DamageAcc, LootEvent, PhotonValue};
 
-/// Packet dedup window. `open_all` listens on ALL interfaces on purpose
+/// A capture problem the user can fix. Goes to the UI as a code, so the UI can show it
+/// translated and with the steps to fix it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureIssue {
+    /// Npcap is not installed: the UI shows the install guide.
+    NpcapMissing,
+    /// Npcap is installed but no adapter could be opened.
+    NpcapUnavailable,
+    /// Npcap runs and Albion is open, but nothing arrives. Usually a route optimizer.
+    NpcapNoPackets,
+    /// WinDivert is the chosen method, but the user declined the administrator prompt.
+    WindivertNeedsAdmin,
+}
+
+/// How long Albion can stay open without a packet before the UI suggests that Npcap
+/// isn't seeing its traffic. The login screen is quiet, so this can't be short.
+const NO_PACKETS_HINT_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `albion_is_open` lists every process on the PC, so it only runs when the rest applies.
+fn no_packets_issue(
+    method: CaptureMethod,
+    silent_for: std::time::Duration,
+    albion_is_open: impl FnOnce() -> bool,
+) -> Option<CaptureIssue> {
+    let applies =
+        method == CaptureMethod::Npcap && silent_for >= NO_PACKETS_HINT_AFTER && albion_is_open();
+    applies.then_some(CaptureIssue::NpcapNoPackets)
+}
+
+/// Packet dedup window. Npcap listens on ALL interfaces on purpose
 /// (VPN/ExitLag/virtual adapters — listening on only one would lose traffic
 /// when the user enables VPN). The cost: on a BRIDGED adapter (Hyper-V/vEthernet)
 /// the SAME packet is captured on 2 interfaces and arrives 2× on the channel
@@ -223,42 +249,6 @@ fn backfill_pending_metadata_and_persist(
     Ok(true)
 }
 
-/// Maps Albion game-server IP prefixes to region identifiers.
-fn albion_region_from_ip(ip: [u8; 4]) -> Option<&'static str> {
-    match [ip[0], ip[1], ip[2]] {
-        [5, 188, 125] => Some("west"),
-        [5, 45, 187] => Some("east"),
-        [193, 169, 238] => Some("europe"),
-        _ => None,
-    }
-}
-
-/// Extracts server region from a packet frame by checking src/dst IP.
-fn albion_region_from_frame(data: &[u8], l2_hint: usize) -> Option<&'static str> {
-    // L2 offsets to try: hinted offset, then common values
-    let offsets = [l2_hint, 0, 14, 4];
-    for (index, &l2) in offsets.iter().enumerate() {
-        // Skip if this offset was already tried
-        if offsets[..index].contains(&l2) {
-            continue;
-        }
-        // Need at least 20 bytes after L2 offset for IP header
-        if data.len() < l2 + 20 {
-            continue;
-        }
-        // Check for IPv4 header: version 4, protocol UDP (17)
-        let vihl = data[l2];
-        if vihl >> 4 != 4 || data[l2 + 9] != 17 {
-            continue;
-        }
-        // Extract src and dst IP addresses (12-15 and 16-19 bytes after L2)
-        let src = [data[l2 + 12], data[l2 + 13], data[l2 + 14], data[l2 + 15]];
-        let dst = [data[l2 + 16], data[l2 + 17], data[l2 + 18], data[l2 + 19]];
-        return albion_region_from_ip(src).or_else(|| albion_region_from_ip(dst));
-    }
-    None
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SniffStats {
     pub running: bool,
@@ -291,6 +281,8 @@ pub struct SniffStats {
     pub alliance_name: String,
     pub party_members: Vec<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub capture_issue: Option<CaptureIssue>,
 }
 
 impl Default for SniffStats {
@@ -313,6 +305,7 @@ impl Default for SniffStats {
             alliance_name: String::new(),
             party_members: vec![],
             error: None,
+            capture_issue: None,
         }
     }
 }
@@ -332,6 +325,7 @@ pub struct Sniffer {
     /// Entity ID → name mapping (NewCharacter), used to resolve the damage meter.
     pub entities: Arc<Mutex<HashMap<i64, String>>>,
     pub character_metadata: Arc<Mutex<HashMap<String, crate::photon_parser::CharacterMetadata>>>,
+    party: Arc<Mutex<PartyTracker>>,
     /// Damage/healing accumulated by causer_id this session.
     pub damage: Arc<Mutex<HashMap<i64, DamageAcc>>>,
     /// Same accumulation, but only for hits whose TARGET is a known player.
@@ -344,19 +338,27 @@ pub struct Sniffer {
     pub capture_loot: Arc<AtomicBool>,
     pub capture_damage: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
-    /// WinDivert capture handle (0 = not started). Lives for the session,
-    /// shutdown on stop/restart. See `windivert.rs`.
-    #[cfg(target_os = "windows")]
-    windivert_handle: Arc<AtomicI64>,
-    #[cfg(not(target_os = "windows"))]
-    windivert_handle: Arc<AtomicI64>,
-    /// Last recognized Albion game-server region for lootlog export.
-    pub server_region: Arc<Mutex<String>>,
+    /// WinDivert capture handle (0 = not started), shut down on stop. Npcap needs no
+    /// such thing: its threads watch `generation`. See `windivert.rs`.
+    windivert_handle: Arc<std::sync::Mutex<isize>>,
 }
 
 pub enum CaptureMsg {
     Packet(usize, Vec<u8>),
+    /// The capture ended by itself. The sniffer starts it over, or reports why it can't.
     Dead(String),
+    /// A line for the log file, from a capture thread.
+    Log(String),
+}
+
+/// Why a capture could not start, split by who needs to know what.
+#[cfg(target_os = "windows")]
+#[derive(Clone, PartialEq)]
+struct CaptureProblem {
+    issue: Option<CaptureIssue>,
+    /// Technical text shown on screen. None when the issue code says it all.
+    shown: Option<String>,
+    logged: String,
 }
 
 impl Sniffer {
@@ -376,16 +378,13 @@ impl Sniffer {
             debug: Arc::new(Mutex::new(Vec::new())),
             entities: Arc::new(Mutex::new(HashMap::new())),
             character_metadata: Arc::new(Mutex::new(HashMap::new())),
+            party: Arc::new(Mutex::new(PartyTracker::default())),
             damage: Arc::new(Mutex::new(HashMap::new())),
             damage_vs_players: Arc::new(Mutex::new(HashMap::new())),
             capture_loot: Arc::new(AtomicBool::new(false)),
             capture_damage: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
-            #[cfg(target_os = "windows")]
-            windivert_handle: Arc::new(AtomicI64::new(0)),
-            #[cfg(not(target_os = "windows"))]
-            windivert_handle: Arc::new(AtomicI64::new(0)),
-            server_region: Arc::new(Mutex::new("west".into())),
+            windivert_handle: Arc::new(std::sync::Mutex::new(0)),
         }
     }
 
@@ -398,22 +397,25 @@ impl Sniffer {
             debug: Arc::clone(&self.debug),
             entities: Arc::clone(&self.entities),
             character_metadata: Arc::clone(&self.character_metadata),
+            party: Arc::clone(&self.party),
             damage: Arc::clone(&self.damage),
             damage_vs_players: Arc::clone(&self.damage_vs_players),
             capture_loot: Arc::clone(&self.capture_loot),
             capture_damage: Arc::clone(&self.capture_damage),
             generation: Arc::clone(&self.generation),
-            #[cfg(target_os = "windows")]
             windivert_handle: Arc::clone(&self.windivert_handle),
-            #[cfg(not(target_os = "windows"))]
-            windivert_handle: Arc::clone(&self.windivert_handle),
-            server_region: Arc::clone(&self.server_region),
         }
     }
 
     pub async fn stop(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
-        self.stats.lock().await.running = false;
+        {
+            let mut stats = self.stats.lock().await;
+            stats.running = false;
+            stats.online = false;
+            stats.error = None;
+            stats.capture_issue = None;
+        }
         #[cfg(target_os = "windows")]
         crate::windivert::shutdown(&self.windivert_handle);
     }
@@ -426,27 +428,106 @@ impl Sniffer {
         self.generation.load(Ordering::Acquire) == generation
     }
 
-    /// Main loop: starts the platform capture backend and processes packets.
     #[cfg(target_os = "windows")]
-    pub async fn run(&self) {
-        let generation = self.prepare_start();
-        self.run_generation(generation).await;
+    fn start_backend(
+        &self,
+        method: CaptureMethod,
+        tx: &mpsc::Sender<CaptureMsg>,
+        generation: u64,
+    ) -> Result<(), CaptureProblem> {
+        match method {
+            CaptureMethod::Npcap => {
+                crate::npcap::start_capture(tx.clone(), Arc::clone(&self.generation), generation)
+                    .map_err(|error| match error {
+                        crate::npcap::StartError::Missing(detail) => CaptureProblem {
+                            issue: Some(CaptureIssue::NpcapMissing),
+                            shown: None,
+                            logged: format!("Npcap not found: {detail}"),
+                        },
+                        crate::npcap::StartError::Unavailable(detail) => CaptureProblem {
+                            issue: Some(CaptureIssue::NpcapUnavailable),
+                            logged: format!("Npcap could not start: {detail}"),
+                            shown: Some(detail),
+                        },
+                    })
+            }
+            CaptureMethod::Windivert if !crate::elevation::is_elevated() => Err(CaptureProblem {
+                issue: Some(CaptureIssue::WindivertNeedsAdmin),
+                shown: None,
+                logged: "WinDivert needs administrator rights".to_string(),
+            }),
+            CaptureMethod::Windivert => crate::windivert::start_capture(
+                tx.clone(),
+                Arc::clone(&self.generation),
+                generation,
+                Arc::clone(&self.windivert_handle),
+            )
+            .map_err(|detail| CaptureProblem {
+                issue: None,
+                logged: format!("WinDivert could not start: {detail}"),
+                shown: Some(format!("WinDivert: {detail}")),
+            }),
+        }
     }
 
-    #[cfg(not(target_os = "windows"))]
-    pub async fn run(&self) {
-        let mut stats = self.stats.lock().await;
-        stats.running = false;
-        stats.error = Some("Captura de pacotes indisponível nesta plataforma.".into());
+    /// Tries until the capture starts or this generation is replaced. Retrying is what
+    /// makes it start by itself when the user finishes installing Npcap, and when the
+    /// app autostarts before Windows has the driver or the network ready. Returns
+    /// whether it started.
+    #[cfg(target_os = "windows")]
+    async fn open_capture(
+        &self,
+        method: CaptureMethod,
+        tx: &mpsc::Sender<CaptureMsg>,
+        generation: u64,
+    ) -> bool {
+        let mut last_problem: Option<CaptureProblem> = None;
+        loop {
+            if !self.is_current(generation) {
+                return false;
+            }
+            match self.start_backend(method, tx, generation) {
+                Ok(()) => {
+                    let mut stats = self.stats.lock().await;
+                    if self.is_current(generation) {
+                        stats.error = None;
+                        stats.capture_issue = None;
+                    }
+                    drop(stats);
+                    self.debug_log_file("info", &format!("Capture active: {method:?}"))
+                        .await;
+                    return true;
+                }
+                Err(problem) => {
+                    // Logged only when it changes: this repeats until the user acts.
+                    if last_problem.as_ref() != Some(&problem) {
+                        self.debug_log_file("err", &problem.logged).await;
+                        let mut stats = self.stats.lock().await;
+                        if self.is_current(generation) {
+                            stats.error = problem.shown.clone();
+                            stats.capture_issue = problem.issue;
+                        }
+                        drop(stats);
+                        last_problem = Some(problem);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
     }
 
+    /// Main loop: starts the chosen capture method and processes packets.
     #[cfg(target_os = "windows")]
-    pub async fn run_generation(&self, generation: u64) {
+    pub async fn run_generation(&self, generation: u64, method: CaptureMethod) {
         {
             let mut s = self.stats.lock().await;
             s.running = true;
+            s.online = false;
             s.error = None;
+            s.capture_issue = None;
         }
+        // Warnings from the previous method don't apply to this one.
+        self.debug.lock().await.clear();
         // Zero the log file each session for readability.
         if let Some(p) = debug_log_path() {
             if let Some(parent) = p.parent() {
@@ -457,55 +538,15 @@ impl Sniffer {
                 format!("=== session {} ===\n", crate::photon_parser::now_iso_utc()),
             );
         }
-        self.debug_log("info", "Sniffer starting — WinDivert (WFP layer)…")
+        self.debug_log("info", &format!("Sniffer starting: {method:?}"))
             .await;
 
         // The channel lives for the entire session.
         let (tx, rx) = mpsc::channel::<CaptureMsg>();
 
-        // Start WinDivert capture. Retries if the DLL or driver isn't ready
-        // yet (autostart races Windows boot — driver service may still be
-        // loading).
-        loop {
-            if self.generation.load(Ordering::Acquire) != generation {
-                return;
-            }
-            #[cfg(target_os = "windows")]
-            {
-                match crate::windivert::start_capture(
-                    tx.clone(),
-                    Arc::clone(&self.generation),
-                    generation,
-                ) {
-                    Ok(handle) => {
-                        self.windivert_handle.store(
-                            handle.load(std::sync::atomic::Ordering::Relaxed),
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                        self.debug_log(
-                            "info",
-                            "WinDivert active (WFP layer) — ExitLag/VPN compatible capture enabled.",
-                        )
-                        .await;
-                        break;
-                    }
-                    Err(e) => {
-                        let msg = format!("WinDivert: {}. Retrying in 5s…", e);
-                        self.debug_log("err", &msg).await;
-                        self.stats.lock().await.error = Some(msg);
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    }
-                }
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                let msg = "Packet capture is only supported on Windows.".to_string();
-                self.debug_log("err", &msg).await;
-                self.stats.lock().await.error = Some(msg);
-                return;
-            }
+        if !self.open_capture(method, &tx, generation).await {
+            return;
         }
-        self.stats.lock().await.error = None;
 
         let mut parser = PhotonParser::new();
         let mut last_packet_time = Instant::now();
@@ -537,25 +578,27 @@ impl Sniffer {
 
             // Receive packets from channel (non-blocking — if no packet, continue).
             match rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                Ok(CaptureMsg::Dead(_)) => {
-                    // WinDivert doesn't use this, but keep the variant for
-                    // potential future capture backends.
+                Ok(CaptureMsg::Dead(reason)) => {
+                    self.debug_log_file("err", &format!("Capture stopped: {reason}"))
+                        .await;
+                    was_online = false;
+                    self.stats.lock().await.online = false;
+                    if !self.open_capture(method, &tx, generation).await {
+                        break;
+                    }
+                }
+                Ok(CaptureMsg::Log(line)) => {
+                    self.debug_log_file("info", &line).await;
                 }
                 Ok(CaptureMsg::Packet(l2_hint, data)) => {
                     raw_pkts += 1;
                     // Photon payload offset: L2 (ethernet/raw) + IP (real IHL) + UDP.
-                    // WinDivert delivers raw IP (L2=0), but the fallback logic in
-                    // photon_offset handles any L2 hint.
+                    // WinDivert delivers raw IP (L2=0), Npcap depends on the adapter.
                     let off = match photon_offset(&data, l2_hint) {
                         Some(o) => o,
                         None => continue,
                     };
                     last_packet_time = Instant::now();
-
-                    // Track the game-server region from validated IPv4/UDP traffic.
-                    if let Some(region) = albion_region_from_frame(&data, l2_hint) {
-                        *self.server_region.lock().await = region.into();
-                    }
 
                     let photon_data = &data[off..];
 
@@ -586,6 +629,7 @@ impl Sniffer {
                         was_online = true;
                         let mut s = self.stats.lock().await;
                         s.online = true;
+                        s.capture_issue = None;
                         self.debug_log(
                             "info",
                             "Albion detected — packets received. Capturing loot…",
@@ -716,11 +760,28 @@ impl Sniffer {
                             }
                         }
 
-                        if op.albion_code == 231 {
-                            if let Some(names) = extract_party(op) {
+                        let party_changed = {
+                            let mut party = self.party.lock().await;
+                            if party.apply(op) {
                                 let mut s = self.stats.lock().await;
-                                s.party_members = names;
+                                // A party without the local player means they are the one who left.
+                                if !s.player_name.is_empty()
+                                    && !party.names().contains(&s.player_name)
+                                {
+                                    party.clear();
+                                }
+                                s.party_members = party.names();
+                                Some(s.party_members.join(", "))
+                            } else {
+                                None
                             }
+                        };
+                        if let Some(names) = party_changed {
+                            self.debug_log_file(
+                                "info",
+                                &format!("Party (event {}): {names}", op.albion_code),
+                            )
+                            .await;
                         }
 
                         if let Some((name, metadata)) = extract_character_stats(op) {
@@ -963,7 +1024,12 @@ impl Sniffer {
             // actionable info).
             if last_heartbeat.elapsed().as_secs() >= 10 {
                 last_heartbeat = Instant::now();
-                let s = self.stats.lock().await;
+                let mut s = self.stats.lock().await;
+                if s.error.is_none() {
+                    s.capture_issue = no_packets_issue(method, last_packet_time.elapsed(), || {
+                        crate::albion_detect::find_albion_pid().is_some()
+                    });
+                }
                 self.debug_log_file(
                     "info",
                     &format!(
@@ -995,7 +1061,7 @@ impl Sniffer {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub async fn run_generation(&self, _generation: u64) {
+    pub async fn run_generation(&self, _generation: u64, _method: CaptureMethod) {
         let mut stats = self.stats.lock().await;
         stats.running = false;
         stats.error = Some("Captura de pacotes indisponível nesta plataforma.".into());
@@ -1077,7 +1143,6 @@ impl Sniffer {
             }
         }
 
-        loot.server_region = self.server_region.lock().await.clone();
         let metadata_by_name = self.character_metadata.lock().await.clone();
         let result = {
             let mut loot_buffer = self.loot.lock().await;
@@ -1211,7 +1276,7 @@ fn dump_params(op: &crate::photon_parser::ParsedOperation) -> String {
 /// Tries the L2 suggested by the datalink, then falls back to 0/14/4 and
 /// validates the IPv4+UDP structure — works on ethernet, raw IP (VPN) and
 /// loopback without hardcoding.
-fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
+pub(crate) fn photon_offset(data: &[u8], l2_hint: usize) -> Option<usize> {
     for &l2 in &[l2_hint, 0, 14, 4] {
         if data.len() < l2 + 28 {
             continue;
@@ -1241,10 +1306,112 @@ mod tests {
     use super::photon_offset;
     use super::{
         add_loot_and_persist, backfill_loot_and_persist, backfill_pending_metadata_and_persist,
-        clear_loot_and_persist, is_duplicate_loot, merge_character_metadata, LootEvent,
-        LOOT_DEDUP_LOOKBACK,
+        clear_loot_and_persist, is_duplicate_loot, merge_character_metadata, no_packets_issue,
+        CaptureIssue, LootEvent, LOOT_DEDUP_LOOKBACK, NO_PACKETS_HINT_AFTER,
     };
+    use crate::config::CaptureMethod;
     use crate::photon_parser::CharacterMetadata;
+    use std::time::Duration;
+
+    #[test]
+    fn hints_that_npcap_sees_nothing_only_with_albion_open_and_silent() {
+        let long = NO_PACKETS_HINT_AFTER;
+        assert_eq!(
+            no_packets_issue(CaptureMethod::Npcap, long, || true),
+            Some(CaptureIssue::NpcapNoPackets)
+        );
+        assert_eq!(no_packets_issue(CaptureMethod::Npcap, long, || false), None);
+        assert_eq!(
+            no_packets_issue(CaptureMethod::Npcap, long - Duration::from_secs(1), || true),
+            None
+        );
+    }
+
+    #[test]
+    fn never_suggests_changing_method_while_on_windivert() {
+        assert_eq!(
+            no_packets_issue(CaptureMethod::Windivert, NO_PACKETS_HINT_AFTER, || true),
+            None
+        );
+    }
+
+    #[test]
+    fn does_not_list_processes_until_the_silence_is_long_enough() {
+        no_packets_issue(CaptureMethod::Npcap, Duration::ZERO, || {
+            panic!("process list should not be read")
+        });
+    }
+
+    #[test]
+    fn the_ui_receives_the_issue_codes_it_expects() {
+        for (issue, code) in [
+            (CaptureIssue::NpcapMissing, "npcap_missing"),
+            (CaptureIssue::NpcapUnavailable, "npcap_unavailable"),
+            (CaptureIssue::NpcapNoPackets, "npcap_no_packets"),
+            (CaptureIssue::WindivertNeedsAdmin, "windivert_needs_admin"),
+        ] {
+            assert_eq!(serde_json::to_value(issue).unwrap(), code);
+        }
+    }
+
+    /// Real switch between methods without a game. WinDivert can't start here (no rights
+    /// without elevation, no DLL next to the test binary with it), Npcap can. Switching
+    /// must clear the failure and packets must be counted. Run with
+    /// `cargo test --lib live_sniffer -- --ignored`.
+    #[cfg(target_os = "windows")]
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs Npcap installed and internet access"]
+    async fn live_sniffer_switches_method_and_counts_packets() {
+        let sniffer = super::Sniffer::new();
+
+        let generation = sniffer.prepare_start();
+        let running = sniffer.clone_shared();
+        tokio::spawn(async move {
+            running
+                .run_generation(generation, CaptureMethod::Windivert)
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let failed = sniffer.stats.lock().await.clone();
+        assert!(
+            failed.capture_issue == Some(CaptureIssue::WindivertNeedsAdmin)
+                || failed.error.is_some_and(|e| e.starts_with("WinDivert:"))
+        );
+
+        sniffer.stop().await;
+        let stopped = sniffer.stats.lock().await.clone();
+        assert_eq!(stopped.error, None);
+        assert_eq!(stopped.capture_issue, None);
+
+        let generation = sniffer.prepare_start();
+        let running = sniffer.clone_shared();
+        tokio::spawn(async move {
+            running
+                .run_generation(generation, CaptureMethod::Npcap)
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(sniffer.stats.lock().await.error, None);
+
+        let socket = std::net::UdpSocket::bind("0.0.0.0:5055").expect("port 5055 free");
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let query = [
+            0x43, 0x21, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e',
+            3, b'c', b'o', b'm', 0, 0, 1, 0, 1,
+        ];
+        socket.send_to(&query, "1.1.1.1:53").expect("query sent");
+        let mut reply = [0u8; 512];
+        socket.recv_from(&mut reply).expect("DNS reply");
+        tokio::time::sleep(Duration::from_millis(800)).await;
+
+        let stats = sniffer.stats.lock().await.clone();
+        assert!(stats.packets_captured >= 2, "{}", stats.packets_captured);
+        assert!(stats.online);
+        assert_eq!(stats.capture_issue, None);
+        sniffer.stop().await;
+    }
 
     // Minimum UDP/IPv4: [ip header 20][udp 8][payload]. version=4, ihl=5, proto=17.
     fn ipv4_udp(payload: &[u8]) -> Vec<u8> {

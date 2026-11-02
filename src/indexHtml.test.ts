@@ -6,6 +6,6 @@ describe("initial Companion document", () => {
   it("paints the fixed shell background before the React stylesheet loads", () => {
     const document = readFileSync(resolve(import.meta.dirname, "../index.html"), "utf8");
 
-    expect(document).toMatch(/background(?:-color)?\s*:\s*#0e0f13/i);
+    expect(document).toMatch(/background(?:-color)?\s*:\s*#0a0c0e/i);
   });
 });
