@@ -15,7 +15,7 @@
     nsExec::Exec 'schtasks /Query /TN ZiggsCompanion'
     Pop $0
     ${If} $0 = 0
-      ExecShell "runas" "schtasks.exe" "/Delete /TN ZiggsCompanion /F" "" SW_HIDE
+      ExecShell "runas" "schtasks.exe" "/Delete /TN ZiggsCompanion /F" SW_HIDE
     ${EndIf}
   ${EndIf}
 !macroend
