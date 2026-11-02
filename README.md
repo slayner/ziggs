@@ -7,7 +7,7 @@ A desktop companion for Albion Online focused on two local features:
 
 The application also includes automatic updates, crash reports, system-tray behavior, and autostart. It does **not** provide tunneling, DNS optimization, historic battle or kill discovery, distributed scanning, market capture, or AODP delivery.
 
-## Platforms
+## Platform
 
 ### Windows 10/11 (64-bit)
 
@@ -19,10 +19,6 @@ Packet capture works through one of two methods, chosen in **Settings**. Adminis
 A configuration from before this choice stays on WinDivert: an update should not stop a capture that already works.
 
 Starting with Windows also follows the method. WinDivert uses a scheduled task at the highest run level, which grants the rights at sign-in without Windows asking, and Npcap uses the user's `Run` key. The application reconciles these entries each time it opens.
-
-### Linux x86_64
-
-The interface can be built and used, but packet capture is not available.
 
 ## Development
 
@@ -42,11 +38,7 @@ npm run tauri build
 
 ## Configuration
 
-Local configuration is stored at:
-
-- Windows: `%APPDATA%\ziggs-companion\config.json`
-- Linux: `~/.config/ziggs-companion/config.json`
-- macOS: `~/Library/Application Support/ziggs-companion/config.json`
+Local configuration is stored at `%APPDATA%\ziggs-companion\config.json`.
 
 The available options control Damage Meter, Lootlog, the capture method, autostart, and minimizing to the system tray. Capture controls are available in **Settings**; disabling a capture does not remove session data that was already collected.
 
