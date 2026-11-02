@@ -60,8 +60,6 @@ pub struct LootRow {
     pub looted_from_guild: String,
     #[serde(default)]
     pub looted_from_alliance: String,
-    #[serde(default)]
-    pub server_region: String,
 }
 
 // Item table: packet index → id + localized names. Index matches the ao-bin-dump
@@ -156,19 +154,19 @@ pub async fn load_item_names() {
     }
 }
 
-// ao-loot-logger CSV header. The backend matches by column name and tolerates
-// extra columns and any order.
+// Exactly the columns of ao-loot-logger, in the same order. Users are free to load
+// this file on any site that reads that format, so do not add or reorder columns.
 const CSV_HEADER: &str = "timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;\
-item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name;server__region";
+item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name";
 // Convert captured LootEvents into ao-loot-logger CSV. Item names stay in English
 // so the file stays interoperable across clients in different languages.
 pub fn build_csv_from_loot(events: &[LootEvent]) -> String {
-    let mut lines = Vec::with_capacity(events.len() + 1);
-    lines.push(CSV_HEADER.to_string());
+    let mut csv = String::from(CSV_HEADER);
+    csv.push('\n');
     for e in events {
         let (item_id, item_name, _, _) = resolve(e.item_index);
-        lines.push(format!(
-            "{};{};{};{};{};{};{};{};{};{};{}",
+        csv.push_str(&format!(
+            "{};{};{};{};{};{};{};{};{};{}\n",
             e.ts,
             e.looted_by_alliance,
             e.looted_by_guild,
@@ -179,14 +177,9 @@ pub fn build_csv_from_loot(events: &[LootEvent]) -> String {
             e.looted_from_alliance,
             e.looted_from_guild,
             e.looted_from,
-            if e.server_region.is_empty() {
-                "west"
-            } else {
-                &e.server_region
-            },
         ));
     }
-    lines.join("\n")
+    csv
 }
 
 // Save CSV text to the user's Downloads folder.
@@ -315,28 +308,79 @@ mod tests {
             "Grandmaster's Guardian Helmet",
             "CSV must stay in English"
         );
-        assert_eq!(cols.len(), 11, "CSV must match AO Loot Logger columns");
-        assert_eq!(
-            f[cols.iter().position(|c| *c == "server__region").unwrap()],
-            "west"
-        );
 
         let mut enriched = ev(2958);
         enriched.looted_by_guild = "Ziggs".into();
         enriched.looted_by_alliance = "Alliance".into();
         enriched.looted_from_guild = "Rivals".into();
         enriched.looted_from_alliance = "Enemies".into();
-        enriched.server_region = "europe".into();
         let enriched_csv = build_csv_from_loot(&[enriched]);
         let enriched_fields: Vec<&str> = enriched_csv.lines().nth(1).unwrap().split(';').collect();
         assert_eq!(enriched_fields[1], "Alliance");
         assert_eq!(enriched_fields[2], "Ziggs");
         assert_eq!(enriched_fields[7], "Enemies");
         assert_eq!(enriched_fields[8], "Rivals");
-        assert_eq!(enriched_fields[10], "europe");
 
         // Unknown index must still emit an item_id so the backend keeps the row.
         assert!(lines[2].contains("IDX_999999"));
+    }
+
+    #[test]
+    fn csv_has_exactly_the_ao_loot_logger_format() {
+        let _guard = item_table_test_lock().lock().unwrap();
+        store(vec![crate::api::ItemName {
+            i: 4172,
+            id: "T4_BAG".into(),
+            en: "Adept's Bag".into(),
+            pt: None,
+            es: None,
+        }]);
+        let mut row = ev(4172);
+        row.ts = "2026-11-02T01:02:03.000Z".into();
+        row.looted_by = "Zezinho".into();
+        row.looted_from = "Fulano".into();
+        row.quantity = 2;
+
+        // Header and row layout copied from ao-loot-logger's src/loot-logger.js. Other
+        // sites parse this format, so an extra column makes our files incompatible.
+        assert_eq!(
+            build_csv_from_loot(&[row]),
+            "timestamp_utc;looted_by__alliance;looted_by__guild;looted_by__name;item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from__name\n\
+             2026-11-02T01:02:03.000Z;;;Zezinho;T4_BAG;Adept's Bag;2;;;Fulano\n"
+        );
+    }
+
+    // Against a real backend: a captured packet index must reach the CSV as the item's
+    // id and name. Uses production unless ZIGGS_TEST_API points somewhere else.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs a running backend"]
+    async fn live_catalog_puts_the_real_item_in_the_csv() {
+        // Not config::API_BASE_URL: in a test build that one is localhost.
+        let base = std::env::var("ZIGGS_TEST_API").unwrap_or_else(|_| "https://ziggs.xyz".into());
+        let catalog = crate::api::ApiClient::new(&base)
+            .items()
+            .await
+            .expect("the backend must serve the item catalog");
+        let index = catalog
+            .iter()
+            .find(|item| item.id == "T8_CAPE")
+            .expect("T8_CAPE must be in the catalog")
+            .i;
+
+        let _guard = item_table_test_lock().lock().unwrap();
+        store(catalog);
+        let csv = build_csv_from_loot(&[ev(index)]);
+
+        let row = csv.lines().nth(1).unwrap();
+        assert!(row.contains(";T8_CAPE;Elder's Cape;"), "{row}");
+    }
+
+    #[test]
+    fn session_saved_by_an_older_version_still_loads() {
+        // Sessions written before v0.2.18 carry server_region; they must keep loading.
+        let saved = r#"[{"ts":"2026-09-05T00:00:00Z","looted_by":"Zezinho","looted_from":"Fulano","item_index":4172,"quantity":1,"is_silver":false,"server_region":"europe"}]"#;
+        let loaded: Vec<LootEvent> = serde_json::from_str(saved).unwrap();
+        assert_eq!(loaded[0].looted_by, "Zezinho");
     }
 
     #[test]

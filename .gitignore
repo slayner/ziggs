@@ -20,9 +20,3 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
-# Local release and maintenance scripts
-scripts/
-
-# Companion integration tests belong to the monorepo.
-/backend/
-/companion/

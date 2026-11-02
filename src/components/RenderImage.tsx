@@ -57,6 +57,7 @@ export function RenderImage({ apiBaseUrl, kind, candidates, alt, size = 64 }: Re
       alt={alt}
       className="render-image"
       data-render-status={status}
+      decoding="sync"
       height={size}
       onError={() => {
         setCandidateIndex(index => index + 1);

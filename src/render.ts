@@ -52,8 +52,10 @@ export function buildRenderUrl(
   return `${base}/render/${kind}/${encodeURIComponent(key)}${query ? `?${query}` : ""}`;
 }
 
+// The icon first: the id of a skill's condition or effect has no art of its own, and asking
+// for it would only cost a failed request before the one that works.
 export function skillRenderCandidates(source: SkillRenderSource): string[] {
-  return uniqueCandidates([source.unique_name, source.icon, source.name]);
+  return uniqueCandidates([source.icon, source.unique_name, source.name]);
 }
 
 export function itemRenderCandidates(source: ItemRenderSource): string[] {

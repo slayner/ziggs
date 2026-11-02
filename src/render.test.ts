@@ -10,8 +10,12 @@ describe("Companion render proxy helpers", () => {
     expect(buildRenderUrl("https://ziggs.xyz", "item", "T8_HEAD_PLATE_SET1@2", { quality: 4, size: 64 })).toBe("https://ziggs.xyz/render/item/T8_HEAD_PLATE_SET1%402?quality=4&size=64");
   });
 
+  it("asks for the icon before the skill id, which may have no art of its own", () => {
+    expect(skillRenderCandidates({ icon: "PASSIVE_X", unique_name: "PASSIVE_X_CONDITION", name: "Passive" })).toEqual(["PASSIVE_X", "PASSIVE_X_CONDITION", "Passive"]);
+  });
+
   it("uses each skill render candidate once in stable order", () => {
-    expect(skillRenderCandidates({ icon: "Powerful Swing", unique_name: "HAMMER_SHOVE", name: "Powerful Swing" })).toEqual(["HAMMER_SHOVE", "Powerful Swing"]);
+    expect(skillRenderCandidates({ icon: "Powerful Swing", unique_name: "HAMMER_SHOVE", name: "Powerful Swing" })).toEqual(["Powerful Swing", "HAMMER_SHOVE"]);
   });
 
   it("never requests art for unresolved loot indexes", () => {

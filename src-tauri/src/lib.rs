@@ -1,12 +1,18 @@
 pub mod albion_detect;
 pub mod api;
+#[cfg(target_os = "windows")]
+pub mod autostart;
 #[cfg(test)]
 mod capability_config_tests;
 pub mod catalog;
 pub mod config;
 pub mod crash_report;
+#[cfg(target_os = "windows")]
+pub mod elevation;
 pub mod lootlog;
 pub mod maps;
+#[cfg(target_os = "windows")]
+pub mod npcap;
 pub mod persist;
 pub mod photon_parser;
 pub mod sniffer;
@@ -32,7 +38,6 @@ use tokio::sync::Mutex;
 pub struct AppState {
     config: Arc<Mutex<config::CompanionConfig>>,
     sniffer: Sniffer,
-    sniffer_running: Arc<Mutex<bool>>,
     lootlog: Arc<Mutex<lootlog::LootlogStatus>>,
 }
 
@@ -40,8 +45,18 @@ pub struct AppState {
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use super::restore_capture_toggle;
+    use super::{restore_capture_toggle, second_launch_shows_the_window};
     use crate::{config::CompanionConfig, sniffer::Sniffer};
+
+    #[test]
+    fn a_click_shows_the_window_but_the_start_with_windows_does_not() {
+        let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        assert!(second_launch_shows_the_window(&args(&["app.exe"])));
+        assert!(!second_launch_shows_the_window(&args(&[
+            "app.exe",
+            "--minimized"
+        ])));
+    }
 
     #[test]
     fn failed_damage_setting_save_restores_the_capture_gate() {
@@ -83,6 +98,14 @@ async fn set_config(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    if key == "capture_method"
+        && value == serde_json::json!("windivert")
+        && !elevation::is_elevated()
+    {
+        return reopen_with_windivert(&state, &app).await;
+    }
+
     let mut cfg = state.config.lock().await;
     let changed_autostart = key == "autostart";
     let previous = cfg.clone();
@@ -107,11 +130,15 @@ async fn set_config(
         ("spell_index_offset", serde_json::Value::Number(v)) => {
             cfg.spell_index_offset = v.as_i64().unwrap_or_default() as i32
         }
+        ("capture_method", value) => {
+            cfg.capture_method =
+                serde_json::from_value(value).map_err(|_| "configuração inválida".to_string())?;
+        }
         _ => return Err("configuração inválida".into()),
     };
 
     if changed_autostart {
-        if let Err(error) = apply_autostart(&app, cfg.autostart) {
+        if let Err(error) = apply_autostart(&app, cfg.autostart, cfg.capture_method) {
             *cfg = previous;
             return Err(error);
         }
@@ -119,14 +146,170 @@ async fn set_config(
 
     if let Err(error) = config::save(&cfg) {
         if changed_autostart {
-            let _ = apply_autostart(&app, previous.autostart);
+            let _ = apply_autostart(&app, previous.autostart, previous.capture_method);
         }
         restore_capture_toggle(&state.sniffer, &key, &previous);
         *cfg = previous;
         return Err(error.to_string());
     }
 
+    if cfg.capture_method != previous.capture_method {
+        state.sniffer.stop().await;
+        start_sniffer(&state.sniffer, cfg.capture_method);
+        // Leaving WinDivert: the scheduled task gives way to the Run key.
+        if let Err(error) = apply_autostart(&app, cfg.autostart, cfg.capture_method) {
+            tracing::warn!("não foi possível ajustar a inicialização automática: {error}");
+        }
+    }
+
     Ok(())
+}
+
+/// Answer to the page when the user says no to the Windows permission prompt.
+#[cfg(target_os = "windows")]
+const ELEVATION_DECLINED: &str = "elevation_declined";
+
+/// Runs the Windows prompt off the async threads, since it blocks until the user answers.
+#[cfg(target_os = "windows")]
+async fn relaunch_elevated_for_the_user() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| elevation::relaunch_elevated(false))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// This process can't use WinDivert, so the choice takes effect in a new, elevated one.
+/// It's saved first so the new process reads it, and undone if the user says no, which
+/// leaves this process and its capture exactly as they were.
+#[cfg(target_os = "windows")]
+async fn reopen_with_windivert(
+    state: &tauri::State<'_, AppState>,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
+    let previous = {
+        let mut cfg = state.config.lock().await;
+        let previous = cfg.clone();
+        cfg.capture_method = config::CaptureMethod::Windivert;
+        if let Err(error) = config::save(&cfg) {
+            *cfg = previous;
+            return Err(error.to_string());
+        }
+        previous
+    };
+
+    if let Err(error) = relaunch_elevated_for_the_user().await {
+        tracing::info!("não foi possível reabrir como administrador: {error}");
+        let mut cfg = state.config.lock().await;
+        *cfg = previous;
+        if let Err(error) = config::save(&cfg) {
+            return Err(error.to_string());
+        }
+        return Err(ELEVATION_DECLINED.into());
+    }
+    app.exit(0);
+    Ok(())
+}
+
+/// For when the user said no at startup and changed their mind.
+#[tauri::command]
+async fn relaunch_as_admin(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(error) = relaunch_elevated_for_the_user().await {
+            tracing::info!("não foi possível reabrir como administrador: {error}");
+            return Err(ELEVATION_DECLINED.into());
+        }
+        app.exit(0);
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Err("indisponível nesta plataforma".into())
+    }
+}
+
+/// Whether this process goes on to open the app. See `elevation::startup_step`. If the
+/// user says no to the prompt, the app still opens and explains, unless an instance is
+/// already capturing: a second one would only fight it for the saved loot session.
+#[cfg(target_os = "windows")]
+fn settle_privileges(method: config::CaptureMethod, minimized: bool) -> bool {
+    let elevated = elevation::is_elevated();
+    if elevated {
+        elevation::mark_elevated_instance();
+    }
+    let other_is_elevated = !elevated && elevation::elevated_instance_is_running();
+    let step = elevation::startup_step(
+        method == config::CaptureMethod::Windivert,
+        elevated,
+        other_is_elevated,
+        minimized,
+    );
+    tracing::info!(
+        ?method,
+        elevated,
+        other_is_elevated,
+        minimized,
+        ?step,
+        "starting"
+    );
+    match step {
+        elevation::StartupStep::Continue => true,
+        elevation::StartupStep::Quit => false,
+        elevation::StartupStep::Reopen => match elevation::relaunch_elevated(true) {
+            Ok(()) => false,
+            Err(error) => {
+                tracing::info!("não foi possível reabrir como administrador: {error}");
+                !other_is_elevated
+            }
+        },
+    }
+}
+
+/// An entry that starts with Windows opens the app hidden, so finding it already running
+/// is no reason to show it.
+fn second_launch_shows_the_window(args: &[String]) -> bool {
+    !args.iter().any(|arg| arg == "--minimized")
+}
+
+fn start_sniffer(sniffer: &Sniffer, method: config::CaptureMethod) {
+    let generation = sniffer.prepare_start();
+    let sniffer = sniffer.clone_shared();
+    tauri::async_runtime::spawn(async move {
+        sniffer.run_generation(generation, method).await;
+    });
+}
+
+#[derive(serde::Serialize)]
+struct NpcapStatus {
+    installed: bool,
+    version: Option<String>,
+}
+
+#[tauri::command]
+fn get_npcap_status() -> NpcapStatus {
+    #[cfg(target_os = "windows")]
+    let version = npcap::version();
+    #[cfg(not(target_os = "windows"))]
+    let version: Result<Option<String>, String> = Err("Npcap is Windows only".to_string());
+
+    match version {
+        Ok(version) => NpcapStatus {
+            installed: true,
+            version,
+        },
+        Err(_) => NpcapStatus {
+            installed: false,
+            version: None,
+        },
+    }
+}
+
+/// The address is fixed here so the page can't open anything else through this command.
+#[tauri::command]
+fn open_npcap_download(app: tauri::AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url("https://npcap.com/#download", None::<&str>)
+        .map_err(|error| error.to_string())
 }
 
 fn restore_capture_toggle(sniffer: &Sniffer, key: &str, previous: &config::CompanionConfig) {
@@ -144,12 +327,20 @@ fn restore_capture_toggle(sniffer: &Sniffer, key: &str, previous: &config::Compa
 }
 
 #[cfg(target_os = "windows")]
-fn apply_autostart(_app: &tauri::AppHandle, enable: bool) -> Result<(), String> {
-    set_autostart(enable)
+fn apply_autostart(
+    _app: &tauri::AppHandle,
+    enable: bool,
+    method: config::CaptureMethod,
+) -> Result<(), String> {
+    autostart::apply(enable, method, autostart::Moment::Changed)
 }
 
 #[cfg(not(target_os = "windows"))]
-fn apply_autostart(app: &tauri::AppHandle, enable: bool) -> Result<(), String> {
+fn apply_autostart(
+    app: &tauri::AppHandle,
+    enable: bool,
+    _method: config::CaptureMethod,
+) -> Result<(), String> {
     let autostart = app.autolaunch();
     if enable {
         autostart.enable().map_err(|error| error.to_string())
@@ -158,64 +349,6 @@ fn apply_autostart(app: &tauri::AppHandle, enable: bool) -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn set_autostart(enable: bool) -> Result<(), String> {
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("não foi possível localizar o executável: {error}"))?;
-    const TASK_NAME: &str = "ZiggsCompanion";
-
-    let output = if enable {
-        // WinDivert needs administrator rights. The scheduled task must preserve
-        // that level and keep the launch unobtrusive after the user signs in.
-        let task_command = format!("\"{}\" --minimized", executable.display());
-        crate::winutil::no_window(std::process::Command::new("schtasks"))
-            .args([
-                "/Create",
-                "/TN",
-                TASK_NAME,
-                "/SC",
-                "ONLOGON",
-                "/TR",
-                &task_command,
-                "/RL",
-                "HIGHEST",
-                "/F",
-            ])
-            .output()
-    } else {
-        crate::winutil::no_window(std::process::Command::new("schtasks"))
-            .args(["/Delete", "/TN", TASK_NAME, "/F"])
-            .output()
-    }
-    .map_err(|error| {
-        let action = if enable { "configurar" } else { "remover" };
-        format!("não foi possível {action} a inicialização automática: {error}")
-    })?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if !enable
-        && [stderr.as_ref(), stdout.as_ref()].iter().any(|detail| {
-            detail.contains("cannot find") || detail.contains("não foi possível localizar")
-        })
-    {
-        return Ok(());
-    }
-
-    let detail = if stderr.trim().is_empty() {
-        stdout.trim()
-    } else {
-        stderr.trim()
-    };
-    let action = if enable { "criação" } else { "remoção" };
-    Err(format!(
-        "o Windows não aceitou a {action} da tarefa de inicialização automática: {detail}"
-    ))
-}
 #[tauri::command]
 async fn get_sniff_stats(state: tauri::State<'_, AppState>) -> Result<SniffStats, String> {
     let mut stats = state.sniffer.stats.lock().await.clone();
@@ -257,7 +390,6 @@ async fn get_captured_loot(
                 looted_from: entry.looted_from.clone(),
                 looted_from_guild: entry.looted_from_guild.clone(),
                 looted_from_alliance: entry.looted_from_alliance.clone(),
-                server_region: entry.server_region.clone(),
             }
         })
         .collect())
@@ -534,20 +666,52 @@ async fn check_and_apply_update() -> Result<(), String> {
     Err("Atualização automática indisponível nesta plataforma".into())
 }
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    elevation::wait_for_replaced_instance();
     crash_report::install_hook();
     crash_report::init_logging();
     let mut cfg = config::load();
+    let start_minimized = std::env::args().any(|arg| arg == "--minimized");
+    #[cfg(target_os = "windows")]
+    {
+        // Opened by an entry the user has turned off, which only an elevated process could
+        // remove. Finish the job and stay closed, as they asked.
+        if start_minimized && !cfg.autostart {
+            if let Err(error) =
+                autostart::apply(false, cfg.capture_method, autostart::Moment::Launch)
+            {
+                tracing::warn!("não foi possível remover a inicialização automática: {error}");
+            }
+            return;
+        }
+        if !settle_privileges(cfg.capture_method, start_minimized) {
+            return;
+        }
+        // Before the single-instance check, which may end this process: that is how a task
+        // left behind would otherwise survive every logon.
+        if let Err(error) =
+            autostart::apply(cfg.autostart, cfg.capture_method, autostart::Moment::Launch)
+        {
+            tracing::warn!("não foi possível configurar a inicialização automática: {error}");
+        }
+    }
     cfg.install_id = config::install_id();
-    let autostart = cfg.autostart;
     let sniffer = Sniffer::new();
     let state = AppState {
         config: Arc::new(Mutex::new(cfg.clone())),
         sniffer,
-        sniffer_running: Arc::new(Mutex::new(false)),
         lootlog: Arc::new(Mutex::new(lootlog::LootlogStatus::default())),
     };
-    let start_minimized = std::env::args().any(|arg| arg == "--minimized");
     tauri::Builder::default()
+        // First on purpose: a second launch has to end before anything else starts.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !second_launch_shows_the_window(&args) {
+                return;
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                present_window(&window);
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -583,14 +747,7 @@ pub fn run() {
                 cfg.collect_auto_lootlog,
                 std::sync::atomic::Ordering::Relaxed,
             );
-            let sniffer = state.sniffer.clone_shared();
-            let running = Arc::clone(&state.sniffer_running);
-            *running.blocking_lock() = true;
-            let generation = sniffer.prepare_start();
-            tauri::async_runtime::spawn(async move {
-                sniffer.run_generation(generation).await;
-                *running.lock().await = false;
-            });
+            start_sniffer(&state.sniffer, cfg.capture_method);
             tauri::async_runtime::spawn(load_spell_names());
             tauri::async_runtime::spawn(lootlog::load_item_names());
             build_tray(app.handle())?;
@@ -599,8 +756,11 @@ pub fn run() {
                     present_window(&window);
                 }
             }
-            if autostart {
-                if let Err(error) = apply_autostart(app.handle(), true) {
+            // On Windows this already happened, before the window: see the start of `run`.
+            #[cfg(not(target_os = "windows"))]
+            if cfg.autostart {
+                if let Err(error) = apply_autostart(app.handle(), cfg.autostart, cfg.capture_method)
+                {
                     tracing::warn!(
                         "não foi possível configurar a inicialização automática: {error}"
                     );
@@ -634,7 +794,10 @@ pub fn run() {
             clear_damage_meter,
             save_lootlog_csv,
             check_and_apply_update,
-            report_frontend_crash
+            report_frontend_crash,
+            get_npcap_status,
+            open_npcap_download,
+            relaunch_as_admin
         ])
         .run(tauri::generate_context!())
         .expect("falha ao iniciar o companion");

@@ -24,6 +24,24 @@ fn default_api_base() -> String {
     API_BASE_URL.to_string()
 }
 
+/// How packets reach the parser. The results are the same with either one.
+/// Npcap is installed by the user; WinDivert ships with the app.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureMethod {
+    #[default]
+    Npcap,
+    Windivert,
+}
+
+/// A config.json without this field was written when WinDivert was the only method, and
+/// that capture already works on that PC. An update must not stop it and ask the user
+/// to install something, possibly with the app hidden in the tray during an event.
+/// Only new installs start on the default.
+fn capture_method_of_older_config() -> CaptureMethod {
+    CaptureMethod::Windivert
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompanionConfig {
     /// Copy of `API_BASE_URL` so the UI can build image URLs.
@@ -38,6 +56,8 @@ pub struct CompanionConfig {
     pub collect_damage_meter: bool,
     #[serde(default = "default_true")]
     pub collect_auto_lootlog: bool,
+    #[serde(default = "capture_method_of_older_config")]
+    pub capture_method: CaptureMethod,
     /// Launch with the system.
     pub autostart: bool,
     /// Minimize to tray when the window closes.
@@ -59,7 +79,8 @@ impl Default for CompanionConfig {
             api_base_url: default_api_base(),
             collect_damage_meter: true, // default ON; see field comment
             collect_auto_lootlog: true, // default ON; see field comment
-            autostart: true,            // default launch with system
+            capture_method: CaptureMethod::default(),
+            autostart: true, // default launch with system
             minimize_to_tray: true,
             install_id: String::new(), // generated on demand by install_id()
             spell_index_offset: 0,
@@ -169,6 +190,48 @@ mod tests {
     fn api_base_url_is_serialized_for_ui() {
         let s = serde_json::to_string(&CompanionConfig::default()).unwrap();
         assert!(s.contains(API_BASE_URL), "UI reads config.api_base_url");
+    }
+
+    #[test]
+    fn a_new_install_starts_on_npcap() {
+        assert_eq!(
+            CompanionConfig::default().capture_method,
+            CaptureMethod::Npcap
+        );
+    }
+
+    /// Every install before this choice existed has a config.json without the field.
+    #[test]
+    fn a_config_from_an_older_version_stays_on_windivert() {
+        let json = r#"{ "autostart": true, "minimize_to_tray": true }"#;
+        let cfg: CompanionConfig = serde_json::from_str(json).expect("valid config");
+        assert_eq!(cfg.capture_method, CaptureMethod::Windivert);
+    }
+
+    #[test]
+    fn the_chosen_method_survives_a_save() {
+        for method in [CaptureMethod::Npcap, CaptureMethod::Windivert] {
+            let cfg = CompanionConfig {
+                capture_method: method,
+                ..CompanionConfig::default()
+            };
+            let saved = serde_json::to_string(&cfg).unwrap();
+            let loaded: CompanionConfig = serde_json::from_str(&saved).unwrap();
+            assert_eq!(loaded.capture_method, method);
+        }
+    }
+
+    #[test]
+    fn method_names_are_the_ones_the_ui_sends() {
+        assert_eq!(
+            serde_json::from_value::<CaptureMethod>(serde_json::json!("npcap")).unwrap(),
+            CaptureMethod::Npcap
+        );
+        assert_eq!(
+            serde_json::from_value::<CaptureMethod>(serde_json::json!("windivert")).unwrap(),
+            CaptureMethod::Windivert
+        );
+        assert!(serde_json::from_value::<CaptureMethod>(serde_json::json!("pcap")).is_err());
     }
 
     #[test]

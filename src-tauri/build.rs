@@ -1,7 +1,7 @@
 // build.rs — compiles the Tauri manifest and Common Controls v6 manifest.
 //
-// Npcap SDK linking was removed: packet capture now uses WinDivert (bundled
-// as DLL+sys in resources/), no external SDK or driver installation needed.
+// Neither capture method needs an SDK at build time: WinDivert is bundled as DLL+sys
+// in resources/, and Npcap's wpcap.dll is loaded at runtime (see src/npcap.rs).
 
 fn main() {
     // Generates the ACL permissions (capabilities/*.json → gen/schemas/) and the rest
@@ -12,12 +12,11 @@ fn main() {
     // silently, even with decorations:false removing the native title bar
     // (no native chrome AND no JS drag = window impossible to move).
     // Real incident on 20-21/07/2026: build.rs was rewritten for auto-detect
-    // of the Npcap SDK and this call disappeared along with it. (Npcap SDK
-    // linking has since been removed entirely — capture uses WinDivert.)
+    // of the Npcap SDK and this call disappeared along with it.
     //
     // Tauri builds the primary Windows resource itself. Give it our manifest
     // directly so the executable gets exactly one RT_MANIFEST containing both
-    // Common Controls v6 and the required elevation declaration.
+    // Common Controls v6 and the execution level (see src/elevation.rs).
     let attrs = tauri_build::Attributes::new().windows_attributes(
         tauri_build::WindowsAttributes::new().app_manifest(include_str!("Companion.exe.manifest")),
     );

@@ -1,4 +1,4 @@
-// WinDivert: sole packet capture mechanism for the companion.
+// WinDivert: the packet capture method that ships with the companion.
 //
 // Captures Albion UDP packets at the WFP (Windows Filtering Platform) network
 // layer, which sits ABOVE routing and VPN encapsulation. This means:
@@ -10,9 +10,9 @@
 // WinDivert.dll and WinDivert64.sys are bundled in resources/ (LGPLv3).
 // Administrator privileges are required.
 
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::sniffer::CaptureMsg;
 
@@ -28,6 +28,10 @@ udp.SrcPort == 4535)\0";
 
 /// WINDIVERT_ADDRESS struct size: i64(8) + u32(4) + u32(4) + [u8;64] = 80 bytes.
 const ADDR_SIZE: usize = 80;
+
+/// The open capture handle, 0 when there is none. Both `shutdown` and the capture
+/// thread go through this lock, so a handle is never used after being closed.
+pub type HandleStore = Arc<Mutex<isize>>;
 
 type FnOpen = unsafe extern "C" fn(*const u8, i32, i16, u64) -> isize;
 type FnRecv = unsafe extern "C" fn(isize, *mut u8, u32, *mut u32, *mut u8) -> i32;
@@ -104,16 +108,16 @@ unsafe fn load_dll() -> Result<Funcs, String> {
 
 /// Starts a WinDivert SNIFF capture thread that sends raw IP packets (L2=0,
 /// no ethernet header — WinDivert delivers raw IP at the NETWORK layer) to
-/// the sniffer's channel. Returns a shared handle store — call `shutdown`
-/// on it to unblock the thread and close the handle.
+/// the sniffer's channel. The handle goes into `handle_store`; call `shutdown`
+/// on it to unblock the thread, which then closes the handle.
 ///
-/// Returns `Ok(handle_store)` if WinDivert was started, `Err(msg)` with a
-/// human-readable error string on failure.
+/// Returns `Err(msg)` with a human-readable error string on failure.
 pub fn start_capture(
     tx: mpsc::Sender<CaptureMsg>,
     generation: Arc<AtomicU64>,
     gen_value: u64,
-) -> Result<Arc<AtomicI64>, String> {
+    handle_store: HandleStore,
+) -> Result<(), String> {
     let funcs = unsafe { load_dll() }?;
 
     let handle = unsafe {
@@ -126,40 +130,34 @@ pub fn start_capture(
     };
 
     if handle == 0 || handle == -1 {
-        #[cfg(target_os = "windows")]
-        {
-            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-            let hint = match err {
-                5 => "ACCESS_DENIED — not running as admin",
-                31 => "DEVICE_NOT_WORKING — driver not loaded",
-                127 => "PROC_NOT_FOUND — DLL exports missing (wrong WinDivert version?)",
-                577 => "INVALID_PARAMETER — Windows blocking driver signature (Secure Boot?)",
-                1058 => "SERVICE_DISABLED — WinDivert service disabled",
-                1060 => "SERVICE_DOES_NOT_EXIST — driver not installed",
-                1275 => "DLL_NOT_FOUND — WinDivert.dll missing dependencies (VC++ runtime?)",
-                _ => "see WinDivert docs",
-            };
-            return Err(format!(
-                "WinDivertOpen failed: GetLastError={} ({})",
-                err, hint
-            ));
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            return Err("WinDivertOpen failed (non-Windows)".to_string());
-        }
+        let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        let hint = match err {
+            5 => "ACCESS_DENIED — not running as admin",
+            31 => "DEVICE_NOT_WORKING — driver not loaded",
+            127 => "PROC_NOT_FOUND — DLL exports missing (wrong WinDivert version?)",
+            577 => "INVALID_PARAMETER — Windows blocking driver signature (Secure Boot?)",
+            1058 => "SERVICE_DISABLED — WinDivert service disabled",
+            1060 => "SERVICE_DOES_NOT_EXIST — driver not installed",
+            1275 => "DLL_NOT_FOUND — WinDivert.dll missing dependencies (VC++ runtime?)",
+            _ => "see WinDivert docs",
+        };
+        return Err(format!(
+            "WinDivertOpen failed: GetLastError={} ({})",
+            err, hint
+        ));
     }
 
-    let handle_store = Arc::new(AtomicI64::new(handle as i64));
-    let handle_store_clone = Arc::clone(&handle_store);
+    *handle_store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = handle;
 
     std::thread::spawn(move || {
         let mut buf = vec![0u8; 65535];
         let mut addr = [0u8; ADDR_SIZE];
 
-        loop {
+        let failure = loop {
             if generation.load(Ordering::Acquire) != gen_value {
-                break;
+                break None;
             }
 
             let mut recv_len: u32 = 0;
@@ -174,35 +172,51 @@ pub fn start_capture(
             };
 
             if ok == 0 {
-                break;
+                // A shutdown changes the generation first, so a failure while this
+                // capture is still current means it died on its own.
+                let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+                break (generation.load(Ordering::Acquire) == gen_value)
+                    .then(|| format!("WinDivertRecv failed: GetLastError={}", err));
             }
 
             if recv_len > 0 {
                 let packet = buf[..recv_len as usize].to_vec();
                 let _ = tx.send(CaptureMsg::Packet(0, packet));
             }
+        };
+
+        {
+            let mut current = handle_store
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            unsafe {
+                (funcs.close)(handle);
+            }
+            if *current == handle {
+                *current = 0;
+            }
         }
 
-        unsafe {
-            (funcs.close)(handle);
+        if let Some(reason) = failure {
+            let _ = tx.send(CaptureMsg::Dead(reason));
         }
-        handle_store_clone.store(0, Ordering::SeqCst);
     });
 
-    Ok(handle_store)
+    Ok(())
 }
 
-/// Shuts down a WinDivert capture handle (unblocks the recv call) and closes
-/// it. No-op if the handle is 0 (not started or already closed).
-pub fn shutdown(handle_store: &Arc<AtomicI64>) {
-    let handle = handle_store.swap(0, Ordering::SeqCst);
-    if handle == 0 {
+/// Unblocks the capture thread's pending read, and the thread closes the handle.
+/// No-op if there is no open handle.
+pub fn shutdown(handle_store: &HandleStore) {
+    let current = handle_store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *current == 0 {
         return;
     }
     if let Ok(funcs) = unsafe { load_dll() } {
         unsafe {
-            (funcs.shutdown)(handle as isize, WINDIVERT_SHUTDOWN_RECV);
-            (funcs.close)(handle as isize);
+            (funcs.shutdown)(*current, WINDIVERT_SHUTDOWN_RECV);
         }
     }
 }
