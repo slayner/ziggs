@@ -180,7 +180,7 @@ export default function App() {
   }, [settings]);
 
   if (!config) {
-    return <div className="cp-splash"><img src="/logo.png" alt="Ziggs" /><span>{t("splashText")}</span></div>;
+    return <div className="cp-splash"><img src="/logo.svg" alt="Ziggs" /><span>{t("splashText")}</span></div>;
   }
 
   const issue = stats?.capture_issue ?? null;
@@ -201,7 +201,7 @@ export default function App() {
           ignoreAsyncFailure(getCurrentWindow().startDragging());
         }
       }}>
-        <img className="cp-logo" src="/logo.png" alt="Ziggs" />
+        <img className="cp-logo" src="/logo-small.svg" alt="Ziggs" />
         <span className="cp-brand">Ziggs Companion</span>
         <span className="cp-version">v{version}</span>
         <span className={`cp-capture is-${captureState}`}><i aria-hidden="true" />{captureLabel}</span>
@@ -369,7 +369,10 @@ function Damage({ captureBlocked, config, stats, openSettings, view, setView }: 
 
   return <>
     <div className="cp-head">
-      <h1>{t("navDamage")}</h1>
+      <div className="cp-head-text">
+        <h1>{t("navDamage")}</h1>
+        <p>{t("dmgHeadHint")}</p>
+      </div>
       {visible.length > 0 && <span className="cp-meta">{t("dmgTotal")} <b>{fmt(total, lang)}</b></span>}
       <div className="cp-actions">
         <button className={`ds-btn cp-filter ${partyOnly ? "is-on" : ""}`} aria-pressed={partyOnly} title={t("dmgPartyHint")} onClick={() => setView(current => ({ ...current, partyOnly: !current.partyOnly }))}>{t("dmgPartyOnly")}</button>
