@@ -87,6 +87,26 @@ fn store(list: Vec<crate::api::ItemName>) {
     }
 }
 
+// Items nobody splits after a fight: Trash (what is left of broken gear, T4_TRASH to T8_TRASH)
+// and the kill trophies (Combat/War Memento, *_KILLTROPHY_*). They never reach the lootlog.
+pub fn is_ignored_item(item_id: &str) -> bool {
+    let base = item_id.split('@').next().unwrap_or(item_id);
+    let trash = base
+        .strip_prefix('T')
+        .and_then(|rest| rest.split_once('_'))
+        .is_some_and(|(tier, name)| !tier.is_empty() && tier.chars().all(|c| c.is_ascii_digit()) && name == "TRASH");
+    trash || base.contains("_KILLTROPHY_")
+}
+
+// Same check by packet index. Without the catalog the item is unknown and stays.
+pub fn is_ignored_index(index: i32) -> bool {
+    items()
+        .read()
+        .ok()
+        .and_then(|r| r.get(&index).map(|it| is_ignored_item(&it.id)))
+        .unwrap_or(false)
+}
+
 // Resolve index to (item_id, en, pt, es). Unknown indexes fall back to `IDX_{n}`,
 // matching the backend convention so nothing is dropped on ingest.
 pub fn resolve(index: i32) -> (String, String, String, String) {
@@ -163,7 +183,7 @@ item_id;item_name;quantity;looted_from__alliance;looted_from__guild;looted_from_
 pub fn build_csv_from_loot(events: &[LootEvent]) -> String {
     let mut csv = String::from(CSV_HEADER);
     csv.push('\n');
-    for e in events {
+    for e in events.iter().filter(|e| !is_ignored_index(e.item_index)) {
         let (item_id, item_name, _, _) = resolve(e.item_index);
         csv.push_str(&format!(
             "{};{};{};{};{};{};{};{};{};{}\n",
@@ -226,6 +246,18 @@ mod tests {
             quantity: 2,
             is_silver: false,
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn trash_and_kill_trophies_are_ignored() {
+        for id in ["T4_TRASH", "T8_TRASH", "UNIQUE_FURNITUREITEM_KILLTROPHY_OPENWORLD_LARGE",
+                   "UNIQUE_FURNITUREITEM_KILLTROPHY_OPENWORLD_SMALL"] {
+            assert!(is_ignored_item(id), "{id} should be ignored");
+        }
+        for id in ["T7_BAG", "T4_CAPEITEM_SMUGGLER@3", "UNIQUE_GVGTOKEN_GENERIC", "T6_2H_TOOL_SIEGEHAMMER",
+                   "TRASH", "T_TRASH", "T5_TRASH_BIN"] {
+            assert!(!is_ignored_item(id), "{id} should stay");
         }
     }
 

@@ -374,6 +374,8 @@ async fn get_captured_loot(
         .lock()
         .await
         .iter()
+        // Also hides what was captured before the catalog loaded or by an older version.
+        .filter(|entry| !lootlog::is_ignored_index(entry.item_index))
         .map(|entry| {
             let (item_id, item_name, item_name_pt, item_name_es) =
                 lootlog::resolve(entry.item_index);
