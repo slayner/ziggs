@@ -1119,6 +1119,9 @@ impl Sniffer {
     }
 
     async fn push_loot(&self, mut loot: LootEvent) {
+        if crate::lootlog::is_ignored_index(loot.item_index) {
+            return; // Trash and kill trophies (see lootlog::is_ignored_item)
+        }
         let looted_by = loot.looted_by.clone();
         let looted_from = loot.looted_from.clone();
         {

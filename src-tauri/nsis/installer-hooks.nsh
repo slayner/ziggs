@@ -6,6 +6,12 @@
 !macro NSIS_HOOK_PREINSTALL
 !macroend
 
+; Windows keeps showing the old icon on pinned taskbar and Start shortcuts after an update, because
+; it caches icons by path. SHCNE_ASSOCCHANGED tells the shell to reload them.
+!macro NSIS_HOOK_POSTINSTALL
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+!macroend
+
 ; The app creates these itself when it starts with Windows (see src/autostart.rs). An update
 ; keeps them. Deleting the scheduled task takes administrator rights, so Windows asks, but
 ; only whoever has one: left behind, it would run that path as administrator at every logon.
